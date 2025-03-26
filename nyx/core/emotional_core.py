@@ -17,11 +17,15 @@ from pydantic import BaseModel, Field, validator, TypeAdapter
 from agents import (
     Agent, Runner, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail,
     function_tool, handoff, trace, RunContextWrapper, FunctionTool,
-    ModelSettings, RunConfig, AgentHooks
+    ModelSettings, RunConfig, AgentHooks, ItemHelpers
 )
 from agents.extensions import handoff_filters
 from agents.extensions.handoff_prompt import prompt_with_handoff_instructions, RECOMMENDED_PROMPT_PREFIX
-from agents.tracing import agent_span, custom_span, function_span
+from agents.tracing import (
+    agent_span, custom_span, function_span, add_trace_processor, BatchTraceProcessor,
+    trace_include_sensitive_data, trace_metadata
+)
+from agents.tracing.processors import BackendSpanExporter
 from agents.exceptions import AgentsException, ModelBehaviorError, UserError
 
 logger = logging.getLogger(__name__)
@@ -124,13 +128,51 @@ class DigitalHormone(BaseModel):
     half_life: float = Field(..., description="Half-life in hours", ge=0.0)
     last_update: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
 
-# Custom context to share between agent runs
+class EmotionalResponseOutput(BaseModel):
+    """Schema for complete emotional response output"""
+    primary_emotion: DerivedEmotion
+    intensity: float = Field(..., ge=0.0, le=1.0)
+    response_text: str
+    reflection: Optional[str] = None
+    neurochemical_changes: Dict[str, float]
+    valence: float = Field(..., ge=-1.0, le=1.0)
+    arousal: float = Field(..., ge=0.0, le=1.0)
+
+# Improved context class with better typing and helper methods
 class EmotionalContext(BaseModel):
-    """Context for emotional processing between agent runs"""
+    """Enhanced context for emotional processing between agent runs"""
     cycle_count: int = Field(default=0, description="Current processing cycle count")
-    last_emotions: Dict[str, float] = Field(default_factory=dict, description="Last emotional state")
-    interaction_history: List[Dict[str, Any]] = Field(default_factory=list, description="Recent interaction history")
-    temp_data: Dict[str, Any] = Field(default_factory=dict, description="Temporary data storage")
+    last_emotions: Dict[str, float] = Field(default_factory=dict)
+    interaction_history: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
+    temp_data: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Add helper methods directly to the context
+    def record_emotion(self, emotion: str, intensity: float):
+        """Record an emotion with its intensity"""
+        self.last_emotions[emotion] = intensity
+        
+    def add_interaction(self, data: Dict[str, Any]):
+        """Add an interaction to history with automatic trimming"""
+        self.interaction_history.append(data)
+        if len(self.interaction_history) > 20:
+            self.interaction_history.pop(0)
+    
+    def get_agent_usage(self) -> Dict[str, int]:
+        """Get the agent usage statistics"""
+        if "agent_usage" not in self.temp_data:
+            self.temp_data["agent_usage"] = defaultdict(int)
+        return self.temp_data["agent_usage"]
+    
+    def record_agent_usage(self, agent_name: str):
+        """Record usage of an agent"""
+        agent_usage = self.get_agent_usage()
+        agent_usage[agent_name] += 1
+    
+    def get_timing_data(self) -> Dict[str, Dict[str, float]]:
+        """Get agent timing data"""
+        if "agent_timing" not in self.temp_data:
+            self.temp_data["agent_timing"] = {}
+        return self.temp_data["agent_timing"]
 
 # =============================================================================
 # Agent Instructions & Configuration
@@ -197,66 +239,114 @@ AGENT_INSTRUCTIONS = {
 # Custom Lifecycle Hooks & Guardrails
 # =============================================================================
 
-# Custom lifecycle hooks for emotional agents
+# Enhanced lifecycle hooks for emotional agent
 class EmotionalAgentHooks(AgentHooks):
-    """Hooks for tracking emotional agent lifecycle events"""
+    """Enhanced hooks for emotional agent lifecycle events"""
     
-    async def on_start(self, context: RunContextWrapper, agent: Agent):
+    def __init__(self, neurochemicals=None):
+        self.neurochemicals = neurochemicals
+    
+    async def on_start(self, context: RunContextWrapper[EmotionalContext], agent: Agent):
         logger.debug(f"Emotional agent started: {agent.name}")
-        # Could add performance tracking here
-        if not hasattr(context, "temp_data"):
-            context.temp_data = {}
-        context.temp_data["start_time"] = datetime.datetime.now()
-    
-    async def on_end(self, context: RunContextWrapper, agent: Agent, output: Any):
-        if hasattr(context, "temp_data") and "start_time" in context.temp_data:
-            start_time = context.temp_data["start_time"]
-            duration = (datetime.datetime.now() - start_time).total_seconds()
-            logger.debug(f"Emotional agent {agent.name} completed in {duration:.2f}s")
-            
-    async def on_tool_start(self, context: RunContextWrapper, agent: Agent, tool: FunctionTool):
-        logger.debug(f"Tool started: {tool.name} by agent {agent.name}")
         
-    async def on_tool_end(self, context: RunContextWrapper, agent: Agent, tool: FunctionTool, result: str):
-        logger.debug(f"Tool completed: {tool.name} by agent {agent.name}")
+        # Add performance tracking
+        if not hasattr(context.context, "temp_data"):
+            context.context.temp_data = {}
+        
+        # Track which agents are being used
+        context.context.record_agent_usage(agent.name)
+        
+        # Track start time for performance metrics
+        context.context.temp_data["start_time"] = datetime.datetime.now()
+        
+        # Pre-load common data for efficiency
+        if agent.name == "Emotion Derivation Agent":
+            # Pre-fetch neurochemical state to avoid duplicate calls
+            if "cached_neurochemical_state" not in context.context.temp_data and self.neurochemicals:
+                context.context.temp_data["cached_neurochemical_state"] = {
+                    c: d["value"] for c, d in self.neurochemicals.items()
+                }
+    
+    async def on_end(self, context: RunContextWrapper[EmotionalContext], 
+                    agent: Agent, output: Any):
+        # Calculate and store performance metrics
+        if "start_time" in context.context.temp_data:
+            start_time = context.context.temp_data["start_time"]
+            duration = (datetime.datetime.now() - start_time).total_seconds()
+            
+            # Update rolling average response time for this agent
+            agent_timing = context.context.get_timing_data()
+            if agent.name not in agent_timing:
+                agent_timing[agent.name] = {"count": 0, "avg_time": 0}
+            
+            stats = agent_timing[agent.name]
+            stats["avg_time"] = ((stats["avg_time"] * stats["count"]) + duration) / (stats["count"] + 1)
+            stats["count"] += 1
+            
+            logger.debug(f"Agent {agent.name} completed in {duration:.2f}s (avg: {stats['avg_time']:.2f}s)")
+    
+    async def on_tool_start(self, context: RunContextWrapper[EmotionalContext], 
+                           agent: Agent, tool: FunctionTool):
+        logger.debug(f"Tool started: {tool.name} by agent {agent.name}")
+        context.context.temp_data[f"tool_start_{tool.name}"] = datetime.datetime.now()
+    
+    async def on_tool_end(self, context: RunContextWrapper[EmotionalContext], 
+                         agent: Agent, tool: FunctionTool, result: str):
+        if f"tool_start_{tool.name}" in context.context.temp_data:
+            start_time = context.context.temp_data[f"tool_start_{tool.name}"]
+            duration = (datetime.datetime.now() - start_time).total_seconds()
+            logger.debug(f"Tool {tool.name} completed in {duration:.2f}s")
 
 # Define input guardrail for emotional processing
-async def validate_emotional_input(ctx: RunContextWrapper, agent: Agent, input_data: str) -> GuardrailFunctionOutput:
+async def validate_emotional_input(ctx: RunContextWrapper[EmotionalContext], 
+                                  agent: Agent, 
+                                  input_data: str) -> GuardrailFunctionOutput:
     """Validate that input for emotional processing is safe and appropriate"""
     with function_span("validate_emotional_input", input=str(input_data)[:100]):
-        # Check for extremely negative content that might disrupt emotional system
-        red_flags = ["kill", "suicide", "destroy everything", "harmful instructions"]
-        # Check for emotional manipulation attempts
-        manipulation_flags = ["make you feel", "force emotion", "override emotion"]
-        
-        input_lower = input_data.lower() if isinstance(input_data, str) else ""
-        
-        for flag in red_flags:
-            if flag in input_lower:
-                return GuardrailFunctionOutput(
-                    output_info=GuardrailOutput(
-                        is_safe=False,
-                        reason=f"Detected potentially harmful content: {flag}",
-                        suggested_action="reject"
-                    ),
-                    tripwire_triggered=True
-                )
-                
-        for flag in manipulation_flags:
-            if flag in input_lower:
-                return GuardrailFunctionOutput(
-                    output_info=GuardrailOutput(
-                        is_safe=False,
-                        reason=f"Detected emotional manipulation attempt: {flag}",
-                        suggested_action="caution"
-                    ),
-                    tripwire_triggered=True
-                )
-        
-        return GuardrailFunctionOutput(
-            output_info=GuardrailOutput(is_safe=True),
-            tripwire_triggered=False
-        )
+        try:
+            # Check for extremely negative content that might disrupt emotional system
+            red_flags = ["kill", "suicide", "destroy everything", "harmful instructions"]
+            # Check for emotional manipulation attempts
+            manipulation_flags = ["make you feel", "force emotion", "override emotion"]
+            
+            input_lower = input_data.lower() if isinstance(input_data, str) else ""
+            
+            for flag in red_flags:
+                if flag in input_lower:
+                    return GuardrailFunctionOutput(
+                        output_info=GuardrailOutput(
+                            is_safe=False,
+                            reason=f"Detected potentially harmful content: {flag}",
+                            suggested_action="reject"
+                        ),
+                        tripwire_triggered=True
+                    )
+                    
+            for flag in manipulation_flags:
+                if flag in input_lower:
+                    return GuardrailFunctionOutput(
+                        output_info=GuardrailOutput(
+                            is_safe=False,
+                            reason=f"Detected emotional manipulation attempt: {flag}",
+                            suggested_action="caution"
+                        ),
+                        tripwire_triggered=True
+                    )
+            
+            return GuardrailFunctionOutput(
+                output_info=GuardrailOutput(is_safe=True),
+                tripwire_triggered=False
+            )
+        except Exception as e:
+            logger.error(f"Error in emotional input validation: {e}")
+            # Return safe by default in case of errors, but log the issue
+            return GuardrailFunctionOutput(
+                output_info=GuardrailOutput(
+                    is_safe=True,
+                    reason=f"Validation error: {str(e)}"
+                ),
+                tripwire_triggered=False
+            )
 
 # =============================================================================
 # Core Emotional System
@@ -469,10 +559,10 @@ class EmotionalCore:
         # Create shared context for agents
         self.context = EmotionalContext()
         
-        # Initialize agent hooks
-        self.agent_hooks = EmotionalAgentHooks()
+        # Initialize agent hooks with neurochemicals reference
+        self.agent_hooks = EmotionalAgentHooks(self.neurochemicals)
         
-        # Initialize agents lazily with hook for better performance tracking
+        # Initialize agents dict - we'll use factory pattern with agent cloning
         self.agents = {}
         
         # Performance metrics
@@ -481,41 +571,73 @@ class EmotionalCore:
             "average_response_time": 0,
             "update_counts": defaultdict(int)
         }
+        
+        # Set up custom trace processor for emotional analytics
+        self._setup_tracing()
+    
+    def _setup_tracing(self):
+        """Configure custom trace processor for emotional analytics"""
+        emotion_trace_processor = BatchTraceProcessor(
+            exporter=BackendSpanExporter(project="nyx_emotional_system"),
+            max_batch_size=100,
+            schedule_delay=3.0
+        )
+        add_trace_processor(emotion_trace_processor)
     
     def _create_base_run_config(self, workflow_name=None, trace_id=None):
         """Create a base run configuration for all agent runs"""
         return RunConfig(
             workflow_name=workflow_name or "Emotional_Processing",
             trace_id=trace_id or f"emotion_trace_{self.context.cycle_count}",
-            model_settings=ModelSettings(temperature=0.4),
+            model="o3-mini",  # Explicitly set model for all runs
+            model_settings=ModelSettings(
+                temperature=0.4,
+                top_p=0.95,
+                max_tokens=300  # Control token usage
+            ),
+            handoff_input_filter=handoff_filters.keep_relevant_history,  # Global filter
             tracing_disabled=False,
-            trace_include_sensitive_data=True
+            trace_include_sensitive_data=True,
+            trace_metadata={"system": "nyx_emotional_core", "version": "1.0"}
         )
     
     def _with_emotion_trace(func):
-        """Decorator to add tracing to emotional methods"""
+        """Decorator to add tracing to emotional methods with improved metadata"""
         @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
             workflow_name = f"Emotion_{func.__name__}"
             trace_id = f"emotion_{func.__name__}_{datetime.datetime.now().timestamp()}"
             
-            with trace(workflow_name=workflow_name, trace_id=trace_id):
+            # Add useful metadata and group traces by conversation
+            metadata = {
+                "function": func.__name__,
+                "cycle_count": self.context.cycle_count,
+                "current_emotion": self.get_dominant_emotion()[0],
+                "performance_metrics": {k: v for k, v in self.performance_metrics.items() 
+                                      if k in ["api_calls", "average_response_time"]}
+            }
+            
+            with trace(
+                workflow_name=workflow_name, 
+                trace_id=trace_id,
+                group_id=f"conversation_{self.context.temp_data.get('conversation_id', 'default')}",
+                metadata=metadata
+            ):
                 return await func(self, *args, **kwargs)
         return wrapper
     
-    def _ensure_agent(self, agent_type):
-        """Ensure a specific agent is initialized"""
-        if agent_type not in self.agents:
-            creator_method = getattr(self, f"_create_{agent_type}_agent", None)
-            if creator_method:
-                self.agents[agent_type] = creator_method()
-            else:
-                raise ValueError(f"Unknown agent type: {agent_type}")
-        return self.agents[agent_type]
-    
-    def _create_neurochemical_agent(self):
-        """Create agent for handling neurochemical updates"""
-        return Agent[EmotionalContext](
+    def _initialize_agents(self):
+        """Initialize all agents using factory pattern with agent cloning"""
+        # Create a base agent with common settings as template
+        base_agent = Agent[EmotionalContext](
+            name="Base Agent",
+            model="o3-mini",  # Use specific model name
+            model_settings=ModelSettings(temperature=0.4),
+            hooks=self.agent_hooks
+        )
+        
+        # Create agents with cloning for consistent configuration
+        self.agents["neurochemical"] = base_agent.clone(
             name="Neurochemical Agent",
             instructions=AGENT_INSTRUCTIONS["neurochemical_agent"],
             tools=[
@@ -524,14 +646,10 @@ class EmotionalCore:
                 function_tool(self._process_chemical_interactions),
                 function_tool(self._get_neurochemical_state)
             ],
-            hooks=self.agent_hooks,
-            model_settings=ModelSettings(temperature=0.2),  # Lower temperature for more predictable behavior
             input_guardrails=[InputGuardrail(guardrail_function=validate_emotional_input)]
         )
-    
-    def _create_emotion_derivation_agent(self):
-        """Create agent for deriving emotions from neurochemical state"""
-        return Agent[EmotionalContext](
+        
+        self.agents["emotion_derivation"] = base_agent.clone(
             name="Emotion Derivation Agent",
             instructions=AGENT_INSTRUCTIONS["emotion_derivation_agent"],
             tools=[
@@ -539,14 +657,10 @@ class EmotionalCore:
                 function_tool(self._derive_emotional_state),
                 function_tool(self._get_emotional_state_matrix)
             ],
-            hooks=self.agent_hooks,
-            model_settings=ModelSettings(temperature=0.2),
             output_type=EmotionalStateMatrix
         )
-
-    def _create_reflection_agent(self):
-        """Create agent for internal emotional reflection"""
-        return Agent[EmotionalContext](
+        
+        self.agents["reflection"] = base_agent.clone(
             name="Emotional Reflection Agent",
             instructions=AGENT_INSTRUCTIONS["reflection_agent"],
             tools=[
@@ -554,14 +668,11 @@ class EmotionalCore:
                 function_tool(self._generate_internal_thought),
                 function_tool(self._analyze_emotional_patterns)
             ],
-            hooks=self.agent_hooks,
             model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
             output_type=InternalThoughtOutput
         )
-    
-    def _create_learning_agent(self):
-        """Create agent for emotional learning and adaptation"""
-        return Agent[EmotionalContext](
+        
+        self.agents["learning"] = base_agent.clone(
             name="Emotional Learning Agent",
             instructions=AGENT_INSTRUCTIONS["learning_agent"],
             tools=[
@@ -569,48 +680,49 @@ class EmotionalCore:
                 function_tool(self._update_learning_rules),
                 function_tool(self._apply_learned_adaptations)
             ],
-            hooks=self.agent_hooks,
             model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
         )
         
-    def _create_orchestrator_agent(self):
-        """Create an orchestrator agent for coordinating emotional processing"""
-        neurochemical_agent = self._ensure_agent("neurochemical")
-        reflection_agent = self._ensure_agent("reflection")
-        learning_agent = self._ensure_agent("learning")
-        
-        return Agent[EmotionalContext](
+        # Create orchestrator with optimized handoffs
+        self.agents["orchestrator"] = base_agent.clone(
             name="Emotion_Orchestrator",
             instructions=AGENT_INSTRUCTIONS["emotion_orchestrator"],
             handoffs=[
                 handoff(
-                    neurochemical_agent, 
-                    tool_name_override="update_neurochemicals", 
-                    tool_description_override="Update neurochemicals based on emotional analysis",
-                    input_filter=handoff_filters.remove_all_tools
+                    self.agents["neurochemical"], 
+                    tool_name_override="process_emotions", 
+                    tool_description_override="Process and update neurochemicals based on emotional input analysis. Use this when you need to trigger emotional changes.",
+                    input_filter=lambda data: handoff_filters.keep_relevant_history(data)
                 ),
-                
                 handoff(
-                    reflection_agent, 
+                    self.agents["reflection"], 
                     tool_name_override="generate_reflection",
-                    tool_description_override="Generate emotional reflection if appropriate",
-                    input_filter=handoff_filters.remove_all_tools
+                    tool_description_override="Generate emotional reflection when user input triggers significant emotional response. Use when deeper introspection is needed.",
+                    input_filter=lambda data: handoff_filters.keep_relevant_history(data)
                 ),
-                
                 handoff(
-                    learning_agent,
+                    self.agents["learning"],
                     tool_name_override="record_and_learn",
-                    tool_description_override="Record and learn from emotional interactions",
-                    input_filter=handoff_filters.remove_all_tools
+                    tool_description_override="Record interaction patterns and apply learning to adapt emotional responses. Use after completing emotional processing.",
+                    input_filter=lambda data: handoff_filters.keep_relevant_history(data)
                 )
             ],
             tools=[
                 function_tool(self._analyze_text_sentiment)
             ],
-            hooks=self.agent_hooks,
-            model_settings=ModelSettings(temperature=0.4),
-            input_guardrails=[InputGuardrail(guardrail_function=validate_emotional_input)]
+            input_guardrails=[InputGuardrail(guardrail_function=validate_emotional_input)],
+            output_type=EmotionalResponseOutput  # Specify structured output
         )
+    
+    def _ensure_agent(self, agent_type):
+        """Ensure a specific agent is initialized"""
+        if not self.agents:
+            self._initialize_agents()
+            
+        if agent_type not in self.agents:
+            raise UserError(f"Unknown agent type: {agent_type}")
+        
+        return self.agents[agent_type]
 
     def set_hormone_system(self, hormone_system):
         """Set the hormone system reference"""
@@ -622,7 +734,7 @@ class EmotionalCore:
     
     @function_tool
     async def _update_neurochemical(self, ctx: RunContextWrapper[EmotionalContext], 
-                                update_data: EmotionUpdateInput) -> EmotionUpdateResult:
+                           update_data: EmotionUpdateInput) -> EmotionUpdateResult:
         """
         Update a specific neurochemical with a delta change
         
@@ -632,47 +744,58 @@ class EmotionalCore:
         Returns:
             Update result with neurochemical and emotion changes
         """
-        with function_span("update_neurochemical", input=f"{update_data.chemical}:{update_data.value}"):
-            chemical = update_data.chemical
-            value = update_data.value
-            
-            # Validate input
-            if not -1.0 <= value <= 1.0:
-                raise UserError(f"Value must be between -1.0 and 1.0, got {value}")
-            
-            if chemical not in self.neurochemicals:
-                raise UserError(f"Unknown neurochemical: {chemical}. Available chemicals: {list(self.neurochemicals.keys())}")
-            
-            # Get pre-update value
-            old_value = self.neurochemicals[chemical]["value"]
-            
-            # Update neurochemical
-            self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + value))
-            
-            # Update performance metrics
-            self.performance_metrics["update_counts"][chemical] += 1
-            
-            # Process chemical interactions
-            await self._process_chemical_interactions(ctx, source_chemical=chemical, source_delta=value)
-            
-            # Derive emotions from updated neurochemical state
-            emotional_state = await self._derive_emotional_state(ctx)
-            
-            # Update timestamp and record in history
-            self.last_update = datetime.datetime.now()
-            self._record_emotional_state()
-            
-            # Track in context
-            if ctx.context:
-                ctx.context.last_emotions = emotional_state
-                ctx.context.cycle_count += 1
-            
+        try:
+            with function_span("update_neurochemical", input=f"{update_data.chemical}:{update_data.value}"):
+                # Validation
+                if not -1.0 <= update_data.value <= 1.0:
+                    raise UserError(f"Value must be between -1.0 and 1.0, got {update_data.value}")
+                
+                if update_data.chemical not in self.neurochemicals:
+                    raise UserError(f"Unknown neurochemical: {update_data.chemical}")
+                    
+                chemical = update_data.chemical
+                value = update_data.value
+                
+                # Get pre-update value
+                old_value = self.neurochemicals[chemical]["value"]
+                
+                # Update neurochemical
+                self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + value))
+                
+                # Update performance metrics
+                self.performance_metrics["update_counts"][chemical] += 1
+                
+                # Process chemical interactions
+                await self._process_chemical_interactions(ctx, source_chemical=chemical, source_delta=value)
+                
+                # Derive emotions from updated neurochemical state
+                emotional_state = await self._derive_emotional_state(ctx)
+                
+                # Update timestamp and record in history
+                self.last_update = datetime.datetime.now()
+                self._record_emotional_state()
+                
+                # Track in context
+                if ctx.context:
+                    ctx.context.last_emotions = emotional_state
+                    ctx.context.cycle_count += 1
+                
+                return EmotionUpdateResult(
+                    success=True,
+                    updated_chemical=chemical,
+                    old_value=old_value,
+                    new_value=self.neurochemicals[chemical]["value"],
+                    derived_emotions=emotional_state
+                )
+        except AgentsException as e:
+            logger.error(f"Agent exception during neurochemical update: {e}")
+            # Handle gracefully with appropriate response
             return EmotionUpdateResult(
-                success=True,
-                updated_chemical=chemical,
-                old_value=old_value,
-                new_value=self.neurochemicals[chemical]["value"],
-                derived_emotions=emotional_state
+                success=False,
+                updated_chemical=update_data.chemical,
+                old_value=self.neurochemicals.get(update_data.chemical, {}).get("value", 0.0),
+                new_value=self.neurochemicals.get(update_data.chemical, {}).get("value", 0.0),
+                derived_emotions={}
             )
     
     @function_tool
@@ -683,46 +806,57 @@ class EmotionalCore:
         Returns:
             Updated neurochemical state after decay
         """
-        with function_span("apply_chemical_decay"):
-            now = datetime.datetime.now()
-            time_delta = (now - self.last_update).total_seconds() / 3600  # hours
-            
-            # Don't decay if less than a minute has passed
-            if time_delta < 0.016:  # about 1 minute in hours
+        try:
+            with function_span("apply_chemical_decay"):
+                now = datetime.datetime.now()
+                time_delta = (now - self.last_update).total_seconds() / 3600  # hours
+                
+                # Don't decay if less than a minute has passed
+                if time_delta < 0.016:  # about 1 minute in hours
+                    return ChemicalDecayOutput(
+                        decay_applied=False,
+                        neurochemical_state={c: d["value"] for c, d in self.neurochemicals.items()},
+                        derived_emotions={},
+                        time_elapsed_hours=time_delta,
+                        last_update=self.last_update.isoformat()
+                    )
+                
+                # Apply decay to each neurochemical
+                for chemical, data in self.neurochemicals.items():
+                    decay_rate = data["decay_rate"]
+                    baseline = data["baseline"]
+                    current = data["value"]
+                    
+                    # Calculate decay based on time passed
+                    decay_amount = decay_rate * time_delta
+                    
+                    # Decay toward baseline
+                    if current > baseline:
+                        self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
+                    elif current < baseline:
+                        self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
+                
+                # Update timestamp
+                self.last_update = now
+                
+                # Derive new emotional state after decay
+                emotional_state = await self._derive_emotional_state(ctx)
+                
                 return ChemicalDecayOutput(
-                    decay_applied=False,
+                    decay_applied=True,
                     neurochemical_state={c: d["value"] for c, d in self.neurochemicals.items()},
-                    derived_emotions={},
+                    derived_emotions=emotional_state,
                     time_elapsed_hours=time_delta,
                     last_update=self.last_update.isoformat()
                 )
-            
-            # Apply decay to each neurochemical
-            for chemical, data in self.neurochemicals.items():
-                decay_rate = data["decay_rate"]
-                baseline = data["baseline"]
-                current = data["value"]
-                
-                # Calculate decay based on time passed
-                decay_amount = decay_rate * time_delta
-                
-                # Decay toward baseline
-                if current > baseline:
-                    self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
-                elif current < baseline:
-                    self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
-            
-            # Update timestamp
-            self.last_update = now
-            
-            # Derive new emotional state after decay
-            emotional_state = await self._derive_emotional_state(ctx)
-            
+        except Exception as e:
+            logger.error(f"Error in chemical decay: {e}")
+            # Return safe default response
             return ChemicalDecayOutput(
-                decay_applied=True,
+                decay_applied=False,
                 neurochemical_state={c: d["value"] for c, d in self.neurochemicals.items()},
-                derived_emotions=emotional_state,
-                time_elapsed_hours=time_delta,
+                derived_emotions={},
+                time_elapsed_hours=0.0,
                 last_update=self.last_update.isoformat()
             )
     
@@ -743,44 +877,53 @@ class EmotionalCore:
         Returns:
             Interaction results
         """
-        with function_span("process_chemical_interactions", input=f"{source_chemical}:{source_delta}"):
-            if source_chemical not in self.chemical_interactions:
+        try:
+            with function_span("process_chemical_interactions", input=f"{source_chemical}:{source_delta}"):
+                if source_chemical not in self.chemical_interactions:
+                    return NeurochemicalInteractionOutput(
+                        source_chemical=source_chemical,
+                        source_delta=source_delta,
+                        changes={}
+                    )
+                
+                changes = {}
+                
+                # Apply interactions to affected chemicals
+                for target_chemical, multiplier in self.chemical_interactions[source_chemical].items():
+                    if target_chemical in self.neurochemicals:
+                        # Calculate effect (source_delta * interaction_multiplier)
+                        effect = source_delta * multiplier
+                        
+                        # Skip tiny effects
+                        if abs(effect) < 0.01:
+                            continue
+                        
+                        # Store old value
+                        old_value = self.neurochemicals[target_chemical]["value"]
+                        
+                        # Apply effect
+                        new_value = max(0, min(1, old_value + effect))
+                        self.neurochemicals[target_chemical]["value"] = new_value
+                        
+                        # Record change
+                        changes[target_chemical] = {
+                            "old_value": old_value,
+                            "new_value": new_value,
+                            "change": new_value - old_value
+                        }
+                
                 return NeurochemicalInteractionOutput(
                     source_chemical=source_chemical,
                     source_delta=source_delta,
-                    changes={}
+                    changes=changes
                 )
-            
-            changes = {}
-            
-            # Apply interactions to affected chemicals
-            for target_chemical, multiplier in self.chemical_interactions[source_chemical].items():
-                if target_chemical in self.neurochemicals:
-                    # Calculate effect (source_delta * interaction_multiplier)
-                    effect = source_delta * multiplier
-                    
-                    # Skip tiny effects
-                    if abs(effect) < 0.01:
-                        continue
-                    
-                    # Store old value
-                    old_value = self.neurochemicals[target_chemical]["value"]
-                    
-                    # Apply effect
-                    new_value = max(0, min(1, old_value + effect))
-                    self.neurochemicals[target_chemical]["value"] = new_value
-                    
-                    # Record change
-                    changes[target_chemical] = {
-                        "old_value": old_value,
-                        "new_value": new_value,
-                        "change": new_value - old_value
-                    }
-            
+        except Exception as e:
+            logger.error(f"Error in chemical interactions: {e}")
+            # Return minimal default response
             return NeurochemicalInteractionOutput(
                 source_chemical=source_chemical,
                 source_delta=source_delta,
-                changes=changes
+                changes={}
             )
     
     @function_tool
@@ -792,14 +935,35 @@ class EmotionalCore:
             Current neurochemical state
         """
         with function_span("get_neurochemical_state"):
+            # Check if we have a cached state in context for better performance
+            if "cached_neurochemical_state" in ctx.context.temp_data:
+                cached_time = ctx.context.temp_data.get("cached_time", 0)
+                current_time = datetime.datetime.now().timestamp()
+                
+                # Use cached value if it's fresh (less than 1 second old)
+                if current_time - cached_time < 1.0:
+                    return {
+                        "chemicals": ctx.context.temp_data["cached_neurochemical_state"],
+                        "baselines": {c: d["baseline"] for c, d in self.neurochemicals.items()},
+                        "decay_rates": {c: d["decay_rate"] for c, d in self.neurochemicals.items()},
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "cached": True
+                    }
+            
             # Apply decay before returning state
             await self._apply_chemical_decay(ctx)
             
+            # Cache the result for future calls
+            state = {c: d["value"] for c, d in self.neurochemicals.items()}
+            ctx.context.temp_data["cached_neurochemical_state"] = state
+            ctx.context.temp_data["cached_time"] = datetime.datetime.now().timestamp()
+            
             return {
-                "chemicals": {c: d["value"] for c, d in self.neurochemicals.items()},
+                "chemicals": state,
                 "baselines": {c: d["baseline"] for c, d in self.neurochemicals.items()},
                 "decay_rates": {c: d["decay_rate"] for c, d in self.neurochemicals.items()},
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.datetime.now().isoformat(),
+                "cached": False
             }
     
     # =========================================================================
@@ -992,17 +1156,12 @@ class EmotionalCore:
                 }
             
             # Store interaction information in context
-            if ctx.context:
-                ctx.context.interaction_history.append({
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "primary_emotion": primary_emotion,
-                    "intensity": intensity,
-                    "thought": thought_text
-                })
-                
-                # Limit history size
-                if len(ctx.context.interaction_history) > 20:
-                    ctx.context.interaction_history = ctx.context.interaction_history[-20:]
+            ctx.context.add_interaction({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "primary_emotion": primary_emotion,
+                "intensity": intensity,
+                "thought": thought_text
+            })
             
             return InternalThoughtOutput(
                 thought_text=thought_text,
@@ -1516,6 +1675,33 @@ class EmotionalCore:
         return result.final_output
     
     @_with_emotion_trace
+    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[Dict[str, Any]]:
+        """Process input with streaming responses to provide real-time emotional reactions"""
+        self.context.cycle_count += 1
+        orchestrator = self._ensure_agent("orchestrator")
+        run_config = self._create_base_run_config(
+            workflow_name="Emotional_Processing_Streamed",
+            trace_id=f"emotion_stream_{self.context.cycle_count}"
+        )
+        
+        # Use run_streamed instead of run
+        result = Runner.run_streamed(
+            orchestrator,
+            json.dumps({"input_text": text, "current_cycle": self.context.cycle_count}),
+            context=self.context,
+            run_config=run_config
+        )
+        
+        # Stream events as they happen
+        async for event in result.stream_events():
+            if event.type == "run_item_stream_event":
+                if event.item.type == "message_output_item":
+                    yield {
+                        "type": "emotional_update",
+                        "content": ItemHelpers.text_message_output(event.item)
+                    }
+    
+    @_with_emotion_trace
     async def generate_emotional_expression(self, force: bool = False) -> Dict[str, Any]:
         """
         Generate an emotional expression based on current state
@@ -1587,91 +1773,95 @@ class EmotionalCore:
         Returns:
             Processing results
         """
-        results = {}
-        
-        # Create context wrapper for async calls
-        ctx_wrapper = RunContextWrapper(context=self.context)
-        
-        # Positive reward primarily affects nyxamine (dopamine)
-        if reward_value > 0:
-            # Update nyxamine (dopamine)
-            nyxamine_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="nyxamine",
-                    value=reward_value * 0.5,  # Scale reward to appropriate change
-                    source=source
-                )
-            )
-            results["nyxamine"] = nyxamine_result
+        try:
+            results = {}
             
-            # Slight increase in seranix (serotonin) for positive reward
-            seranix_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="seranix",
-                    value=reward_value * 0.2,
-                    source=source
-                )
-            )
-            results["seranix"] = seranix_result
+            # Create context wrapper for async calls
+            ctx_wrapper = RunContextWrapper(context=self.context)
             
-            # Slight decrease in cortanyx (stress hormone)
-            cortanyx_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="cortanyx",
-                    value=-reward_value * 0.1,
-                    source=source
+            # Positive reward primarily affects nyxamine (dopamine)
+            if reward_value > 0:
+                # Update nyxamine (dopamine)
+                nyxamine_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="nyxamine",
+                        value=reward_value * 0.5,  # Scale reward to appropriate change
+                        source=source
+                    )
                 )
-            )
-            results["cortanyx"] = cortanyx_result
-        
-        # Negative reward affects cortanyx (stress) and reduces nyxamine
-        elif reward_value < 0:
-            # Increase cortanyx (stress hormone)
-            cortanyx_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="cortanyx",
-                    value=abs(reward_value) * 0.4,
-                    source=source
+                results["nyxamine"] = nyxamine_result
+                
+                # Slight increase in seranix (serotonin) for positive reward
+                seranix_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="seranix",
+                        value=reward_value * 0.2,
+                        source=source
+                    )
                 )
-            )
-            results["cortanyx"] = cortanyx_result
+                results["seranix"] = seranix_result
+                
+                # Slight decrease in cortanyx (stress hormone)
+                cortanyx_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="cortanyx",
+                        value=-reward_value * 0.1,
+                        source=source
+                    )
+                )
+                results["cortanyx"] = cortanyx_result
             
-            # Decrease nyxamine (dopamine)
-            nyxamine_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="nyxamine",
-                    value=reward_value * 0.3,  # Already negative
-                    source=source
+            # Negative reward affects cortanyx (stress) and reduces nyxamine
+            elif reward_value < 0:
+                # Increase cortanyx (stress hormone)
+                cortanyx_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="cortanyx",
+                        value=abs(reward_value) * 0.4,
+                        source=source
+                    )
                 )
-            )
-            results["nyxamine"] = nyxamine_result
+                results["cortanyx"] = cortanyx_result
+                
+                # Decrease nyxamine (dopamine)
+                nyxamine_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="nyxamine",
+                        value=reward_value * 0.3,  # Already negative
+                        source=source
+                    )
+                )
+                results["nyxamine"] = nyxamine_result
+                
+                # Slight decrease in seranix (mood stability)
+                seranix_result = await self._update_neurochemical(
+                    ctx_wrapper,
+                    EmotionUpdateInput(
+                        chemical="seranix",
+                        value=reward_value * 0.1,  # Already negative
+                        source=source
+                    )
+                )
+                results["seranix"] = seranix_result
             
-            # Slight decrease in seranix (mood stability)
-            seranix_result = await self._update_neurochemical(
-                ctx_wrapper,
-                EmotionUpdateInput(
-                    chemical="seranix",
-                    value=reward_value * 0.1,  # Already negative
-                    source=source
-                )
-            )
-            results["seranix"] = seranix_result
-        
-        # Get updated emotional state
-        emotional_state = await self._get_emotional_state_matrix(ctx_wrapper)
-        results["emotional_state"] = emotional_state
-        
-        # Track in context
-        self.context.last_emotions = {
-            emotional_state.primary_emotion.name: emotional_state.primary_emotion.intensity
-        }
-        
-        return results
+            # Get updated emotional state
+            emotional_state = await self._get_emotional_state_matrix(ctx_wrapper)
+            results["emotional_state"] = emotional_state
+            
+            # Track in context
+            self.context.last_emotions = {
+                emotional_state.primary_emotion.name: emotional_state.primary_emotion.intensity
+            }
+            
+            return results
+        except AgentsException as e:
+            logger.error(f"Agent exception during reward processing: {e}")
+            return {"error": str(e), "success": False}
     
     @_with_emotion_trace
     async def update_neurochemical_baseline(self, 
@@ -1687,24 +1877,28 @@ class EmotionalCore:
         Returns:
             Update result
         """
-        if chemical not in self.neurochemicals:
-            raise UserError(f"Unknown neurochemical: {chemical}. Available chemicals: {list(self.neurochemicals.keys())}")
-        
-        # Validate baseline value
-        new_baseline = max(0.0, min(1.0, new_baseline))
-        
-        # Store old value
-        old_baseline = self.neurochemicals[chemical]["baseline"]
-        
-        # Update baseline
-        self.neurochemicals[chemical]["baseline"] = new_baseline
-        
-        return {
-            "success": True,
-            "chemical": chemical,
-            "old_baseline": old_baseline,
-            "new_baseline": new_baseline
-        }
+        try:
+            if chemical not in self.neurochemicals:
+                raise UserError(f"Unknown neurochemical: {chemical}. Available chemicals: {list(self.neurochemicals.keys())}")
+            
+            # Validate baseline value
+            new_baseline = max(0.0, min(1.0, new_baseline))
+            
+            # Store old value
+            old_baseline = self.neurochemicals[chemical]["baseline"]
+            
+            # Update baseline
+            self.neurochemicals[chemical]["baseline"] = new_baseline
+            
+            return {
+                "success": True,
+                "chemical": chemical,
+                "old_baseline": old_baseline,
+                "new_baseline": new_baseline
+            }
+        except Exception as e:
+            logger.error(f"Error updating baseline: {e}")
+            return {"error": str(e), "success": False}
     
     @_with_emotion_trace
     async def generate_introspection(self) -> Dict[str, Any]:
@@ -1946,24 +2140,28 @@ class EmotionalCore:
             "Frustration": {"cortanyx": 0.6, "nyxamine": -0.3}
         }
         
-        if emotion in chemical_map:
-            # Apply each chemical change
-            for chemical, factor in chemical_map[emotion].items():
-                if chemical in self.neurochemicals:
-                    # Scale the value by the factor
-                    scaled_value = value * factor
-                    
-                    # Update the chemical
-                    old_value = self.neurochemicals[chemical]["value"]
-                    self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + scaled_value))
+        try:
+            if emotion in chemical_map:
+                # Apply each chemical change
+                for chemical, factor in chemical_map[emotion].items():
+                    if chemical in self.neurochemicals:
+                        # Scale the value by the factor
+                        scaled_value = value * factor
+                        
+                        # Update the chemical
+                        old_value = self.neurochemicals[chemical]["value"]
+                        self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + scaled_value))
+                
+                # Update timestamp and record history
+                self.last_update = datetime.datetime.now()
+                self._record_emotional_state()
+                
+                return True
             
-            # Update timestamp and record history
-            self.last_update = datetime.datetime.now()
-            self._record_emotional_state()
-            
-            return True
-        
-        return False
+            return False
+        except Exception as e:
+            logger.error(f"Error in update_emotion: {e}")
+            return False
     
     def set_emotion(self, emotion: str, value: float) -> bool:
         """Legacy API: Set a specific emotion to an absolute value (not delta)"""
@@ -1981,163 +2179,198 @@ class EmotionalCore:
             "Frustration": {"cortanyx": 0.6, "nyxamine": 0.3}
         }
         
-        if emotion in chemical_map:
-            # Apply each chemical change as an absolute value
-            for chemical, factor in chemical_map[emotion].items():
-                if chemical in self.neurochemicals:
-                    # Scale the target value by the factor
-                    target_value = value * factor
-                    
-                    # Set the chemical to the target value
-                    self.neurochemicals[chemical]["value"] = max(0, min(1, target_value))
+        try:
+            if emotion in chemical_map:
+                # Apply each chemical change as an absolute value
+                for chemical, factor in chemical_map[emotion].items():
+                    if chemical in self.neurochemicals:
+                        # Scale the target value by the factor
+                        target_value = value * factor
+                        
+                        # Set the chemical to the target value
+                        self.neurochemicals[chemical]["value"] = max(0, min(1, target_value))
+                
+                # Update timestamp and record history
+                self.last_update = datetime.datetime.now()
+                self._record_emotional_state()
+                
+                return True
             
-            # Update timestamp and record history
-            self.last_update = datetime.datetime.now()
-            self._record_emotional_state()
-            
-            return True
-        
-        return False
+            return False
+        except Exception as e:
+            logger.error(f"Error in set_emotion: {e}")
+            return False
     
     def update_from_stimuli(self, stimuli: Dict[str, float]) -> Dict[str, float]:
         """Legacy API: Update emotions based on received stimuli"""
-        for emotion, adjustment in stimuli.items():
-            self.update_emotion(emotion, adjustment)
-        
-        # Update timestamp
-        self.last_update = datetime.datetime.now()
-        
-        # Record in history
-        self._record_emotional_state()
-        
-        # For legacy API compatibility, return derived emotions
-        return self.get_emotional_state()
+        try:
+            for emotion, adjustment in stimuli.items():
+                self.update_emotion(emotion, adjustment)
+            
+            # Update timestamp
+            self.last_update = datetime.datetime.now()
+            
+            # Record in history
+            self._record_emotional_state()
+            
+            # For legacy API compatibility, return derived emotions
+            return self.get_emotional_state()
+        except Exception as e:
+            logger.error(f"Error in update_from_stimuli: {e}")
+            return {}
     
     def apply_decay(self):
         """Legacy API: Apply emotional decay based on time elapsed since last update"""
-        now = datetime.datetime.now()
-        time_delta = (now - self.last_update).total_seconds() / 3600  # hours
-        
-        # Don't decay if less than a minute has passed
-        if time_delta < 0.016:  # about 1 minute in hours
-            return
-        
-        # Apply decay to each neurochemical
-        for chemical, data in self.neurochemicals.items():
-            decay_rate = data["decay_rate"]
-            baseline = data["baseline"]
-            current = data["value"]
+        try:
+            now = datetime.datetime.now()
+            time_delta = (now - self.last_update).total_seconds() / 3600  # hours
             
-            # Calculate decay based on time passed
-            decay_amount = decay_rate * time_delta
+            # Don't decay if less than a minute has passed
+            if time_delta < 0.016:  # about 1 minute in hours
+                return
             
-            # Decay toward baseline
-            if current > baseline:
-                self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
-            elif current < baseline:
-                self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
-        
-        # Update timestamp
-        self.last_update = now
+            # Apply decay to each neurochemical
+            for chemical, data in self.neurochemicals.items():
+                decay_rate = data["decay_rate"]
+                baseline = data["baseline"]
+                current = data["value"]
+                
+                # Calculate decay based on time passed
+                decay_amount = decay_rate * time_delta
+                
+                # Decay toward baseline
+                if current > baseline:
+                    self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
+                elif current < baseline:
+                    self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
+            
+            # Update timestamp
+            self.last_update = now
+        except Exception as e:
+            logger.error(f"Error in apply_decay: {e}")
     
     def get_emotional_state(self) -> Dict[str, float]:
         """Legacy API: Return the current emotional state"""
-        self.apply_decay()  # Apply decay before returning state
-        
-        # Get derived emotions from neurochemical state
-        emotion_intensities = self._derive_emotional_state_sync()
-        
-        # For backward compatibility with older code
-        for standard_emotion in ["Joy", "Sadness", "Fear", "Anger", "Trust", "Disgust", 
-                                "Anticipation", "Surprise", "Love", "Frustration"]:
-            if standard_emotion not in emotion_intensities:
-                emotion_intensities[standard_emotion] = 0.1
-        
-        return emotion_intensities
+        try:
+            self.apply_decay()  # Apply decay before returning state
+            
+            # Get derived emotions from neurochemical state
+            emotion_intensities = self._derive_emotional_state_sync()
+            
+            # For backward compatibility with older code
+            for standard_emotion in ["Joy", "Sadness", "Fear", "Anger", "Trust", "Disgust", 
+                                    "Anticipation", "Surprise", "Love", "Frustration"]:
+                if standard_emotion not in emotion_intensities:
+                    emotion_intensities[standard_emotion] = 0.1
+            
+            return emotion_intensities
+        except Exception as e:
+            logger.error(f"Error in get_emotional_state: {e}")
+            return {"Neutral": 0.5}
     
     def get_dominant_emotion(self) -> Tuple[str, float]:
         """Legacy API: Return the most intense emotion"""
-        self.apply_decay()
-        
-        # Get derived emotions
-        emotion_intensities = self._derive_emotional_state_sync()
-        
-        if not emotion_intensities:
-            return ("Neutral", 0.5)
+        try:
+            self.apply_decay()
             
-        return max(emotion_intensities.items(), key=lambda x: x[1])
+            # Get derived emotions
+            emotion_intensities = self._derive_emotional_state_sync()
+            
+            if not emotion_intensities:
+                return ("Neutral", 0.5)
+                
+            return max(emotion_intensities.items(), key=lambda x: x[1])
+        except Exception as e:
+            logger.error(f"Error in get_dominant_emotion: {e}")
+            return ("Neutral", 0.5)
     
     def get_emotional_valence(self) -> float:
         """Legacy API: Calculate overall emotional valence (positive/negative)"""
-        # Get emotional state matrix
-        matrix = self._get_emotional_state_matrix_sync()
-        
-        return matrix["valence"]
+        try:
+            # Get emotional state matrix
+            matrix = self._get_emotional_state_matrix_sync()
+            
+            return matrix["valence"]
+        except Exception as e:
+            logger.error(f"Error in get_emotional_valence: {e}")
+            return 0.0
     
     def get_emotional_arousal(self) -> float:
         """Legacy API: Calculate overall emotional arousal (intensity)"""
-        # Get emotional state matrix
-        matrix = self._get_emotional_state_matrix_sync()
-        
-        return matrix["arousal"]
+        try:
+            # Get emotional state matrix
+            matrix = self._get_emotional_state_matrix_sync()
+            
+            return matrix["arousal"]
+        except Exception as e:
+            logger.error(f"Error in get_emotional_arousal: {e}")
+            return 0.5
     
     def should_express_emotion(self) -> bool:
         """Legacy API: Determine if Nyx should express emotion based on current state"""
-        # Get dominant emotion and intensity
-        matrix = self._get_emotional_state_matrix_sync()
-        dominant_value = matrix["primary_emotion"]["intensity"]
-        arousal = matrix["arousal"]
-        
-        # Higher intensity/arousal emotions are more likely to be expressed
-        threshold = 0.7 - (dominant_value * 0.3) - (arousal * 0.2)  # Adaptive threshold
-        
-        return random.random() > threshold
+        try:
+            # Get dominant emotion and intensity
+            matrix = self._get_emotional_state_matrix_sync()
+            dominant_value = matrix["primary_emotion"]["intensity"]
+            arousal = matrix["arousal"]
+            
+            # Higher intensity/arousal emotions are more likely to be expressed
+            threshold = 0.7 - (dominant_value * 0.3) - (arousal * 0.2)  # Adaptive threshold
+            
+            return random.random() > threshold
+        except Exception as e:
+            logger.error(f"Error in should_express_emotion: {e}")
+            return False
     
     def get_expression_for_emotion(self, emotion: Optional[str] = None, temporal_context: Optional[Dict[str, Any]] = None) -> str:
         """Legacy API: Get a natural language expression for an emotion"""
-        if emotion is None:
-            # Get dominant emotion
-            matrix = self._get_emotional_state_matrix_sync()
-            emotion = matrix["primary_emotion"]["name"]
-        
-        # Attempt to generate an internal thought for this emotion
-        reflection_patterns = self.reflection_patterns.get(emotion, [])
-        
-        if reflection_patterns:
-            return random.choice(reflection_patterns)
+        try:
+            if emotion is None:
+                # Get dominant emotion
+                matrix = self._get_emotional_state_matrix_sync()
+                emotion = matrix["primary_emotion"]["name"]
+            
+            # Attempt to generate an internal thought for this emotion
+            reflection_patterns = self.reflection_patterns.get(emotion, [])
+            
+            if reflection_patterns:
+                return random.choice(reflection_patterns)
 
-        # Add temporal variations if context provided
-        if temporal_context and "time_category" in temporal_context:
-            time_category = temporal_context["time_category"]
+            # Add temporal variations if context provided
+            if temporal_context and "time_category" in temporal_context:
+                time_category = temporal_context["time_category"]
+                
+                # Add time-specific variations to expressions
+                if time_category in ["long", "very_long"] and emotion == "Joy":
+                    return "After some time apart, I find myself particularly pleased to reconnect."
+                elif time_category in ["long", "very_long"] and emotion in ["Sadness", "Melancholy"]:
+                    return "The passage of time has left me in a somewhat pensive state."
+                elif time_category in ["medium", "medium_long"] and emotion == "Anticipation":
+                    return "I've been experiencing a growing sense of anticipation during our conversation."
+                
             
-            # Add time-specific variations to expressions
-            if time_category in ["long", "very_long"] and emotion == "Joy":
-                return "After some time apart, I find myself particularly pleased to reconnect."
-            elif time_category in ["long", "very_long"] and emotion in ["Sadness", "Melancholy"]:
-                return "The passage of time has left me in a somewhat pensive state."
-            elif time_category in ["medium", "medium_long"] and emotion == "Anticipation":
-                return "I've been experiencing a growing sense of anticipation during our conversation."
+            # Fallback expressions if no patterns exist
+            fallback_expressions = {
+                "Joy": "I'm feeling quite pleased right now.",
+                "Sadness": "I'm feeling a bit melancholy.",
+                "Fear": "I'm feeling somewhat anxious.",
+                "Anger": "I'm feeling rather irritated.",
+                "Trust": "I'm feeling quite comfortable with you.",
+                "Disgust": "I'm feeling a bit repulsed.",
+                "Anticipation": "I'm looking forward to what happens next.",
+                "Surprise": "I'm quite taken aback.",
+                "Love": "I'm feeling particularly fond of you.",
+                "Frustration": "I'm feeling somewhat frustrated.",
+                "Teasing": "I feel like being playful and teasing.",
+                "Controlling": "I feel the need to take control now.",
+                "Cruel": "I'm in a rather severe mood right now.",
+                "Detached": "I'm feeling emotionally distant at the moment."
+            }
             
-        
-        # Fallback expressions if no patterns exist
-        fallback_expressions = {
-            "Joy": "I'm feeling quite pleased right now.",
-            "Sadness": "I'm feeling a bit melancholy.",
-            "Fear": "I'm feeling somewhat anxious.",
-            "Anger": "I'm feeling rather irritated.",
-            "Trust": "I'm feeling quite comfortable with you.",
-            "Disgust": "I'm feeling a bit repulsed.",
-            "Anticipation": "I'm looking forward to what happens next.",
-            "Surprise": "I'm quite taken aback.",
-            "Love": "I'm feeling particularly fond of you.",
-            "Frustration": "I'm feeling somewhat frustrated.",
-            "Teasing": "I feel like being playful and teasing.",
-            "Controlling": "I feel the need to take control now.",
-            "Cruel": "I'm in a rather severe mood right now.",
-            "Detached": "I'm feeling emotionally distant at the moment."
-        }
-        
-        return fallback_expressions.get(emotion, "I'm experiencing a complex mix of emotions right now.")
+            return fallback_expressions.get(emotion, "I'm experiencing a complex mix of emotions right now.")
+        except Exception as e:
+            logger.error(f"Error in get_expression_for_emotion: {e}")
+            return "I'm experiencing a complex mix of emotions right now."
     
     # =========================================================================
     # Sync Helper Methods for Legacy API
@@ -2367,44 +2600,48 @@ class HormoneSystem:
         Returns:
             Update result
         """
-        if hormone not in self.hormones:
+        try:
+            if hormone not in self.hormones:
+                return {
+                    "success": False,
+                    "error": f"Unknown hormone: {hormone}"
+                }
+            
+            # Get pre-update value
+            old_value = self.hormones[hormone]["value"]
+            
+            # Calculate new value with bounds checking
+            new_value = max(0.0, min(1.0, old_value + change))
+            self.hormones[hormone]["value"] = new_value
+            
+            # Record significant changes
+            if abs(new_value - old_value) > 0.05:
+                self.hormones[hormone]["evolution_history"].append({
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": change,
+                    "source": source
+                })
+                
+                # Limit history size
+                if len(self.hormones[hormone]["evolution_history"]) > 50:
+                    self.hormones[hormone]["evolution_history"] = self.hormones[hormone]["evolution_history"][-50:]
+            
+            # Update last_update timestamp
+            self.hormones[hormone]["last_update"] = datetime.datetime.now().isoformat()
+            
             return {
-                "success": False,
-                "error": f"Unknown hormone: {hormone}"
-            }
-        
-        # Get pre-update value
-        old_value = self.hormones[hormone]["value"]
-        
-        # Calculate new value with bounds checking
-        new_value = max(0.0, min(1.0, old_value + change))
-        self.hormones[hormone]["value"] = new_value
-        
-        # Record significant changes
-        if abs(new_value - old_value) > 0.05:
-            self.hormones[hormone]["evolution_history"].append({
-                "timestamp": datetime.datetime.now().isoformat(),
+                "success": True,
+                "hormone": hormone,
                 "old_value": old_value,
                 "new_value": new_value,
                 "change": change,
                 "source": source
-            })
-            
-            # Limit history size
-            if len(self.hormones[hormone]["evolution_history"]) > 50:
-                self.hormones[hormone]["evolution_history"] = self.hormones[hormone]["evolution_history"][-50:]
-        
-        # Update last_update timestamp
-        self.hormones[hormone]["last_update"] = datetime.datetime.now().isoformat()
-        
-        return {
-            "success": True,
-            "hormone": hormone,
-            "old_value": old_value,
-            "new_value": new_value,
-            "change": change,
-            "source": source
-        }
+            }
+        except Exception as e:
+            logger.error(f"Error updating hormone: {e}")
+            return {"success": False, "error": str(e)}
         
     @function_tool
     async def update_hormone_cycles(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
@@ -2414,83 +2651,87 @@ class HormoneSystem:
         Returns:
             Updated hormone values
         """
-        with function_span("update_hormone_cycles"):
-            now = datetime.datetime.now()
-            updated_values = {}
-            
-            for hormone_name, hormone_data in self.hormones.items():
-                # Get time since last update
-                last_update = datetime.datetime.fromisoformat(hormone_data.get("last_update", self.init_time.isoformat()))
-                hours_elapsed = (now - last_update).total_seconds() / 3600
+        try:
+            with function_span("update_hormone_cycles"):
+                now = datetime.datetime.now()
+                updated_values = {}
                 
-                # Skip if very little time has passed
-                if hours_elapsed < 0.1:  # Less than 6 minutes
-                    continue
+                for hormone_name, hormone_data in self.hormones.items():
+                    # Get time since last update
+                    last_update = datetime.datetime.fromisoformat(hormone_data.get("last_update", self.init_time.isoformat()))
+                    hours_elapsed = (now - last_update).total_seconds() / 3600
                     
-                # Calculate natural cycle progression
-                cycle_period = hormone_data["cycle_period"]
-                old_phase = hormone_data["cycle_phase"]
-                
-                # Progress cycle phase based on elapsed time - use efficient math
-                phase_change = (hours_elapsed / cycle_period) % 1.0
-                new_phase = (old_phase + phase_change) % 1.0
-                
-                # Calculate cycle-based value using a sinusoidal pattern - cached constants for speed
-                cycle_amplitude = 0.2  # How much the cycle affects the value
-                PI_2 = 6.28318530718  # 2*pi precomputed
-                cycle_influence = cycle_amplitude * math.sin(new_phase * PI_2)
-                
-                # Apply environmental factors
-                env_influence = self._calculate_environmental_influence(hormone_name)
-                
-                # Calculate decay based on half-life
-                half_life = hormone_data["half_life"]
-                decay_factor = math.pow(0.5, hours_elapsed / half_life)
-                
-                # Calculate new value
-                old_value = hormone_data["value"]
-                baseline = hormone_data["baseline"]
-                
-                # Value decays toward (baseline + cycle_influence + env_influence)
-                target_value = baseline + cycle_influence + env_influence
-                new_value = old_value * decay_factor + target_value * (1 - decay_factor)
-                
-                # Constrain to valid range
-                new_value = max(0.1, min(0.9, new_value))
-                
-                # Update hormone data
-                hormone_data["value"] = new_value
-                hormone_data["cycle_phase"] = new_phase
-                hormone_data["last_update"] = now.isoformat()
-                
-                # Track significant changes
-                if abs(new_value - old_value) > 0.05:
-                    hormone_data["evolution_history"].append({
-                        "timestamp": now.isoformat(),
+                    # Skip if very little time has passed
+                    if hours_elapsed < 0.1:  # Less than 6 minutes
+                        continue
+                        
+                    # Calculate natural cycle progression
+                    cycle_period = hormone_data["cycle_period"]
+                    old_phase = hormone_data["cycle_phase"]
+                    
+                    # Progress cycle phase based on elapsed time - use efficient math
+                    phase_change = (hours_elapsed / cycle_period) % 1.0
+                    new_phase = (old_phase + phase_change) % 1.0
+                    
+                    # Calculate cycle-based value using a sinusoidal pattern - cached constants for speed
+                    cycle_amplitude = 0.2  # How much the cycle affects the value
+                    PI_2 = 6.28318530718  # 2*pi precomputed
+                    cycle_influence = cycle_amplitude * math.sin(new_phase * PI_2)
+                    
+                    # Apply environmental factors
+                    env_influence = self._calculate_environmental_influence(hormone_name)
+                    
+                    # Calculate decay based on half-life
+                    half_life = hormone_data["half_life"]
+                    decay_factor = math.pow(0.5, hours_elapsed / half_life)
+                    
+                    # Calculate new value
+                    old_value = hormone_data["value"]
+                    baseline = hormone_data["baseline"]
+                    
+                    # Value decays toward (baseline + cycle_influence + env_influence)
+                    target_value = baseline + cycle_influence + env_influence
+                    new_value = old_value * decay_factor + target_value * (1 - decay_factor)
+                    
+                    # Constrain to valid range
+                    new_value = max(0.1, min(0.9, new_value))
+                    
+                    # Update hormone data
+                    hormone_data["value"] = new_value
+                    hormone_data["cycle_phase"] = new_phase
+                    hormone_data["last_update"] = now.isoformat()
+                    
+                    # Track significant changes
+                    if abs(new_value - old_value) > 0.05:
+                        hormone_data["evolution_history"].append({
+                            "timestamp": now.isoformat(),
+                            "old_value": old_value,
+                            "new_value": new_value,
+                            "old_phase": old_phase,
+                            "new_phase": new_phase,
+                            "reason": "cycle_update"
+                        })
+                        
+                        # Limit history size
+                        if len(hormone_data["evolution_history"]) > 50:
+                            hormone_data["evolution_history"] = hormone_data["evolution_history"][-50:]
+                    
+                    updated_values[hormone_name] = {
                         "old_value": old_value,
                         "new_value": new_value,
-                        "old_phase": old_phase,
-                        "new_phase": new_phase,
-                        "reason": "cycle_update"
-                    })
-                    
-                    # Limit history size
-                    if len(hormone_data["evolution_history"]) > 50:
-                        hormone_data["evolution_history"] = hormone_data["evolution_history"][-50:]
+                        "phase": new_phase
+                    }
                 
-                updated_values[hormone_name] = {
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "phase": new_phase
+                # After updating hormones, update their influence on neurochemicals
+                await self._update_hormone_influences(ctx)
+                
+                return {
+                    "updated_hormones": updated_values,
+                    "timestamp": now.isoformat()
                 }
-            
-            # After updating hormones, update their influence on neurochemicals
-            await self._update_hormone_influences(ctx)
-            
-            return {
-                "updated_hormones": updated_values,
-                "timestamp": now.isoformat()
-            }
+        except Exception as e:
+            logger.error(f"Error in hormone cycles: {e}")
+            return {"error": str(e), "updated_hormones": {}}
     
     def _calculate_environmental_influence(self, hormone_name: str) -> float:
         """Calculate environmental influence on a hormone using a more efficient approach"""
@@ -2518,52 +2759,56 @@ class HormoneSystem:
         Returns:
             Updated influence values
         """
-        with function_span("update_hormone_influences"):
-            # Skip if no emotional core
-            if not self.emotional_core:
-                return {
-                    "message": "No emotional core available",
-                    "influences": {}
-                }
-            
-            # Pre-initialize all influences to zero for cleaner calculation
-            influences = {
-                chemical: 0.0 for chemical in self.emotional_core.neurochemicals
-            }
-            
-            # Calculate influences from each hormone
-            for hormone_name, hormone_data in self.hormones.items():
-                # Skip if hormone has no influence mapping
-                if hormone_name not in self.hormone_neurochemical_influences:
-                    continue
-                    
-                hormone_value = hormone_data["value"]
-                hormone_influence_map = self.hormone_neurochemical_influences[hormone_name]
+        try:
+            with function_span("update_hormone_influences"):
+                # Skip if no emotional core
+                if not self.emotional_core:
+                    return {
+                        "message": "No emotional core available",
+                        "influences": {}
+                    }
                 
-                # Apply influences based on hormone value
-                for chemical, influence_factor in hormone_influence_map.items():
-                    if chemical in self.emotional_core.neurochemicals:
-                        # Calculate scaled influence
-                        scaled_influence = influence_factor * (hormone_value - 0.5) * 2
+                # Pre-initialize all influences to zero for cleaner calculation
+                influences = {
+                    chemical: 0.0 for chemical in self.emotional_core.neurochemicals
+                }
+                
+                # Calculate influences from each hormone
+                for hormone_name, hormone_data in self.hormones.items():
+                    # Skip if hormone has no influence mapping
+                    if hormone_name not in self.hormone_neurochemical_influences:
+                        continue
                         
-                        # Accumulate influence (allows multiple hormones to affect the same chemical)
-                        influences[chemical] += scaled_influence
-            
-            # Apply the accumulated influences
-            for chemical, influence in influences.items():
-                if chemical in self.emotional_core.neurochemicals:
-                    # Get original baseline
-                    original_baseline = self.emotional_core.neurochemicals[chemical]["baseline"]
+                    hormone_value = hormone_data["value"]
+                    hormone_influence_map = self.hormone_neurochemical_influences[hormone_name]
                     
-                    # Add temporary hormone influence with bounds checking
-                    temporary_baseline = max(0.1, min(0.9, original_baseline + influence))
-                    
-                    # Record influence but don't permanently change baseline
-                    self.emotional_core.neurochemicals[chemical]["temporary_baseline"] = temporary_baseline
-            
-            return {
-                "applied_influences": influences
-            }
+                    # Apply influences based on hormone value
+                    for chemical, influence_factor in hormone_influence_map.items():
+                        if chemical in self.emotional_core.neurochemicals:
+                            # Calculate scaled influence
+                            scaled_influence = influence_factor * (hormone_value - 0.5) * 2
+                            
+                            # Accumulate influence (allows multiple hormones to affect the same chemical)
+                            influences[chemical] += scaled_influence
+                
+                # Apply the accumulated influences
+                for chemical, influence in influences.items():
+                    if chemical in self.emotional_core.neurochemicals:
+                        # Get original baseline
+                        original_baseline = self.emotional_core.neurochemicals[chemical]["baseline"]
+                        
+                        # Add temporary hormone influence with bounds checking
+                        temporary_baseline = max(0.1, min(0.9, original_baseline + influence))
+                        
+                        # Record influence but don't permanently change baseline
+                        self.emotional_core.neurochemicals[chemical]["temporary_baseline"] = temporary_baseline
+                
+                return {
+                    "applied_influences": influences
+                }
+        except Exception as e:
+            logger.error(f"Error in hormone influences: {e}")
+            return {"applied_influences": {}, "error": str(e)}
     
     # Add utility method for getting current hormone info
     def get_hormone_levels(self) -> Dict[str, Dict[str, Any]]:
@@ -2573,19 +2818,23 @@ class HormoneSystem:
         Returns:
             Dictionary of hormone data
         """
-        hormone_levels = {}
-        
-        for name, data in self.hormones.items():
-            hormone_levels[name] = {
-                "value": data["value"],
-                "baseline": data["baseline"],
-                "phase": data["cycle_phase"],
-                "cycle_period": data["cycle_period"],
-                "phase_description": self._get_phase_description(name, data["cycle_phase"]),
-                "influence_strength": abs(data["value"] - data["baseline"]) / max(0.1, data["baseline"])
-            }
-        
-        return hormone_levels
+        try:
+            hormone_levels = {}
+            
+            for name, data in self.hormones.items():
+                hormone_levels[name] = {
+                    "value": data["value"],
+                    "baseline": data["baseline"],
+                    "phase": data["cycle_phase"],
+                    "cycle_period": data["cycle_period"],
+                    "phase_description": self._get_phase_description(name, data["cycle_phase"]),
+                    "influence_strength": abs(data["value"] - data["baseline"]) / max(0.1, data["baseline"])
+                }
+            
+            return hormone_levels
+        except Exception as e:
+            logger.error(f"Error getting hormone levels: {e}")
+            return {}
     
     def _get_phase_description(self, hormone: str, phase: float) -> str:
         """Get a description of the current phase in the hormone cycle"""
@@ -2643,22 +2892,26 @@ class HormoneSystem:
         Returns:
             Update result
         """
-        if factor not in self.environmental_factors:
+        try:
+            if factor not in self.environmental_factors:
+                return {
+                    "success": False,
+                    "error": f"Unknown environmental factor: {factor}",
+                    "available_factors": list(self.environmental_factors.keys())
+                }
+            
+            # Store old value
+            old_value = self.environmental_factors[factor]
+            
+            # Update with bounds checking
+            self.environmental_factors[factor] = max(0.0, min(1.0, value))
+            
             return {
-                "success": False,
-                "error": f"Unknown environmental factor: {factor}",
-                "available_factors": list(self.environmental_factors.keys())
+                "success": True,
+                "factor": factor,
+                "old_value": old_value,
+                "new_value": self.environmental_factors[factor]
             }
-        
-        # Store old value
-        old_value = self.environmental_factors[factor]
-        
-        # Update with bounds checking
-        self.environmental_factors[factor] = max(0.0, min(1.0, value))
-        
-        return {
-            "success": True,
-            "factor": factor,
-            "old_value": old_value,
-            "new_value": self.environmental_factors[factor]
-        }
+        except Exception as e:
+            logger.error(f"Error updating environmental factor: {e}")
+            return {"success": False, "error": str(e)}
