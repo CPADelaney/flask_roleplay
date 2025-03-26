@@ -1,3 +1,5 @@
+# nyx/core/knowledge_core.py
+
 """
 KnowledgeCore refactored with OpenAI Agent SDK.
 This module provides an agentic framework for knowledge management, integrating
