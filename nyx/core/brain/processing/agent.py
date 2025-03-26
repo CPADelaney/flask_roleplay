@@ -1,4 +1,5 @@
 # nyx/core/brain/processing/agent.py
+
 import logging
 import asyncio
 import datetime
@@ -14,12 +15,26 @@ class AgentProcessor:
     def __init__(self, brain, integration_mode=False):
         self.brain = brain
         self.integration_mode = integration_mode
+        self.performance_metrics = {
+            "response_times": [],
+            "token_usage": 0,
+            "success_rate": 0.95,  # Starting value
+            "error_count": 0
+        }
+        self.agent_metrics = {}
     
     async def initialize(self):
         """Initialize the processor"""
         # Ensure agent capabilities are initialized
         if hasattr(self.brain, "initialize_agent_capabilities"):
             await self.brain.initialize_agent_capabilities()
+        
+        # Initialize agent integration if available
+        if hasattr(self.brain, "agent_integration") and self.brain.agent_integration:
+            # Already initialized, nothing to do
+            pass
+        elif hasattr(self.brain, "initialize_agent_integration"):
+            await self.brain.initialize_agent_integration()
         
         logger.info(f"Agent processor initialized (integration_mode={self.integration_mode})")
     
@@ -43,13 +58,27 @@ class AgentProcessor:
             # Initialize context if needed
             context = context or {}
             
+            # Track the current meta-tone if available
+            meta_tone = None
+            if hasattr(self.brain, "agent_integration") and self.brain.agent_integration:
+                meta_tone = self.brain.agent_integration.current_meta_tone
+                context["meta_tone"] = meta_tone
+            
             if self.integration_mode:
                 # Process with both systems in parallel
                 brain_task = asyncio.create_task(self._process_with_brain(user_input, context))
                 agent_task = asyncio.create_task(self._process_with_agent(user_input, context))
                 
                 # Wait for both to complete
-                brain_result, agent_result = await asyncio.gather(brain_task, agent_task)
+                try:
+                    brain_result, agent_result = await asyncio.gather(brain_task, agent_task)
+                except Exception as e:
+                    # Handle error
+                    logger.error(f"Error in integrated processing: {str(e)}")
+                    
+                    # Try to recover what we can
+                    brain_result = await brain_task if not brain_task.done() else {"error": str(e), "user_input": user_input}
+                    agent_result = await agent_task if not agent_task.done() else {"error": str(e), "user_input": user_input}
                 
                 # Create integrated result
                 result = {
@@ -71,10 +100,24 @@ class AgentProcessor:
                     result["generate_image"] = True
                     result["image_prompt"] = agent_result.get("image_prompt")
                 
+                # Add emotional state from brain processing
+                if "emotional_state" in brain_result:
+                    result["emotional_state"] = brain_result["emotional_state"]
+                
+                # Update success rate metric
+                success = not (brain_result.get("error") or agent_result.get("error"))
+                self._update_metrics(success, (datetime.datetime.now() - start_time).total_seconds())
+                
                 return result
             else:
                 # Process just with agent
-                return await self._process_with_agent(user_input, context)
+                result = await self._process_with_agent(user_input, context)
+                
+                # Update success rate metric
+                success = not result.get("error")
+                self._update_metrics(success, (datetime.datetime.now() - start_time).total_seconds())
+                
+                return result
     
     async def _process_with_brain(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Process input with brain systems"""
@@ -97,7 +140,14 @@ class AgentProcessor:
             else:
                 return {"error": "Agent capabilities not available", "user_input": user_input}
         
+        # Record start time for perf measurement
+        start_time = datetime.datetime.now()
+        
         try:
+            # Use agent integration if available
+            if hasattr(self.brain, "agent_integration") and self.brain.agent_integration:
+                return await self._process_with_agent_integration(user_input, context)
+            
             # Get memories to enhance context
             enhanced_context = context.copy() if context else {}
             
@@ -171,7 +221,7 @@ class AgentProcessor:
                         "generate_image": response_dict.get("generate_image", False),
                         "image_prompt": response_dict.get("image_prompt"),
                         "user_input": user_input,
-                        "response_time": (datetime.datetime.now() - start_time).total_seconds() if "start_time" in locals() else 0
+                        "response_time": (datetime.datetime.now() - start_time).total_seconds()
                     }
                     
                     return agent_result
@@ -183,10 +233,27 @@ class AgentProcessor:
                 "has_experience": False,
                 "user_input": user_input,
                 "emotional_state": emotional_state,
-                "response_time": (datetime.datetime.now() - start_time).total_seconds() if "start_time" in locals() else 0
+                "response_time": (datetime.datetime.now() - start_time).total_seconds()
             }
                 
         except Exception as e:
+            # Update error stats
+            self.performance_metrics["error_count"] += 1
+            
+            # Try to register error with issue tracker if available
+            if hasattr(self.brain, "issue_tracker"):
+                await self.brain.issue_tracker.register_issue({
+                    "title": "Agent processing error",
+                    "category": "PROCESSING",
+                    "severity": "MEDIUM",
+                    "error_message": str(e),
+                    "component": "agent_processor",
+                    "context": {
+                        "user_input": user_input,
+                        "integration_mode": self.integration_mode
+                    }
+                })
+            
             logger.error(f"Error processing with agent: {str(e)}")
             return {
                 "success": False,
@@ -194,6 +261,58 @@ class AgentProcessor:
                 "message": "I apologize, but I encountered an error while processing your input.",
                 "user_input": user_input
             }
+    
+    async def _process_with_agent_integration(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Process input using the agent integration system"""
+        agent_integration = self.brain.agent_integration
+        
+        # Determine which agent or combination to use
+        if "agent" in context:
+            # Use specified agent
+            agent_name = context["agent"]
+            result = await agent_integration.run_agent(
+                agent_name=agent_name,
+                input_text=user_input,
+                context=context,
+                apply_meta_tone=True
+            )
+        elif "combination" in context:
+            # Use specified combination
+            combination_name = context["combination"]
+            result = await agent_integration.run_combination(
+                combination_name=combination_name,
+                input_text=user_input,
+                context=context
+            )
+        else:
+            # Default to main agent if available
+            agent_name = "nyx_role_agent" if "nyx_role_agent" in agent_integration.agents else "main_brain_agent"
+            result = await agent_integration.run_agent(
+                agent_name=agent_name,
+                input_text=user_input,
+                context=context,
+                apply_meta_tone=True
+            )
+        
+        # Format result for brain compatibility
+        formatted_result = {
+            "success": result.get("success", False),
+            "message": result.get("output", ""),
+            "has_experience": True,  # Consider agent responses as experiences
+            "user_input": user_input,
+            "agent_result": result
+        }
+        
+        # Add emotional state if available
+        if hasattr(self.brain, "emotional_core"):
+            formatted_result["emotional_state"] = self.brain.emotional_core.get_emotional_state()
+        
+        # Add image generation if present in agent result
+        if "output" in result and isinstance(result["output"], dict) and "generate_image" in result["output"]:
+            formatted_result["generate_image"] = result["output"]["generate_image"]
+            formatted_result["image_prompt"] = result["output"].get("image_prompt")
+        
+        return formatted_result
     
     async def generate_response(self, user_input: str, processing_result: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -267,3 +386,19 @@ class AgentProcessor:
                 "emotional_state": {},
                 "emotional_expression": None
             }
+    
+    def _update_metrics(self, success: bool, response_time: float) -> None:
+        """Update performance metrics based on processing result"""
+        # Update response times
+        self.performance_metrics["response_times"].append(response_time)
+        if len(self.performance_metrics["response_times"]) > 100:
+            self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+        
+        # Update success rate with exponential decay
+        decay_factor = 0.95  # How much weight to give to historical success rate
+        success_value = 1.0 if success else 0.0
+        
+        self.performance_metrics["success_rate"] = (
+            self.performance_metrics["success_rate"] * decay_factor + 
+            success_value * (1 - decay_factor)
+        )
