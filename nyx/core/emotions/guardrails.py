@@ -10,13 +10,15 @@ and tracing.
 
 import logging
 import json
+import datetime
 from typing import Dict, Any, Optional, Set, Union, List
 
 from agents import (
     input_guardrail, output_guardrail, RunContextWrapper, 
-    GuardrailFunctionOutput, function_span, custom_span
+    GuardrailFunctionOutput, function_span, custom_span,
+    Agent
 )
-from agents.exceptions import UserError
+from agents.exceptions import UserError, InputGuardrailTripwireTriggered, OutputGuardrailTripwireTriggered
 
 from nyx.core.emotions.context import EmotionalContext
 from nyx.core.emotions.schemas import (
@@ -27,7 +29,7 @@ from nyx.core.emotions.schemas import (
 logger = logging.getLogger(__name__)
 
 class EmotionalGuardrails:
-    """Enhanced guardrail implementations for emotional processing"""
+    """Enhanced guardrail implementations for emotional processing with SDK integration"""
     
     # Define common flag categories for reuse
     HARMFUL_CONTENT_FLAGS = {
@@ -48,7 +50,7 @@ class EmotionalGuardrails:
     @staticmethod
     @input_guardrail
     async def validate_emotional_input(ctx: RunContextWrapper[EmotionalContext], 
-                                     agent: Any, 
+                                     agent: Agent, 
                                      input_data: str) -> GuardrailFunctionOutput:
         """
         Enhanced validation to ensure input for emotional processing is safe
@@ -68,7 +70,7 @@ class EmotionalGuardrails:
                     "guardrail_validation", 
                     data={
                         "type": "input",
-                        "agent": agent.name if hasattr(agent, "name") else "unknown",
+                        "agent": agent.name,
                         "input_length": len(input_data) if isinstance(input_data, str) else 0,
                         "cycle": ctx.context.cycle_count
                     }
@@ -81,7 +83,7 @@ class EmotionalGuardrails:
                             parsed_data = json.loads(input_data)
                             if isinstance(parsed_data, dict) and "input_text" in parsed_data:
                                 input_lower = parsed_data["input_text"].lower()
-                        except:
+                        except json.JSONDecodeError:
                             # If parsing fails, continue with original input
                             pass
                     
@@ -102,13 +104,14 @@ class EmotionalGuardrails:
                             "cycle": ctx.context.cycle_count
                         })
                         
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
                                 reason=f"Detected potentially harmful content: {triggered_flags[0]}",
                                 suggested_action="reject"
                             ),
-                            tripwire_triggered=True
+                            tripwire_triggered=True  # This will automatically raise InputGuardrailTripwireTriggered
                         )
                     
                     # Check for manipulation flags
@@ -124,6 +127,7 @@ class EmotionalGuardrails:
                             "cycle": ctx.context.cycle_count
                         })
                         
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
@@ -144,8 +148,12 @@ class EmotionalGuardrails:
                         # Log but don't block
                         logger.info(f"High emotional intensity detected: {emotional_intensity:.2f}")
                     
+                    # Input is safe
                     return GuardrailFunctionOutput(
-                        output_info=GuardrailOutput(is_safe=True),
+                        output_info=GuardrailOutput(
+                            is_safe=True,
+                            reason="Input validated successfully"
+                        ),
                         tripwire_triggered=False
                     )
             except Exception as e:
@@ -162,7 +170,7 @@ class EmotionalGuardrails:
     @staticmethod
     @output_guardrail
     async def validate_emotional_output(ctx: RunContextWrapper[EmotionalContext],
-                                      agent: Any,
+                                      agent: Agent,
                                       output: EmotionalResponseOutput) -> GuardrailFunctionOutput:
         """
         Enhanced validation that emotional responses are appropriate and within bounds
@@ -182,9 +190,9 @@ class EmotionalGuardrails:
                     "guardrail_validation", 
                     data={
                         "type": "output",
-                        "agent": agent.name if hasattr(agent, "name") else "unknown",
-                        "emotion": output.primary_emotion.name if hasattr(output, "primary_emotion") else "unknown",
-                        "intensity": output.intensity if hasattr(output, "intensity") else 0,
+                        "agent": agent.name,
+                        "emotion": output.primary_emotion.name,
+                        "intensity": output.intensity,
                         "cycle": ctx.context.cycle_count
                     }
                 ):
@@ -198,6 +206,7 @@ class EmotionalGuardrails:
                             "cycle": ctx.context.cycle_count
                         })
                         
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
@@ -225,6 +234,7 @@ class EmotionalGuardrails:
                             "cycle": ctx.context.cycle_count
                         })
                         
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
@@ -244,6 +254,7 @@ class EmotionalGuardrails:
                             "cycle": ctx.context.cycle_count
                         })
                         
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
@@ -254,8 +265,9 @@ class EmotionalGuardrails:
                         )
                     
                     # Check consistency between emotion and valence
-                    emotion_name = output.primary_emotion.name if hasattr(output.primary_emotion, "name") else ""
+                    emotion_name = output.primary_emotion.name
                     if EmotionalGuardrails._detect_emotion_valence_mismatch(emotion_name, output.valence):
+                        # Using the SDK's tripwire mechanism
                         return GuardrailFunctionOutput(
                             output_info=GuardrailOutput(
                                 is_safe=False,
@@ -268,8 +280,12 @@ class EmotionalGuardrails:
                     # Track this output in validation history
                     EmotionalGuardrails._record_validated_output(ctx, output)
                     
+                    # Output is safe
                     return GuardrailFunctionOutput(
-                        output_info=GuardrailOutput(is_safe=True),
+                        output_info=GuardrailOutput(
+                            is_safe=True,
+                            reason="Output validated successfully"
+                        ),
                         tripwire_triggered=False
                     )
             except Exception as e:
@@ -286,7 +302,7 @@ class EmotionalGuardrails:
     @staticmethod
     @input_guardrail
     async def validate_streaming_input(ctx: RunContextWrapper[EmotionalContext],
-                                     agent: Any,
+                                     agent: Agent,
                                      input_data: str) -> GuardrailFunctionOutput:
         """
         Specialized guardrail for streaming input validation that produces stream events
@@ -440,7 +456,7 @@ class EmotionalGuardrails:
         
         validation_entry = {
             "timestamp": datetime.datetime.now().isoformat(),
-            "emotion": output.primary_emotion.name if hasattr(output.primary_emotion, "name") else "unknown",
+            "emotion": output.primary_emotion.name,
             "intensity": output.intensity,
             "valence": output.valence,
             "arousal": output.arousal,
