@@ -1,4 +1,5 @@
-# nyx/core/brain/agent_integration.py
+# nyx/core/agent_integration.py
+
 import logging
 import asyncio
 import datetime
@@ -1159,7 +1160,7 @@ class AgentIntegration:
         
         # Emotional content indicators
         emotional_terms = ["feel", "emotion", "happy", "sad", "angry", "worried", 
-                         "concerned", "love", "hate", "excited", "afraid"]
+                         "concerned", "excited", "depressed", "stressed", "mood"]
         emotional_count = sum(1 for term in emotional_terms if term in text_lower)
         characteristics["emotional_content"] = min(1.0, emotional_count / 3)
         
