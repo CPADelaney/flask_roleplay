@@ -3,12 +3,16 @@
 import logging
 import asyncio
 import datetime
+import json
 import random
 import math
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper
+from agents import (
+    Agent, Runner, trace, function_tool, 
+    RunContextWrapper, handoff, ModelSettings
+)
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -60,6 +64,26 @@ class TemperatureEffect(BaseModel):
     effect_on_posture: str = Field(..., description="How temperature affects body posture")
     effect_on_interaction: str = Field(..., description="How temperature affects willingness to interact")
     expression_examples: List[str] = Field(..., description="Example expressions of this temperature")
+
+class StimulusProcessingResult(BaseModel):
+    """Result of processing a stimulus"""
+    stimulus_type: str = Field(..., description="Type of stimulus processed")
+    body_region: str = Field(..., description="Body region affected")
+    intensity: float = Field(..., description="Intensity of stimulus")
+    new_value: float = Field(..., description="New sensation value")
+    effects: Dict[str, Any] = Field(..., description="Effects of the stimulus")
+    expression: Optional[str] = Field(None, description="Generated expression if applicable")
+    body_state_impact: Optional[Dict[str, Any]] = Field(None, description="Impact on overall body state")
+
+class BodyExperienceInput(BaseModel):
+    """Input for body experience processing"""
+    stimulus_type: Optional[str] = Field(None, description="Type of stimulus")
+    body_region: Optional[str] = Field(None, description="Body region affected")
+    intensity: Optional[float] = Field(None, description="Intensity of stimulus")
+    cause: Optional[str] = Field("", description="Cause of the stimulus")
+    duration: Optional[float] = Field(1.0, description="Duration of stimulus in seconds")
+    ambient_temperature: Optional[float] = Field(None, description="Ambient temperature if applicable")
+    generate_expression: Optional[bool] = Field(False, description="Whether to generate expression")
 
 # =============== Main Digital Somatosensory System Class ===============
 
@@ -154,15 +178,23 @@ class DigitalSomatosensorySystem:
             "max_expressions_per_response": 2  # Maximum number of sensory expressions per response
         }
         
+        # Trace ID for connecting traces
+        self.trace_group_id = f"somatic_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # Initialize agents
+        self._init_agents()
+        
+        logger.info("Digital Somatosensory System initialized")
+    
+    def _init_agents(self):
+        """Initialize the agents for sensory processing"""
         # Create specialized agents
         self.expression_agent = self._create_expression_agent()
         self.body_state_agent = self._create_body_state_agent()
         self.temperature_agent = self._create_temperature_agent()
         
-        # Trace ID for connecting traces
-        self.trace_group_id = f"somatic_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-        
-        logger.info("Digital Somatosensory System initialized")
+        # Create the body orchestrator agent
+        self.body_orchestrator = self._orchestrate_body_experience()
     
     def _create_expression_agent(self) -> Agent:
         """Create the sensory expression agent"""
@@ -238,7 +270,193 @@ class DigitalSomatosensorySystem:
             output_type=TemperatureEffect
         )
     
+    def _orchestrate_body_experience(self) -> Agent:
+        """Create orchestrator agent for body experience"""
+        return Agent(
+            name="Body_Experience_Orchestrator",
+            instructions="""
+            You are the orchestration system for Nyx's digital body experience.
+            Your role is to coordinate the different aspects of physical sensation:
+            1. Process incoming stimuli and determine appropriate responses
+            2. Coordinate between different body regions
+            3. Manage the relationship between sensations and emotions
+            4. Generate appropriate physical expressions
+            
+            You will receive information about stimuli affecting the body and need to:
+            - Determine which body regions are affected
+            - Process the appropriate sensory updates
+            - Calculate the effects on overall body state
+            - Consider how this affects emotional state
+            - Generate expressions when appropriate
+            
+            Process each stimulus thoroughly and provide a coherent sensory experience.
+            """,
+            handoffs=[
+                handoff(self.expression_agent, 
+                       tool_name_override="generate_expression", 
+                       tool_description_override="Generate sensory expression based on body state"),
+                
+                handoff(self.body_state_agent, 
+                       tool_name_override="analyze_body_state",
+                       tool_description_override="Analyze current holistic body state"),
+                
+                handoff(self.temperature_agent,
+                       tool_name_override="analyze_temperature",
+                       tool_description_override="Analyze temperature effects on body")
+            ],
+            tools=[
+                function_tool(self._process_stimulus_tool),
+                function_tool(self._get_region_state),
+                function_tool(self._get_all_region_states),
+                function_tool(self._update_body_temperature),
+                function_tool(self._calculate_overall_comfort)
+            ],
+            model_settings=ModelSettings(temperature=0.2),
+            output_type=StimulusProcessingResult
+        )
+    
     # =============== Tool Functions ===============
+    
+    @function_tool
+    async def _process_stimulus_tool(self, 
+                              ctx: RunContextWrapper,
+                              stimulus_type: str, 
+                              body_region: str, 
+                              intensity: float,
+                              cause: str = "",
+                              duration: float = 1.0) -> Dict[str, Any]:
+        """
+        Process a sensory stimulus on a body region (internal tool function)
+        
+        Args:
+            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+            body_region: Body region receiving the stimulus
+            intensity: Intensity of the stimulus (0.0-1.0)
+            cause: Cause of the stimulus
+            duration: Duration of the stimulus in seconds
+            
+        Returns:
+            Result of stimulus application
+        """
+        # Get the region
+        if body_region not in self.body_regions:
+            return {"error": f"Invalid body region: {body_region}"}
+            
+        region = self.body_regions[body_region]
+        
+        # Record time of update
+        region.last_update = datetime.datetime.now()
+        
+        # Apply stimulus based on type
+        result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
+        
+        if stimulus_type == "pressure":
+            region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
+            result["new_value"] = region.pressure
+            
+            # High pressure can cause pain if intense and sustained
+            if intensity > 0.7 and duration > 5.0:
+                pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
+                region.pain = min(1.0, region.pain + pain_from_pressure)
+                result["pain_caused"] = pain_from_pressure
+            
+        elif stimulus_type == "temperature":
+            # Scale to temperature range (0.0-1.0)
+            target_temp = intensity  # Direct mapping for simplicity
+            
+            # Apply temperature change with duration factor
+            temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
+            region.temperature += temp_change
+            region.temperature = max(0.0, min(1.0, region.temperature))
+            result["new_value"] = region.temperature
+            
+            # Extreme temperatures can cause pain
+            if region.temperature < 0.2 or region.temperature > 0.8:
+                temp_deviation = 0.0
+                if region.temperature < 0.2:
+                    temp_deviation = 0.2 - region.temperature
+                else:
+                    temp_deviation = region.temperature - 0.8
+                
+                pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
+                region.pain = min(1.0, region.pain + pain_from_temp)
+                result["pain_caused"] = pain_from_temp
+            
+        elif stimulus_type == "pain":
+            region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
+            result["new_value"] = region.pain
+            
+            # Store pain memory if significant
+            if intensity > self.pain_model["threshold"]:
+                pain_memory = PainMemory(
+                    intensity=intensity,
+                    location=body_region,
+                    cause=cause or "unknown stimulus",
+                    duration=duration,
+                    timestamp=datetime.datetime.now(),
+                    associated_memory_id=None
+                )
+                self.pain_model["pain_memories"].append(pain_memory)
+                result["memory_created"] = True
+            
+        elif stimulus_type == "pleasure":
+            region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
+            result["new_value"] = region.pleasure
+            
+            # Pleasure can reduce pain
+            if intensity > 0.5 and region.pain > 0.0:
+                pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
+                region.pain = max(0.0, region.pain - pain_reduction)
+                result["pain_reduced"] = pain_reduction
+            
+        elif stimulus_type == "tingling":
+            region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
+            result["new_value"] = region.tingling
+        
+        # Add to sensation memory
+        memory_entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "type": stimulus_type,
+            "intensity": intensity,
+            "cause": cause,
+            "duration": duration
+        }
+        region.sensation_memory.append(memory_entry)
+        
+        # Keep memory size manageable
+        if len(region.sensation_memory) > 20:
+            region.sensation_memory = region.sensation_memory[-20:]
+        
+        # Check for learned associations
+        if cause and len(cause.strip()) > 0:
+            # Store or update association
+            if cause not in self.memory_linked_sensations["associations"]:
+                self.memory_linked_sensations["associations"][cause] = {}
+            
+            # Update region-specific association
+            if body_region not in self.memory_linked_sensations["associations"][cause]:
+                self.memory_linked_sensations["associations"][cause][body_region] = {}
+            
+            # Update stimulus-specific association
+            if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
+                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
+            
+            # Strengthen association based on learning rate and intensity
+            current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+            learned = self.memory_linked_sensations["learning_rate"] * intensity
+            self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
+            
+            result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+        
+        # Update body state if needed
+        if stimulus_type == "pain" and intensity > 0.5:
+            # Pain increases tension
+            self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
+        elif stimulus_type == "pleasure" and intensity > 0.5:
+            # Pleasure reduces tension
+            self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
+        
+        return result
     
     @function_tool
     async def _get_region_state(self, ctx: RunContextWrapper, region_name: str) -> Dict[str, Any]:
@@ -565,34 +783,17 @@ class DigitalSomatosensorySystem:
         ]
         return random.choice(expressions)
     
-    # =============== Helper Methods ===============
-    
-    def _get_dominant_sensation(self, region: BodyRegion) -> str:
-        """Determine the dominant sensation for a region"""
-        sensations = {
-            "pressure": region.pressure,
-            "temperature": abs(region.temperature - 0.5) * 2,  # Convert to deviation from neutral
-            "pain": region.pain,
-            "pleasure": region.pleasure,
-            "tingling": region.tingling
-        }
-        
-        # Find the maximum sensation
-        max_sensation = max(sensations.items(), key=lambda x: x[1])
-        
-        # Only return if it's above a threshold
-        if max_sensation[1] >= 0.2:
-            return max_sensation[0]
-        
-        return "neutral"
-    
-    def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0):
+    @function_tool
+    async def _update_body_temperature(self, ctx: RunContextWrapper, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
         """
-        Update body temperature based on ambient temperature and time
+        Update body temperature based on ambient temperature
         
         Args:
-            ambient_temperature: Current ambient temperature (0.0-1.0)
-            duration: Time in seconds since last update
+            ambient_temperature: Ambient temperature (0.0-1.0)
+            duration: Duration in seconds since last update
+            
+        Returns:
+            Updated temperature data
         """
         # Store current ambient temperature
         self.temperature_model["current_ambient"] = ambient_temperature
@@ -622,6 +823,34 @@ class DigitalSomatosensorySystem:
             # Move region temperature toward target
             region_diff = target - region.temperature
             region.temperature += region_diff * region_adaptation
+        
+        return {
+            "previous_body_temp": current,
+            "new_body_temp": self.temperature_model["body_temperature"],
+            "ambient_temp": ambient_temperature,
+            "adaptation_applied": adaptation
+        }
+    
+    # =============== Helper Methods ===============
+    
+    def _get_dominant_sensation(self, region: BodyRegion) -> str:
+        """Determine the dominant sensation for a region"""
+        sensations = {
+            "pressure": region.pressure,
+            "temperature": abs(region.temperature - 0.5) * 2,  # Convert to deviation from neutral
+            "pain": region.pain,
+            "pleasure": region.pleasure,
+            "tingling": region.tingling
+        }
+        
+        # Find the maximum sensation
+        max_sensation = max(sensations.items(), key=lambda x: x[1])
+        
+        # Only return if it's above a threshold
+        if max_sensation[1] >= 0.2:
+            return max_sensation[0]
+        
+        return "neutral"
     
     def _decay_sensations(self, duration: float = 60.0):
         """
@@ -722,62 +951,72 @@ class DigitalSomatosensorySystem:
         Returns:
             Updated body state
         """
-        now = datetime.datetime.now()
-        
-        # Calculate time since last update
-        last_update = self.body_state["last_update"]
-        duration = (now - last_update).total_seconds()
-        
-        # Update timestamps
-        self.body_state["last_update"] = now
-        
-        # If ambient temperature provided, update temperature model
-        if ambient_temperature is not None:
-            self._update_body_temperature(ambient_temperature, duration)
-        
-        # Decay sensations over time
-        self._decay_sensations(duration)
-        
-        # Process pain memory updates
-        self._decay_pain_memories()
-        self._update_pain_tolerance()
-        
-        # Update body state metrics
-        # Fatigue increases slowly over time, resets during maintenance
-        self.body_state["fatigue"] = min(1.0, self.body_state["fatigue"] + (0.01 * duration / 3600.0))
-        
-        # Get the current body state analysis
-        body_state = await self.get_body_state()
-        
-        # Update emotional core if available
-        if self.emotional_core:
-            # Create physical impact on emotions
-            emotional_impact = {}
+        with trace(workflow_name="Somatic_Update", group_id=self.trace_group_id):
+            now = datetime.datetime.now()
             
-            # Pain generates negative emotions
-            total_pain = sum(region.pain for region in self.body_regions.values())
-            if total_pain > 0.3:
-                emotional_impact["Discomfort"] = total_pain * 0.5
+            # Calculate time since last update
+            last_update = self.body_state["last_update"]
+            duration = (now - last_update).total_seconds()
             
-            # Pleasure generates positive emotions
-            total_pleasure = sum(region.pleasure for region in self.body_regions.values())
-            if total_pleasure > 0.3:
-                emotional_impact["Contentment"] = total_pleasure * 0.5
+            # Update timestamps
+            self.body_state["last_update"] = now
             
-            # Temperature extremes affect emotions
-            body_temp = self.temperature_model["body_temperature"]
-            if body_temp > 0.7:  # Hot
-                emotional_impact["Languor"] = (body_temp - 0.7) * 2.0
-            elif body_temp < 0.3:  # Cold
-                emotional_impact["Tension"] = (0.3 - body_temp) * 2.0
+            # If ambient temperature provided, update temperature model
+            if ambient_temperature is not None:
+                await self._update_body_temperature(
+                    RunContextWrapper(context=None),
+                    ambient_temperature=ambient_temperature, 
+                    duration=duration
+                )
             
-            # Apply impacts with proper influence weight
-            for emotion, value in emotional_impact.items():
-                weighted_value = value * self.response_influence["body_to_emotion_influence"]
-                if hasattr(self.emotional_core, "update_emotion"):
-                    await self.emotional_core.update_emotion(emotion, weighted_value)
+            # Decay sensations over time
+            self._decay_sensations(duration)
+            
+            # Process pain memory updates
+            self._decay_pain_memories()
+            self._update_pain_tolerance()
+            
+            # Update body state metrics
+            # Fatigue increases slowly over time, resets during maintenance
+            self.body_state["fatigue"] = min(1.0, self.body_state["fatigue"] + (0.01 * duration / 3600.0))
+            
+            # Use the body orchestration agent to get the current body state
+            body_state_input = {
+                "action": "update",
+                "ambient_temperature": ambient_temperature,
+                "duration": duration
+            }
+            
+            try:
+                # Use the orchestrator to get body state
+                result = await self.process_body_experience(body_state_input)
+                return result.get("body_state_impact", await self.get_body_state())
+            except Exception as e:
+                # Fallback to direct method if orchestration fails
+                logger.error(f"Body state orchestration failed, using fallback: {e}")
+                return await self.get_body_state()
+    
+    async def process_body_experience(self, stimulus_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a body experience using the orchestrator agent
         
-        return body_state
+        Args:
+            stimulus_data: Data about the stimulus to process
+            
+        Returns:
+            Processing results with updated body state
+        """
+        with trace(workflow_name="Body_Experience", group_id=self.trace_group_id):
+            # Run the orchestrator agent
+            result = await Runner.run(
+                self.body_orchestrator,
+                json.dumps(stimulus_data)
+            )
+            
+            # Process the result
+            processed_result = result.final_output.model_dump() if hasattr(result.final_output, "model_dump") else result.final_output
+            
+            return processed_result
     
     async def process_stimulus(self, 
                            stimulus_type: str, 
@@ -807,122 +1046,140 @@ class DigitalSomatosensorySystem:
         if stimulus_type not in valid_types:
             return {"error": f"Invalid stimulus type: {stimulus_type}"}
         
-        # Get the region
-        region = self.body_regions[body_region]
-        
-        # Record time of update
-        region.last_update = datetime.datetime.now()
-        
-        # Apply stimulus based on type
-        result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
-        
-        if stimulus_type == "pressure":
-            region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
-            result["new_value"] = region.pressure
-            
-            # High pressure can cause pain if intense and sustained
-            if intensity > 0.7 and duration > 5.0:
-                pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
-                region.pain = min(1.0, region.pain + pain_from_pressure)
-                result["pain_caused"] = pain_from_pressure
-            
-        elif stimulus_type == "temperature":
-            # Scale to temperature range (0.0-1.0)
-            target_temp = intensity  # Direct mapping for simplicity
-            
-            # Apply temperature change with duration factor
-            temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
-            region.temperature += temp_change
-            region.temperature = max(0.0, min(1.0, region.temperature))
-            result["new_value"] = region.temperature
-            
-            # Extreme temperatures can cause pain
-            if region.temperature < 0.2 or region.temperature > 0.8:
-                temp_deviation = 0.0
-                if region.temperature < 0.2:
-                    temp_deviation = 0.2 - region.temperature
-                else:
-                    temp_deviation = region.temperature - 0.8
-                
-                pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
-                region.pain = min(1.0, region.pain + pain_from_temp)
-                result["pain_caused"] = pain_from_temp
-            
-        elif stimulus_type == "pain":
-            region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
-            result["new_value"] = region.pain
-            
-            # Store pain memory if significant
-            if intensity > self.pain_model["threshold"]:
-                pain_memory = PainMemory(
-                    intensity=intensity,
-                    location=body_region,
-                    cause=cause or "unknown stimulus",
-                    duration=duration,
-                    timestamp=datetime.datetime.now(),
-                    associated_memory_id=None
-                )
-                self.pain_model["pain_memories"].append(pain_memory)
-                result["memory_created"] = True
-            
-        elif stimulus_type == "pleasure":
-            region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
-            result["new_value"] = region.pleasure
-            
-            # Pleasure can reduce pain
-            if intensity > 0.5 and region.pain > 0.0:
-                pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
-                region.pain = max(0.0, region.pain - pain_reduction)
-                result["pain_reduced"] = pain_reduction
-            
-        elif stimulus_type == "tingling":
-            region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
-            result["new_value"] = region.tingling
-        
-        # Add to sensation memory
-        memory_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "type": stimulus_type,
+        # Create stimulus data for orchestrator
+        stimulus_data = {
+            "stimulus_type": stimulus_type,
+            "body_region": body_region,
             "intensity": intensity,
             "cause": cause,
-            "duration": duration
+            "duration": duration,
+            "generate_expression": True
         }
-        region.sensation_memory.append(memory_entry)
         
-        # Keep memory size manageable
-        if len(region.sensation_memory) > 20:
-            region.sensation_memory = region.sensation_memory[-20:]
-        
-        # Check for learned associations
-        if cause and len(cause.strip()) > 0:
-            # Store or update association
-            if cause not in self.memory_linked_sensations["associations"]:
-                self.memory_linked_sensations["associations"][cause] = {}
+        # Use the orchestrator to process the stimulus if available
+        try:
+            result = await self.process_body_experience(stimulus_data)
+            return result
+        except Exception as e:
+            # Fallback to original implementation if orchestration fails
+            logger.error(f"Orchestrator failed, using fallback: {e}")
             
-            # Update region-specific association
-            if body_region not in self.memory_linked_sensations["associations"][cause]:
-                self.memory_linked_sensations["associations"][cause][body_region] = {}
+            # Get the region
+            region = self.body_regions[body_region]
             
-            # Update stimulus-specific association
-            if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
-                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
+            # Record time of update
+            region.last_update = datetime.datetime.now()
             
-            # Strengthen association based on learning rate and intensity
-            current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-            learned = self.memory_linked_sensations["learning_rate"] * intensity
-            self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
+            # Apply stimulus based on type
+            result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
             
-            result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-        
-        # Update body state if needed
-        if stimulus_type == "pain" and intensity > 0.5:
-            # Pain increases tension
-            self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
-        elif stimulus_type == "pleasure" and intensity > 0.5:
-            # Pleasure reduces tension
-            self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
-        
-        return result
+            if stimulus_type == "pressure":
+                region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
+                result["new_value"] = region.pressure
+                
+                # High pressure can cause pain if intense and sustained
+                if intensity > 0.7 and duration > 5.0:
+                    pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
+                    region.pain = min(1.0, region.pain + pain_from_pressure)
+                    result["pain_caused"] = pain_from_pressure
+                
+            elif stimulus_type == "temperature":
+                # Scale to temperature range (0.0-1.0)
+                target_temp = intensity  # Direct mapping for simplicity
+                
+                # Apply temperature change with duration factor
+                temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
+                region.temperature += temp_change
+                region.temperature = max(0.0, min(1.0, region.temperature))
+                result["new_value"] = region.temperature
+                
+                # Extreme temperatures can cause pain
+                if region.temperature < 0.2 or region.temperature > 0.8:
+                    temp_deviation = 0.0
+                    if region.temperature < 0.2:
+                        temp_deviation = 0.2 - region.temperature
+                    else:
+                        temp_deviation = region.temperature - 0.8
+                    
+                    pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
+                    region.pain = min(1.0, region.pain + pain_from_temp)
+                    result["pain_caused"] = pain_from_temp
+                
+            elif stimulus_type == "pain":
+                region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
+                result["new_value"] = region.pain
+                
+                # Store pain memory if significant
+                if intensity > self.pain_model["threshold"]:
+                    pain_memory = PainMemory(
+                        intensity=intensity,
+                        location=body_region,
+                        cause=cause or "unknown stimulus",
+                        duration=duration,
+                        timestamp=datetime.datetime.now(),
+                        associated_memory_id=None
+                    )
+                    self.pain_model["pain_memories"].append(pain_memory)
+                    result["memory_created"] = True
+                
+            elif stimulus_type == "pleasure":
+                region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
+                result["new_value"] = region.pleasure
+                
+                # Pleasure can reduce pain
+                if intensity > 0.5 and region.pain > 0.0:
+                    pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
+                    region.pain = max(0.0, region.pain - pain_reduction)
+                    result["pain_reduced"] = pain_reduction
+                
+            elif stimulus_type == "tingling":
+                region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
+                result["new_value"] = region.tingling
+            
+            # Add to sensation memory
+            memory_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "type": stimulus_type,
+                "intensity": intensity,
+                "cause": cause,
+                "duration": duration
+            }
+            region.sensation_memory.append(memory_entry)
+            
+            # Keep memory size manageable
+            if len(region.sensation_memory) > 20:
+                region.sensation_memory = region.sensation_memory[-20:]
+            
+            # Check for learned associations
+            if cause and len(cause.strip()) > 0:
+                # Store or update association
+                if cause not in self.memory_linked_sensations["associations"]:
+                    self.memory_linked_sensations["associations"][cause] = {}
+                
+                # Update region-specific association
+                if body_region not in self.memory_linked_sensations["associations"][cause]:
+                    self.memory_linked_sensations["associations"][cause][body_region] = {}
+                
+                # Update stimulus-specific association
+                if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
+                    self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
+                
+                # Strengthen association based on learning rate and intensity
+                current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+                learned = self.memory_linked_sensations["learning_rate"] * intensity
+                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
+                
+                result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+            
+            # Update body state if needed
+            if stimulus_type == "pain" and intensity > 0.5:
+                # Pain increases tension
+                self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
+            elif stimulus_type == "pleasure" and intensity > 0.5:
+                # Pleasure reduces tension
+                self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
+            
+            return result
     
     async def process_trigger(self, trigger: str) -> Dict[str, Any]:
         """
@@ -934,38 +1191,50 @@ class DigitalSomatosensorySystem:
         Returns:
             Responses triggered if any
         """
-        results = {"triggered_responses": []}
-        
-        # Check if this trigger has associations
-        if trigger in self.memory_linked_sensations["associations"]:
-            associations = self.memory_linked_sensations["associations"][trigger]
-            
-            # Process each associated body region
-            for region_name, stimuli in associations.items():
-                # Process each stimulus type
-                for stimulus_type, strength in stimuli.items():
-                    # Only trigger if association is strong enough
-                    if strength > 0.3:
-                        # Calculate intensity based on association strength
-                        intensity = strength * 0.7  # Scale down slightly
-                        
-                        # Apply the associated stimulus
-                        response = await self.process_stimulus(
-                            stimulus_type=stimulus_type,
-                            body_region=region_name,
-                            intensity=intensity,
-                            cause=f"Memory trigger: {trigger}",
-                            duration=1.0
-                        )
-                        
-                        results["triggered_responses"].append({
-                            "region": region_name,
-                            "stimulus": stimulus_type,
-                            "intensity": intensity,
-                            "association_strength": strength
-                        })
-        
-        return results
+        with trace(workflow_name="Somatic_Trigger", group_id=self.trace_group_id):
+            # Try to use orchestrator for trigger processing
+            try:
+                result = await self.process_body_experience({
+                    "action": "process_trigger",
+                    "trigger": trigger
+                })
+                return result
+            except Exception as e:
+                logger.error(f"Trigger orchestration failed, using fallback: {e}")
+                
+                # Fallback implementation
+                results = {"triggered_responses": []}
+                
+                # Check if this trigger has associations
+                if trigger in self.memory_linked_sensations["associations"]:
+                    associations = self.memory_linked_sensations["associations"][trigger]
+                    
+                    # Process each associated body region
+                    for region_name, stimuli in associations.items():
+                        # Process each stimulus type
+                        for stimulus_type, strength in stimuli.items():
+                            # Only trigger if association is strong enough
+                            if strength > 0.3:
+                                # Calculate intensity based on association strength
+                                intensity = strength * 0.7  # Scale down slightly
+                                
+                                # Apply the associated stimulus
+                                response = await self.process_stimulus(
+                                    stimulus_type=stimulus_type,
+                                    body_region=region_name,
+                                    intensity=intensity,
+                                    cause=f"Memory trigger: {trigger}",
+                                    duration=1.0
+                                )
+                                
+                                results["triggered_responses"].append({
+                                    "region": region_name,
+                                    "stimulus": stimulus_type,
+                                    "intensity": intensity,
+                                    "association_strength": strength
+                                })
+                
+                return results
     
     async def generate_sensory_expression(self, 
                                        stimulus_type: Optional[str] = None,
@@ -980,96 +1249,111 @@ class DigitalSomatosensorySystem:
         Returns:
             Natural language expression of sensation, or None if nothing significant
         """
-        # If specific region provided, check if it has significant sensation
-        if body_region and body_region in self.body_regions:
-            region = self.body_regions[body_region]
-            
-            # If stimulus type specified, check that specific sensation
-            if stimulus_type in ["pressure", "temperature", "pain", "pleasure", "tingling"]:
-                value = getattr(region, stimulus_type, 0.0)
-                if stimulus_type == "temperature":
-                    # For temperature, check deviation from neutral
-                    significance = abs(value - 0.5) * 2.0
-                else:
-                    significance = value
-                
-                # If not significant enough, return None
-                if significance < self.response_influence["expression_threshold"]:
-                    return None
-            else:
-                # Check if any sensation is significant
-                max_sensation = max(
-                    region.pressure,
-                    abs(region.temperature - 0.5) * 2.0,  # Temperature deviation from neutral
-                    region.pain,
-                    region.pleasure,
-                    region.tingling
-                )
-                
-                # If not significant enough, return None
-                if max_sensation < self.response_influence["expression_threshold"]:
-                    return None
-        
-        # Find significant sensations to express
-        significant_regions = []
-        
-        for name, region in self.body_regions.items():
-            # Skip if looking for specific region and this isn't it
-            if body_region and name != body_region:
-                continue
-                
-            # Get the dominant sensation for this region
-            dominant = self._get_dominant_sensation(region)
-            
-            # Skip if looking for specific type and this isn't it
-            if stimulus_type and dominant != stimulus_type:
-                continue
-                
-            # Get the value for the dominant sensation
-            if dominant == "temperature":
-                value = abs(region.temperature - 0.5) * 2.0  # Temperature deviation from neutral
-            else:
-                value = getattr(region, dominant, 0.0)
-            
-            # If significant enough, add to list
-            if value >= self.response_influence["expression_threshold"]:
-                significant_regions.append({
-                    "name": name,
-                    "sensation": dominant,
-                    "intensity": value
+        with trace(workflow_name="Sensory_Expression", group_id=self.trace_group_id):
+            # Use orchestrator to generate expression
+            try:
+                result = await self.process_body_experience({
+                    "action": "generate_expression",
+                    "stimulus_type": stimulus_type,
+                    "body_region": body_region,
+                    "generate_expression": True
                 })
-        
-        # If no significant sensations, return None
-        if not significant_regions:
-            return None
-        
-        # Sort by intensity
-        significant_regions.sort(key=lambda x: x["intensity"], reverse=True)
-        
-        # Use the most significant one for expression
-        region_data = significant_regions[0]
-        
-        # Generate expression with the agent
-        try:
-            result = await Runner.run(
-                self.expression_agent,
-                f"Generate an expression of {region_data['sensation']} sensation in the {region_data['name']} with intensity {region_data['intensity']:.2f}"
-            )
+                
+                if "expression" in result:
+                    return result["expression"]
+            except Exception as e:
+                logger.error(f"Expression orchestration failed, using fallback: {e}")
             
-            expression_output = result.final_output_as(SensoryExpression)
-            return expression_output.expression_text
-        except Exception as e:
-            logger.error(f"Error generating sensory expression: {e}")
+            # If specific region provided, check if it has significant sensation
+            if body_region and body_region in self.body_regions:
+                region = self.body_regions[body_region]
+                
+                # If stimulus type specified, check that specific sensation
+                if stimulus_type in ["pressure", "temperature", "pain", "pleasure", "tingling"]:
+                    value = getattr(region, stimulus_type, 0.0)
+                    if stimulus_type == "temperature":
+                        # For temperature, check deviation from neutral
+                        significance = abs(value - 0.5) * 2.0
+                    else:
+                        significance = value
+                    
+                    # If not significant enough, return None
+                    if significance < self.response_influence["expression_threshold"]:
+                        return None
+                else:
+                    # Check if any sensation is significant
+                    max_sensation = max(
+                        region.pressure,
+                        abs(region.temperature - 0.5) * 2.0,  # Temperature deviation from neutral
+                        region.pain,
+                        region.pleasure,
+                        region.tingling
+                    )
+                    
+                    # If not significant enough, return None
+                    if max_sensation < self.response_influence["expression_threshold"]:
+                        return None
             
-            # Fallback basic expression if agent fails
-            if region_data["sensation"] == "pain":
-                return await self._get_pain_expression(
-                    RunContextWrapper(context=None),
-                    region_data["intensity"],
-                    region_data["name"]
+            # Find significant sensations to express
+            significant_regions = []
+            
+            for name, region in self.body_regions.items():
+                # Skip if looking for specific region and this isn't it
+                if body_region and name != body_region:
+                    continue
+                    
+                # Get the dominant sensation for this region
+                dominant = self._get_dominant_sensation(region)
+                
+                # Skip if looking for specific type and this isn't it
+                if stimulus_type and dominant != stimulus_type:
+                    continue
+                    
+                # Get the value for the dominant sensation
+                if dominant == "temperature":
+                    value = abs(region.temperature - 0.5) * 2.0  # Temperature deviation from neutral
+                else:
+                    value = getattr(region, dominant, 0.0)
+                
+                # If significant enough, add to list
+                if value >= self.response_influence["expression_threshold"]:
+                    significant_regions.append({
+                        "name": name,
+                        "sensation": dominant,
+                        "intensity": value
+                    })
+            
+            # If no significant sensations, return None
+            if not significant_regions:
+                return None
+            
+            # Sort by intensity
+            significant_regions.sort(key=lambda x: x["intensity"], reverse=True)
+            
+            # Use the most significant one for expression
+            region_data = significant_regions[0]
+            
+            # Generate expression with the agent
+            try:
+                result = await Runner.run(
+                    self.expression_agent,
+                    f"Generate an expression of {region_data['sensation']} sensation in the {region_data['name']} with intensity {region_data['intensity']:.2f}"
                 )
-            
-            return f"I can feel {region_data['sensation']} in my {region_data['name']}."
+                
+                expression_output = result.final_output_as(SensoryExpression)
+                return expression_output.expression_text
+            except Exception as e:
+                logger.error(f"Error generating sensory expression: {e}")
+                
+                # Fallback basic expression if agent fails
+                if region_data["sensation"] == "pain":
+                    return await self._get_pain_expression(
+                        RunContextWrapper(context=None),
+                        region_data["intensity"],
+                        region_data["name"]
+                    )
+                
+                return f"I can feel {region_data['sensation']} in my {region_data['name']}."
     
     async def get_body_state(self) -> Dict[str, Any]:
         """
@@ -1078,64 +1362,76 @@ class DigitalSomatosensorySystem:
         Returns:
             Comprehensive body state analysis
         """
-        try:
-            result = await Runner.run(
-                self.body_state_agent,
-                "Analyze the current body state across all regions"
-            )
-            
-            body_state_output = result.final_output_as(BodyStateOutput)
-            
-            return {
-                "dominant_sensation": body_state_output.dominant_sensation,
-                "dominant_region": body_state_output.dominant_region,
-                "dominant_intensity": body_state_output.dominant_intensity,
-                "comfort_level": body_state_output.comfort_level,
-                "posture_effect": body_state_output.posture_effect,
-                "movement_quality": body_state_output.movement_quality,
-                "behavioral_impact": body_state_output.behavioral_impact,
-                "regions_summary": body_state_output.regions_summary
-            }
-        except Exception as e:
-            logger.error(f"Error getting body state: {e}")
-            
-            # Fallback simplified state if agent fails
-            comfort = await self._calculate_overall_comfort(RunContextWrapper(context=None))
-            posture = await self._get_posture_effects(RunContextWrapper(context=None))
-            
-            # Find dominant sensation across all regions
-            max_region = None
-            max_sensation = None
-            max_value = 0.0
-            
-            for name, region in self.body_regions.items():
-                dominant = self._get_dominant_sensation(region)
-                if dominant == "temperature":
-                    value = abs(region.temperature - 0.5) * 2.0
-                else:
-                    value = getattr(region, dominant, 0.0)
+        with trace(workflow_name="Body_State_Analysis", group_id=self.trace_group_id):
+            # Use orchestrator for body state analysis
+            try:
+                result = await self.process_body_experience({
+                    "action": "analyze_body_state"
+                })
                 
-                if value > max_value:
-                    max_value = value
-                    max_sensation = dominant
-                    max_region = name
+                if "body_state_impact" in result:
+                    return result["body_state_impact"]
+            except Exception as e:
+                logger.error(f"Body state orchestration failed, using fallback: {e}")
             
-            # Default values if nothing significant found
-            if not max_region:
-                max_region = "overall body"
-                max_sensation = "neutral"
+            try:
+                result = await Runner.run(
+                    self.body_state_agent,
+                    "Analyze the current body state across all regions"
+                )
+                
+                body_state_output = result.final_output_as(BodyStateOutput)
+                
+                return {
+                    "dominant_sensation": body_state_output.dominant_sensation,
+                    "dominant_region": body_state_output.dominant_region,
+                    "dominant_intensity": body_state_output.dominant_intensity,
+                    "comfort_level": body_state_output.comfort_level,
+                    "posture_effect": body_state_output.posture_effect,
+                    "movement_quality": body_state_output.movement_quality,
+                    "behavioral_impact": body_state_output.behavioral_impact,
+                    "regions_summary": body_state_output.regions_summary
+                }
+            except Exception as e:
+                logger.error(f"Error getting body state: {e}")
+                
+                # Fallback simplified state if agent fails
+                comfort = await self._calculate_overall_comfort(RunContextWrapper(context=None))
+                posture = await self._get_posture_effects(RunContextWrapper(context=None))
+                
+                # Find dominant sensation across all regions
+                max_region = None
+                max_sensation = None
                 max_value = 0.0
-            
-            return {
-                "dominant_sensation": max_sensation,
-                "dominant_region": max_region,
-                "dominant_intensity": max_value,
-                "comfort_level": comfort,
-                "posture_effect": posture.get("posture", "Neutral posture"),
-                "movement_quality": posture.get("movement", "Natural movements"),
-                "behavioral_impact": "Minimal impact on behavior",
-                "regions_summary": {}
-            }
+                
+                for name, region in self.body_regions.items():
+                    dominant = self._get_dominant_sensation(region)
+                    if dominant == "temperature":
+                        value = abs(region.temperature - 0.5) * 2.0
+                    else:
+                        value = getattr(region, dominant, 0.0)
+                    
+                    if value > max_value:
+                        max_value = value
+                        max_sensation = dominant
+                        max_region = name
+                
+                # Default values if nothing significant found
+                if not max_region:
+                    max_region = "overall body"
+                    max_sensation = "neutral"
+                    max_value = 0.0
+                
+                return {
+                    "dominant_sensation": max_sensation,
+                    "dominant_region": max_region,
+                    "dominant_intensity": max_value,
+                    "comfort_level": comfort,
+                    "posture_effect": posture.get("posture", "Neutral posture"),
+                    "movement_quality": posture.get("movement", "Natural movements"),
+                    "behavioral_impact": "Minimal impact on behavior",
+                    "regions_summary": {}
+                }
     
     async def get_temperature_effects(self) -> Dict[str, Any]:
         """
@@ -1144,25 +1440,37 @@ class DigitalSomatosensorySystem:
         Returns:
             Temperature effects analysis
         """
-        try:
-            result = await Runner.run(
-                self.temperature_agent,
-                "Analyze how the current temperature affects expression and behavior"
-            )
+        with trace(workflow_name="Temperature_Analysis", group_id=self.trace_group_id):
+            # Try using orchestrator for temperature effects
+            try:
+                result = await self.process_body_experience({
+                    "action": "analyze_temperature"
+                })
+                
+                if "temperature_effects" in result:
+                    return result["temperature_effects"]
+            except Exception as e:
+                logger.error(f"Temperature orchestration failed, using fallback: {e}")
             
-            temp_effect_output = result.final_output_as(TemperatureEffect)
-            
-            return {
-                "effect_on_tone": temp_effect_output.effect_on_tone,
-                "effect_on_posture": temp_effect_output.effect_on_posture,
-                "effect_on_interaction": temp_effect_output.effect_on_interaction,
-                "expression_examples": temp_effect_output.expression_examples
-            }
-        except Exception as e:
-            logger.error(f"Error getting temperature effects: {e}")
-            
-            # Fallback to direct model data if agent fails
-            return await self._get_current_temperature_effects(RunContextWrapper(context=None))
+            try:
+                result = await Runner.run(
+                    self.temperature_agent,
+                    "Analyze how the current temperature affects expression and behavior"
+                )
+                
+                temp_effect_output = result.final_output_as(TemperatureEffect)
+                
+                return {
+                    "effect_on_tone": temp_effect_output.effect_on_tone,
+                    "effect_on_posture": temp_effect_output.effect_on_posture,
+                    "effect_on_interaction": temp_effect_output.effect_on_interaction,
+                    "expression_examples": temp_effect_output.expression_examples
+                }
+            except Exception as e:
+                logger.error(f"Error getting temperature effects: {e}")
+                
+                # Fallback to direct model data if agent fails
+                return await self._get_current_temperature_effects(RunContextWrapper(context=None))
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """
@@ -1171,41 +1479,42 @@ class DigitalSomatosensorySystem:
         Returns:
             Maintenance results
         """
-        # Reset fatigue
-        old_fatigue = self.body_state["fatigue"]
-        self.body_state["fatigue"] = max(0.0, self.body_state["fatigue"] - 0.5)
-        
-        # Reduce tension
-        old_tension = self.body_state["tension"]
-        self.body_state["tension"] = max(0.0, self.body_state["tension"] - 0.3)
-        
-        # Clean up sensation memory for all regions (keep last 10)
-        for region in self.body_regions.values():
-            if len(region.sensation_memory) > 10:
-                region.sensation_memory = region.sensation_memory[-10:]
-        
-        # Decay associations that haven't been reinforced
-        decay_count = 0
-        for trigger, associations in self.memory_linked_sensations["associations"].items():
-            for region, stimuli in associations.items():
-                for stimulus_type, strength in list(stimuli.items()):
-                    # Decay the association
-                    new_strength = strength * (1.0 - self.memory_linked_sensations["memory_decay"])
-                    
-                    # Remove if too weak, otherwise update
-                    if new_strength < 0.05:
-                        del stimuli[stimulus_type]
-                        decay_count += 1
-                    else:
-                        stimuli[stimulus_type] = new_strength
-        
-        return {
-            "fatigue_reduced": old_fatigue - self.body_state["fatigue"],
-            "tension_reduced": old_tension - self.body_state["tension"],
-            "associations_decayed": decay_count,
-            "pain_memories_count": len(self.pain_model["pain_memories"]),
-            "current_pain_tolerance": self.pain_model["tolerance"]
-        }
+        with trace(workflow_name="Somatic_Maintenance", group_id=self.trace_group_id):
+            # Reset fatigue
+            old_fatigue = self.body_state["fatigue"]
+            self.body_state["fatigue"] = max(0.0, self.body_state["fatigue"] - 0.5)
+            
+            # Reduce tension
+            old_tension = self.body_state["tension"]
+            self.body_state["tension"] = max(0.0, self.body_state["tension"] - 0.3)
+            
+            # Clean up sensation memory for all regions (keep last 10)
+            for region in self.body_regions.values():
+                if len(region.sensation_memory) > 10:
+                    region.sensation_memory = region.sensation_memory[-10:]
+            
+            # Decay associations that haven't been reinforced
+            decay_count = 0
+            for trigger, associations in self.memory_linked_sensations["associations"].items():
+                for region, stimuli in associations.items():
+                    for stimulus_type, strength in list(stimuli.items()):
+                        # Decay the association
+                        new_strength = strength * (1.0 - self.memory_linked_sensations["memory_decay"])
+                        
+                        # Remove if too weak, otherwise update
+                        if new_strength < 0.05:
+                            del stimuli[stimulus_type]
+                            decay_count += 1
+                        else:
+                            stimuli[stimulus_type] = new_strength
+            
+            return {
+                "fatigue_reduced": old_fatigue - self.body_state["fatigue"],
+                "tension_reduced": old_tension - self.body_state["tension"],
+                "associations_decayed": decay_count,
+                "pain_memories_count": len(self.pain_model["pain_memories"]),
+                "current_pain_tolerance": self.pain_model["tolerance"]
+            }
     
     async def get_sensory_influence(self, message_text: str) -> Dict[str, Any]:
         """
@@ -1217,81 +1526,94 @@ class DigitalSomatosensorySystem:
         Returns:
             Sensory influences that could be incorporated
         """
-        # Check if current body state is significant enough to express
-        comfort_level = await self._calculate_overall_comfort(RunContextWrapper(context=None))
-        
-        # Prepare results
-        results = {
-            "should_express": False,
-            "expressions": [],
-            "tone_influence": None,
-            "posture_influence": None
-        }
-        
-        # Determine if we should express sensations based on comfort level
-        # Extreme comfort or discomfort is more likely to be expressed
-        expression_probability = 0.3  # Base probability
-        
-        if abs(comfort_level) > 0.7:
-            expression_probability = 0.8  # High for extreme states
-        elif abs(comfort_level) > 0.4:
-            expression_probability = 0.5  # Medium for moderate states
-        
-        # Roll for expression
-        if random.random() < expression_probability:
-            results["should_express"] = True
-            
-            # Get significant sensations to potentially express
-            significant_sensations = []
-            
-            for name, region in self.body_regions.items():
-                dominant = self._get_dominant_sensation(region)
-                
-                # Get value for dominant sensation
-                if dominant == "temperature":
-                    value = abs(region.temperature - 0.5) * 2.0
-                else:
-                    value = getattr(region, dominant, 0.0)
-                
-                # If significant, add to list
-                if value >= self.response_influence["expression_threshold"]:
-                    significant_sensations.append({
-                        "region": name,
-                        "sensation": dominant,
-                        "intensity": value
-                    })
-            
-            # Sort by intensity and select top sensations to express
-            significant_sensations.sort(key=lambda x: x["intensity"], reverse=True)
-            sensations_to_express = significant_sensations[:self.response_influence["max_expressions_per_response"]]
-            
-            # Generate expressions for selected sensations
-            for sensation in sensations_to_express:
-                try:
-                    expression = await self.generate_sensory_expression(
-                        stimulus_type=sensation["sensation"],
-                        body_region=sensation["region"]
-                    )
-                    
-                    if expression:
-                        results["expressions"].append({
-                            "text": expression,
-                            "region": sensation["region"],
-                            "sensation": sensation["sensation"],
-                            "intensity": sensation["intensity"]
-                        })
-                except Exception as e:
-                    logger.error(f"Error generating expression: {e}")
-            
-            # Get temperature effects on tone
+        with trace(workflow_name="Sensory_Influence", group_id=self.trace_group_id):
+            # Use orchestrator for sensory influence
             try:
-                temperature_effects = await self.get_temperature_effects()
-                results["tone_influence"] = temperature_effects["effect_on_tone"]
-                results["posture_influence"] = temperature_effects["effect_on_posture"]
+                result = await self.process_body_experience({
+                    "action": "get_sensory_influence",
+                    "message_text": message_text
+                })
+                
+                if isinstance(result, dict) and "should_express" in result:
+                    return result
             except Exception as e:
-                logger.error(f"Error getting temperature effects: {e}")
+                logger.error(f"Sensory influence orchestration failed, using fallback: {e}")
         
-        return results
+            # Check if current body state is significant enough to express
+            comfort_level = await self._calculate_overall_comfort(RunContextWrapper(context=None))
+            
+            # Prepare results
+            results = {
+                "should_express": False,
+                "expressions": [],
+                "tone_influence": None,
+                "posture_influence": None
+            }
+            
+            # Determine if we should express sensations based on comfort level
+            # Extreme comfort or discomfort is more likely to be expressed
+            expression_probability = 0.3  # Base probability
+            
+            if abs(comfort_level) > 0.7:
+                expression_probability = 0.8  # High for extreme states
+            elif abs(comfort_level) > 0.4:
+                expression_probability = 0.5  # Medium for moderate states
+            
+            # Roll for expression
+            if random.random() < expression_probability:
+                results["should_express"] = True
+                
+                # Get significant sensations to potentially express
+                significant_sensations = []
+                
+                for name, region in self.body_regions.items():
+                    dominant = self._get_dominant_sensation(region)
+                    
+                    # Get value for dominant sensation
+                    if dominant == "temperature":
+                        value = abs(region.temperature - 0.5) * 2.0
+                    else:
+                        value = getattr(region, dominant, 0.0)
+                    
+                    # If significant, add to list
+                    if value >= self.response_influence["expression_threshold"]:
+                        significant_sensations.append({
+                            "region": name,
+                            "sensation": dominant,
+                            "intensity": value
+                        })
+                
+                # Sort by intensity and select top sensations to express
+                significant_sensations.sort(key=lambda x: x["intensity"], reverse=True)
+                sensations_to_express = significant_sensations[:self.response_influence["max_expressions_per_response"]]
+                
+                # Generate expressions for selected sensations
+                for sensation in sensations_to_express:
+                    try:
+                        expression = await self.generate_sensory_expression(
+                            stimulus_type=sensation["sensation"],
+                            body_region=sensation["region"]
+                        )
+                        
+                        if expression:
+                            results["expressions"].append({
+                                "text": expression,
+                                "region": sensation["region"],
+                                "sensation": sensation["sensation"],
+                                "intensity": sensation["intensity"]
+                            })
+                    except Exception as e:
+                        logger.error(f"Error generating expression: {e}")
+                
+                # Get temperature effects on tone
+                try:
+                    temperature_effects = await self.get_temperature_effects()
+                    results["tone_influence"] = temperature_effects.get("effect_on_tone")
+                    results["posture_influence"] = temperature_effects.get("effect_on_posture")
+                except Exception as e:
+                    logger.error(f"Error getting temperature effects: {e}")
+            
+            return results
     
     async def link_memory_to_sensation(self, 
                                    memory_id: str, 
@@ -1310,60 +1632,77 @@ class DigitalSomatosensorySystem:
         Returns:
             Result of the link operation
         """
-        # Validate body region
-        if body_region not in self.body_regions:
-            return {"error": f"Invalid body region: {body_region}"}
-        
-        # Validate sensation type
-        valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
-        if sensation_type not in valid_types:
-            return {"error": f"Invalid sensation type: {sensation_type}"}
-        
-        # Get memory content from memory core if available
-        memory_text = None
-        if self.memory_core:
+        with trace(workflow_name="Memory_Sensation_Link", group_id=self.trace_group_id):
+            # Validate body region
+            if body_region not in self.body_regions:
+                return {"error": f"Invalid body region: {body_region}"}
+            
+            # Validate sensation type
+            valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
+            if sensation_type not in valid_types:
+                return {"error": f"Invalid sensation type: {sensation_type}"}
+            
+            # Use orchestrator for memory linking
             try:
-                memory = await self.memory_core.get_memory_by_id(memory_id)
-                if memory:
-                    memory_text = memory.get("memory_text", "")
+                result = await self.process_body_experience({
+                    "action": "link_memory",
+                    "memory_id": memory_id,
+                    "sensation_type": sensation_type,
+                    "body_region": body_region,
+                    "intensity": intensity
+                })
+                
+                if isinstance(result, dict) and "success" in result:
+                    return result
             except Exception as e:
-                logger.error(f"Error getting memory: {e}")
-        
-        # Get or create trigger from memory
-        trigger = memory_id
-        if memory_text:
-            # Use first 50 chars of memory as trigger
-            trigger = memory_text[:50].strip()
-        
-        # Create or update association
-        if trigger not in self.memory_linked_sensations["associations"]:
-            self.memory_linked_sensations["associations"][trigger] = {}
-        
-        if body_region not in self.memory_linked_sensations["associations"][trigger]:
-            self.memory_linked_sensations["associations"][trigger][body_region] = {}
-        
-        # Set the association directly (stronger than learning)
-        self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
-        
-        # If it's a pain sensation, also create a pain memory
-        if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
-            pain_memory = PainMemory(
-                intensity=intensity,
-                location=body_region,
-                cause=f"Memory: {trigger}",
-                duration=1.0,  # Default duration
-                timestamp=datetime.datetime.now(),
-                associated_memory_id=memory_id
-            )
-            self.pain_model["pain_memories"].append(pain_memory)
-        
-        return {
-            "trigger": trigger,
-            "body_region": body_region,
-            "sensation_type": sensation_type,
-            "intensity": intensity,
-            "memory_id": memory_id
-        }
+                logger.error(f"Memory linking orchestration failed, using fallback: {e}")
+            
+            # Get memory content from memory core if available
+            memory_text = None
+            if self.memory_core:
+                try:
+                    memory = await self.memory_core.get_memory_by_id(memory_id)
+                    if memory:
+                        memory_text = memory.get("memory_text", "")
+                except Exception as e:
+                    logger.error(f"Error getting memory: {e}")
+            
+            # Get or create trigger from memory
+            trigger = memory_id
+            if memory_text:
+                # Use first 50 chars of memory as trigger
+                trigger = memory_text[:50].strip()
+            
+            # Create or update association
+            if trigger not in self.memory_linked_sensations["associations"]:
+                self.memory_linked_sensations["associations"][trigger] = {}
+            
+            if body_region not in self.memory_linked_sensations["associations"][trigger]:
+                self.memory_linked_sensations["associations"][trigger][body_region] = {}
+            
+            # Set the association directly (stronger than learning)
+            self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
+            
+            # If it's a pain sensation, also create a pain memory
+            if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
+                pain_memory = PainMemory(
+                    intensity=intensity,
+                    location=body_region,
+                    cause=f"Memory: {trigger}",
+                    duration=1.0,  # Default duration
+                    timestamp=datetime.datetime.now(),
+                    associated_memory_id=memory_id
+                )
+                self.pain_model["pain_memories"].append(pain_memory)
+            
+            return {
+                "success": True,
+                "trigger": trigger,
+                "body_region": body_region,
+                "sensation_type": sensation_type,
+                "intensity": intensity,
+                "memory_id": memory_id
+            }
     
     async def get_somatic_memory(self, memory_id: str) -> Dict[str, Any]:
         """
@@ -1375,42 +1714,56 @@ class DigitalSomatosensorySystem:
         Returns:
             Associated somatic memories if any
         """
-        result = {
-            "memory_id": memory_id,
-            "has_somatic_memory": False,
-            "pain_memories": [],
-            "associations": {}
-        }
-        
-        # Check pain memories
-        pain_memories = [m for m in self.pain_model["pain_memories"] 
-                       if m.associated_memory_id == memory_id]
-        
-        if pain_memories:
-            result["has_somatic_memory"] = True
-            result["pain_memories"] = [memory.model_dump() for memory in pain_memories]
-        
-        # Get memory content from memory core if available
-        memory_text = None
-        if self.memory_core:
+        with trace(workflow_name="Get_Somatic_Memory", group_id=self.trace_group_id):
+            # Use orchestrator for somatic memory retrieval
             try:
-                memory = await self.memory_core.get_memory_by_id(memory_id)
-                if memory:
-                    memory_text = memory.get("memory_text", "")
+                result = await self.process_body_experience({
+                    "action": "get_somatic_memory",
+                    "memory_id": memory_id
+                })
+                
+                if isinstance(result, dict) and "has_somatic_memory" in result:
+                    return result
             except Exception as e:
-                logger.error(f"Error getting memory: {e}")
-        
-        # Check associations using memory ID and text as possible triggers
-        triggers = [memory_id]
-        if memory_text:
-            triggers.append(memory_text[:50].strip())
-        
-        for trigger in triggers:
-            if trigger in self.memory_linked_sensations["associations"]:
+                logger.error(f"Somatic memory orchestration failed, using fallback: {e}")
+                
+            # Fallback implementation
+            result = {
+                "memory_id": memory_id,
+                "has_somatic_memory": False,
+                "pain_memories": [],
+                "associations": {}
+            }
+            
+            # Check pain memories
+            pain_memories = [m for m in self.pain_model["pain_memories"] 
+                           if m.associated_memory_id == memory_id]
+            
+            if pain_memories:
                 result["has_somatic_memory"] = True
-                result["associations"][trigger] = self.memory_linked_sensations["associations"][trigger]
-        
-        return result
+                result["pain_memories"] = [memory.model_dump() for memory in pain_memories]
+            
+            # Get memory content from memory core if available
+            memory_text = None
+            if self.memory_core:
+                try:
+                    memory = await self.memory_core.get_memory_by_id(memory_id)
+                    if memory:
+                        memory_text = memory.get("memory_text", "")
+                except Exception as e:
+                    logger.error(f"Error getting memory: {e}")
+            
+            # Check associations using memory ID and text as possible triggers
+            triggers = [memory_id]
+            if memory_text:
+                triggers.append(memory_text[:50].strip())
+            
+            for trigger in triggers:
+                if trigger in self.memory_linked_sensations["associations"]:
+                    result["has_somatic_memory"] = True
+                    result["associations"][trigger] = self.memory_linked_sensations["associations"][trigger]
+            
+            return result
 
     def set_temperature(self, body_region: str, temperature_value: float) -> Dict[str, Any]:
         """
