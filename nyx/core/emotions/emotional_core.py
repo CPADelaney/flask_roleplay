@@ -37,6 +37,9 @@ from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
 from nyx.core.emotions.tools.emotion_tools import EmotionTools
 from nyx.core.emotions.tools.reflection_tools import ReflectionTools
 from nyx.core.emotions.tools.learning_tools import LearningTools
+from agents.tracing import trace, function_span, add_trace_processor, BatchTraceProcessor
+from agents.tracing.processors import BackendSpanExporter
+from nyx.core.emotions.utils import handle_errors, with_emotion_trace, create_run_config
 
 logger = logging.getLogger(__name__)
 
