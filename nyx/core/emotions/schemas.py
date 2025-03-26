@@ -116,4 +116,4 @@ class EmotionalResponseOutput(BaseModel):
     reflection: Optional[str] = None
     neurochemical_changes: Dict[str, float]
     valence: float = Field(..., ge=-1.0, le=1.0)
-    arousal: float = Field(..., ge=0.0, le=1.0)c
+    arousal: float = Field(..., ge=0.0, le=1.0)
