@@ -262,6 +262,18 @@ class EmotionalCore:
             "average_response_time": 0,
             "update_counts": defaultdict(int)
         }
+
+    def _setup_tracing(self):
+        """Configure custom trace processor for emotional analytics"""
+        from agents.tracing import add_trace_processor, BatchTraceProcessor
+        from agents.tracing.processors import BackendSpanExporter
+        
+        emotion_trace_processor = BatchTraceProcessor(
+            exporter=BackendSpanExporter(project="nyx_emotional_system"),
+            max_batch_size=100,
+            schedule_delay=3.0
+        )
+        add_trace_processor(emotion_trace_processor)
     
     def _initialize_agents(self):
         """Initialize all agents using factory pattern with agent cloning"""
