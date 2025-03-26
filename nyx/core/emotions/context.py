@@ -432,3 +432,117 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             metadata["conversation_id"] = self.temp_data["conversation_id"]
             
         return metadata
+# Adding enhanced methods to EmotionalContext
+
+def prepare_agent_context(self, agent_type: str) -> Dict[str, Any]:
+    """
+    Prepare context data optimized for a specific agent type with
+    enhanced SDK integration
+    
+    Args:
+        agent_type: Type of agent to prepare for
+        
+    Returns:
+        Dictionary of agent-specific context data
+    """
+    # Use the existing prepare_for_agent method as a base
+    context_data = self.prepare_for_agent(agent_type)
+    
+    # Add SDK-specific optimizations
+    context_data["_sdk_metadata"] = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "cycle": self.cycle_count,
+        "agent_type": agent_type
+    }
+    
+    # Add trace context for better SDK integration
+    context_data["trace_context"] = self.create_trace_metadata()
+    
+    # Add SDK-specific performance data
+    perf_data = {}
+    
+    # Add agent timing data if available
+    agent_timing = self.get_timing_data()
+    if agent_type in agent_timing:
+        perf_data["avg_response_time"] = agent_timing[agent_type].get("avg_time", 0)
+        perf_data["response_count"] = agent_timing[agent_type].get("count", 0)
+    
+    # Add function timing data if available for this agent type
+    function_timing = self.get_value("function_timing", {})
+    if function_timing:
+        perf_data["function_timing"] = {
+            k: v for k, v in function_timing.items()
+            if k.startswith(agent_type) or agent_type.lower() in k.lower()
+        }
+    
+    # Add performance data to context if any was found
+    if perf_data:
+        context_data["_performance"] = perf_data
+    
+    return context_data
+
+def create_trace_metadata(self) -> Dict[str, Any]:
+    """
+    Create metadata for traces with enhanced SDK integration
+    
+    Returns:
+        Dictionary of trace metadata
+    """
+    metadata = {
+        "system": "nyx_emotional_core",
+        "version": "1.0",
+        "cycle": self.cycle_count,
+        "timestamp": datetime.datetime.now().isoformat()
+    }
+    
+    # Add active agent if available
+    if self.active_agent:
+        metadata["active_agent"] = self.active_agent
+        
+    # Add dominant emotion if available with additional information
+    if self.last_emotions:
+        dominant = max(self.last_emotions.items(), key=lambda x: x[1])
+        metadata["dominant_emotion"] = dominant[0]
+        metadata["intensity"] = dominant[1]
+        
+        # Add all emotions above threshold for richer tracing
+        significant_emotions = {
+            emotion: intensity for emotion, intensity in self.last_emotions.items()
+            if intensity > 0.3  # Only include emotions with significant intensity
+        }
+        if significant_emotions:
+            metadata["emotions"] = significant_emotions
+            
+    # Add conversation ID if available
+    if "conversation_id" in self.temp_data:
+        metadata["conversation_id"] = self.temp_data["conversation_id"]
+        
+    # Add SDK integration timestamp
+    metadata["sdk_timestamp"] = datetime.datetime.now().isoformat()
+    
+    return metadata
+
+def get_recent_activity(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Get recent activity across all circular buffers for
+    improved SDK monitoring
+    
+    Args:
+        limit: Maximum number of items to return from each buffer
+        
+    Returns:
+        Dictionary with recent activity data
+    """
+    activity = {}
+    
+    # Get recent activity from circular buffers
+    for buffer_name in self._circular_history.keys():
+        buffer_data = self.get_circular_buffer(buffer_name)
+        if buffer_data:
+            activity[buffer_name] = buffer_data[-limit:]
+    
+    # Add standard fields
+    activity["timestamp"] = datetime.datetime.now().isoformat()
+    activity["cycle"] = self.cycle_count
+    
+    return activity
