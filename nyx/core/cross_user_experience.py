@@ -813,7 +813,7 @@ class CrossUserExperienceManager:
                                      limit: int = 3,
                                      source_user_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Find experiences from other users that match a query
+        Find experiences from other users that match a query using Agent SDK orchestration
         
         Args:
             target_user_id: ID of the target user
@@ -825,133 +825,56 @@ class CrossUserExperienceManager:
         Returns:
             Cross-user experience results
         """
-        with trace(workflow_name="find_cross_user_experiences", group_id=self.trace_group_id):
-            if not self.experience_interface:
-                return {
-                    "error": "Experience interface not available",
-                    "experiences": [],
-                    "count": 0
-                }
+        # Create an experience search orchestrator
+        experience_search_orchestrator = Agent(
+            name="Experience_Search_Orchestrator",
+            instructions="""
+            You are the orchestration system for Nyx's cross-user experience search.
+            Your role is to:
+            1. Determine appropriate sources for experience retrieval
+            2. Ensure proper permissions are applied
+            3. Evaluate relevance of experiences
+            4. Personalize experiences for the target user
             
-            # Get all potential source users if not specified
-            if not source_user_ids:
-                source_user_ids = []
-                # Get users from permission matrix
-                for key in self.permission_matrix:
-                    source_id, target_id = key.split(":")
-                    if target_id == target_user_id and source_id != target_user_id:
-                        source_user_ids.append(source_id)
+            Balance finding high-quality experiences with respecting privacy boundaries.
+            """,
+            handoffs=[
+                handoff(self.permission_agent, 
+                       tool_name_override="check_permissions", 
+                       tool_description_override="Check permissions for cross-user experience sharing"),
                 
-                # Add users from sharing history
-                for entry in self.sharing_history:
-                    if entry.get("target_user_id") == target_user_id and entry.get("source_user_id") != target_user_id:
-                        source_user_ids.append(entry.get("source_user_id"))
+                handoff(self.relevance_agent, 
+                       tool_name_override="evaluate_relevance",
+                       tool_description_override="Evaluate relevance of experiences to query"),
                 
-                # Get unique user IDs
-                source_user_ids = list(set(source_user_ids))
-                
-                # Add users from same cluster if available
-                if target_user_id in self.user_clusters:
-                    cluster = self.user_clusters[target_user_id]
-                    for user_id in cluster:
-                        if user_id != target_user_id and user_id not in source_user_ids:
-                            source_user_ids.append(user_id)
-            
-            # If no source users, return empty result
-            if not source_user_ids:
-                return {
-                    "experiences": [],
-                    "count": 0,
-                    "source_user_ids": [],
-                    "target_user_id": target_user_id
-                }
-            
-            # Get experiences from each source user
-            all_experiences = []
-            
-            for source_user_id in source_user_ids:
-                # Check permission
-                permission = await self.get_sharing_permission(source_user_id, target_user_id)
-                permission_level = permission.get("permission_level", self.default_permission_level)
-                
-                # Skip if permission level is too low
-                if permission_level < 0.3:
-                    continue
-                
-                try:
-                    # Search for experiences from this user
-                    if hasattr(self.experience_interface, "retrieve_experiences_enhanced"):
-                        experiences = await self.experience_interface.retrieve_experiences_enhanced(
-                            query=query,
-                            scenario_type=scenario_type,
-                            limit=limit * 2,  # Get more to filter
-                            user_id=source_user_id,
-                            include_cross_user=False  # Only from this user
-                        )
-                    else:
-                        experiences = []
-                    
-                    # Filter by permission
-                    filtered_experiences = await self._filter_experiences_by_permission(
-                        RunContextWrapper(context=None),
-                        experiences=experiences,
-                        source_user_id=source_user_id,
-                        target_user_id=target_user_id
-                    )
-                    
-                    # Add source user ID to each experience
-                    for exp in filtered_experiences:
-                        exp["source_user_id"] = source_user_id
-                    
-                    all_experiences.extend(filtered_experiences)
-                except Exception as e:
-                    logger.error(f"Error getting experiences from user {source_user_id}: {e}")
-            
-            # Score experiences for relevance
-            scored_experiences = []
-            
-            for exp in all_experiences:
-                # Calculate relevance
-                relevance = await self._calculate_cross_user_relevance(
-                    RunContextWrapper(context=None),
-                    experience=exp,
-                    target_user_id=target_user_id,
-                    query=query
-                )
-                
-                # Add to scored experiences
-                scored_experiences.append((exp, relevance))
-            
-            # Sort by relevance
-            scored_experiences.sort(key=lambda x: x[1], reverse=True)
-            
-            # Get top experiences
-            top_experiences = scored_experiences[:limit]
-            
-            # Personalize experiences
-            personalized_experiences = []
-            relevance_scores = []
-            
-            for exp, relevance in top_experiences:
-                if relevance >= self.min_relevance_threshold:
-                    # Personalize experience
-                    personalized = await self._personalize_experience(
-                        RunContextWrapper(context=None),
-                        experience=exp,
-                        target_user_id=target_user_id
-                    )
-                    
-                    personalized_experiences.append(personalized)
-                    relevance_scores.append(relevance)
-            
-            return {
-                "experiences": personalized_experiences,
-                "count": len(personalized_experiences),
-                "source_user_ids": list(set(exp["source_user_id"] for exp, _ in top_experiences)),
-                "target_user_id": target_user_id,
-                "relevance_scores": relevance_scores,
-                "personalized": True
-            }
+                handoff(self.personalization_agent,
+                       tool_name_override="personalize_experiences",
+                       tool_description_override="Personalize experiences for target user")
+            ],
+            tools=[
+                function_tool(self._get_potential_source_users),
+                function_tool(self._retrieve_experiences),
+                function_tool(self._filter_experiences_by_permission)
+            ]
+        )
+        
+        with trace(workflow_name="Experience_Search", group_id=self.trace_group_id):
+            # Run the orchestrator
+            result = await Runner.run(
+                experience_search_orchestrator,
+                json.dumps({
+                    "target_user_id": target_user_id,
+                    "query": query,
+                    "scenario_type": scenario_type,
+                    "limit": limit,
+                    "source_user_ids": source_user_ids
+                })
+            )
+        
+        # Process the result
+        search_result = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
+        
+        return search_result
     
     async def find_similar_users(self, user_id: str, min_similarity: float = 0.6) -> List[Dict[str, Any]]:
         """
