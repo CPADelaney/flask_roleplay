@@ -106,3 +106,42 @@ def create_run_config(
         trace_include_sensitive_data=include_sensitive_data,
         trace_metadata=metadata
     )
+def with_emotion_trace(func: Callable):
+    """
+    Decorator to add tracing to emotional methods with improved metadata
+    
+    Args:
+        func: The function to wrap with tracing
+        
+    Returns:
+        Wrapped function with tracing
+    """
+    @functools.wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        workflow_name = f"Emotion_{func.__name__}"
+        trace_id = f"emotion_{func.__name__}_{datetime.datetime.now().timestamp()}"
+        
+        # Add useful metadata and group traces by conversation
+        metadata = {
+            "function": func.__name__,
+            "cycle_count": self.context.cycle_count,
+            "current_emotion": self.get_dominant_emotion()[0] if hasattr(self, "get_dominant_emotion") else "Unknown",
+            "performance_metrics": {
+                k: v for k, v in self.performance_metrics.items() 
+                if hasattr(self, "performance_metrics") and k in ["api_calls", "average_response_time"]
+            }
+        }
+        
+        # Get conversation ID from context if available
+        conversation_id = "default"
+        if hasattr(self, "context") and hasattr(self.context, "temp_data"):
+            conversation_id = self.context.temp_data.get("conversation_id", "default")
+        
+        with trace(
+            workflow_name=workflow_name, 
+            trace_id=trace_id,
+            group_id=f"conversation_{conversation_id}",
+            metadata=metadata
+        ):
+            return await func(self, *args, **kwargs)
+    return wrapper
