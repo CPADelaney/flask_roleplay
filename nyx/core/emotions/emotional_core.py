@@ -255,6 +255,7 @@ class EmotionalCore:
         self.emotion_tools = EmotionTools(self)
         self.reflection_tools = ReflectionTools(self)
         self.learning_tools = LearningTools(self)
+        self._setup_tracing()
         
         # Initialize agents dict - will use factory pattern with agent cloning
         self.agents = {}
@@ -746,8 +747,6 @@ class EmotionalCore:
             emotion_scores = {e: i * factor for e, i in emotion_scores.items()}
         
         return emotion_scores
-        
-    self._setup_tracing()
     
     def apply_decay(self):
         """Apply emotional decay based on time elapsed since last update"""
