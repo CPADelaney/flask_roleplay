@@ -6,6 +6,7 @@ import random
 import os
 import math
 from typing import Dict, List, Any, Optional, Tuple, Union
+import json
 
 from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
@@ -17,23 +18,9 @@ from nyx.core.prediction_engine import PredictionEngine
 
 from issue_tracking_system import IssueTrackingSystem
 
-# Import core systems
-from nyx.core.emotional_core import EmotionalCore
-from nyx.core.memory_core import MemoryCore
-from nyx.core.reflection_engine import ReflectionEngine
-from nyx.core.experience_interface import ExperienceInterface
-from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
-from nyx.core.internal_feedback_system import InternalFeedbackSystem
-from nyx.core.meta_core import MetaCore
-from nyx.core.knowledge_core import KnowledgeCoreAgents
-from nyx.core.memory_orchestrator import MemoryOrchestrator
-from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
-from nyx.core.experience_consolidation import ExperienceConsolidationSystem
-from nyx.core.identity_evolution import IdentityEvolutionSystem
-from nyx.core.cross_user_experience import CrossUserExperienceManager
-from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator, SensoryInput, ExpectationSignal
-from nyx.core.attentional_controller import AttentionalController, AttentionalControl
-from nyx.core.reward_system import RewardSignalProcessor, RewardSignal
+
+from nyx.core.needs_system import NeedsSystem # Import NeedsSystem
+from nyx.core.goal_manager import GoalManager # Import GoalManager
 
 from nyx.core.procedural_memory import (
     ProceduralMemoryManager, EnhancedProceduralMemoryManager,
@@ -135,6 +122,8 @@ class NyxBrain:
         self.temporal_perception = None
         self.procedural_memory = None
         self.agent_enhanced_memory = None
+        self.needs_system: Optional[NeedsSystem] = None
+        self.goal_manager: Optional[GoalManager] = None
         
         # Component managers
         self.processing_manager = None
@@ -144,6 +133,7 @@ class NyxBrain:
         self.initialized = False
         self.last_interaction = datetime.datetime.now()
         self.interaction_count = 0
+        self.cognitive_cycles_executed = 0 # Track cycles run by brain
         self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}"
         
         # Configuration defaults
@@ -163,6 +153,9 @@ class NyxBrain:
             "experiences_shared": 0,
             "cross_user_experiences_shared": 0,
             "experience_consolidations": 0,
+            "goals_completed": 0,
+            "goals_failed": 0,
+            "steps_executed": 0,
             "response_times": []
         }
         
@@ -181,6 +174,7 @@ class NyxBrain:
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
+        self.last_needs_goal_update = datetime.datetime.now() # Track last cycle run
         
         # Error tracking
         self.error_registry = {
@@ -196,6 +190,7 @@ class NyxBrain:
         
         # Agent system
         self.agent_capabilities_initialized = False
+        self.brain_agent = None # Main brain agent
         
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
     
@@ -303,6 +298,13 @@ class NyxBrain:
             self.reward_system.somatosensory_system = self.digital_somatosensory_system
             # Optionally set DSS reference in IdentityEvolution if needed
             self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
+
+            # --- 7. Initialize GoalManager & NeedsSystem ---
+            # GoalManager needs the brain reference to call action methods.
+            self.goal_manager = GoalManager(brain_reference=self)
+            # NeedsSystem needs the goal manager to trigger goal creation.
+            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
+            # --- End Goal/Needs Init ---
             
             # Initialize temporal perception
             self.temporal_perception = TemporalPerception()
@@ -345,7 +347,13 @@ class NyxBrain:
                 "hormone": self.hormone_system,
                 "time": self.temporal_perception,
                 "procedural": self.agent_enhanced_memory
+                "needs": self.needs_system,
+                "goals": self.goal_manager
             })
+
+            self.attentional_controller = AttentionalController(
+                emotional_core=self.emotional_core
+            )
             
             # Initialize agent capabilities if needed
             if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
@@ -362,8 +370,32 @@ class NyxBrain:
             except ImportError:
                 logger.info("Reflexive system module not found, skipping initialization")
             
-            # Create main brain agent with all function tools
+            self.multimodal_integrator = EnhancedMultiModalIntegrator(
+                reasoning_core=self.reasoning_core, # Pass reasoning core reference
+                attentional_controller=self.attentional_controller
+            )
+             # Assuming TemporalPerception, ProceduralMemoryManager, AgentEnhancedMemoryManager
+             # ReflectionEngine, ExperienceInterface, DynamicAdaptationSystem, InternalFeedbackSystem exist
+            self.temporal_perception = TemporalPerception()
+            await self.temporal_perception.initialize(self, None)
+            self.procedural_memory = ProceduralMemoryManager()
+            self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
+            self.reflection_engine = ReflectionEngine()
+            self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
+            self.dynamic_adaptation = DynamicAdaptationSystem()
+            self.internal_feedback = InternalFeedbackSystem()
+
+            # Register feature extractors for multimodal
+            await self._register_processing_modules()
+
+            # Initialize component managers
+            self.processing_manager = ProcessingManager(self)
+            await self.processing_manager.initialize()
+            self.self_config_manager = SelfConfigManager(self)
+
+            # Create main brain agent
             self.brain_agent = self._create_brain_agent()
+
             
             self.initialized = True
             logger.info(f"NyxBrain fully initialized for user {self.user_id}, conversation {self.conversation_id}")
@@ -371,6 +403,93 @@ class NyxBrain:
         except Exception as e:
             logger.error(f"Error initializing NyxBrain: {str(e)}")
             raise
+
+    @function_tool # Make it a tool callable by brain_agent if desired
+    async def run_cognitive_cycle(self, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Runs a single cognitive cycle: updating needs, selecting/executing goals,
+        and potentially running meta-cognitive processes.
+
+        Args:
+            context_data: Optional external context (e.g., from user input processing).
+
+        Returns:
+            Dictionary summarizing the cycle's activities and results.
+        """
+        if not self.initialized:
+            logger.warning("Attempted to run cognitive cycle before initialization.")
+            return {"error": "Brain not initialized"}
+
+        self.cognitive_cycles_executed += 1
+        cycle_results = {
+            "cycle_number": self.cognitive_cycles_executed,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        logger.debug(f"--- Starting Cognitive Cycle {self.cognitive_cycles_executed} ---")
+
+        with trace(workflow_name="NyxCognitiveCycle", group_id=self.trace_group_id):
+            # 1. Update Needs & Check for Goal Triggers
+            if self.needs_system:
+                try:
+                    drive_strengths = await self.needs_system.update_needs()
+                    cycle_results["needs_update"] = {"drive_strengths": drive_strengths}
+                    logger.debug(f"Needs updated. Drives: {drive_strengths}")
+                except Exception as e:
+                    logger.error(f"Error updating needs: {e}")
+                    cycle_results["needs_update"] = {"error": str(e)}
+
+            # 2. Goal Management: Select & Execute Step
+            if self.goal_manager:
+                try:
+                    execution_result = await self.goal_manager.execute_next_step()
+                    if execution_result:
+                        cycle_results["goal_execution"] = execution_result
+                        # Update performance metrics
+                        step_info = execution_result.get("executed_step", {})
+                        if step_info.get("status") == "completed":
+                            self.performance_metrics["steps_executed"] += 1
+                        if step_info.get("status") == "failed":
+                            # Potentially log error or trigger meta-core review
+                            pass
+                        goal_status = await self.goal_manager.get_goal_status(execution_result.get("goal_id"))
+                        if goal_status:
+                             if goal_status.get("status") == "completed": self.performance_metrics["goals_completed"] += 1
+                             if goal_status.get("status") == "failed": self.performance_metrics["goals_failed"] += 1
+
+                        logger.debug(f"Goal execution step result: {execution_result}")
+                    else:
+                        cycle_results["goal_execution"] = {"status": "no_action_taken"}
+                        logger.debug("No goal action taken this cycle.")
+                except Exception as e:
+                    logger.exception(f"Error during goal execution: {e}")
+                    cycle_results["goal_execution"] = {"error": str(e)}
+
+            # 3. Meta-Cognitive Loop (Can be run less frequently)
+            if self.meta_core and (self.cognitive_cycles_executed % self.meta_core.context.meta_parameters.get("evaluation_interval", 5) == 0):
+                 try:
+                      logger.debug("Running MetaCore cycle...")
+                      # Prepare context for MetaCore
+                      meta_context = context_data or {}
+                      meta_context['needs_state'] = self.needs_system.get_needs_state() if self.needs_system else {}
+                      meta_context['active_goals'] = await self.goal_manager.get_all_goals(status_filter=["active"]) if self.goal_manager else []
+                      meta_context['performance_metrics'] = await self.get_system_stats() # Pass current overall stats
+
+                      # Assuming meta_core has a method like cognitive_cycle
+                      if hasattr(self.meta_core, 'cognitive_cycle'):
+                           meta_results = await self.meta_core.cognitive_cycle(meta_context)
+                           cycle_results["meta_core_cycle"] = meta_results
+                           logger.debug("MetaCore cycle completed.")
+                      else:
+                           logger.warning("MetaCore does not have 'cognitive_cycle' method.")
+
+                 except Exception as e:
+                      logger.error(f"Error running MetaCore cycle: {e}")
+                      cycle_results["meta_core_cycle"] = {"error": str(e)}
+
+            # 4. Other periodic updates (e.g., memory maintenance) can also go here
+
+            logger.debug(f"--- Finished Cognitive Cycle {self.cognitive_cycles_executed} ---")
+        return cycle_results
     
     async def initialize_agent_capabilities(self):
         """Initialize the agent capabilities for roleplay and narrative"""
@@ -1045,9 +1164,25 @@ class NyxBrain:
                     logger.error(f"Error in procedural maintenance: {str(e)}")
                     results["procedural_maintenance"] = {"error": str(e)}
             
+            if self.hormone_system:
+                 try: results["hormone_maintenance"] = await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None))
+                 except Exception as e: logger.error(f"Hormone maintenance error: {e}"); results["hormone_maintenance"] = {"error": str(e)}
+            if self.memory_orchestrator:
+                 try: results["memory_maintenance"] = await self.memory_orchestrator.run_maintenance()
+                 except Exception as e: logger.error(f"Memory maintenance error: {e}"); results["memory_maintenance"] = {"error": str(e)}
+            # ... etc. for other systems ...
+            if self.digital_somatosensory_system:
+                 try:
+                     ambient_temp = None # Or get from environment
+                     dss_state = await self.digital_somatosensory_system.update(ambient_temperature=ambient_temp)
+                     results["dss_maintenance_update"] = "completed"
+                 except Exception as e: logger.error(f"DSS maintenance error: {e}"); results["dss_maintenance_update"] = {"error": str(e)}
+
             results["maintenance_time"] = datetime.datetime.now().isoformat()
+            logger.info("System maintenance finished.")
             return results
-    
+
+    @function_tool # Make it callable by agents    
     async def get_system_stats(self) -> Dict[str, Any]:
         """
         Get comprehensive statistics about all systems
@@ -1197,7 +1332,41 @@ class NyxBrain:
                     "available_modes": list(self.processing_manager.processors.keys()) + ["auto"]
                 }
             
+            if self.needs_system:
+                try:
+                    needs_state = self.needs_system.get_needs_state()
+                    stats["needs_stats"] = {
+                        "current_levels": {n: s['level'] for n, s in needs_state.items()},
+                        "drive_strengths": {n: s['drive_strength'] for n, s in needs_state.items()},
+                        "total_drive": sum(s['drive_strength'] for s in needs_state.values()),
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting needs stats: {e}")
+                    stats["needs_stats"] = {"error": str(e)}
+
+            if self.goal_manager:
+                try:
+                    all_goals = await self.goal_manager.get_all_goals()
+                    active_goals = await self.goal_manager.get_all_goals(status_filter=["active"])
+                    pending_goals = await self.goal_manager.get_all_goals(status_filter=["pending"])
+                    stats["goal_stats"] = {
+                        "total_goals": len(self.goal_manager.goals),
+                        "active_goals_count": len(active_goals),
+                        "pending_goals_count": len(pending_goals),
+                        "completed_goals": self.performance_metrics["goals_completed"],
+                        "failed_goals": self.performance_metrics["goals_failed"],
+                        "active_goal_ids": [g['id'] for g in active_goals],
+                        "highest_priority_pending": pending_goals[0]['description'] if pending_goals else None,
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting goal stats: {e}")
+                    stats["goal_stats"] = {"error": str(e)}
+
+            # Add combined performance metrics including goal stats
+            stats["performance_metrics"] = self.performance_metrics
+
             return stats
+
     
     async def add_procedure(self, name: str, steps: List[Dict[str, Any]], domain: str = "general") -> Dict[str, Any]:
         """
