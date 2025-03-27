@@ -2,26 +2,43 @@
 
 import logging
 import numpy as np
-import datetime # Added for timestamp generation
-from typing import Dict, List, Any, Optional, Tuple, AsyncGenerator
+import datetime
+import asyncio
+import json
+from typing import Dict, List, Any, Optional, Tuple, Union, AsyncGenerator
 from pydantic import BaseModel, Field
-import asyncio # Added for placeholder async functions
+from enum import Enum
 
-from agents import Agent, Runner, function_tool, RunContextWrapper
+from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 
-# --- Schemas (Keep existing SensoryInput, ExpectationSignal, IntegratedPercept) ---
+logger = logging.getLogger(__name__)
+
+# --- Constants for Modalities ---
+class Modality(str, Enum):
+    TEXT = "text"
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO_MUSIC = "audio_music"
+    AUDIO_SPEECH = "audio_speech"
+    SYSTEM_SCREEN = "system_screen"
+    SYSTEM_AUDIO = "system_audio"
+    TOUCH_EVENT = "touch_event"
+    TASTE = "taste"
+    SMELL = "smell"
+
+# --- Base Schemas ---
 
 class SensoryInput(BaseModel):
     """Schema for raw sensory input"""
-    modality: str = Field(..., description="Input modality (text, image, video, audio_music, audio_speech, system_screen, system_audio)")
-    data: Any = Field(..., description="Raw input data (e.g., text string, image bytes, audio chunk path/bytes, video frame path/bytes/stream)")
+    modality: Modality
+    data: Any = Field(..., description="Raw input data (e.g., text string, image bytes, audio data)")
     confidence: float = Field(1.0, description="Input confidence (0.0-1.0)", ge=0.0, le=1.0)
-    timestamp: str = Field(..., description="Input timestamp")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata (e.g., filename, source URL, camera ID, mic ID)")
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 class ExpectationSignal(BaseModel):
     """Schema for top-down expectation signal"""
-    target_modality: str = Field(..., description="Target modality to influence")
+    target_modality: Modality
     pattern: Any = Field(..., description="Expected pattern or feature (e.g., object name, specific sound, text content)")
     strength: float = Field(0.5, description="Signal strength (0.0-1.0)", ge=0.0, le=1.0)
     source: str = Field(..., description="Source of expectation (reasoning, memory, etc.)")
@@ -29,227 +46,222 @@ class ExpectationSignal(BaseModel):
 
 class IntegratedPercept(BaseModel):
     """Schema for integrated percept after bottom-up and top-down processing"""
-    modality: str = Field(..., description="Percept modality")
-    content: Any = Field(..., description="Processed content (e.g., text summary, image description, audio features, recognized actions)")
+    modality: Modality
+    content: Any = Field(..., description="Processed content (features, descriptions, etc.)")
     bottom_up_confidence: float = Field(..., description="Confidence from bottom-up processing")
     top_down_influence: float = Field(..., description="Degree of top-down influence")
     attention_weight: float = Field(..., description="Attentional weight applied")
-    timestamp: str = Field(..., description="Processing timestamp")
-    raw_features: Optional[Dict[str, Any]] = Field(None, description="Detailed features extracted during bottom-up processing") # Added for detail
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    raw_features: Optional[Dict[str, Any]] = Field(None, description="Detailed features from bottom-up processing")
 
-
-# --- Feature Schemas (Examples - Define more detailed ones as needed) ---
+# --- Feature Schemas for Different Modalities ---
 
 class ImageFeatures(BaseModel):
-    description: str = "No description available."
-    objects: List[str] = []
-    text_content: Optional[str] = None # OCR
-    dominant_colors: List[Tuple[int, int, int]] = []
+    """Features extracted from image data."""
+    description: str = Field(default="No description available.")
+    objects: List[str] = Field(default_factory=list)
+    text_content: Optional[str] = None  # OCR
+    dominant_colors: List[Tuple[int, int, int]] = Field(default_factory=list)
     estimated_mood: Optional[str] = None
     is_screenshot: bool = False
+    spatial_layout: Optional[Dict[str, Any]] = None  # Positions of detected objects
 
 class AudioFeatures(BaseModel):
-    type: str = "unknown" # music, speech, ambient, sound_effect
-    transcription: Optional[str] = None # For speech
-    speaker_id: Optional[str] = None # For speech
-    mood: Optional[str] = None # For music/speech
-    genre: Optional[str] = None # For music
-    tempo_bpm: Optional[float] = None # For music
-    key: Optional[str] = None # For music
-    sound_events: List[str] = [] # For ambient/effects
+    """Features extracted from audio data."""
+    type: str = "unknown"  # music, speech, ambient, sound_effect
+    transcription: Optional[str] = None  # For speech
+    speaker_id: Optional[str] = None  # For speech
+    mood: Optional[str] = None  # For music/speech
+    genre: Optional[str] = None  # For music
+    tempo_bpm: Optional[float] = None  # For music
+    key: Optional[str] = None  # For music
+    sound_events: List[str] = Field(default_factory=list)  # For ambient/effects
+    noise_level: Optional[float] = None  # Estimated background noise
 
 class VideoFeatures(BaseModel):
+    """Features extracted from video data."""
     summary: str = "No summary available."
-    key_actions: List[str] = []
-    tracked_objects: Dict[str, List[Tuple[float, float]]] = {} # Object name -> list of (time, confidence)
-    scene_changes: List[float] = [] # Timestamps of scene changes
-    audio_features: Optional[AudioFeatures] = None # Embedded audio analysis
-    estimated_mood_progression: List[Tuple[float, str]] = [] # List of (time, mood)
+    key_actions: List[str] = Field(default_factory=list)
+    tracked_objects: Dict[str, List[Tuple[float, float]]] = Field(default_factory=dict)  # Object name -> list of (time, confidence)
+    scene_changes: List[float] = Field(default_factory=list)  # Timestamps of scene changes
+    audio_features: Optional[AudioFeatures] = None  # Embedded audio analysis
+    estimated_mood_progression: List[Tuple[float, str]] = Field(default_factory=list)  # List of (time, mood)
+    significant_frames: List[Dict[str, Any]] = Field(default_factory=list)  # Key moments
 
 class TouchEventFeatures(BaseModel):
+    """Features extracted from touch event data."""
     region: str
-    texture: Optional[str] = None # e.g., smooth, rough, soft, sticky, wet
-    temperature: Optional[str] = None # e.g., warm, cool, hot, cold
-    pressure_level: Optional[float] = None # 0.0-1.0
-    hardness: Optional[str] = None # e.g., soft, firm, hard
-    shape: Optional[str] = None # e.g., flat, round, sharp
-    object_description: Optional[str] = None # What was touched
+    texture: Optional[str] = None  # e.g., smooth, rough, soft, sticky, wet
+    temperature: Optional[str] = None  # e.g., warm, cool, hot, cold
+    pressure_level: Optional[float] = None  # 0.0-1.0
+    hardness: Optional[str] = None  # e.g., soft, firm, hard
+    shape: Optional[str] = None  # e.g., flat, round, sharp
+    object_description: Optional[str] = None  # What was touched
 
 class TasteFeatures(BaseModel):
-    profiles: List[str] = [] # e.g., sweet, sour, bitter, salty, umami, fatty, metallic, fruity, spicy
-    intensity: float = 0.5 # 0.0-1.0
-    texture: Optional[str] = None # e.g., creamy, crunchy, chewy, liquid
-    temperature: Optional[str] = None # e.g., hot, cold, room
+    """Features extracted from taste data."""
+    profiles: List[str] = Field(default_factory=list)  # e.g., sweet, sour, bitter, salty, umami, fatty, metallic, fruity, spicy
+    intensity: float = 0.5  # 0.0-1.0
+    texture: Optional[str] = None  # e.g., creamy, crunchy, chewy, liquid
+    temperature: Optional[str] = None  # e.g., hot, cold, room
     source_description: Optional[str] = None
 
 class SmellFeatures(BaseModel):
-    profiles: List[str] = [] # e.g., floral, fruity, citrus, woody, spicy, fresh, pungent, earthy, chemical, sweet, rotten
-    intensity: float = 0.5 # 0.0-1.0
-    pleasantness: Optional[float] = None # Estimated pleasantness -1.0 to 1.0
+    """Features extracted from smell data."""
+    profiles: List[str] = Field(default_factory=list)  # e.g., floral, fruity, citrus, woody, spicy, fresh, pungent, earthy, chemical, sweet, rotten
+    intensity: float = 0.5  # 0.0-1.0
+    pleasantness: Optional[float] = None  # Estimated pleasantness -1.0 to 1.0
     source_description: Optional[str] = None
 
+# --- Constants for Feature Classification ---
+POSITIVE_TASTES = {"sweet", "umami", "fatty", "savory"}
+NEGATIVE_TASTES = {"bitter", "sour", "metallic", "spoiled"}
+POSITIVE_SMELLS = {"floral", "fruity", "sweet", "fresh", "baked", "woody", "earthy"}
+NEGATIVE_SMELLS = {"pungent", "chemical", "rotten", "sour", "fishy", "burnt"}
 
-# --- Constants for Taste/Smell Rewards ---
-POSITIVE_TASTES = {'sweet', 'umami', 'fatty', 'savory'}
-NEGATIVE_TASTES = {'bitter', 'sour', 'metallic', 'spoiled'}
-POSITIVE_SMELLS = {'floral', 'fruity', 'sweet', 'fresh', 'baked', 'woody', 'earthy'} # Context dependent
-NEGATIVE_SMELLS = {'pungent', 'chemical', 'rotten', 'sour', 'fishy', 'burnt'}
-
-
-
-# --- Constants for Modalities ---
-MODALITY_TEXT = "text"
-MODALITY_IMAGE = "image"
-MODALITY_VIDEO = "video"
-MODALITY_AUDIO_MUSIC = "audio_music"
-MODALITY_AUDIO_SPEECH = "audio_speech"
-MODALITY_SYSTEM_SCREEN = "system_screen"
-MODALITY_SYSTEM_AUDIO = "system_audio"
-MODALITY_TOUCH_EVENT = "touch_event"
-MODALITY_TASTE = "taste"
-MODALITY_SMELL = "smell"
-
-
-class EnhancedMultiModalIntegrator:
+class MultimodalIntegrator:
     """
     Processes sensory inputs using both bottom-up and top-down pathways.
-    Handles text, image, video, audio, and system inputs.
+    Handles text, image, video, audio, and other sensory modalities.
     """
 
-    def __init__(self, reasoning_core=None, attentional_controller=None):
+    def __init__(self, reasoning_core=None, attentional_controller=None, vision_model=None, audio_processor=None):
+        """
+        Initialize the multimodal integrator.
+        
+        Args:
+            reasoning_core: Optional reference to the reasoning core for top-down processing
+            attentional_controller: Optional reference to the attentional controller for filtering
+            vision_model: Optional reference to vision model for image/video processing
+            audio_processor: Optional reference to audio processor for audio processing
+        """
         self.reasoning_core = reasoning_core
         self.attentional_controller = attentional_controller
+        self.vision_model = vision_model
+        self.audio_processor = audio_processor
+        
+        # Integration agent (for analyzing percepts)
+        self.integration_agent = self._create_integration_agent()
 
-        # Processing stages
-        self.feature_extractors: Dict[str, callable] = {}
-        self.expectation_modulators: Dict[str, callable] = {}
-        self.integration_strategies: Dict[str, callable] = {}
+        # Processing stages by modality
+        self.feature_extractors: Dict[Modality, callable] = {}
+        self.expectation_modulators: Dict[Modality, callable] = {}
+        self.integration_strategies: Dict[Modality, callable] = {}
 
         # Buffer for recent perceptions
         self.perception_buffer: List[IntegratedPercept] = []
-        self.max_buffer_size = 100 # Increased buffer size
+        self.max_buffer_size = 100
+        
+        # Track perception stats
+        self.perception_stats: Dict[Modality, Dict[str, int]] = {
+            modality: {"count": 0, "attention_filtered": 0} for modality in Modality
+        }
 
         # Current active expectations
         self.active_expectations: List[ExpectationSignal] = []
+        
+        # Lock for thread safety
+        self._lock = asyncio.Lock()
 
-        self.logger = logging.getLogger(__name__)
-
-        # --- Register Handlers for All Modalities ---
+        # Set up handlers for all modalities
         self._register_handlers()
+        
+        logger.info("MultimodalIntegrator initialized")
+
+    def _create_integration_agent(self) -> Optional[Agent]:
+        """Creates an agent for analyzing and integrating multimodal percepts."""
+        try:
+            return Agent(
+                name="Multimodal Integration Agent",
+                instructions="""You analyze sensory percepts and integrate information across modalities.
+                
+                Your tasks include:
+                1. Analyzing features extracted from different sensory modalities (vision, audio, touch, etc.)
+                2. Identifying patterns and connections between sensory inputs
+                3. Creating coherent descriptions that integrate information from multiple sources
+                4. Resolving conflicts or ambiguities between different modalities
+                5. Translating sensory features into semantically meaningful information
+                
+                For different modalities, focus on:
+                - Vision: Identify objects, relationships, scene context, and visual properties
+                - Audio: Understand speech content, emotional tone, music characteristics, or ambient sounds
+                - Touch: Interpret tactile properties like texture, temperature, and pressure
+                - Other senses: Extract meaningful patterns and properties
+                
+                Respond with structured JSON that enhances the raw features with meaningful interpretations.
+                """,
+                model="gpt-4o",
+                model_settings=ModelSettings(
+                    temperature=0.2,
+                    response_format={"type": "json_object"}
+                ),
+                output_type=Dict[str, Any]
+            )
+        except Exception as e:
+            logger.error(f"Error creating integration agent: {e}")
+            return None
 
     def _register_handlers(self):
-        """Register placeholder handlers for different modalities."""
-        self.logger.info("Registering multimodal handlers...")
+        """Register processing functions for all modalities."""
+        logger.info("Registering multimodal handlers")
 
-        # Text (Already partially handled, ensure registration)
-        self.register_feature_extractor(MODALITY_TEXT, self._extract_text_features)
-        self.register_expectation_modulator(MODALITY_TEXT, self._modulate_text_perception)
-        self.register_integration_strategy(MODALITY_TEXT, self._integrate_text_pathways)
+        # Text modality
+        self.feature_extractors[Modality.TEXT] = self._extract_text_features
+        self.expectation_modulators[Modality.TEXT] = self._modulate_text_perception
+        self.integration_strategies[Modality.TEXT] = self._integrate_text_pathways
 
-        # Image
-        self.register_feature_extractor(MODALITY_IMAGE, self._extract_image_features)
-        self.register_expectation_modulator(MODALITY_IMAGE, self._modulate_generic_perception) # Use generic for now
-        self.register_integration_strategy(MODALITY_IMAGE, self._integrate_generic_pathways) # Use generic for now
+        # Image modality
+        self.feature_extractors[Modality.IMAGE] = self._extract_image_features
+        self.expectation_modulators[Modality.IMAGE] = self._modulate_generic_perception
+        self.integration_strategies[Modality.IMAGE] = self._integrate_generic_pathways
 
-        # Video
-        self.register_feature_extractor(MODALITY_VIDEO, self._extract_video_features)
-        self.register_expectation_modulator(MODALITY_VIDEO, self._modulate_generic_perception)
-        self.register_integration_strategy(MODALITY_VIDEO, self._integrate_generic_pathways)
+        # Video modality
+        self.feature_extractors[Modality.VIDEO] = self._extract_video_features
+        self.expectation_modulators[Modality.VIDEO] = self._modulate_generic_perception
+        self.integration_strategies[Modality.VIDEO] = self._integrate_generic_pathways
 
-        # Audio (Music)
-        self.register_feature_extractor(MODALITY_AUDIO_MUSIC, self._extract_audio_features)
-        self.register_expectation_modulator(MODALITY_AUDIO_MUSIC, self._modulate_generic_perception)
-        self.register_integration_strategy(MODALITY_AUDIO_MUSIC, self._integrate_generic_pathways)
+        # Audio (Music) modality
+        self.feature_extractors[Modality.AUDIO_MUSIC] = self._extract_audio_features
+        self.expectation_modulators[Modality.AUDIO_MUSIC] = self._modulate_generic_perception
+        self.integration_strategies[Modality.AUDIO_MUSIC] = self._integrate_generic_pathways
 
-        # Audio (Speech)
-        self.register_feature_extractor(MODALITY_AUDIO_SPEECH, self._extract_audio_features)
-        # Potentially use text modulator for transcribed speech? Or a dedicated one.
-        self.register_expectation_modulator(MODALITY_AUDIO_SPEECH, self._modulate_speech_perception)
-        self.register_integration_strategy(MODALITY_AUDIO_SPEECH, self._integrate_speech_pathways)
+        # Audio (Speech) modality
+        self.feature_extractors[Modality.AUDIO_SPEECH] = self._extract_audio_features
+        self.expectation_modulators[Modality.AUDIO_SPEECH] = self._modulate_speech_perception
+        self.integration_strategies[Modality.AUDIO_SPEECH] = self._integrate_speech_pathways
 
-        # System Screen (Treat as Image/Video initially)
-        self.register_feature_extractor(MODALITY_SYSTEM_SCREEN, self._extract_image_features) # Start with image features
-        self.register_expectation_modulator(MODALITY_SYSTEM_SCREEN, self._modulate_generic_perception)
-        self.register_integration_strategy(MODALITY_SYSTEM_SCREEN, self._integrate_generic_pathways)
+        # System Screen modality
+        self.feature_extractors[Modality.SYSTEM_SCREEN] = self._extract_image_features
+        self.expectation_modulators[Modality.SYSTEM_SCREEN] = self._modulate_generic_perception
+        self.integration_strategies[Modality.SYSTEM_SCREEN] = self._integrate_generic_pathways
 
-        # System Audio (Treat as Speech/Ambient initially)
-        self.register_feature_extractor(MODALITY_SYSTEM_AUDIO, self._extract_audio_features)
-        self.register_expectation_modulator(MODALITY_SYSTEM_AUDIO, self._modulate_speech_perception) # Speech is often key
-        self.register_integration_strategy(MODALITY_SYSTEM_AUDIO, self._integrate_speech_pathways)
+        # System Audio modality
+        self.feature_extractors[Modality.SYSTEM_AUDIO] = self._extract_audio_features
+        self.expectation_modulators[Modality.SYSTEM_AUDIO] = self._modulate_speech_perception
+        self.integration_strategies[Modality.SYSTEM_AUDIO] = self._integrate_speech_pathways
 
-        # Touch Event
-        self.register_feature_extractor(MODALITY_TOUCH_EVENT, self._extract_touch_event_features)
-        self.register_expectation_modulator(MODALITY_TOUCH_EVENT, self._modulate_generic_perception) # Generic ok for now
-        self.register_integration_strategy(MODALITY_TOUCH_EVENT, self._integrate_generic_pathways) # Generic ok for now
+        # Touch Event modality
+        self.feature_extractors[Modality.TOUCH_EVENT] = self._extract_touch_event_features
+        self.expectation_modulators[Modality.TOUCH_EVENT] = self._modulate_generic_perception
+        self.integration_strategies[Modality.TOUCH_EVENT] = self._integrate_generic_pathways
 
-        # Taste
-        self.register_feature_extractor(MODALITY_TASTE, self._extract_taste_features)
-        self.register_expectation_modulator(MODALITY_TASTE, self._modulate_generic_perception)
-        self.register_integration_strategy(MODALITY_TASTE, self._integrate_generic_pathways)
+        # Taste modality
+        self.feature_extractors[Modality.TASTE] = self._extract_taste_features
+        self.expectation_modulators[Modality.TASTE] = self._modulate_generic_perception
+        self.integration_strategies[Modality.TASTE] = self._integrate_generic_pathways
 
-        # Smell
-        self.register_feature_extractor(MODALITY_SMELL, self._extract_smell_features)
-        self.register_expectation_modulator(MODALITY_SMELL, self._modulate_generic_perception)
-        self.register_integration_strategy(MODALITY_SMELL, self._integrate_generic_pathways)
+        # Smell modality
+        self.feature_extractors[Modality.SMELL] = self._extract_smell_features
+        self.expectation_modulators[Modality.SMELL] = self._modulate_generic_perception
+        self.integration_strategies[Modality.SMELL] = self._integrate_generic_pathways
 
-        self.logger.info("Multimodal handlers registered.")
+        logger.info("All multimodal handlers registered")
 
-
-    async def _extract_touch_event_features(self, data: Dict, metadata: Dict) -> TouchEventFeatures:
-        """ Placeholder: Parses touch event data dict. """
-        self.logger.debug(f"Placeholder: Extracting touch event features: {data}")
-        # Expect data to be a dict like {'region': 'hand', 'texture': 'rough', ...}
-        if not isinstance(data, dict):
-            self.logger.warning("Touch event data is not a dict, cannot parse features.")
-            return TouchEventFeatures(region="unknown", object_description="Parsing error")
-        # Basic validation/parsing
-        return TouchEventFeatures(**data)
-
-    async def _extract_taste_features(self, data: Dict, metadata: Dict) -> TasteFeatures:
-        """ Placeholder: Parses taste data dict. """
-        self.logger.debug(f"Placeholder: Extracting taste features: {data}")
-        if not isinstance(data, dict):
-            self.logger.warning("Taste data is not a dict, cannot parse features.")
-            return TasteFeatures(profiles=["unknown"], source_description="Parsing error")
-        return TasteFeatures(**data)
-
-    async def _extract_smell_features(self, data: Dict, metadata: Dict) -> SmellFeatures:
-        """ Placeholder: Parses smell data dict. """
-        self.logger.debug(f"Placeholder: Extracting smell features: {data}")
-        if not isinstance(data, dict):
-             self.logger.warning("Smell data is not a dict, cannot parse features.")
-             return SmellFeatures(profiles=["unknown"], source_description="Parsing error")
-        # Add basic pleasantness estimation
-        features = SmellFeatures(**data)
-        if not features.pleasantness:
-             pos_count = sum(1 for p in features.profiles if p in POSITIVE_SMELLS)
-             neg_count = sum(1 for p in features.profiles if p in NEGATIVE_SMELLS)
-             if pos_count + neg_count > 0:
-                 features.pleasantness = (pos_count - neg_count) / (pos_count + neg_count)
-             else:
-                 features.pleasantness = 0.0 # Neutral if no known profiles
-        return features
-
-
-    # --- Registration Methods (Unchanged) ---
-    async def register_feature_extractor(self, modality: str, extractor_function):
-        """Register a feature extraction function for a specific modality"""
-        self.feature_extractors[modality] = extractor_function
-
-    async def register_expectation_modulator(self, modality: str, modulator_function):
-        """Register a function that applies top-down expectations to a modality"""
-        self.expectation_modulators[modality] = modulator_function
-
-    async def register_integration_strategy(self, modality: str, integration_function):
-        """Register a function that integrates bottom-up and top-down processing"""
-        self.integration_strategies[modality] = integration_function
-
-    # --- Core Processing Logic (Small modifications for logging/clarity) ---
     async def process_sensory_input(self,
                                    input_data: SensoryInput,
-                                   expectations: List[ExpectationSignal] = None) -> IntegratedPercept:
+                                   expectations: Optional[List[ExpectationSignal]] = None) -> IntegratedPercept:
         """
-        Process sensory input using both bottom-up and top-down pathways
+        Process sensory input using both bottom-up and top-down pathways.
         Handles various modalities including vision and audio.
 
         Args:
@@ -260,84 +272,112 @@ class EnhancedMultiModalIntegrator:
             Integrated percept combining bottom-up and top-down processing.
         """
         modality = input_data.modality
-        timestamp = input_data.timestamp or datetime.datetime.now().isoformat() # Ensure timestamp exists
-        self.logger.info(f"Processing sensory input: Modality={modality}, Timestamp={timestamp}")
+        timestamp = input_data.timestamp or datetime.datetime.now().isoformat()
+        logger.info(f"Processing sensory input: Modality={modality}, Timestamp={timestamp}")
+        
+        # Update stats
+        async with self._lock:
+            self.perception_stats[modality]["count"] += 1
 
         # 1. Bottom-up processing (data-driven)
-        self.logger.debug(f"Performing bottom-up processing for {modality}...")
+        logger.debug(f"Performing bottom-up processing for {modality}")
         bottom_up_result = await self._perform_bottom_up_processing(input_data)
-        self.logger.debug(f"Bottom-up features for {modality}: {str(bottom_up_result['features'])[:200]}...") # Log snippet
+        logger.debug(f"Bottom-up features for {modality} extracted")
 
         # 2. Get or use provided top-down expectations
         if expectations is None:
-            self.logger.debug(f"Fetching active expectations for {modality}...")
+            logger.debug(f"Fetching active expectations for {modality}")
             expectations = await self._get_active_expectations(modality)
-            self.logger.debug(f"Found {len(expectations)} active expectations for {modality}.")
+            logger.debug(f"Found {len(expectations)} active expectations for {modality}")
         else:
-            self.logger.debug(f"Using {len(expectations)} provided expectations for {modality}.")
-
+            logger.debug(f"Using {len(expectations)} provided expectations for {modality}")
 
         # 3. Apply top-down modulation
-        self.logger.debug(f"Applying top-down modulation for {modality}...")
+        logger.debug(f"Applying top-down modulation for {modality}")
         modulated_result = await self._apply_top_down_modulation(bottom_up_result, expectations, modality)
-        self.logger.debug(f"Modulation influence for {modality}: {modulated_result['influence_strength']:.2f}")
+        logger.debug(f"Modulation influence for {modality}: {modulated_result['influence_strength']:.2f}")
 
         # 4. Integrate bottom-up and top-down pathways
-        self.logger.debug(f"Integrating pathways for {modality}...")
+        logger.debug(f"Integrating pathways for {modality}")
         integrated_result = await self._integrate_pathways(bottom_up_result, modulated_result, modality)
-        self.logger.debug(f"Integrated content for {modality}: {str(integrated_result['content'])[:200]}...")
+        logger.debug(f"Integrated content for {modality}")
 
         # 5. Apply attentional filtering if available
-        attentional_weight = 1.0 # Default
+        attentional_weight = 1.0  # Default
         if self.attentional_controller:
             try:
-                self.logger.debug(f"Calculating attention weight for {modality}...")
-                # Ensure integrated_result provides necessary info for attention
+                logger.debug(f"Calculating attention weight for {modality}")
+                # Prepare attention input
                 attention_input = {
-                     "modality": modality,
-                     "content_summary": str(integrated_result.get('content', ''))[:100], # Pass summary
-                     "confidence": bottom_up_result.get("confidence", 1.0),
-                     "metadata": input_data.metadata
-                 }
+                    "modality": modality,
+                    "content_summary": self._get_content_summary(integrated_result.get('content', {})),
+                    "confidence": bottom_up_result.get("confidence", 1.0),
+                    "metadata": input_data.metadata
+                }
+                
                 attentional_weight = await self.attentional_controller.calculate_attention_weight(
-                    attention_input, expectations # Pass attention_input and expectations
+                    attention_input, expectations
                 )
-                self.logger.debug(f"Calculated attention weight for {modality}: {attentional_weight:.2f}")
+                logger.debug(f"Calculated attention weight for {modality}: {attentional_weight:.2f}")
+                
+                # Update stats for filtered percepts
+                if attentional_weight < 0.2:  # Threshold for considering "filtered"
+                    async with self._lock:
+                        self.perception_stats[modality]["attention_filtered"] += 1
+                    
             except Exception as e:
-                 self.logger.error(f"Error calculating attention weight for {modality}: {e}")
-                 attentional_weight = 0.5 # Fallback attention if error
-
+                logger.error(f"Error calculating attention weight for {modality}: {e}")
+                attentional_weight = 0.5  # Fallback attention if error
 
         # 6. Create final percept
         percept = IntegratedPercept(
             modality=modality,
-            content=integrated_result.get("content"), # Use .get for safety
+            content=integrated_result.get("content"),
             bottom_up_confidence=bottom_up_result.get("confidence", 0.0),
             top_down_influence=modulated_result.get("influence_strength", 0.0),
             attention_weight=attentional_weight,
             timestamp=timestamp,
-            raw_features=bottom_up_result.get("features") # Store raw features for potential downstream use
+            raw_features=bottom_up_result.get("features")
         )
 
         # 7. Add to perception buffer
-        self._add_to_perception_buffer(percept)
+        await self._add_to_perception_buffer(percept)
 
         # 8. Update reasoning core with new perception (if significant attention)
-        if self.reasoning_core and attentional_weight > 0.3: # Lower threshold slightly
-             try:
-                 self.logger.debug(f"Updating reasoning core with significant percept ({modality}, weight={attentional_weight:.2f}).")
-                 # Assume reasoning_core has an update method
-                 await self.reasoning_core.update_with_perception(percept)
-             except AttributeError:
-                 self.logger.warning("Reasoning core does not have 'update_with_perception' method.")
-             except Exception as e:
-                 self.logger.error(f"Error updating reasoning core: {e}")
+        if self.reasoning_core and attentional_weight > 0.3:
+            try:
+                logger.debug(f"Updating reasoning core with significant percept ({modality}, weight={attentional_weight:.2f})")
+                # Check if reasoning core has update method
+                if hasattr(self.reasoning_core, 'update_with_perception'):
+                    await self.reasoning_core.update_with_perception(percept)
+            except Exception as e:
+                logger.error(f"Error updating reasoning core: {e}")
 
-
-        self.logger.info(f"Finished processing sensory input for {modality}.")
+        logger.info(f"Finished processing sensory input for {modality}")
         return percept
+    
+    def _get_content_summary(self, content: Any) -> str:
+        """Get a short summary string of content for attention calculations."""
+        if isinstance(content, str):
+            return content[:100]
+        elif isinstance(content, dict):
+            if "description" in content:
+                return content["description"][:100]
+            elif "summary" in content:
+                return content["summary"][:100]
+            else:
+                return str(list(content.keys()))[:100]
+        elif isinstance(content, (list, tuple)):
+            return str(content[:3])[:100]
+        else:
+            return str(content)[:100]
 
-    # --- Bottom-Up Processing (Feature Extraction) ---
+    async def _add_to_perception_buffer(self, percept: IntegratedPercept):
+        """Add percept to buffer, maintaining thread safety."""
+        async with self._lock:
+            self.perception_buffer.append(percept)
+            if len(self.perception_buffer) > self.max_buffer_size:
+                self.perception_buffer.pop(0)
 
     async def _perform_bottom_up_processing(self, input_data: SensoryInput) -> Dict[str, Any]:
         """Extract features from raw sensory input using registered extractors."""
@@ -346,138 +386,315 @@ class EnhancedMultiModalIntegrator:
         if modality in self.feature_extractors:
             try:
                 extractor = self.feature_extractors[modality]
-                features = await extractor(input_data.data, input_data.metadata) # Pass data and metadata
+                features = await extractor(input_data.data, input_data.metadata)
                 return {
                     "modality": modality,
-                    "features": features, # Should match modality-specific Feature Schema ideally
+                    "features": features,
                     "confidence": input_data.confidence,
                     "metadata": input_data.metadata
                 }
             except Exception as e:
-                self.logger.exception(f"Error in bottom-up feature extraction for {modality}: {e}") # Use exception for traceback
+                logger.exception(f"Error in bottom-up feature extraction for {modality}: {e}")
                 # Fallback with error info
                 return {
                     "modality": modality,
                     "features": {"error": f"Feature extraction failed: {e}"},
-                    "confidence": input_data.confidence * 0.5, # Lower confidence on error
+                    "confidence": input_data.confidence * 0.5,  # Lower confidence on error
                     "metadata": input_data.metadata
                 }
         else:
-            self.logger.warning(f"No feature extractor registered for modality: {modality}. Passing data through.")
+            logger.warning(f"No feature extractor registered for modality: {modality}. Passing data through.")
             return {
                 "modality": modality,
-                "features": input_data.data, # Pass through raw data
-                "confidence": input_data.confidence * 0.8, # Slightly lower confidence if no extractor
+                "features": input_data.data,  # Pass through raw data
+                "confidence": input_data.confidence * 0.8,  # Slightly lower confidence if no extractor
                 "metadata": input_data.metadata
             }
 
-    # --- Placeholder Feature Extractors ---
-    # NOTE: These are placeholders. Real implementations would call external models/APIs.
+    # --- Feature Extraction Methods ---
 
     async def _extract_text_features(self, data: str, metadata: Dict) -> Dict:
-         """ Placeholder: Extracts basic text features. """
-         self.logger.debug(f"Placeholder: Extracting text features for: {data[:50]}...")
-         # In reality: Use NLP library or model for sentiment, entities, keywords etc.
-         word_count = len(data.split())
-         char_count = len(data)
-         return {"word_count": word_count, "char_count": char_count, "preview": data[:100]}
+        """Extract features from text input."""
+        logger.debug(f"Extracting text features: {data[:50]}...")
+        
+        # If using vision model and it supports text, use that
+        if self.vision_model and hasattr(self.vision_model, 'analyze_text'):
+            try:
+                vision_results = await self.vision_model.analyze_text(data)
+                return vision_results
+            except Exception as e:
+                logger.error(f"Error using vision model for text analysis: {e}")
+        
+        # Basic text analysis
+        word_count = len(data.split())
+        char_count = len(data)
+        
+        # Simple sentiment analysis (basic keyword search)
+        positive_words = ['good', 'great', 'excellent', 'wonderful', 'amazing', 'happy', 'joy', 'love', 'like']
+        negative_words = ['bad', 'terrible', 'awful', 'horrible', 'sad', 'angry', 'hate', 'dislike']
+        
+        text_lower = data.lower()
+        positive_count = sum(text_lower.count(word) for word in positive_words)
+        negative_count = sum(text_lower.count(word) for word in negative_words)
+        
+        sentiment = 0.0
+        if positive_count + negative_count > 0:
+            sentiment = (positive_count - negative_count) / (positive_count + negative_count)
+        
+        # Check for questions
+        is_question = '?' in data
+        
+        return {
+            "word_count": word_count, 
+            "char_count": char_count,
+            "preview": data[:100],
+            "sentiment": sentiment,
+            "is_question": is_question
+        }
 
     async def _extract_image_features(self, data: Any, metadata: Dict) -> ImageFeatures:
-        """ Placeholder: Extracts image features. Assumes data is image bytes or path. """
-        self.logger.debug(f"Placeholder: Extracting image features (data type: {type(data)})...")
-        # In reality: Use a vision model (e.g., GPT-4V API, local ViT/CLIP)
-        # Input `data` could be bytes, file path, URL. Need handling.
-        await asyncio.sleep(0.1) # Simulate processing time
-        is_screenshot = MODALITY_SYSTEM_SCREEN in metadata.get("source_modality", "")
+        """Extract features from image data."""
+        logger.debug(f"Extracting image features (data type: {type(data)})...")
+        
+        # Use vision model if available
+        if self.vision_model and hasattr(self.vision_model, 'analyze_image'):
+            try:
+                vision_results = await self.vision_model.analyze_image(data)
+                if isinstance(vision_results, dict):
+                    # Convert to ImageFeatures
+                    is_screenshot = metadata.get("source_modality") == Modality.SYSTEM_SCREEN
+                    
+                    # Extract text content from OCR if available
+                    text_content = None
+                    if "text_content" in vision_results:
+                        text_content = vision_results["text_content"]
+                    elif "ocr_text" in vision_results:
+                        text_content = vision_results["ocr_text"]
+                    
+                    return ImageFeatures(
+                        description=vision_results.get("description", "No description available"),
+                        objects=vision_results.get("objects", []),
+                        text_content=text_content,
+                        dominant_colors=vision_results.get("dominant_colors", []),
+                        estimated_mood=vision_results.get("mood", None),
+                        is_screenshot=is_screenshot,
+                        spatial_layout=vision_results.get("spatial_layout", None)
+                    )
+                else:
+                    return vision_results  # If already an ImageFeatures object
+            except Exception as e:
+                logger.error(f"Error using vision model: {e}")
+        
+        # Fallback to basic processing
+        await asyncio.sleep(0.1)  # Simulate processing time
+        is_screenshot = metadata.get("source_modality") == Modality.SYSTEM_SCREEN
+        
         return ImageFeatures(
-            description="Placeholder image description.",
-            objects=["object1", "placeholder"],
-            text_content="OCR text placeholder" if is_screenshot else None,
+            description="[Placeholder image description - vision model unavailable]",
+            objects=["placeholder_object"],
+            text_content="[OCR unavailable]" if is_screenshot else None,
             is_screenshot=is_screenshot
         )
 
     async def _extract_video_features(self, data: Any, metadata: Dict) -> VideoFeatures:
-        """ Placeholder: Extracts video features. Assumes data is path, URL, or stream. """
-        self.logger.debug(f"Placeholder: Extracting video features (data type: {type(data)})...")
-        # In reality: Use video analysis model/API (action recognition, object tracking, summarization)
-        # This is complex, might involve processing frames/segments.
-        await asyncio.sleep(0.3) # Simulate longer processing time
+        """Extract features from video data."""
+        logger.debug(f"Extracting video features (data type: {type(data)})...")
+        
+        # Use vision model if available for key frames
+        if self.vision_model and hasattr(self.vision_model, 'analyze_video'):
+            try:
+                vision_results = await self.vision_model.analyze_video(data)
+                return vision_results  # Assuming it returns a VideoFeatures object
+            except Exception as e:
+                logger.error(f"Error using vision model for video: {e}")
+        
+        # Use audio processor for audio track if available
+        audio_features = None
+        if self.audio_processor and hasattr(self.audio_processor, 'extract_audio_from_video'):
+            try:
+                audio_data = await self.audio_processor.extract_audio_from_video(data)
+                audio_features = await self._extract_audio_features(audio_data, metadata)
+            except Exception as e:
+                logger.error(f"Error extracting audio from video: {e}")
+        
+        # Fallback placeholder
+        await asyncio.sleep(0.3)  # Simulate longer processing time
         return VideoFeatures(
-            summary="Placeholder video summary.",
-            key_actions=["action1", "placeholder_event"],
-            scene_changes=[5.2, 15.8]
+            summary="[Placeholder video summary - video processing unavailable]",
+            key_actions=["placeholder_action"],
+            scene_changes=[5.2, 15.8],
+            audio_features=audio_features
         )
 
     async def _extract_audio_features(self, data: Any, metadata: Dict) -> AudioFeatures:
-        """ Placeholder: Extracts audio features. Assumes data is path, bytes, or stream. """
-        self.logger.debug(f"Placeholder: Extracting audio features (data type: {type(data)})...")
-        # In reality: Use audio processing libs (librosa) and models (Whisper for STT, genre/mood classifiers)
-        await asyncio.sleep(0.15) # Simulate processing time
-        modality = metadata.get("source_modality", MODALITY_AUDIO_MUSIC) # Guess based on metadata if possible
+        """Extract features from audio data."""
+        logger.debug(f"Extracting audio features (data type: {type(data)})...")
+        
+        # Use audio processor if available
+        if self.audio_processor:
+            try:
+                if hasattr(self.audio_processor, 'analyze_speech') and metadata.get("source_modality") in [Modality.AUDIO_SPEECH, Modality.SYSTEM_AUDIO]:
+                    return await self.audio_processor.analyze_speech(data)
+                elif hasattr(self.audio_processor, 'analyze_music') and metadata.get("source_modality") == Modality.AUDIO_MUSIC:
+                    return await self.audio_processor.analyze_music(data)
+                elif hasattr(self.audio_processor, 'analyze_audio'):
+                    return await self.audio_processor.analyze_audio(data)
+            except Exception as e:
+                logger.error(f"Error using audio processor: {e}")
+        
+        # Fallback placeholder
+        await asyncio.sleep(0.15)  # Simulate processing time
+        modality = metadata.get("source_modality", Modality.AUDIO_MUSIC)
+        
+        if modality in [Modality.AUDIO_SPEECH, Modality.SYSTEM_AUDIO]:
+            return AudioFeatures(
+                type="speech",
+                transcription="[Placeholder speech transcription - audio processing unavailable]",
+                mood="neutral"
+            )
+        elif modality == Modality.AUDIO_MUSIC:
+            return AudioFeatures(
+                type="music",
+                mood="calm",
+                genre="ambient",
+                tempo_bpm=80.0
+            )
+        else:  # Ambient/Effects
+            return AudioFeatures(
+                type="ambient",
+                sound_events=["background_noise", "indistinct_sounds"]
+            )
 
-        if modality == MODALITY_AUDIO_SPEECH or modality == MODALITY_SYSTEM_AUDIO:
-             return AudioFeatures(
-                 type="speech",
-                 transcription="Placeholder speech transcription.",
-                 mood="neutral"
-             )
-        elif modality == MODALITY_AUDIO_MUSIC:
-             return AudioFeatures(
-                 type="music",
-                 mood="calm",
-                 genre="ambient",
-                 tempo_bpm=80.0
-             )
-        else: # Ambient/Effects
-             return AudioFeatures(
-                 type="ambient",
-                 sound_events=["low_hum", "distant_chatter"]
-             )
+    async def _extract_touch_event_features(self, data: Dict, metadata: Dict) -> TouchEventFeatures:
+        """Extract features from touch event data."""
+        logger.debug(f"Extracting touch event features: {data}")
+        
+        # Validate input data
+        if not isinstance(data, dict):
+            logger.warning("Touch event data is not a dict, cannot parse features.")
+            return TouchEventFeatures(region="unknown", object_description="Parsing error")
+        
+        # Extract basic touch properties
+        try:
+            # Convert dictionary to TouchEventFeatures model
+            return TouchEventFeatures(**data)
+        except Exception as e:
+            logger.error(f"Error parsing touch event data: {e}")
+            # Provide minimal fallback
+            return TouchEventFeatures(
+                region=data.get("region", "unknown"),
+                object_description=data.get("object_description", "Error parsing touch data")
+            )
 
-    # --- Top-Down Modulation ---
+    async def _extract_taste_features(self, data: Dict, metadata: Dict) -> TasteFeatures:
+        """Extract features from taste data."""
+        logger.debug(f"Extracting taste features: {data}")
+        
+        # Validate input data
+        if not isinstance(data, dict):
+            logger.warning("Taste data is not a dict, cannot parse features.")
+            return TasteFeatures(profiles=["unknown"], source_description="Parsing error")
+        
+        try:
+            # Convert dictionary to TasteFeatures model
+            return TasteFeatures(**data)
+        except Exception as e:
+            logger.error(f"Error parsing taste data: {e}")
+            # Provide minimal fallback
+            return TasteFeatures(
+                profiles=data.get("profiles", ["unknown"]),
+                intensity=data.get("intensity", 0.5),
+                source_description=data.get("source_description", "Error parsing taste data")
+            )
 
-    async def _get_active_expectations(self, modality: str) -> List[ExpectationSignal]:
-        """Get current active expectations, potentially querying reasoning core."""
+    async def _extract_smell_features(self, data: Dict, metadata: Dict) -> SmellFeatures:
+        """Extract features from smell data."""
+        logger.debug(f"Extracting smell features: {data}")
+        
+        # Validate input data
+        if not isinstance(data, dict):
+            logger.warning("Smell data is not a dict, cannot parse features.")
+            return SmellFeatures(profiles=["unknown"], source_description="Parsing error")
+        
+        try:
+            # Convert dictionary to SmellFeatures
+            features = SmellFeatures(**data)
+            
+            # Add pleasantness estimation if not provided
+            if features.pleasantness is None:
+                pos_count = sum(1 for p in features.profiles if p in POSITIVE_SMELLS)
+                neg_count = sum(1 for p in features.profiles if p in NEGATIVE_SMELLS)
+                if pos_count + neg_count > 0:
+                    features.pleasantness = (pos_count - neg_count) / (pos_count + neg_count)
+                else:
+                    features.pleasantness = 0.0  # Neutral if no known profiles
+            
+            return features
+        except Exception as e:
+            logger.error(f"Error parsing smell data: {e}")
+            # Provide minimal fallback
+            return SmellFeatures(
+                profiles=data.get("profiles", ["unknown"]),
+                intensity=data.get("intensity", 0.5),
+                source_description=data.get("source_description", "Error parsing smell data")
+            )
+
+    # --- Top-Down Modulation Methods ---
+
+    async def _get_active_expectations(self, modality: Modality) -> List[ExpectationSignal]:
+        """Get current active expectations for a specific modality."""
+        # Filter expectations relevant to this modality
         relevant_expectations = [exp for exp in self.active_expectations
-                               if exp.target_modality == modality]
-
-        # Optional: Query reasoning core for dynamic expectations (if reasoning core is sophisticated enough)
-        # if self.reasoning_core and hasattr(self.reasoning_core, 'generate_perceptual_expectations'):
-        #     try:
-        #         self.logger.debug(f"Querying reasoning core for expectations ({modality})...")
-        #         # This requires reasoning_core to have this method implemented
-        #         new_expectations = await self.reasoning_core.generate_perceptual_expectations(modality)
-        #         # ... (Add new expectations, prune old ones as before) ...
-        #         self.logger.debug(f"Received {len(new_expectations)} new expectations.")
-        #         relevant_expectations.extend([exp for exp in new_expectations if exp.target_modality == modality])
-        #     except Exception as e:
-        #         self.logger.error(f"Error getting expectations from reasoning core: {e}")
-
-        # Sort by priority before returning
-        relevant_expectations.sort(key=lambda x: x.priority, reverse=True)
+                              if exp.target_modality == modality]
+        
+        # If reasoning core can provide expectations, query it
+        if self.reasoning_core and hasattr(self.reasoning_core, 'generate_perceptual_expectations'):
+            try:
+                logger.debug(f"Querying reasoning core for expectations ({modality})")
+                new_expectations = await self.reasoning_core.generate_perceptual_expectations(modality)
+                logger.debug(f"Received {len(new_expectations)} new expectations")
+                
+                # Add new expectations to the list
+                relevant_expectations.extend(new_expectations)
+                
+                # Add new expectations to active list for future use
+                self.active_expectations.extend(new_expectations)
+                
+                # Prune old expectations if we have too many
+                if len(self.active_expectations) > 50:
+                    self.active_expectations.sort(key=lambda x: x.priority, reverse=True)
+                    self.active_expectations = self.active_expectations[:40]  # Keep top 40
+                    
+            except Exception as e:
+                logger.error(f"Error getting expectations from reasoning core: {e}")
+        
+        # Sort by priority
+        if relevant_expectations:
+            relevant_expectations.sort(key=lambda x: x.priority, reverse=True)
+            
         return relevant_expectations
 
-
-    async def _apply_top_down_modulation(self,
-                                       bottom_up_result: Dict[str, Any],
+    async def _apply_top_down_modulation(self, bottom_up_result: Dict[str, Any],
                                        expectations: List[ExpectationSignal],
-                                       modality: str) -> Dict[str, Any]:
-        """Apply top-down expectations using registered modulators."""
+                                       modality: Modality) -> Dict[str, Any]:
+        """Apply top-down expectations to modulate perceptual processing."""
+        # If no expectations or no modulator for this modality, return unmodified
         if not expectations or modality not in self.expectation_modulators:
-            # Return default if no expectations or no modulator
             return {
                 "modality": modality,
                 "features": bottom_up_result.get("features"),
                 "influence_strength": 0.0,
                 "influenced_by": []
             }
-
+        
         try:
+            # Get the appropriate modulator for this modality
             modulator = self.expectation_modulators[modality]
-            # Pass features extracted by bottom-up processing
+            
+            # Apply modulation
             modulation_result = await modulator(bottom_up_result.get("features"), expectations)
-
-            # Ensure result has expected keys
+            
+            # Ensure the result has expected keys
             return {
                 "modality": modality,
                 "features": modulation_result.get("features", bottom_up_result.get("features")),
@@ -485,8 +702,8 @@ class EnhancedMultiModalIntegrator:
                 "influenced_by": modulation_result.get("influenced_by", [])
             }
         except Exception as e:
-            self.logger.exception(f"Error in top-down modulation for {modality}: {e}")
-            # Fallback to unmodulated result on error
+            logger.exception(f"Error in top-down modulation for {modality}: {e}")
+            # Return unmodified on error
             return {
                 "modality": modality,
                 "features": bottom_up_result.get("features"),
@@ -494,210 +711,456 @@ class EnhancedMultiModalIntegrator:
                 "influenced_by": ["modulation_error"]
             }
 
-    # --- Placeholder Modulators ---
-    # NOTE: These are placeholders. Real ones would apply biases based on expectations.
+    # --- Modulation Methods ---
 
     async def _modulate_text_perception(self, features: Dict, expectations: List[ExpectationSignal]) -> Dict:
-         """ Placeholder: Applies text-specific expectations. """
-         self.logger.debug("Placeholder: Modulating text perception...")
-         influence_strength = 0.0
-         influenced_by = []
-         # Example: If expecting specific keywords, slightly boost confidence if found
-         for exp in expectations:
-             if isinstance(exp.pattern, str) and exp.pattern.lower() in features.get("preview","").lower():
-                 influence_strength = max(influence_strength, exp.strength * 0.2) # Small influence
-                 influenced_by.append(f"keyword_{exp.pattern[:10]}")
-
-         return {"features": features, "influence_strength": min(influence_strength, 0.8), "influenced_by": influenced_by}
-
-    async def _modulate_generic_perception(self, features: Any, expectations: List[ExpectationSignal]) -> Dict:
-         """ Placeholder: Generic modulator, maybe adjusting overall confidence. """
-         self.logger.debug("Placeholder: Modulating generic perception...")
-         influence_strength = 0.0
-         influenced_by = []
-         # Example: Strong expectation might slightly increase confidence if features seem related
-         if isinstance(features, dict) and expectations:
-              # Very basic check if expectation pattern relates to description/objects
-              for exp in expectations:
-                   pattern_str = str(exp.pattern).lower()
-                   desc = features.get("description", "").lower()
-                   objs = features.get("objects", [])
-                   if pattern_str in desc or any(pattern_str in obj.lower() for obj in objs):
-                        influence_strength = max(influence_strength, exp.strength * 0.1)
-                        influenced_by.append(f"pattern_match_{exp.pattern[:10]}")
-
-         # Could modify features here based on expectations (e.g., bias description)
-         modified_features = features
-         return {"features": modified_features, "influence_strength": min(influence_strength, 0.7), "influenced_by": influenced_by}
-
-    async def _modulate_speech_perception(self, features: AudioFeatures, expectations: List[ExpectationSignal]) -> Dict:
-        """ Placeholder: Modulates speech, potentially biasing transcription. """
-        self.logger.debug("Placeholder: Modulating speech perception...")
+        """Apply top-down expectations to text features."""
+        logger.debug("Modulating text perception...")
         influence_strength = 0.0
         influenced_by = []
-        modified_features = features
-
-        # Example: If expecting a certain speaker, bias speaker_id or confidence
-        # Example: If expecting certain keywords, could inform the STT model (if supported)
+        modified_features = features.copy()
+        
+        # For each expectation, see if it can influence text processing
         for exp in expectations:
-            if "speaker" in str(exp.pattern).lower():
-                 # Hypothetical: bias speaker ID if model supports it
-                 influence_strength = max(influence_strength, exp.strength * 0.3)
-                 influenced_by.append(f"speaker_expectation")
-            elif isinstance(exp.pattern, str):
-                 # Check if expected word is in transcription (if available)
-                 if features.transcription and exp.pattern.lower() in features.transcription.lower():
-                      influence_strength = max(influence_strength, exp.strength * 0.1)
-                      influenced_by.append(f"keyword_{exp.pattern[:10]}")
+            # If expecting specific keywords in text
+            if isinstance(exp.pattern, str) and "preview" in features:
+                preview_text = features["preview"].lower()
+                pattern_text = exp.pattern.lower()
+                
+                # If the keyword is found, increase influence
+                if pattern_text in preview_text:
+                    influence_strength = max(influence_strength, exp.strength * 0.3)
+                    influenced_by.append(f"keyword_match:{exp.pattern[:10]}")
+                    
+                    # Could potentially highlight or emphasize text that matches expectation
+                    # This is a placeholder for more sophisticated text biasing
+            
+            # Could add more sophisticated text biasing here
+        
+        return {
+            "features": modified_features,
+            "influence_strength": influence_strength,
+            "influenced_by": influenced_by
+        }
 
-        return {"features": modified_features, "influence_strength": min(influence_strength, 0.7), "influenced_by": influenced_by}
+    async def _modulate_speech_perception(self, features: AudioFeatures, expectations: List[ExpectationSignal]) -> Dict:
+        """Apply top-down expectations to speech features."""
+        logger.debug("Modulating speech perception...")
+        influence_strength = 0.0
+        influenced_by = []
+        
+        # Create a mutable copy of features (Pydantic model to dict)
+        modified_features = features.dict()
+        
+        for exp in expectations:
+            # If expecting specific content in speech
+            if isinstance(exp.pattern, str) and features.transcription:
+                transcription = features.transcription.lower()
+                pattern = exp.pattern.lower()
+                
+                # If expected content is present, increase confidence
+                if pattern in transcription:
+                    influence_strength = max(influence_strength, exp.strength * 0.2)
+                    influenced_by.append(f"content_match:{exp.pattern[:10]}")
+                    
+            # If expecting specific speaker
+            elif hasattr(exp.pattern, "speaker_id") and features.speaker_id:
+                if exp.pattern.speaker_id == features.speaker_id:
+                    influence_strength = max(influence_strength, exp.strength * 0.4)
+                    influenced_by.append(f"speaker_match:{features.speaker_id}")
+        
+        # Convert dict back to AudioFeatures
+        return {
+            "features": AudioFeatures(**modified_features),
+            "influence_strength": influence_strength,
+            "influenced_by": influenced_by
+        }
 
-    # --- Pathway Integration ---
+    async def _modulate_generic_perception(self, features: Any, expectations: List[ExpectationSignal]) -> Dict:
+        """Generic modulation for sensory modalities without specialized modulators."""
+        logger.debug("Applying generic expectation modulation...")
+        influence_strength = 0.0
+        influenced_by = []
+        
+        # Handle different types of feature data
+        if isinstance(features, dict):
+            # For dictionary features (like image or video features)
+            for exp in expectations:
+                pattern_str = str(exp.pattern).lower()
+                
+                # Check description fields
+                for field in ["description", "summary"]:
+                    if field in features and isinstance(features[field], str):
+                        if pattern_str in features[field].lower():
+                            influence_strength = max(influence_strength, exp.strength * 0.2)
+                            influenced_by.append(f"description_match:{exp.pattern}")
+                
+                # Check object lists
+                if "objects" in features and isinstance(features["objects"], list):
+                    if any(pattern_str in obj.lower() for obj in features["objects"] if isinstance(obj, str)):
+                        influence_strength = max(influence_strength, exp.strength * 0.3)
+                        influenced_by.append(f"object_match:{exp.pattern}")
+        
+        elif isinstance(features, BaseModel):
+            # For Pydantic models (like sensory feature models)
+            model_dict = features.dict()
+            
+            for exp in expectations:
+                pattern_str = str(exp.pattern).lower()
+                
+                # Check string fields in the model
+                for field, value in model_dict.items():
+                    if isinstance(value, str) and pattern_str in value.lower():
+                        influence_strength = max(influence_strength, exp.strength * 0.2)
+                        influenced_by.append(f"field_match:{field}:{exp.pattern}")
+                    
+                    # Check lists of strings
+                    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+                        if any(pattern_str in item.lower() for item in value):
+                            influence_strength = max(influence_strength, exp.strength * 0.3)
+                            influenced_by.append(f"list_match:{field}:{exp.pattern}")
+        
+        # Return original features with modulation metadata
+        return {
+            "features": features,  # For generic modulation, often return unmodified features
+            "influence_strength": influence_strength,
+            "influenced_by": influenced_by
+        }
 
-    async def _integrate_pathways(self,
-                                bottom_up_result: Dict[str, Any],
+    # --- Integration Methods ---
+
+    async def _integrate_pathways(self, bottom_up_result: Dict[str, Any],
                                 top_down_result: Dict[str, Any],
-                                modality: str) -> Dict[str, Any]:
-        """Integrate pathways using registered strategies or default logic."""
+                                modality: Modality) -> Dict[str, Any]:
+        """Integrate bottom-up and top-down processing pathways."""
+        # Use modality-specific integration strategy if available
         if modality in self.integration_strategies:
             try:
                 integration_func = self.integration_strategies[modality]
-                # Pass both full results to the integration function
-                integrated_data = await integration_func(bottom_up_result, top_down_result)
-                # Ensure the result is a dict with at least 'content'
-                if isinstance(integrated_data, dict) and 'content' in integrated_data:
-                    return integrated_data
-                else:
-                    self.logger.warning(f"Integration strategy for {modality} returned unexpected format. Using default.")
+                result = await integration_func(bottom_up_result, top_down_result)
+                
+                # Ensure result has content key
+                if "content" not in result:
+                    logger.warning(f"Integration result for {modality} missing 'content' key")
+                    result["content"] = top_down_result.get("features", bottom_up_result.get("features"))
+                
+                return result
             except Exception as e:
-                self.logger.exception(f"Error in pathway integration strategy for {modality}: {e}")
-                # Fallback to default on error
-
-        # --- Default Integration Logic ---
-        # Use modulated features but retain original confidence; calculate ratios
+                logger.exception(f"Error in pathway integration for {modality}: {e}")
+                # Fall back to default integration on error
+        
+        # Default integration - blend bottom-up and top-down processing
         bottom_up_conf = bottom_up_result.get("confidence", 0.0)
         top_down_infl = top_down_result.get("influence_strength", 0.0)
-
-        # Blend confidence slightly based on influence
-        integrated_confidence = bottom_up_conf * (1.0 - top_down_infl * 0.5) + 0.5 * (top_down_infl * 0.5)
-
-        # Use the *modulated* features as the primary content
-        integrated_content = top_down_result.get("features")
-
+        
+        # Integrate confidence values
+        integrated_conf = bottom_up_conf * (1.0 - top_down_infl * 0.3)
+        
+        # Use top-down features as primary content, falling back to bottom-up if needed
+        integrated_content = top_down_result.get("features", bottom_up_result.get("features"))
+        
         return {
             "content": integrated_content,
-            "integrated_confidence": integrated_confidence,
-            "bottom_up_features": bottom_up_result.get("features"), # Keep original bottom-up
-            "top_down_features": top_down_result.get("features")   # Keep modulated features
+            "integrated_confidence": integrated_conf,
+            "bottom_up_features": bottom_up_result.get("features"),
+            "top_down_features": top_down_result.get("features")
         }
-
-    # --- Placeholder Integration Strategies ---
 
     async def _integrate_text_pathways(self, bottom_up: Dict, top_down: Dict) -> Dict:
-         """ Placeholder: Simple text integration (uses modulated features). """
-         self.logger.debug("Placeholder: Integrating text pathways...")
-         # Use modulated features, maybe adjust confidence based on influence
-         confidence = bottom_up.get("confidence", 1.0)
-         influence = top_down.get("influence_strength", 0.0)
-         integrated_conf = confidence * (1.0 - influence*0.3) # Slightly reduce conf if heavily modulated
-
-         return {
-             "content": top_down.get("features", bottom_up.get("features")), # Prioritize top-down if available
-             "integrated_confidence": integrated_conf,
-             "bottom_up_features": bottom_up.get("features"),
-             "top_down_features": top_down.get("features"),
-         }
-
-    async def _integrate_generic_pathways(self, bottom_up: Dict, top_down: Dict) -> Dict:
-         """ Placeholder: Generic integration (uses modulated features). """
-         self.logger.debug("Placeholder: Integrating generic pathways...")
-         confidence = bottom_up.get("confidence", 1.0)
-         influence = top_down.get("influence_strength", 0.0)
-         integrated_conf = confidence * (1.0 - influence*0.2)
-
-         # For complex features (like ImageFeatures), the modulated features *are* the integrated content
-         return {
-             "content": top_down.get("features", bottom_up.get("features")),
-             "integrated_confidence": integrated_conf,
-             "bottom_up_features": bottom_up.get("features"),
-             "top_down_features": top_down.get("features"),
-         }
-
-    async def _integrate_speech_pathways(self, bottom_up: Dict, top_down: Dict) -> Dict:
-        """ Placeholder: Integrates speech, perhaps combining biased transcription. """
-        self.logger.debug("Placeholder: Integrating speech pathways...")
-        confidence = bottom_up.get("confidence", 1.0)
-        influence = top_down.get("influence_strength", 0.0)
-        integrated_conf = confidence * (1.0 - influence*0.2)
-
-        # If top-down modified the transcription, use that one.
-        # If not, use bottom-up. Combine other features potentially.
-        bu_features = bottom_up.get("features")
-        td_features = top_down.get("features")
-
-        integrated_content = td_features if td_features else bu_features
-
+        """Integrate pathways for text processing."""
+        logger.debug("Integrating text processing pathways...")
+        
+        # Blend confidence based on top-down influence
+        bu_conf = bottom_up.get("confidence", 0.0)
+        td_infl = top_down.get("influence_strength", 0.0)
+        integrated_conf = bu_conf * (1.0 - td_infl * 0.2)
+        
+        # Use modulated features for content
+        features = top_down.get("features", bottom_up.get("features", {}))
+        
+        # For text, we can create an enriched content representation
+        content = {
+            "text": features.get("preview", ""),
+            "sentiment": features.get("sentiment", 0.0),
+            "is_question": features.get("is_question", False),
+            "word_count": features.get("word_count", 0)
+        }
+        
+        # Add any modulation influences to content
+        if top_down.get("influenced_by"):
+            content["influences"] = top_down.get("influenced_by")
+        
         return {
-            "content": integrated_content, # Usually an AudioFeatures object
+            "content": content,
             "integrated_confidence": integrated_conf,
-            "bottom_up_features": bu_features,
-            "top_down_features": td_features,
+            "bottom_up_features": bottom_up.get("features"),
+            "top_down_features": top_down.get("features")
         }
 
-    # --- Buffer and Reasoning Update Methods (Unchanged) ---
-    def _add_to_perception_buffer(self, percept: IntegratedPercept):
-        """Add percept to buffer, removing oldest if full"""
-        self.perception_buffer.append(percept)
+    async def _integrate_generic_pathways(self, bottom_up: Dict, top_down: Dict) -> Dict:
+        """Generic integration for modalities without specialized integrators."""
+        logger.debug("Applying generic pathway integration...")
+        
+        # Blend confidence based on top-down influence
+        bu_conf = bottom_up.get("confidence", 0.0)
+        td_infl = top_down.get("influence_strength", 0.0)
+        integrated_conf = bu_conf * (1.0 - td_infl * 0.2)
+        
+        # Use top-down features, falling back to bottom-up if not available
+        content = top_down.get("features", bottom_up.get("features"))
+        
+        # For structured content (BaseModel instances), add influence information if available
+        if isinstance(content, BaseModel) and top_down.get("influenced_by"):
+            # Create a mutable copy
+            content_dict = content.dict()
+            # Add influence information if not already present
+            if "influenced_by" not in content_dict:
+                content_dict["influenced_by"] = top_down.get("influenced_by")
+            # Convert back to the original type
+            content = type(content)(**content_dict)
+        
+        return {
+            "content": content,
+            "integrated_confidence": integrated_conf,
+            "bottom_up_features": bottom_up.get("features"),
+            "top_down_features": top_down.get("features")
+        }
 
-        if len(self.perception_buffer) > self.max_buffer_size:
-            self.perception_buffer.pop(0)
+    async def _integrate_speech_pathways(self, bottom_up: Dict, top_down: Dict) -> Dict:
+        """Integrate pathways for speech processing."""
+        logger.debug("Integrating speech processing pathways...")
+        
+        # Blend confidence based on top-down influence
+        bu_conf = bottom_up.get("confidence", 0.0)
+        td_infl = top_down.get("influence_strength", 0.0)
+        integrated_conf = bu_conf * (1.0 - td_infl * 0.25)
+        
+        # Get features from results
+        bu_features = bottom_up.get("features")
+        td_features = top_down.get("features")
+        
+        # For speech, we want to use the top-down modulated features if available
+        # This might include bias toward expected words or speakers
+        content = td_features if td_features else bu_features
+        
+        # Create enriched content if we have a transcription
+        if isinstance(content, AudioFeatures) and content.transcription:
+            enriched_content = {
+                "transcription": content.transcription,
+                "speaker_id": content.speaker_id,
+                "mood": content.mood,
+                "type": content.type
+            }
+            
+            # Add influence info
+            if top_down.get("influenced_by"):
+                enriched_content["influences"] = top_down.get("influenced_by")
+            
+            # Use enriched dict as content
+            return {
+                "content": enriched_content,
+                "integrated_confidence": integrated_conf,
+                "bottom_up_features": bu_features,
+                "top_down_features": td_features
+            }
+        
+        # Otherwise return the features as content
+        return {
+            "content": content,
+            "integrated_confidence": integrated_conf,
+            "bottom_up_features": bu_features,
+            "top_down_features": td_features
+        }
 
-    async def _update_reasoning_with_perception(self, percept: IntegratedPercept):
-        """Update reasoning core with significant perception"""
-        # Added check for method existence
-        if self.reasoning_core and hasattr(self.reasoning_core, 'update_with_perception'):
-            try:
-                await self.reasoning_core.update_with_perception(percept)
-            except Exception as e:
-                self.logger.error(f"Error updating reasoning with perception: {str(e)}")
-        elif self.reasoning_core:
-             self.logger.warning("Reasoning core does not have 'update_with_perception' method.")
+    # --- Public API Methods ---
 
+    async def register_feature_extractor(self, modality: Modality, extractor_function):
+        """Register a feature extraction function for a specific modality"""
+        self.feature_extractors[modality] = extractor_function
+        logger.info(f"Registered feature extractor for {modality}")
 
-    # --- Expectation Management (Unchanged) ---
+    async def register_expectation_modulator(self, modality: Modality, modulator_function):
+        """Register a function that applies top-down expectations to a modality"""
+        self.expectation_modulators[modality] = modulator_function
+        logger.info(f"Registered expectation modulator for {modality}")
+
+    async def register_integration_strategy(self, modality: Modality, integration_function):
+        """Register a function that integrates bottom-up and top-down processing"""
+        self.integration_strategies[modality] = integration_function
+        logger.info(f"Registered integration strategy for {modality}")
+
     async def add_expectation(self, expectation: ExpectationSignal):
-        """Add a new top-down expectation"""
-        # Add basic validation
-        if not isinstance(expectation, ExpectationSignal):
-             self.logger.warning("Attempted to add invalid expectation type.")
-             return
+        """Add a new top-down expectation signal"""
         self.active_expectations.append(expectation)
-        # Prune if too many expectations
-        if len(self.active_expectations) > 50: # Limit active expectations
+        logger.debug(f"Added expectation for {expectation.target_modality}: {expectation.pattern}")
+        
+        # Prune if we have too many expectations
+        if len(self.active_expectations) > 50:
             self.active_expectations.sort(key=lambda x: x.priority, reverse=True)
-            self.active_expectations = self.active_expectations[:40] # Keep top 40
+            self.active_expectations = self.active_expectations[:40]  # Keep top 40
 
-
-    async def clear_expectations(self, modality: str = None):
+    async def clear_expectations(self, modality: Optional[Modality] = None):
         """Clear active expectations, optionally for a specific modality"""
         if modality:
-            self.active_expectations = [exp for exp in self.active_expectations
+            old_count = len(self.active_expectations)
+            self.active_expectations = [exp for exp in self.active_expectations 
                                       if exp.target_modality != modality]
-            self.logger.info(f"Cleared expectations for modality: {modality}")
+            new_count = len(self.active_expectations)
+            logger.info(f"Cleared {old_count - new_count} expectations for {modality}")
         else:
+            old_count = len(self.active_expectations)
             self.active_expectations = []
-            self.logger.info("Cleared all active expectations.")
+            logger.info(f"Cleared all {old_count} active expectations")
 
-    # --- Retrieval Method (Unchanged) ---
-    async def get_recent_percepts(self, modality: str = None, limit: int = 10) -> List[IntegratedPercept]:
+    async def get_recent_percepts(self, modality: Optional[Modality] = None, 
+                                limit: int = 10) -> List[IntegratedPercept]:
         """Get recent percepts, optionally filtered by modality"""
-        buffer = self.perception_buffer
         if modality:
-            filtered = [p for p in buffer if p.modality == modality]
+            filtered = [p for p in self.perception_buffer if p.modality == modality]
             return filtered[-limit:]
         else:
-            return buffer[-limit:]
+            return self.perception_buffer[-limit:]
 
+    # --- Utils for OpenAI Agents SDK Integration ---
+
+    @function_tool
+    async def process_text(self, ctx: RunContextWrapper, text: str, 
+                         metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Process a text input through the multimodal integration system.
+        
+        Args:
+            text: The text input to process
+            metadata: Optional metadata about the text
+            
+        Returns:
+            Processing results including features and integration data
+        """
+        input_data = SensoryInput(
+            modality=Modality.TEXT,
+            data=text,
+            timestamp=datetime.datetime.now().isoformat(),
+            metadata=metadata or {}
+        )
+        
+        percept = await self.process_sensory_input(input_data)
+        
+        return {
+            "modality": percept.modality,
+            "content": percept.content,
+            "confidence": percept.bottom_up_confidence,
+            "influence": percept.top_down_influence,
+            "attention": percept.attention_weight,
+            "features": percept.raw_features
+        }
+    
+    @function_tool
+    async def process_image(self, ctx: RunContextWrapper, image_data: Any,
+                          metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Process an image through the multimodal integration system.
+        
+        Args:
+            image_data: Raw image data (bytes, path, or base64 encoded string)
+            metadata: Optional metadata about the image
+            
+        Returns:
+            Processing results including image features and integration data
+        """
+        input_data = SensoryInput(
+            modality=Modality.IMAGE,
+            data=image_data,
+            timestamp=datetime.datetime.now().isoformat(),
+            metadata=metadata or {}
+        )
+        
+        percept = await self.process_sensory_input(input_data)
+        
+        return {
+            "modality": percept.modality,
+            "content": percept.content,
+            "confidence": percept.bottom_up_confidence,
+            "influence": percept.top_down_influence,
+            "attention": percept.attention_weight,
+            "features": percept.raw_features
+        }
+    
+    @function_tool
+    async def add_perceptual_expectation(self, ctx: RunContextWrapper, 
+                                       target_modality: str,
+                                       pattern: Any,
+                                       strength: float = 0.5,
+                                       priority: float = 0.5,
+                                       source: str = "agent") -> Dict[str, Any]:
+        """
+        Add a top-down expectation signal to guide perception.
+        
+        Args:
+            target_modality: Which modality to apply the expectation to
+            pattern: What to expect (e.g., object name, content, feature)
+            strength: How strongly to apply the expectation (0.0-1.0)
+            priority: Priority relative to other expectations (0.0-1.0)
+            source: Source of the expectation (e.g., "memory", "reasoning")
+            
+        Returns:
+            Result of adding the expectation
+        """
+        try:
+            modality = Modality(target_modality)
+        except ValueError:
+            return {
+                "success": False,
+                "error": f"Invalid modality: {target_modality}. Valid options are: {[m.value for m in Modality]}"
+            }
+            
+        expectation = ExpectationSignal(
+            target_modality=modality,
+            pattern=pattern,
+            strength=min(1.0, max(0.0, strength)),
+            priority=min(1.0, max(0.0, priority)),
+            source=source
+        )
+        
+        await self.add_expectation(expectation)
+        
+        return {
+            "success": True,
+            "expectation_added": {
+                "modality": modality,
+                "pattern": str(pattern),
+                "strength": strength,
+                "priority": priority
+            },
+            "active_expectations_count": len(self.active_expectations)
+        }
+    
+    @function_tool
+    async def get_perception_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get statistics about processed percepts.
+        
+        Returns:
+            Statistics by modality including counts and filtering rates
+        """
+        stats = {}
+        for modality in Modality:
+            modality_stats = self.perception_stats[modality]
+            total = modality_stats["count"]
+            filtered = modality_stats["attention_filtered"]
+            
+            filter_rate = filtered / total if total > 0 else 0.0
+            
+            stats[modality] = {
+                "total_processed": total,
+                "attention_filtered": filtered,
+                "filter_rate": filter_rate
+            }
+            
+        return {
+            "stats_by_modality": stats,
+            "total_percepts": len(self.perception_buffer),
+            "active_expectations": len(self.active_expectations)
+        }
 # --- How NyxBrain would use it (Conceptual Example) ---
 # class NyxBrain:
 #     # ... (initialization of multimodal_integrator) ...
