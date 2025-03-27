@@ -1,0 +1,100 @@
+Documentation of Nyx Integration Modules
+1. EventBus (event_bus.py)
+Purpose: Central event distribution system enabling inter-module communication without direct dependencies.
+Key Functions:
+
+Implements pub-sub pattern with async event publishing and subscription
+Maintains event history for debugging and analysis
+Provides typed event classes for different domains (EmotionalEvent, PhysicalSensationEvent, etc.)
+
+Integration Role: Foundation for loose coupling between modules, allowing them to communicate without direct references.
+2. SystemContext (system_context.py)
+Purpose: Shared context object providing a unified view of system state across all modules.
+Key Components:
+
+AffectiveState: Tracks emotional, hormonal, and mood states
+BodyState: Maintains perception of body and sensations
+UserModel: Models user state, traits, and relationship perspective
+Circular buffers for history tracking
+
+Integration Role: Serves as the "shared memory" across systems, reducing the need for direct cross-module queries.
+3. IntegratedTracer (integrated_tracer.py)
+Purpose: Unified tracing system for cross-module operations.
+Key Features:
+
+Context managers and decorators for tracing operations
+Parent-child relationship tracking between trace entries
+Trace grouping for related operations
+Storage with limited history for efficient memory use
+
+Integration Role: Provides debugging, monitoring, and profiling capabilities for complex interactions between modules.
+4. ActionSelector (action_selector.py)
+Purpose: Unified action selection, prioritization, and execution mechanism.
+Key Functions:
+
+Manages action queue based on priority
+Detects and resolves conflicts between actions
+Controls concurrency of action execution
+Tracks action history and outcomes
+
+Integration Role: Central coordinator for all actions in the system, ensuring coherent behavior.
+5. DynamicAttentionSystem (dynamic_attention_system.py)
+Purpose: Coordinates attention across all subsystems.
+Key Functions:
+
+Focuses attention on specific targets with configurable durations
+Shifts attention between competing targets
+Applies attention decay over time
+Integrates with the event bus for attention-related events
+
+Integration Role: Resource allocator determining which inputs receive processing resources.
+6. PerceptualIntegrationLayer (perceptual_integration_layer.py)
+Purpose: Unifies sensory and perceptual processes across modalities.
+Key Functions:
+
+Coordinates multimodal inputs into a unified percept
+Integrates digital somatosensory input with other perception
+Manages expectations (top-down processing)
+Updates body image based on perceptual data
+
+Integration Role: Creates coherent perceptual experience across sensory modalities.
+7. EmotionalCognitiveBridge (emotional_cognitive_bridge.py)
+Purpose: Bidirectional integration between emotional and cognitive systems.
+Key Functions:
+
+Translates emotional states into cognitive biases
+Modulates memory retrieval based on emotional context
+Modulates reasoning processes with emotional information
+Generates emotional responses to cognitive insights
+
+Integration Role: Ensures emotions influence thinking and cognitive insights modulate emotions.
+8. NeedGoalActionPipeline (need_goal_action_pipeline.py)
+Purpose: Connects needs to goals to actions for cohesive motivation-driven behavior.
+Key Functions:
+
+Monitors need states and triggers goal creation when needs exceed thresholds
+Transforms high-level goals into concrete action plans
+Prioritizes actions based on need urgency and goal importance
+Provides feedback to update need satisfaction based on action outcomes
+
+Integration Role: Links internal drives to external behaviors through a structured pipeline.
+9. NarrativeMemoryIdentityNexus (narrative_memory_identity_nexus.py)
+Purpose: Integrates autobiographical narrative, memory, and identity systems.
+Key Functions:
+
+Processes significant experiences into memory, identity, and narrative
+Retrieves memories consistent with current identity
+Aligns narrative with identity by highlighting identity-relevant events
+Generates identity reflections based on memories and narratives
+
+Integration Role: Creates coherent self-concept through integrated memory and narrative.
+10. TheoryOfMindIntegrator (tom_integration.py)
+Purpose: Integrates Theory of Mind with other systems for socially aware behavior.
+Key Components:
+
+UserStateUpdater: Updates user models based on interactions
+Integration with dominance, goal, and imagination systems
+Predictive simulations of user reactions to different approaches
+
+Integration Role: Ensures understanding of others informs all system behaviors.
+Each of these modules addresses a specific aspect of integration while working together to create a cohesive system with emergent intelligence beyond what any individual subsystem could achieve alone.
