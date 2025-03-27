@@ -124,6 +124,8 @@ class NyxBrain:
         self.agent_enhanced_memory = None
         self.needs_system: Optional[NeedsSystem] = None
         self.goal_manager: Optional[GoalManager] = None
+        self.general_dominance_ideation_agent = create_dominance_ideation_agent() 
+        self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
         
         # Component managers
         self.processing_manager = None
@@ -2643,33 +2645,57 @@ class NyxBrain:
 
         return profile
         
-    @function_tool # Make callable by GoalManager planner
+    @function_tool
     async def generate_femdom_activity_ideas(self,
                                          user_id: str,
                                          purpose: str,
                                          desired_intensity_range: Tuple[int, int] = (3, 7),
                                          num_ideas: int = 4) -> Dict:
-        """
-        Generates tailored Femdom activity ideas using the DominanceIdeationAgent.
-        Includes safety filtering.
-
-        Args:
-            user_id: The target user.
-            purpose: The reason for the activity (e.g., 'punishment', 'task', 'funishment', 'training').
-            desired_intensity_range: Tuple of min/max desired intensity (1-10).
-            num_ideas: How many ideas to try and generate.
-
-        Returns:
-            Dictionary containing a list of filtered, safe ideas.
-        """
+        """Generates tailored Femdom activity ideas using the appropriate agent."""
         if not self.initialized: await self.initialize()
         logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
 
-        # 1. Gather Context
+        # --- Select Agent Based on Intensity ---
+        min_intensity, max_intensity = desired_intensity_range
+        use_hard_agent = max_intensity >= 7 # Use hard agent if range includes 7+
+
+        if use_hard_agent:
+            agent_to_use = self.hard_dominance_ideation_agent
+            agent_name = "HardDominanceIdeationAgent"
+            # Adjust prompt slightly for clarity if needed, or rely on agent's internal instructions
+            prompt = f"""Generate {num_ideas} **HIGH-INTENSITY (target range {min_intensity}-{max_intensity})** Femdom activity ideas for user '{user_id}'.
+            Purpose: {purpose}
+
+            Use tools for context. Adhere strictly to high-intensity guidelines and safety protocols, especially limits.
+            Output ONLY the JSON list of FemdomActivityIdea objects.
+            """
+            logger.info(f"Using Hard Dominance Ideation Agent for intensity {desired_intensity_range}")
+        else:
+            agent_to_use = self.general_dominance_ideation_agent # Use the general one for lower intensities
+            agent_name = "DominanceIdeationAgent"
+            prompt = f"""Generate {num_ideas} creative Femdom activity ideas (intensity range {min_intensity}-{max_intensity}) for user '{user_id}'.
+            Purpose: {purpose}
+
+            Use tools for context. Tailor ideas, follow safety guidelines.
+            Output ONLY the JSON list of FemdomActivityIdea objects.
+            """
+            logger.info(f"Using General Dominance Ideation Agent for intensity {desired_intensity_range}")
+
+        # 1. Gather Context (Same as before)
         try:
             user_profile = await self.get_user_profile_for_ideation(user_id)
-            scenario_context = await get_current_scenario_context() # Assumes this global tool exists or is method
+            scenario_context = await get_current_scenario_context()
             relationship_state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
+
+            # *** Add check for hard agent prerequisites ***
+            if use_hard_agent:
+                 if not relationship_state or not relationship_state.hard_limits_confirmed:
+                      logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed.")
+                      return {"success": False, "error": "Cannot generate high-intensity ideas: Hard limits not confirmed.", "ideas": []}
+                 user_intensity_pref = profile.get("preferences", {}).get("intensity_preference_level", 5)
+                 if user_intensity_pref < 7:
+                      logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low.")
+                      return {"success": False, "error": "Cannot generate high-intensity ideas: User intensity preference too low.", "ideas": []}
         except Exception as e:
             logger.error(f"Error gathering context for ideation: {e}")
             return {"success": False, "error": "Failed to gather context.", "ideas": []}
@@ -2690,6 +2716,7 @@ class NyxBrain:
         # 3. Run Ideation Agent
         generated_ideas: List[FemdomActivityIdea] = []
         try:
+            result = await Runner.run(agent_to_use, prompt) # Use the selected agent
             # Assuming dominance_ideation_agent is initialized and available
             # We might need to instantiate it here if not a class member
             agent_instance = create_dominance_ideation_agent() # Or self.dominance_ideation_agent if member
@@ -2697,15 +2724,17 @@ class NyxBrain:
 
             # The agent's output_type is List[FemdomActivityIdea], so result.final_output should be the list
             if isinstance(result.final_output, list):
-                 # Validate items are dicts or convertible Pydantic models
                  raw_ideas = result.final_output
                  for idea_data in raw_ideas:
                      try:
-                         # Attempt to parse each item into the Pydantic model
                          idea_obj = FemdomActivityIdea.model_validate(idea_data)
+                         # **Additional Check**: Ensure agent respected intensity range
+                         if not (min_intensity <= idea_obj.intensity <= max_intensity):
+                              logger.warning(f"Agent {agent_name} generated idea outside requested intensity range ({idea_obj.intensity} vs {desired_intensity_range}). Filtering out.")
+                              continue
                          generated_ideas.append(idea_obj)
-                     except Exception as parse_error:
-                          logger.warning(f"Failed to parse generated idea: {idea_data}. Error: {parse_error}")
+                     except Exception as parse_error: # ... handle parse error
+                          pass
             elif result.final_output: # If output wasn't a list but not None
                  logger.warning(f"Ideation agent returned unexpected format: {type(result.final_output)}")
 
