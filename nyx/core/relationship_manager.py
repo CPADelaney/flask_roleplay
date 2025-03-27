@@ -26,6 +26,11 @@ class RelationshipState(BaseModel):
     current_dominance_intensity: float = Field(0.0, ge=0.0, le=1.0, description="Current level of expressed dominance in the interaction")
     max_achieved_intensity: float = Field(0.0, ge=0.0, le=1.0, description="Highest intensity level successfully reached with this user")
     failed_escalation_attempts: int = 0
+    inferred_user_traits: Dict[str, float] = Field(default_factory=dict, description="e.g., {'submissive': 0.7, 'resistant': 0.2, 'playful': 0.5}")
+    successful_dominance_tactics: List[str] = Field(default_factory=list)
+    failed_dominance_tactics: List[str] = Field(default_factory=list)
+    preferred_dominance_style: Optional[str] = Field(None, description="Learned preferred style for this user (e.g., psychological, praise-based)")
+    optimal_escalation_rate: float = Field(0.1, description="Learned optimal step size for intensity increase") # 0.1 = slow, 0.5 = fast
 
 class RelationshipManager:
     """Manages Nyx's relationship states with different users."""
