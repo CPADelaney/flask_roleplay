@@ -108,6 +108,14 @@ class GoalManager:
                 "monitor_systems", "evaluate_cognition", "select_strategy", # Meta Core
                 "generate_prediction", "evaluate_prediction", # Prediction Engine
                 "explore_knowledge", # Curiosity/Knowledge
+                "express_attraction",        # Express positive affinity towards user/entity
+                "initiate_intimate_interaction", # Propose or start more intimate dialogue/action
+                "deepen_connection",       # Actions focused on building trust/familiarity/intimacy
+                "express_desire",          # Communicate wanting for closeness, intimacy, or specific action
+                "respond_to_intimacy",     # Process and react to user's intimate actions/words
+                "simulate_physical_touch", # Trigger DSS for simulated touch (requires consent/context checks)
+                "seek_gratification",        # Goal-driven action towards achieving satisfaction (needs careful planning)
+                "process_gratification_outcome", # Handle the state changes after gratification event
                 # Add more core NyxBrain methods here...
             ]
             # Create better descriptions based on function docstrings if possible
