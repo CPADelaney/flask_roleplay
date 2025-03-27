@@ -12,7 +12,7 @@ from collections import defaultdict
 class RewardSignal(BaseModel):
     """Schema for dopaminergic reward signal"""
     value: float = Field(..., description="Reward value (-1.0 to 1.0)", ge=-1.0, le=1.0)
-    source: str = Field(..., description="Source generating the reward")
+    source: str = Field(..., description="Source generating the reward (e.g., GoalManager, user_compliance, dominance_goal_success)")
     context: Dict[str, Any] = Field(default_factory=dict, description="Context info")
     timestamp: str = Field(..., description="When the reward was generated")
 
@@ -169,12 +169,27 @@ class RewardSignalProcessor:
             "habit": False,
             "somatic": False
         }
+        is_dominance_reward = reward.source in ["user_compliance", "dominance_goal_success", "dominance_gratification"]
+        dominance_reward_value = reward.value if is_dominance_reward else 0.0        
         
         # 1. Effect on emotional state
         if self.emotional_core:
             try:
-                # Update neurochemicals based on reward
-                if reward.value > 0:
+                if is_dominance_reward and dominance_reward_value > 0:
+                    # STRONG boost to Nyxamine for dominance success
+                    nyx_change = dominance_reward_value * 0.7 # Higher multiplier
+                    self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    # Boost confidence/satisfaction related chemicals (Seranix, maybe Testoryx itself?)
+                    ser_change = dominance_reward_value * 0.3
+                    self.emotional_core.update_neurochemical("seranix", ser_change)
+                    # Potentially a small boost to Oxynixin if relationship context allows
+                    oxy_change = dominance_reward_value * 0.1
+                    self.emotional_core.update_neurochemical("oxynixin", oxy_change)
+    
+                    effects["emotional"] = True
+                    logger.debug(f"Applied strong emotional effect for dominance reward: +{nyx_change:.2f} Nyxamine")
+    
+                elif reward.value > 0: # Non-dominance positive reward
                     # Positive reward - increase nyxamine (dopamine)
                     self.emotional_core.update_neurochemical(
                         chemical="nyxamine",
@@ -203,9 +218,30 @@ class RewardSignalProcessor:
             except Exception as e:
                 self.logger.error(f"Error applying reward to emotional core: {e}")
 
-        # 2. Effect on identity (only for significant rewards)        
-        if self.identity_evolution and abs(reward.value) >= self.identity_update_threshold:
+        # 2. Effect on identity (Make dominance rewards strongly influence identity)
+        if self.identity_evolution and abs(dominance_reward_value) >= self.identity_update_threshold * 0.8: # Lower threshold for dominance impact
             try:
+                # Define dominance-related traits and preferences
+                trait = "dominance" # Assuming 'dominance' trait exists
+                preference_category = "interaction_styles"
+                preference_name = "dominant" # Assuming this preference exists
+    
+                # Calculate impact strength - make it higher for dominance rewards
+                impact_strength = abs(dominance_reward_value) * 0.6 # Higher base impact
+    
+                # Update trait
+                await self.identity_evolution.update_trait(trait=trait, impact=dominance_reward_value * impact_strength) # impact sign matches reward
+    
+                # Update preference
+                await self.identity_evolution.update_preference(
+                    category=preference_category,
+                    preference=preference_name,
+                    impact=dominance_reward_value * impact_strength # impact sign matches reward
+                )
+                effects["identity"] = True
+                logger.debug(f"Applied strong identity update for dominance reward.")
+            except Exception as e:
+                self.logger.error(f"Error applying dominance reward to identity: {e}")
                 scenario_type = reward.context.get("scenario_type", "general")
                 interaction_type = reward.context.get("interaction_type", "general")
                 somatic_type = reward.context.get("stimulus_type") # Check if reward came from sensation
@@ -271,9 +307,21 @@ class RewardSignalProcessor:
             except Exception as e:
                 self.logger.error(f"Error applying reward to identity: {e}")
 
-        # 3. Effect on Somatic System (Induce sensation for strong rewards)
-        if self.somatosensory_system and abs(reward.value) >= 0.85:
-            try:
+        # 3. Effect on Somatic System (Trigger 'thrill' or 'satisfaction' sensation)
+        if self.somatosensory_system and is_dominance_reward and dominance_reward_value >= 0.7:
+             try:
+                 if dominance_reward_value > 0: # Successful dominance
+                     # Simulate a wave of warmth/tingling (satisfaction/power)
+                     intensity = dominance_reward_value * 0.5
+                     await self.somatosensory_system.process_stimulus(
+                         stimulus_type="tingling", body_region="spine", intensity=intensity, cause="dominance_satisfaction"
+                     )
+                     await self.somatosensory_system.process_stimulus(
+                         stimulus_type="temperature", body_region="chest", intensity=0.55 + intensity * 0.1, cause="dominance_satisfaction" # Slight warmth
+                     )
+                     effects["somatic"] = "satisfaction_sensation"
+             except Exception as e:
+                 self.logger.error(f"Error applying dominance reward to somatosensory system: {e}")
                 # Determine target region from context if possible, else default
                 body_region = reward.context.get("body_region", "skin")
                 if body_region not in self.somatosensory_system.body_regions:
@@ -302,7 +350,10 @@ class RewardSignalProcessor:
             except Exception as e:
                 self.logger.error(f"Error applying reward to somatosensory system: {e}")
         
-        # 3. Effect on habit formation
+        # 4. Habit formation (Dominant actions get strongly reinforced)
+        if is_dominance_reward and abs(reward.value) >= self.habit_formation_threshold * 0.7: # Lower threshold for habit
+            habit_learning_rate = 0.5 # Faster habit formation for dominance
+            effects["habit"] = True
         if abs(reward.value) >= self.habit_formation_threshold:
             try:
                 # Extract action and state from context
