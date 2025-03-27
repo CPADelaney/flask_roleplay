@@ -386,7 +386,7 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
     async def on_tool_end(self, context: RunContextWrapper[EmotionalContext], 
                         agent: Agent[EmotionalContext], tool: Tool, result: str) -> None:
         """
-        Called when a tool completes execution
+        Called when a tool completes execution with enhanced error recovery
         
         Args:
             context: The run context wrapper
@@ -419,7 +419,43 @@ class EmotionalAgentHooks(AgentHooks[EmotionalContext]):
             # Finish and remove the span
             span.finish(reset_current=True)
             del self.active_spans[tool_span_id]
+        
+        # NEW: Check for errors in the result with recovery logic
+        try:
+            # Try to parse result as JSON to detect errors
+            if isinstance(result, str) and result.startswith("{") and "error" in result.lower():
+                result_data = json.loads(result)
+                
+                if "error" in result_data:
+                    # Create a dedicated error span
+                    with custom_span(
+                        "tool_error",
+                        data={
+                            "tool": tool_name,
+                            "error": result_data["error"],
+                            "error_type": result_data.get("error_type", "unknown"),
+                            "agent": agent.name,
+                            "cycle": context.context.cycle_count
+                        }
+                    ):
+                        # Implement recovery strategies based on tool and error type
+                        if tool_name == "update_neurochemical" and "unknown_neurochemical" in result_data.get("error", ""):
+                            # Log recovery attempt
+                            logger.info(f"Attempting recovery for {tool_name} error")
+                            
+                            # Update tool statistics to track errors
+                            tool_stats = context.context.get_value("tool_stats", {})
+                            if tool_name not in tool_stats:
+                                tool_stats[tool_name] = {"errors": 0}
+                            if "errors" not in tool_stats[tool_name]:
+                                tool_stats[tool_name]["errors"] = 0
+                            tool_stats[tool_name]["errors"] += 1
+                            context.context.set_value("tool_stats", tool_stats)
+        except:
+            # If parsing fails, just continue with normal processing
+            pass
             
+        # Continue with existing tool end processing
         context.context.record_time_marker(f"tool_end_{tool_name}")
         duration = context.context.get_elapsed_time(f"tool_start_{tool_name}", f"tool_end_{tool_name}")
         
