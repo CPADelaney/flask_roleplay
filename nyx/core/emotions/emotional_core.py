@@ -192,8 +192,8 @@ class EmotionalCore:
             }
         }
         
-        # Store reference to hormone system
-        self.hormone_system = None  # Will be set later
+        self.hormone_system = hormone_system
+        self.last_hormone_influence_check = datetime.datetime.now() - datetime.timedelta(minutes=30)
         
         # Add hormone influence tracking
         self.hormone_influences = {
@@ -963,6 +963,8 @@ class EmotionalCore:
         
         # Get the orchestrator agent
         orchestrator = self._get_agent("orchestrator")
+
+        final_output = self._extract_final_output(result) # Assuming result holds final state
         
         # Generate a conversation ID for grouping traces if not present
         conversation_id = self.context.get_value("conversation_id")
@@ -995,6 +997,30 @@ class EmotionalCore:
         
         # Track API call start time
         start_time = datetime.datetime.now()
+
+        # --- Trigger Hormone Updates based on Strong/Sustained Emotions ---
+        if self.hormone_system and (datetime.datetime.now() - self.last_hormone_influence_check).total_seconds() > 1800: # Check every 30 mins
+            try:
+                current_neurochemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
+                ctx = RunContextWrapper(context=self.context) # Create context wrapper
+
+                # Example: Sustained high stress (Cortanyx) might slowly affect Endoryx/Testoryx
+                if current_neurochemicals.get("cortanyx", 0) > 0.75:
+                    await self.hormone_system.update_hormone(ctx, "endoryx", -0.02, source="sustained_stress")
+                    await self.hormone_system.update_hormone(ctx, "testoryx", -0.01, source="sustained_stress")
+
+                # Example: Sustained high bonding (Oxynixin) might boost Oxytonyx
+                if current_neurochemicals.get("oxynixin", 0) > 0.75:
+                    await self.hormone_system.update_hormone(ctx, "oxytonyx", 0.03, source="sustained_bonding")
+
+                # Example: Sustained pleasure/reward (Nyxamine) might boost Endoryx
+                if current_neurochemicals.get("nyxamine", 0) > 0.80:
+                     await self.hormone_system.update_hormone(ctx, "endoryx", 0.02, source="sustained_pleasure")
+
+                self.last_hormone_influence_check = datetime.datetime.now()
+
+            except Exception as e:
+                logger.error(f"Error triggering hormone updates from emotional state: {e}")        
         
         # Generate a run ID for tracking
         run_id = f"run_{datetime.datetime.now().timestamp()}"
