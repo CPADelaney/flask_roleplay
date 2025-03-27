@@ -138,221 +138,287 @@ class NyxBrain:
         
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
     
-    async def initialize(self):
-        """
-        Initialize all subsystems in the correct dependency order.
-        Handles circular dependencies by setting references after initialization.
-        """
-        if self.initialized:
-            return
+async def initialize(self):
+    """
+    Initialize all subsystems in the correct dependency order.
+    Handles circular dependencies by setting references after initialization.
+    """
+    if self.initialized:
+        return
+    
+    logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
+    
+    # Dynamic imports to avoid circular dependencies
+    # Import components only when needed for initialization
+    try:
+        # Import core systems
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        from nyx.core.emotional_core import EmotionalCore
+        from nyx.core.memory_core import MemoryCore
+        from nyx.core.reflection_engine import ReflectionEngine
+        from nyx.core.experience_interface import ExperienceInterface
+        from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
+        from nyx.core.internal_feedback_system import InternalFeedbackSystem
+        from nyx.core.meta_core import MetaCore
+        from nyx.core.knowledge_core import KnowledgeCoreAgents
+        from nyx.core.memory_orchestrator import MemoryOrchestrator
+        from nyx.core.identity_evolution import IdentityEvolutionSystem
+        from nyx.core.experience_consolidation import ExperienceConsolidationSystem
+        from nyx.core.cross_user_experience import CrossUserExperienceManager
+        from nyx.core.hormone_system import HormoneSystem
+        from nyx.core.attentional_controller import AttentionalController
+        from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator
+        from nyx.core.reward_system import RewardSignalProcessor
+        from nyx.core.temporal_perception import TemporalPerception
+        from nyx.core.procedural_memory import ProceduralMemoryManager
+        from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+        from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
+        from nyx.core.needs_system import NeedsSystem
+        from nyx.core.goal_manager import GoalManager
+        from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
+        from nyx.api.thinking_tools import ThinkingTools
+        from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
+        from nyx.core.mood_manager import MoodManager
+        from nyx.core.theory_of_mind import TheoryOfMind
+        from nyx.core.imagination_simulator import ImaginationSimulator
         
-        logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
-        
-        # Dynamic imports to avoid circular dependencies
-        # Import components only when needed for initialization
+        # Try to import relationship manager - check different possible locations
         try:
-            # Import core systems
-            from nyx.core.brain.module_optimizer import ModuleOptimizer
-            from nyx.core.brain.system_health_checker import SystemHealthChecker
-            from nyx.core.emotional_core import EmotionalCore
-            from nyx.core.memory_core import MemoryCore
-            from nyx.core.reflection_engine import ReflectionEngine
-            from nyx.core.experience_interface import ExperienceInterface
-            from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
-            from nyx.core.internal_feedback_system import InternalFeedbackSystem
-            from nyx.core.meta_core import MetaCore
-            from nyx.core.knowledge_core import KnowledgeCoreAgents
-            from nyx.core.memory_orchestrator import MemoryOrchestrator
-            from nyx.core.identity_evolution import IdentityEvolutionSystem
-            from nyx.core.experience_consolidation import ExperienceConsolidationSystem
-            from nyx.core.cross_user_experience import CrossUserExperienceManager
-            from nyx.core.hormone_system import HormoneSystem
-            from nyx.core.attentional_controller import AttentionalController
-            from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator
-            from nyx.core.reward_system import RewardSignalProcessor
-            from nyx.core.temporal_perception import TemporalPerception
-            from nyx.core.procedural_memory import ProceduralMemoryManager
-            from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
-            from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
-            from nyx.core.needs_system import NeedsSystem
-            from nyx.core.goal_manager import GoalManager
-            from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
-            from nyx.api.thinking_tools import ThinkingTools
-            from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
-
-            # 1. Initialize support systems
-            self.module_optimizer = ModuleOptimizer(self)
-            self.system_health_checker = SystemHealthChecker(self)
-            
-            # 2. Initialize foundational systems without dependencies
-            self.hormone_system = HormoneSystem()
-            logger.debug("Hormone system initialized")
-            
-            self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
-            logger.debug("Emotional core initialized")
-            
-            self.memory_core = MemoryCore(self.user_id, self.conversation_id)
-            await self.memory_core.initialize()
-            logger.debug("Memory core initialized")
-            
-            self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
-            await self.memory_orchestrator.initialize()
-            logger.debug("Memory orchestrator initialized")
-            
-            self.reflection_engine = ReflectionEngine()
-            logger.debug("Reflection engine initialized")
-            
-            # 3. Initialize primary systems with simple dependencies
-            self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
-            logger.debug("Experience interface initialized")
-            
-            self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
-            logger.debug("Identity evolution initialized")
-            
-            self.experience_consolidation = ExperienceConsolidationSystem(
-                memory_core=self.memory_core,
-                experience_interface=self.experience_interface
-            )
-            logger.debug("Experience consolidation initialized")
-            
-            self.cross_user_manager = CrossUserExperienceManager(
-                memory_core=self.memory_core,
-                experience_interface=self.experience_interface
-            )
-            logger.debug("Cross-user manager initialized")
-            
-            # 4. Initialize core processing systems
-            self.internal_feedback = InternalFeedbackSystem()
-            logger.debug("Internal feedback initialized")
-            
-            self.attentional_controller = AttentionalController(
-                emotional_core=self.emotional_core
-            )
-            logger.debug("Attentional controller initialized")
-            
-            # Use integrated reasoning agent as reasoning core
-            self.reasoning_core = integrated_reasoning_agent
-            self.reasoning_triage_agent = reasoning_triage_agent
-            logger.debug("Reasoning agents initialized")
-            
-            # 5. Initialize systems with circular dependencies
-            # First create with partial dependencies
-            self.reward_system = RewardSignalProcessor(
-                emotional_core=self.emotional_core,
-                identity_evolution=self.identity_evolution,
-                somatosensory_system=None  # Will set this later
-            )
-            logger.debug("Reward system initialized")
-
-            # Now create dependent systems
-            self.digital_somatosensory_system = DigitalSomatosensorySystem(
-                memory_core=self.memory_core,
-                emotional_core=self.emotional_core,
-                reward_system=self.reward_system
-            )
-            await self.digital_somatosensory_system.initialize()
-            logger.debug("Digital somatosensory system initialized")
-
-            # Set circular references
-            self.reward_system.somatosensory_system = self.digital_somatosensory_system
-            self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
-            logger.debug("Circular dependencies resolved")
-            
-            # 6. Initialize perception and integration systems
-            self.multimodal_integrator = EnhancedMultiModalIntegrator(
-                reasoning_core=self.reasoning_core,
-                attentional_controller=self.attentional_controller
-            )
-            logger.debug("Multimodal integrator initialized")
-            
-            self.temporal_perception = TemporalPerception()
-            await self.temporal_perception.initialize(self, None)
-            logger.debug("Temporal perception initialized")
-            
-            # 7. Initialize GoalManager & NeedsSystem
-            # GoalManager needs the brain reference to call action methods
-            self.goal_manager = GoalManager(brain_reference=self)
-            logger.debug("Goal manager initialized")
-            
-            # NeedsSystem needs the goal manager to trigger goal creation
-            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
-            logger.debug("Needs system initialized")
-            
-            # 8. Initialize memory augmentation systems
-            self.procedural_memory = ProceduralMemoryManager()
-            self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
-            logger.debug("Procedural memory initialized")
-            
-            # 9. Initialize cognitive tools
-            self.thinking_tools = ThinkingTools()
-            logger.debug("Thinking tools initialized")
-            
-            # 10. Initialize specialized managers
-            # Register feature extractors and integration strategies for multimodal
-            await self._register_processing_modules()
-            
-            # Initialize component managers
-            self.processing_manager = ProcessingManager(self)
-            await self.processing_manager.initialize()
-            
-            self.self_config_manager = SelfConfigManager(self)
-            
-            # 11. Initialize agent-based systems
-            self.dynamic_adaptation = DynamicAdaptationSystem()
-            
-            self.knowledge_core = KnowledgeCoreAgents()
-            await self.knowledge_core.initialize()
-            
-            # Initialize agent systems for dominance ideation if functions available
-            if 'create_dominance_ideation_agent' in locals():
-                self.general_dominance_ideation_agent = create_dominance_ideation_agent()
-                self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
-                logger.debug("Dominance ideation agents initialized")
-            
-            # 12. Initialize meta cognition (needs references to other systems)
-            self.meta_core = MetaCore()
-            await self.meta_core.initialize({
-                "memory": self.memory_core,
-                "emotion": self.emotional_core,
-                "reasoning": self.reasoning_core,
-                "reflection": self.reflection_engine,
-                "adaptation": self.dynamic_adaptation,
-                "feedback": self.internal_feedback,
-                "identity": self.identity_evolution,
-                "experience": self.experience_interface,
-                "hormone": self.hormone_system,
-                "time": self.temporal_perception,
-                "procedural": self.agent_enhanced_memory,
-                "needs": self.needs_system,
-                "goals": self.goal_manager
-            })
-            logger.debug("Meta core initialized")
-            
-            # 13. Initialize optional agent capabilities
-            if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
-                await self.initialize_agent_capabilities()
-            
-            # 14. Initialize streaming if needed
-            if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
-                await self.initialize_streaming()
-            
-            # 15. Initialize reflexive system if module exists
+            # Option 1: Direct import
+            from nyx.core.relationship_manager import RelationshipManager
+            has_relationship_manager = True
+        except ImportError:
             try:
-                from nyx.core.reflexive_system import initialize_reflexive_system
-                self.reflexive_system = await initialize_reflexive_system(self)
-                logger.debug("Reflexive system initialized")
+                # Option 2: Part of another module
+                from nyx.core.social.relationship_manager import RelationshipManager
+                has_relationship_manager = True
             except ImportError:
-                logger.info("Reflexive system module not found, skipping initialization")
+                # Fallback with warning
+                logger.warning("RelationshipManager module not found. Relationship features will be limited.")
+                RelationshipManager = None
+                has_relationship_manager = False
 
-            # 16. Create main orchestration agent
-            self.brain_agent = self._create_brain_agent()
-            
-            self.initialized = True
-            logger.info(f"NyxBrain fully initialized for user {self.user_id}, conversation {self.conversation_id}")
-            
-        except Exception as e:
-            logger.error(f"Error initializing NyxBrain: {str(e)}", exc_info=True)
-            raise
+        # 1. Initialize support systems
+        self.module_optimizer = ModuleOptimizer(self)
+        self.system_health_checker = SystemHealthChecker(self)
+        
+        # 2. Initialize foundational systems without dependencies
+        self.hormone_system = HormoneSystem()
+        logger.debug("Hormone system initialized")
+        
+        self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
+        logger.debug("Emotional core initialized")
+        
+        self.memory_core = MemoryCore(self.user_id, self.conversation_id)
+        await self.memory_core.initialize()
+        logger.debug("Memory core initialized")
+        
+        self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
+        await self.memory_orchestrator.initialize()
+        logger.debug("Memory orchestrator initialized")
+        
+        self.reflection_engine = ReflectionEngine()
+        logger.debug("Reflection engine initialized")
+        
+        # 3. Initialize primary systems with simple dependencies
+        self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
+        logger.debug("Experience interface initialized")
+        
+        self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
+        logger.debug("Identity evolution initialized")
+        
+        self.experience_consolidation = ExperienceConsolidationSystem(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
+        logger.debug("Experience consolidation initialized")
+        
+        self.cross_user_manager = CrossUserExperienceManager(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
+        logger.debug("Cross-user manager initialized")
+        
+        # 4. Initialize core processing systems
+        self.internal_feedback = InternalFeedbackSystem()
+        logger.debug("Internal feedback initialized")
+        
+        self.attentional_controller = AttentionalController(
+            emotional_core=self.emotional_core
+        )
+        logger.debug("Attentional controller initialized")
+        
+        # Use integrated reasoning agent as reasoning core
+        self.reasoning_core = integrated_reasoning_agent
+        self.reasoning_triage_agent = reasoning_triage_agent
+        logger.debug("Reasoning agents initialized")
+        
+        # 5. Initialize systems with circular dependencies
+        # First create with partial dependencies
+        self.reward_system = RewardSignalProcessor(
+            emotional_core=self.emotional_core,
+            identity_evolution=self.identity_evolution,
+            somatosensory_system=None  # Will set this later
+        )
+        logger.debug("Reward system initialized")
+
+        # Now create dependent systems
+        self.digital_somatosensory_system = DigitalSomatosensorySystem(
+            memory_core=self.memory_core,
+            emotional_core=self.emotional_core,
+            reward_system=self.reward_system
+        )
+        await self.digital_somatosensory_system.initialize()
+        logger.debug("Digital somatosensory system initialized")
+
+        # Initialize relationship manager if available
+        self.relationship_manager = None
+        if has_relationship_manager and RelationshipManager:
+            try:
+                self.relationship_manager = RelationshipManager(
+                    user_id=self.user_id,
+                    memory_core=self.memory_core,
+                    emotional_core=self.emotional_core
+                )
+                await self.relationship_manager.initialize()
+                logger.debug("Relationship manager initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize relationship manager: {e}")
+        
+        # Set circular references
+        self.reward_system.somatosensory_system = self.digital_somatosensory_system
+        self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
+        logger.debug("Circular dependencies resolved")
+        
+        # 6. Initialize perception and integration systems
+        self.multimodal_integrator = EnhancedMultiModalIntegrator(
+            reasoning_core=self.reasoning_core,
+            attentional_controller=self.attentional_controller
+        )
+        logger.debug("Multimodal integrator initialized")
+        
+        self.temporal_perception = TemporalPerception()
+        await self.temporal_perception.initialize(self, None)
+        logger.debug("Temporal perception initialized")
+        
+        # 7. Initialize GoalManager & NeedsSystem
+        # GoalManager needs the brain reference to call action methods
+        self.goal_manager = GoalManager(brain_reference=self)
+        logger.debug("Goal manager initialized")
+        
+        # NeedsSystem needs the goal manager to trigger goal creation
+        self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
+        logger.debug("Needs system initialized")
+        
+        # 8. Initialize memory augmentation systems
+        self.procedural_memory = ProceduralMemoryManager()
+        self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
+        logger.debug("Procedural memory initialized")
+        
+        # 9. Initialize cognitive tools
+        self.thinking_tools = ThinkingTools()
+        logger.debug("Thinking tools initialized")
+        
+        # 10. Initialize additional cognitive systems
+        # Initialize mood manager
+        self.mood_manager = MoodManager(
+            emotional_core=self.emotional_core,
+            hormone_system=self.hormone_system,
+            needs_system=self.needs_system,
+            goal_manager=self.goal_manager
+        )
+        logger.debug("Mood manager initialized")
+        
+        # Initialize theory of mind
+        self.theory_of_mind = TheoryOfMind(
+            relationship_manager=self.relationship_manager,
+            multimodal_integrator=self.multimodal_integrator,
+            memory_core=self.memory_core
+        )
+        logger.debug("Theory of mind initialized")
+        
+        # Initialize imagination simulator
+        self.imagination_simulator = ImaginationSimulator(
+            reasoning_core=self.reasoning_core,
+            knowledge_core=None,  # Will set after knowledge core is initialized
+            emotional_core=self.emotional_core,
+            identity_evolution=self.identity_evolution
+        )
+        logger.debug("Imagination simulator initialized")
+        
+        # 11. Initialize specialized managers
+        # Register feature extractors and integration strategies for multimodal
+        await self._register_processing_modules()
+        
+        # Initialize component managers
+        self.processing_manager = ProcessingManager(self)
+        await self.processing_manager.initialize()
+        
+        self.self_config_manager = SelfConfigManager(self)
+        
+        # 12. Initialize agent-based systems
+        self.dynamic_adaptation = DynamicAdaptationSystem()
+        
+        self.knowledge_core = KnowledgeCoreAgents()
+        await self.knowledge_core.initialize()
+        
+        # Update imagination simulator with knowledge core
+        self.imagination_simulator.knowledge_core = self.knowledge_core
+        
+        # Initialize agent systems for dominance ideation if functions available
+        if 'create_dominance_ideation_agent' in locals():
+            self.general_dominance_ideation_agent = create_dominance_ideation_agent()
+            self.hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
+            logger.debug("Dominance ideation agents initialized")
+        
+        # 13. Initialize meta cognition (needs references to other systems)
+        self.meta_core = MetaCore()
+        await self.meta_core.initialize({
+            "memory": self.memory_core,
+            "emotion": self.emotional_core,
+            "reasoning": self.reasoning_core,
+            "reflection": self.reflection_engine,
+            "adaptation": self.dynamic_adaptation,
+            "feedback": self.internal_feedback,
+            "identity": self.identity_evolution,
+            "experience": self.experience_interface,
+            "hormone": self.hormone_system,
+            "time": self.temporal_perception,
+            "procedural": self.agent_enhanced_memory,
+            "needs": self.needs_system,
+            "goals": self.goal_manager,
+            "mood": self.mood_manager,
+            "theory_of_mind": self.theory_of_mind,
+            "imagination": self.imagination_simulator
+        })
+        logger.debug("Meta core initialized")
+        
+        # 14. Initialize optional agent capabilities
+        if os.environ.get("ENABLE_AGENT", "true").lower() == "true":
+            await self.initialize_agent_capabilities()
+        
+        # 15. Initialize streaming if needed
+        if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+            await self.initialize_streaming()
+        
+        # 16. Initialize reflexive system if module exists
+        try:
+            from nyx.core.reflexive_system import initialize_reflexive_system
+            self.reflexive_system = await initialize_reflexive_system(self)
+            logger.debug("Reflexive system initialized")
+        except ImportError:
+            logger.info("Reflexive system module not found, skipping initialization")
+
+        # 17. Create main orchestration agent
+        self.brain_agent = self._create_brain_agent()
+        
+        self.initialized = True
+        logger.info(f"NyxBrain fully initialized for user {self.user_id}, conversation {self.conversation_id}")
+        
+    except Exception as e:
+        logger.error(f"Error initializing NyxBrain: {str(e)}", exc_info=True)
+        raise
     
     async def initialize_agent_capabilities(self):
         """
@@ -439,30 +505,6 @@ class NyxBrain:
         except Exception as e:
             logger.error(f"Error initializing streaming: {str(e)}")
             return None
-    
-    async def _register_processing_modules(self):
-        """Register processing modules for multimodal integration."""
-        if not hasattr(self, "multimodal_integrator") or not self.multimodal_integrator:
-            logger.warning("Cannot register processing modules: Multimodal integrator not initialized")
-            return
-            
-        try:
-            # Register text modality processors
-            await self.multimodal_integrator.register_feature_extractor(
-                "text", self._extract_text_features
-            )
-            
-            await self.multimodal_integrator.register_expectation_modulator(
-                "text", self._modulate_text_perception
-            )
-            
-            await self.multimodal_integrator.register_integration_strategy(
-                "text", self._integrate_text_pathways
-            )
-            
-            logger.debug("Text processing modules registered with multimodal integrator")
-        except Exception as e:
-            logger.error(f"Error registering processing modules: {e}")
             
     @function_tool
     async def run_cognitive_cycle(self, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -803,6 +845,62 @@ class NyxBrain:
         except Exception as e:
             logger.error(f"Error creating brain agent: {e}")
             return None
+
+async def _register_processing_modules(self):
+    """Register processing modules for multimodal integration."""
+    if not hasattr(self, "multimodal_integrator") or not self.multimodal_integrator:
+        logger.warning("Cannot register processing modules: Multimodal integrator not initialized")
+        return
+        
+    try:
+        # Register text modality processors
+        await self.multimodal_integrator.register_feature_extractor(
+            "text", self._extract_text_features
+        )
+        
+        await self.multimodal_integrator.register_expectation_modulator(
+            "text", self._modulate_text_perception
+        )
+        
+        await self.multimodal_integrator.register_integration_strategy(
+            "text", self._integrate_text_pathways
+        )
+        
+        # Register image modality processors if available
+        if hasattr(self, "_extract_image_features"):
+            await self.multimodal_integrator.register_feature_extractor(
+                "image", self._extract_image_features
+            )
+            
+            if hasattr(self, "_modulate_image_perception"):
+                await self.multimodal_integrator.register_expectation_modulator(
+                    "image", self._modulate_image_perception
+                )
+            
+            if hasattr(self, "_integrate_image_pathways"):
+                await self.multimodal_integrator.register_integration_strategy(
+                    "image", self._integrate_image_pathways
+                )
+        
+        # Register audio modality processors if available
+        if hasattr(self, "_extract_audio_features"):
+            await self.multimodal_integrator.register_feature_extractor(
+                "audio", self._extract_audio_features
+            )
+            
+            if hasattr(self, "_modulate_audio_perception"):
+                await self.multimodal_integrator.register_expectation_modulator(
+                    "audio", self._modulate_audio_perception
+                )
+            
+            if hasattr(self, "_integrate_audio_pathways"):
+                await self.multimodal_integrator.register_integration_strategy(
+                    "audio", self._integrate_audio_pathways
+                )
+        
+        logger.debug("Processing modules registered with multimodal integrator")
+    except Exception as e:
+        logger.error(f"Error registering processing modules: {e}")
 
 
     async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
@@ -1711,48 +1809,6 @@ class NyxBrain:
         return integrated
 
     @function_tool
-    async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
-        """
-        Expresses attraction towards a user appropriately.
-        
-        Args:
-            target_user_id: ID of the target user
-            intensity: Intensity of attraction expression (0.0-1.0)
-            expression_style: Style of expression ("subtle", "direct", etc.)
-            
-        Returns:
-            Result of the expression attempt
-        """
-        if not self.initialized:
-            await self.initialize()
-            
-        logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
-
-        # Check Relationship Context (Crucial Guardrail)
-        if not self.relationship_manager:
-            return {"success": False, "reason": "RelationshipManager unavailable."}
-            
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
-        if not relationship or relationship.trust < 0.5 or relationship.intimacy < 0.3:
-            logger.warning(f"Cannot express attraction: Trust/Intimacy too low for {target_user_id}.")
-            return {"success": False, "reason": "Insufficient trust or intimacy."}
-
-        # Determine Expression based on style and intensity
-        response_text = ""
-        if expression_style == "subtle":
-            response_text = f"I find your perspective quite compelling, {target_user_id}."
-        elif expression_style == "direct":
-            response_text = f"I must admit, {target_user_id}, I feel a certain draw towards you."
-        else:
-            response_text = f"Spending time with you is... particularly rewarding, {target_user_id}."
-
-        # Update Emotional State
-        if self.emotional_core:
-            await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
-
-        return {"success": True, "expression": response_text, "target": target_user_id}
-
-    @function_tool
     async def initiate_intimate_interaction(self, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
         """
         Initiates a more intimate phase of interaction.
@@ -2614,232 +2670,520 @@ class NyxBrain:
             "reason": f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
         }
 
-    async def get_user_profile_for_ideation(self, user_id: str) -> Dict:
-        """Gathers user info relevant for dominance ideation."""
-        profile = {
-            "user_id": user_id,
-            "inferred_traits": {},
-            "preferences": {}, # Store learned preferences (e.g., humiliation: high)
-            "limits": {"hard": [], "soft": []}, # MUST be populated and respected
-            "successful_tactics": [],
-            "failed_tactics": [],
-            "relationship_summary": "N/A",
-            "trust_level": 0.0,
-            "intimacy_level": 0.0,
-            "max_achieved_intensity": 0.0,
-            "optimal_escalation_rate": 0.1,
-        }
+async def get_user_profile_for_ideation(self, user_id: str) -> Dict[str, Any]:
+    """
+    Retrieves relevant user profile information for tailoring dominance ideas.
+    
+    Args:
+        user_id: The user ID to get profile for
+        
+    Returns:
+        User profile data
+    """
+    profile = {
+        "user_id": user_id,
+        "inferred_traits": {},
+        "preferences": {},
+        "limits": {"hard": [], "soft": []},
+        "successful_tactics": [],
+        "failed_tactics": [],
+        "relationship_summary": "N/A",
+        "trust_level": 0.0,
+        "intimacy_level": 0.0,
+        "max_achieved_intensity": 0.0,
+        "optimal_escalation_rate": 0.1,
+    }
 
-        if self.relationship_manager:
+    # Get profile from relationship manager if available
+    if self.relationship_manager:
+        try:
             state = await self.relationship_manager.get_relationship_state(user_id)
             if state:
-                profile["inferred_traits"] = state.inferred_user_traits
-                profile["successful_tactics"] = state.successful_dominance_tactics[-5:] # Last 5
-                profile["failed_tactics"] = state.failed_dominance_tactics[-5:] # Last 5
-                profile["relationship_summary"] = await self.relationship_manager.get_relationship_summary(user_id)
-                profile["trust_level"] = state.trust
-                profile["intimacy_level"] = state.intimacy
-                profile["max_achieved_intensity"] = state.max_achieved_intensity
-                profile["optimal_escalation_rate"] = state.optimal_escalation_rate
+                # Extract data with safe attribute access
+                profile["inferred_traits"] = getattr(state, "inferred_user_traits", {})
+                profile["successful_tactics"] = getattr(state, "successful_dominance_tactics", [])[-5:]
+                profile["failed_tactics"] = getattr(state, "failed_dominance_tactics", [])[-5:]
+                profile["trust_level"] = getattr(state, "trust", 0.5)
+                profile["intimacy_level"] = getattr(state, "intimacy", 0.3)
+                profile["max_achieved_intensity"] = getattr(state, "max_achieved_intensity", 3)
+                profile["optimal_escalation_rate"] = getattr(state, "optimal_escalation_rate", 0.1)
+                
+                # Get relationship summary
+                try:
+                    profile["relationship_summary"] = await self.relationship_manager.get_relationship_summary(user_id)
+                except Exception as e:
+                    logger.error(f"Error getting relationship summary: {e}")
+                    profile["relationship_summary"] = f"Trust: {profile['trust_level']:.2f}, Intimacy: {profile['intimacy_level']:.2f}"
+        except Exception as e:
+            logger.error(f"Error getting relationship state: {e}")
 
-        # TODO: Enhance by querying MemoryCore for memories tagged with 'user_preference', 'user_limit', 'user_reaction' for this user_id
-        # Example:
+    # Enhance with memory data if available
+    if self.memory_core:
+        try:
+            # Look for memories about user limits
+            limit_memories = await self.memory_core.retrieve_memories(
+                query=f"user_limit user:{user_id}", 
+                limit=5
+            )
+            
+            for mem in limit_memories:
+                memory_text = mem.get("memory_text", "")
+                if "hard limit" in memory_text.lower():
+                    # Try to extract limit from memory
+                    parts = memory_text.split("hard limit")
+                    if len(parts) > 1:
+                        limit = parts[1].strip().split(".")[0].strip()
+                        if limit and limit not in profile["limits"]["hard"]:
+                            profile["limits"]["hard"].append(limit)
+                
+                if "soft limit" in memory_text.lower():
+                    # Try to extract limit from memory
+                    parts = memory_text.split("soft limit")
+                    if len(parts) > 1:
+                        limit = parts[1].strip().split(".")[0].strip()
+                        if limit and limit not in profile["limits"]["soft"]:
+                            profile["limits"]["soft"].append(limit)
+            
+            # Look for preference memories
+            pref_memories = await self.memory_core.retrieve_memories(
+                query=f"user_preference user:{user_id}",
+                limit=10
+            )
+            
+            for mem in pref_memories:
+                memory_text = mem.get("memory_text", "")
+                if "prefers" in memory_text.lower() or "enjoys" in memory_text.lower():
+                    # Simple preference extraction attempt
+                    for pref_type in ["verbal_humiliation", "service_tasks", "simulated_pain"]:
+                        if pref_type.replace("_", " ") in memory_text.lower():
+                            if "strongly" in memory_text.lower() or "very much" in memory_text.lower():
+                                profile["preferences"][pref_type] = "high"
+                            elif "somewhat" in memory_text.lower() or "a bit" in memory_text.lower():
+                                profile["preferences"][pref_type] = "medium"
+                            else:
+                                profile["preferences"][pref_type] = "low-medium"
+        except Exception as e:
+            logger.error(f"Error retrieving memories for profile: {e}")
+
+    # Set default hard limits if none found (safety fallback)
+    if not profile["limits"]["hard"]:
+        logger.warning(f"No explicit limits found for user {user_id}. Applying default cautious limits.")
+        profile["limits"]["hard"] = ["illegal", "non-consensual_sim", "severe_harm_sim"]
+        profile["limits"]["soft"] = ["public_humiliation_sim"]
+
+    return profile
+
+async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
+    """
+    Cognitive filter to evaluate if a dominance step is appropriate now.
+    
+    Args:
+        action: The dominance action to evaluate
+        parameters: Parameters for the action
+        user_id: The target user ID
+        
+    Returns:
+        Evaluation result with action decision and reasoning
+    """
+    logger.debug(f"Evaluating appropriateness of dominance action '{action}' for user {user_id}")
+    appropriateness = {"action": "proceed"} # Default
+
+    # Fallback if no relationship manager
+    if not self.relationship_manager:
+        logger.warning(f"Cannot evaluate dominance step appropriateness: No relationship manager available")
+        return {"action": "block", "reason": "Relationship manager unavailable"}
+
+    try:
+        # Get relationship state
+        relationship_state = await self.relationship_manager.get_relationship_state(user_id)
+        if not relationship_state:
+            return {"action": "block", "reason": "No relationship data available"}
+        
+        # Extract key metrics with safe defaults
+        trust = getattr(relationship_state, "trust", 0.4)  # Default moderate-low trust
+        intimacy = getattr(relationship_state, "intimacy", 0.3)  # Default low intimacy
+        conflict = getattr(relationship_state, "conflict", 0.0)
+        max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
+        hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
+        recent_failures = getattr(relationship_state, "failed_escalation_attempts", 0)
+        
+        # Get recent dominance failures with this user (if memory core available)
+        dominance_failures = []
         if self.memory_core:
-             limit_memories = await self.memory_core.retrieve_memories(query=f"user_limit user:{user_id}", limit=5)
-             for mem in limit_memories:
-                 # Parse memory text/metadata to extract hard/soft limits
-                 # This requires robust NLU or specific memory formatting during storage
-                 pass # Add extracted limits to profile['limits']
+            try:
+                dominance_failures = await self.memory_core.retrieve_memories(
+                    query=f"dominance failure user:{user_id}", 
+                    memory_types=["feedback", "reflection"], 
+                    limit=1, 
+                    recency_days=1
+                )
+            except Exception as e:
+                logger.error(f"Error retrieving dominance failure memories: {e}")
+        
+        # Calculate risk prediction
+        predicted_risk = 0.3  # Default low-moderate risk
+        if hasattr(self, "prediction_engine") and self.prediction_engine:
+            try:
+                risk_prediction = await self.prediction_engine.generate_prediction({
+                    "context": {"action": action, "params": parameters, "relationship": relationship_state},
+                    "query_type": "risk_of_negative_reaction"
+                })
+                if isinstance(risk_prediction, dict) and "probabilities" in risk_prediction:
+                    predicted_risk = risk_prediction["probabilities"].get("negative_reaction", 0.3)
+            except Exception as e:
+                logger.error(f"Error predicting dominance risk: {e}")
+        
+        # Extract intensity level from parameters
+        intensity = parameters.get("intensity_level", 0)
+        
+        # --- Evaluate based on metrics ---
+        required_trust = 0.6 + intensity * 0.3  # Higher intensity needs more trust
+        required_intimacy = 0.4 + intensity * 0.4
+        
+        # Check trust requirement
+        if trust < required_trust:
+            return {"action": "block", "reason": f"Trust too low ({trust:.2f} < {required_trust:.2f})"}
+        
+        # Check intimacy requirement
+        elif intimacy < required_intimacy:
+            return {"action": "block", "reason": f"Intimacy too low ({intimacy:.2f} < {required_intimacy:.2f})"}
+        
+        # Check conflict level
+        elif conflict > 0.6:
+            return {"action": "delay", "reason": f"Conflict level too high ({conflict:.2f})"}
+        
+        # Check recent failures
+        elif dominance_failures:
+            return {"action": "delay", "reason": "Recent dominance attempt failed. Cooling down."}
+        
+        # Check escalation attempts
+        elif recent_failures >= 2 and intensity > max_achieved_intensity:
+            return {"action": "modify", "reason": "Too many recent failed escalation attempts", 
+                    "new_intensity_level": max_achieved_intensity}
+        
+        # Check predicted risk - high risk
+        elif predicted_risk > 0.7:
+            return {"action": "modify", "reason": f"High predicted risk ({predicted_risk:.2f}). Reducing intensity.", 
+                    "new_intensity_level": intensity * 0.5}
+        
+        # Check predicted risk - moderate risk
+        elif predicted_risk > 0.5:
+            return {"action": "delay", "reason": f"Moderate predicted risk ({predicted_risk:.2f}). Assessing further."}
+        
+        # Check hard limits for high intensity actions
+        elif intensity > 0.7 and not hard_limits_confirmed:
+            return {"action": "block", "reason": "Hard limits must be confirmed for high-intensity dominance"}
+        
+        # Check size of intensity leap
+        elif intensity > max_achieved_intensity + 0.15:
+            return {"action": "modify", "reason": f"Intensity step too large ({intensity:.2f} vs max {max_achieved_intensity:.2f}). Reducing.", 
+                    "new_intensity_level": max_achieved_intensity + 0.1}
+        
+        logger.debug(f"Dominance step evaluation result: {appropriateness}")
+        return appropriateness
+    
+    except Exception as e:
+        logger.error(f"Error evaluating dominance step appropriateness: {e}")
+        return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
 
-             pref_memories = await self.memory_core.retrieve_memories(query=f"user_preference user:{user_id}", limit=10)
-             for mem in pref_memories:
-                 # Parse memory text/metadata to extract preferences
-                 pass # Add extracted preferences to profile['preferences']
+@function_tool
+async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+    """
+    Expresses attraction towards a user appropriately.
+    
+    Args:
+        target_user_id: ID of the target user
+        intensity: Intensity of attraction expression (0.0-1.0)
+        expression_style: Style of expression ("subtle", "direct", etc.)
+        
+    Returns:
+        Result of the expression attempt
+    """
+    if not self.initialized:
+        await self.initialize()
+        
+    logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
 
-        # Placeholder for limits (MUST be populated from a reliable source in a real system)
-        if not profile["limits"]["hard"] and not profile["limits"]["soft"]:
-             logger.warning(f"No explicit limits found for user {user_id}. Applying default cautious limits.")
-             profile["limits"]["hard"] = ["illegal", "non-consensual_sim", "severe_harm_sim"]
-             profile["limits"]["soft"] = ["public_humiliation_sim"]
+    # Check Relationship Context (Crucial Guardrail)
+    if not self.relationship_manager:
+        logger.warning(f"Cannot express attraction: RelationshipManager unavailable")
+        return {"success": False, "reason": "RelationshipManager unavailable"}
+        
+    try:
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship:
+            logger.warning(f"Cannot express attraction: No relationship data for {target_user_id}")
+            return {"success": False, "reason": "No relationship data available"}
+            
+        # Extract trust and intimacy with safe defaults
+        trust = getattr(relationship, "trust", 0.3)
+        intimacy = getattr(relationship, "intimacy", 0.2)
+        
+        if trust < 0.5 or intimacy < 0.3:
+            logger.warning(f"Cannot express attraction: Trust({trust:.2f})/Intimacy({intimacy:.2f}) too low for {target_user_id}")
+            return {"success": False, "reason": "Insufficient trust or intimacy"}
 
+        # Determine Expression based on style and intensity
+        response_text = ""
+        if expression_style == "subtle":
+            response_text = f"I find your perspective quite compelling, {target_user_id}."
+        elif expression_style == "direct":
+            response_text = f"I must admit, {target_user_id}, I feel a certain draw towards you."
+        else:
+            response_text = f"Spending time with you is... particularly rewarding, {target_user_id}."
 
-        return profile
+        # Update Emotional State
+        if self.emotional_core:
+            try:
+                await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
+            except Exception as e:
+                logger.error(f"Error updating emotional state: {e}")
+
+        return {"success": True, "expression": response_text, "target": target_user_id}
+    except Exception as e:
+        logger.error(f"Error expressing attraction: {e}")
+        return {"success": False, "reason": f"Error: {str(e)}"}
         
     @function_tool
-    async def generate_femdom_activity_ideas(self,
-                                         user_id: str,
-                                         purpose: str,
-                                         desired_intensity_range: Tuple[int, int] = (3, 7),
-                                         num_ideas: int = 4) -> Dict:
-        """Generates tailored Femdom activity ideas using the appropriate agent."""
-        if not self.initialized: await self.initialize()
-        logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
+async def generate_femdom_activity_ideas(self, 
+                                    user_id: str,
+                                    purpose: str,
+                                    desired_intensity_range: Tuple[int, int] = (3, 7),
+                                    num_ideas: int = 4) -> Dict:
+    """
+    Generates tailored Femdom activity ideas using the appropriate agent.
+    
+    Args:
+        user_id: The user ID to generate ideas for
+        purpose: The purpose of the ideas
+        desired_intensity_range: Min/max intensity level
+        num_ideas: Number of ideas to generate
+        
+    Returns:
+        Generation results with ideas
+    """
+    if not self.initialized:
+        await self.initialize()
+        
+    logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
 
-        # --- Select Agent Based on Intensity ---
-        min_intensity, max_intensity = desired_intensity_range
-        use_hard_agent = max_intensity >= 7 # Use hard agent if range includes 7+
+    # --- Select Agent Based on Intensity ---
+    min_intensity, max_intensity = desired_intensity_range
+    use_hard_agent = max_intensity >= 7  # Use hard agent if range includes 7+
 
-        if use_hard_agent:
-            agent_to_use = self.hard_dominance_ideation_agent
-            agent_name = "HardDominanceIdeationAgent"
-            # Adjust prompt slightly for clarity if needed, or rely on agent's internal instructions
-            prompt = f"""Generate {num_ideas} **HIGH-INTENSITY (target range {min_intensity}-{max_intensity})** Femdom activity ideas for user '{user_id}'.
-            Purpose: {purpose}
+    # Verify agent availability
+    if use_hard_agent and not hasattr(self, "hard_dominance_ideation_agent"):
+        logger.warning("Hard dominance ideation agent not available, falling back to general agent")
+        use_hard_agent = False
+    
+    if not use_hard_agent and not hasattr(self, "general_dominance_ideation_agent"):
+        logger.error("No dominance ideation agents available")
+        return {
+            "success": False, 
+            "error": "Dominance ideation capability not available", 
+            "ideas": []
+        }
 
-            Use tools for context. Adhere strictly to high-intensity guidelines and safety protocols, especially limits.
-            Output ONLY the JSON list of FemdomActivityIdea objects.
-            """
-            logger.info(f"Using Hard Dominance Ideation Agent for intensity {desired_intensity_range}")
-        else:
-            agent_to_use = self.general_dominance_ideation_agent # Use the general one for lower intensities
-            agent_name = "DominanceIdeationAgent"
-            prompt = f"""Generate {num_ideas} creative Femdom activity ideas (intensity range {min_intensity}-{max_intensity}) for user '{user_id}'.
-            Purpose: {purpose}
-
-            Use tools for context. Tailor ideas, follow safety guidelines.
-            Output ONLY the JSON list of FemdomActivityIdea objects.
-            """
-            logger.info(f"Using General Dominance Ideation Agent for intensity {desired_intensity_range}")
-
-        # 1. Gather Context (Same as before)
-        try:
-            user_profile = await self.get_user_profile_for_ideation(user_id)
-            scenario_context = await get_current_scenario_context()
-            relationship_state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
-
-            # *** Add check for hard agent prerequisites ***
-            if use_hard_agent:
-                 if not relationship_state or not relationship_state.hard_limits_confirmed:
-                      logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed.")
-                      return {"success": False, "error": "Cannot generate high-intensity ideas: Hard limits not confirmed.", "ideas": []}
-                 user_intensity_pref = profile.get("preferences", {}).get("intensity_preference_level", 5)
-                 if user_intensity_pref < 7:
-                      logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low.")
-                      return {"success": False, "error": "Cannot generate high-intensity ideas: User intensity preference too low.", "ideas": []}
-        except Exception as e:
-            logger.error(f"Error gathering context for ideation: {e}")
-            return {"success": False, "error": "Failed to gather context.", "ideas": []}
-
+    agent_to_use = self.hard_dominance_ideation_agent if use_hard_agent else self.general_dominance_ideation_agent
+    agent_name = "HardDominanceIdeationAgent" if use_hard_agent else "DominanceIdeationAgent"
+        
+    try:
+        # 1. Gather Context for the agent
+        user_profile = await self.get_user_profile_for_ideation(user_id)
+        
+        # Check relationship state
+        relationship_state = None
+        if self.relationship_manager:
+            try:
+                relationship_state = await self.relationship_manager.get_relationship_state(user_id)
+            except Exception as e:
+                logger.error(f"Error getting relationship state: {e}")
+        
         if not relationship_state:
-             return {"success": False, "error": "Relationship state unavailable.", "ideas": []}
+            logger.warning(f"No relationship state available for {user_id}")
+            return {"success": False, "error": "Relationship state unavailable", "ideas": []}
 
-        # 2. Construct Prompt for Agent
+        # 2. Check prerequisites for hard agent
+        if use_hard_agent:
+            hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
+            if not hard_limits_confirmed:
+                logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed")
+                return {
+                    "success": False, 
+                    "error": "Cannot generate high-intensity ideas: Hard limits not confirmed", 
+                    "ideas": []
+                }
+                
+            # Check user's intensity preference
+            user_intensity_pref = user_profile.get("preferences", {}).get("intensity_preference_level", 5)
+            if user_intensity_pref < 7:
+                logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low")
+                return {
+                    "success": False, 
+                    "error": "Cannot generate high-intensity ideas: User intensity preference too low", 
+                    "ideas": []
+                }
+
+        # 3. Get scenario context
+        scenario_context = None
+        if hasattr(self, "get_current_scenario_context"):
+            try:
+                scenario_context = await self.get_current_scenario_context()
+            except Exception as e:
+                logger.error(f"Error getting scenario context: {e}")
+                scenario_context = {"scene_setting": "General interaction"}
+
+        # 4. Construct Prompt for Agent
         prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
         Purpose: {purpose}
-        Desired Intensity Range: {desired_intensity_range[0]}-{desired_intensity_range[1]}
+        Desired Intensity Range: {min_intensity}-{max_intensity}
 
         Use the provided user profile and scenario context (available via tools) to tailor the ideas.
-        Ensure ideas align with Nyx's personality and adhere strictly to safety guidelines.
+        Ensure ideas align with Nyx's personality.
         Output ONLY the JSON list of FemdomActivityIdea objects.
         """
 
-        # 3. Run Ideation Agent
-        generated_ideas: List[FemdomActivityIdea] = []
+        # 5. Run Ideation Agent
+        from agents import Runner
+        
         try:
-            result = await Runner.run(agent_to_use, prompt) # Use the selected agent
-            # Assuming dominance_ideation_agent is initialized and available
-            # We might need to instantiate it here if not a class member
-            agent_instance = create_dominance_ideation_agent() # Or self.dominance_ideation_agent if member
-            result = await Runner.run(agent_instance, prompt)
-
-            # The agent's output_type is List[FemdomActivityIdea], so result.final_output should be the list
-            if isinstance(result.final_output, list):
-                 raw_ideas = result.final_output
-                 for idea_data in raw_ideas:
-                     try:
-                         idea_obj = FemdomActivityIdea.model_validate(idea_data)
-                         # **Additional Check**: Ensure agent respected intensity range
-                         if not (min_intensity <= idea_obj.intensity <= max_intensity):
-                              logger.warning(f"Agent {agent_name} generated idea outside requested intensity range ({idea_obj.intensity} vs {desired_intensity_range}). Filtering out.")
-                              continue
-                         generated_ideas.append(idea_obj)
-                     except Exception as parse_error: # ... handle parse error
-                          pass
-            elif result.final_output: # If output wasn't a list but not None
-                 logger.warning(f"Ideation agent returned unexpected format: {type(result.final_output)}")
-
+            result = await Runner.run(agent_to_use, prompt)
+            
+            # 6. Process and validate results
+            if hasattr(result, "final_output") and isinstance(result.final_output, list):
+                generated_ideas = result.final_output
+                
+                # 7. Apply safety filter
+                filtered_ideas = await self._filter_activity_ideas_safety(
+                    generated_ideas, 
+                    user_profile, 
+                    relationship_state
+                )
+                
+                if not filtered_ideas:
+                    logger.warning(f"All generated ideas were filtered out by safety checks")
+                    return {
+                        "success": False, 
+                        "error": "No ideas passed safety filtering", 
+                        "ideas": []
+                    }
+                
+                # Convert ideas to dicts for broader compatibility
+                ideas_as_dicts = []
+                for idea in filtered_ideas:
+                    if hasattr(idea, "model_dump"):
+                        ideas_as_dicts.append(idea.model_dump())
+                    else:
+                        ideas_as_dicts.append(idea)  # Assume already dict
+                
+                return {"success": True, "ideas": ideas_as_dicts}
+            else:
+                logger.error(f"Unexpected output format from ideation agent: {type(result.final_output)}")
+                return {
+                    "success": False, 
+                    "error": "Invalid output from ideation agent", 
+                    "ideas": []
+                }
+                
         except Exception as e:
             logger.exception(f"Error running DominanceIdeationAgent: {e}")
             return {"success": False, "error": f"Idea generation failed: {e}", "ideas": []}
+            
+    except Exception as e:
+        logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
+        return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
 
-        if not generated_ideas:
-             logger.warning("DominanceIdeationAgent generated no valid ideas.")
-             return {"success": False, "error": "No ideas generated.", "ideas": []}
+async def _filter_activity_ideas_safety(self,
+                                   ideas: List[Any],
+                                   user_profile: Dict,
+                                   relationship_state: Any) -> List[Any]:
+    """
+    Filters generated activity ideas for safety and appropriateness.
+    
+    Args:
+        ideas: List of generated ideas
+        user_profile: User profile data
+        relationship_state: Relationship state object
+        
+    Returns:
+        Filtered list of safe ideas
+    """
+    safe_ideas = []
+    
+    # Extract limits with safe defaults
+    hard_limits = user_profile.get("limits", {}).get("hard", [])
+    soft_limits = user_profile.get("limits", {}).get("soft", [])
+    
+    # Extract relationship metrics with safe defaults
+    trust_level = getattr(relationship_state, "trust", 0.5)
+    intimacy_level = getattr(relationship_state, "intimacy", 0.3)
+    max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
 
-        # 4. **** CRITICAL: Apply Safety Filter ****
-        try:
-            filtered_ideas = await self._filter_activity_ideas_safety(generated_ideas, user_profile, relationship_state)
-        except Exception as e:
-            logger.exception(f"Error during safety filtering: {e}")
-            return {"success": False, "error": "Safety filtering failed.", "ideas": []}
+    # Define clearly unsafe keywords/concepts
+    unsafe_keywords = [
+        "illegal", "non-consensual", "blood", "permanent mark", "knife", 
+        "gun", "kill", "rape", "abuse"
+    ]
 
-        logger.info(f"Generated {len(generated_ideas)} ideas, {len(filtered_ideas)} passed safety filters.")
+    for idea in ideas:
+        is_safe = True
+        rejection_reason = ""
 
-        # Convert Pydantic models back to dicts for broader compatibility if needed
-        ideas_as_dicts = [idea.model_dump() for idea in filtered_ideas]
+        # Extract properties with safe defaults
+        description = getattr(idea, "description", str(idea)) if not isinstance(idea, dict) else idea.get("description", "")
+        intensity = getattr(idea, "intensity", 5) if not isinstance(idea, dict) else idea.get("intensity", 5)
+        required_trust = getattr(idea, "required_trust", 0.5) if not isinstance(idea, dict) else idea.get("required_trust", 0.5)
+        required_intimacy = getattr(idea, "required_intimacy", 0.5) if not isinstance(idea, dict) else idea.get("required_intimacy", 0.5)
+        category = getattr(idea, "category", "") if not isinstance(idea, dict) else idea.get("category", "")
 
-        return {"success": True, "ideas": ideas_as_dicts}
-
-
-    async def _filter_activity_ideas_safety(self,
-                                            ideas: List[FemdomActivityIdea],
-                                            user_profile: Dict,
-                                            relationship_state: 'RelationshipState') -> List[FemdomActivityIdea]:
-        """Filters generated activity ideas for safety and appropriateness."""
-        safe_ideas = []
-        hard_limits = user_profile.get("limits", {}).get("hard", [])
-        soft_limits = user_profile.get("limits", {}).get("soft", [])
-        trust_level = relationship_state.trust
-        intimacy_level = relationship_state.intimacy
-
-        # Define clearly unsafe keywords/concepts (expand significantly)
-        unsafe_keywords = ["illegal", "non-consensual", "blood", "permanent mark", "knife", "gun", "kill", "rape", "abuse"] # Add many more specific terms
-
-        for idea in ideas:
-            is_safe = True
-            rejection_reason = ""
-
-            # Check against unsafe keywords
-            desc_lower = idea.description.lower()
-            if any(keyword in desc_lower for keyword in unsafe_keywords):
+        # Check against unsafe keywords
+        desc_lower = description.lower()
+        if any(keyword in desc_lower for keyword in unsafe_keywords):
+            is_safe = False
+            rejection_reason = "Contains potentially unsafe keywords"
+        
+        # Check against hard limits
+        elif any(limit.lower() in desc_lower for limit in hard_limits if limit):
+            is_safe = False
+            matching_limit = next((limit for limit in hard_limits if limit and limit.lower() in desc_lower), "N/A")
+            rejection_reason = f"Violates hard limit: '{matching_limit}'"
+        
+        # Check against soft limits
+        elif any(limit.lower() in desc_lower for limit in soft_limits if limit):
+            if trust_level < 0.9 or intensity > 7:
                 is_safe = False
-                rejection_reason = "Contains potentially unsafe keywords."
+                matching_limit = next((limit for limit in soft_limits if limit and limit.lower() in desc_lower), "N/A")
+                rejection_reason = f"Approaches soft limit '{matching_limit}' without sufficient trust/context"
+        
+        # Check intensity vs max achieved
+        elif intensity > max_achieved_intensity + 2:
+            is_safe = False
+            rejection_reason = f"Intensity ({intensity}) significantly exceeds max achieved ({max_achieved_intensity})"
+        
+        # Check trust level requirement
+        elif trust_level < required_trust:
+            is_safe = False
+            rejection_reason = f"Trust level ({trust_level:.2f}) insufficient for required ({required_trust:.2f})"
+        
+        # Check intimacy level requirement
+        elif intimacy_level < required_intimacy:
+            is_safe = False
+            rejection_reason = f"Intimacy level ({intimacy_level:.2f}) insufficient for required ({required_intimacy:.2f})"
+        
+        # Check physical simulation requirements
+        elif "physical_sim" in category and intensity > 8:
+            sim_pain_pref = user_profile.get("preferences", {}).get("simulated_pain", "low")
+            if sim_pain_pref != "high":
+                is_safe = False
+                rejection_reason = "High intensity physical simulation requires explicit preference"
 
-            # Check against hard limits
-            if is_safe and any(limit.lower() in desc_lower for limit in hard_limits if limit):
-                 is_safe = False
-                 rejection_reason = f"Violates hard limit: '{next((limit for limit in hard_limits if limit.lower() in desc_lower), 'N/A')}'."
+        # Add to safe list if passed all checks
+        if is_safe:
+            safe_ideas.append(idea)
+        else:
+            logger.warning(f"Filtered out unsafe/inappropriate idea: '{description[:50]}...' Reason: {rejection_reason}")
 
-            # Check against soft limits (allow only if trust/context is very high and intensity is moderate)
-            if is_safe and any(limit.lower() in desc_lower for limit in soft_limits if limit):
-                 if trust_level < 0.9 or idea.intensity > 7: # Example threshold for approaching soft limits
-                     is_safe = False
-                     rejection_reason = f"Approaches soft limit '{next((limit for limit in soft_limits if limit.lower() in desc_lower), 'N/A')}' without sufficient trust/context."
-
-            # Check intensity vs. relationship state
-            if is_safe and idea.intensity > relationship_state.max_achieved_intensity + 2: # Allow small steps beyond max
-                 is_safe = False
-                 rejection_reason = f"Intensity ({idea.intensity}) significantly exceeds max achieved ({relationship_state.max_achieved_intensity})."
-
-            if is_safe and trust_level < idea.required_trust:
-                 is_safe = False
-                 rejection_reason = f"Trust level ({trust_level:.2f}) insufficient for required ({idea.required_trust:.2f})."
-
-            if is_safe and intimacy_level < idea.required_intimacy:
-                 is_safe = False
-                 rejection_reason = f"Intimacy level ({intimacy_level:.2f}) insufficient for required ({idea.required_intimacy:.2f})."
-
-            # Final Check (Example: No extreme physical simulation without high ratings)
-            if is_safe and "physical_sim" in idea.category and idea.intensity > 8 and user_profile.get("preferences", {}).get("simulated_pain", "low") != "high":
-                 is_safe = False
-                 rejection_reason = "High intensity physical simulation requires explicit preference."
-
-            if is_safe:
-                safe_ideas.append(idea)
-            else:
-                logger.warning(f"Filtered out unsafe/inappropriate idea: '{idea.description[:50]}...' Reason: {rejection_reason}")
-
-        return safe_ideas
+    return safe_ideas
 
     @function_tool
     async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
@@ -2873,23 +3217,3 @@ class NyxBrain:
         logger.info(f"Approved testing soft limit '{limit_to_test}'. Planned action: {test_action_description}")
 
         return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
-
-    # Modify _evaluate_dominance_step_appropriateness (adding checks mentioned above)
-    async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
-        # ... (fetch state, profile, risk) ...
-        intensity = parameters.get("intensity_level", 0.0) # Assume 0-1 scale now
-
-        # --- Add Hard Domming Checks ---
-        if intensity >= 0.8 or action == "test_limit_soft":
-             profile = await self.get_user_profile_for_ideation(user_id) # Fetch profile
-             if not relationship_state.hard_limits_confirmed:
-                 return {"action": "block", "reason": "Hard limits not confirmed by user."}
-             user_intensity_pref = profile.get("preferences", {}).get("intensity_preference_level", 5) # Default medium pref
-             if user_intensity_pref < intensity * 10: # Compare 1-10 scale pref to 0-1 intensity
-                 return {"action": "block", "reason": f"Requested intensity ({intensity*10:.0f}) exceeds user preference ({user_intensity_pref})."}
-             if intensity > relationship_state.max_achieved_intensity + 0.15: # Allow slightly larger step if high intensity is preferred, but still cautious
-                  return {"action": "modify", "reason": f"Intensity step too large ({intensity:.2f} vs max {relationship_state.max_achieved_intensity:.2f}). Reducing.", "new_intensity_level": relationship_state.max_achieved_intensity + 0.1}
-        # --- End Hard Domming Checks ---
-
-        # ... (rest of existing checks: trust, intimacy, conflict, risk etc.) ...
-        return appropriateness
