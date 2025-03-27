@@ -2543,3 +2543,51 @@ class NyxBrain:
             instance.instance_registry = cls._user_instances
         
         return cls._instances[key]
+        
+    @function_tool
+    async def evaluate_dominance_target_potential(self, user_id: str) -> Dict:
+        """Evaluates a user as a potential target for dominance based on Nyx's preferences."""
+        if not self.identity_evolution or not self.relationship_manager:
+             return {"interest_score": 0.1, "reason": "Required systems unavailable."}
+    
+        user_state = await self.relationship_manager.get_relationship_state(user_id)
+        nyx_prefs = await self.identity_evolution.get_preference("dominance_target_profile")
+    
+        if not user_state or not nyx_prefs:
+            return {"interest_score": 0.1, "reason": "State/Preference data missing."}
+    
+        user_traits = user_state.inferred_user_traits # Assumes this is populated
+    
+        # Calculate match score (simplified dot product style)
+        interest_score = 0.0
+        match_count = 0
+        for trait, pref_value in nyx_prefs.items():
+             user_value = user_traits.get(trait, 0.0) # Get user's inferred trait score
+             # Simple match: product of preference and trait value
+             interest_score += pref_value * user_value
+             match_count += 1
+    
+        # Normalize score (roughly)
+        if match_count > 0:
+            # Normalize based on max possible score (sum of prefs) and scale
+            max_possible = sum(abs(v) for v in nyx_prefs.values())
+            normalized_score = (interest_score / max_possible if max_possible > 0 else 0) * 0.8 + 0.1 # Scale 0.1-0.9
+    
+            # Boost based on high trust/intimacy (easier target)
+            trust_boost = (user_state.trust - 0.5) * 0.1
+            intimacy_boost = (user_state.intimacy - 0.5) * 0.1
+            normalized_score += trust_boost + intimacy_boost
+    
+            # Apply a penalty for high conflict
+            conflict_penalty = user_state.conflict * 0.2
+            normalized_score -= conflict_penalty
+    
+            interest_score = max(0.0, min(1.0, normalized_score))
+        else:
+             interest_score = 0.1 # Default low interest
+    
+        return {
+            "user_id": user_id,
+            "interest_score": interest_score,
+            "reason": f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
+        }
