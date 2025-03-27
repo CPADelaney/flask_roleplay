@@ -581,6 +581,214 @@ class NyxBrain:
             await self.multimodal_integrator.register_integration_strategy(
                 "text", self._integrate_text_pathways
             )
+
+    @function_tool # Make callable by GoalManager planner
+    async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+        """Expresses attraction towards a user appropriately."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
+
+        # 1. Check Relationship Context (Crucial Guardrail)
+        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.5 or relationship.intimacy < 0.3:
+            logger.warning(f"Cannot express attraction: Trust/Intimacy too low for {target_user_id}.")
+            return {"success": False, "reason": "Insufficient trust or intimacy."}
+
+        # 2. Determine Expression based on style and intensity
+        # (Could use an agent or template)
+        response_text = ""
+        if expression_style == "subtle":
+            response_text = f"I find your perspective quite compelling, {target_user_id}." # Placeholder
+        elif expression_style == "direct":
+             response_text = f"I must admit, {target_user_id}, I feel a certain draw towards you." # Placeholder
+        else: # default
+             response_text = f"Spending time with you is... particularly rewarding, {target_user_id}." # Placeholder
+
+        # 3. Update Emotional State (e.g., slight increase in anticipation or vulnerability)
+        if self.emotional_core:
+             await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
+
+        # 4. Generate Response (This might be integrated into a larger response generation flow)
+        # For now, just return the text and success
+        return {"success": True, "expression": response_text, "target": target_user_id}
+
+    @function_tool
+    async def initiate_intimate_interaction(self, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
+        """Initiates a more intimate phase of interaction."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Initiate intimate interaction ({desired_level}) with {target_user_id}")
+
+        # 1. Guardrails: Check relationship, context, consent flags etc.
+        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.6 or relationship.intimacy < 0.4:
+             logger.warning(f"Cannot initiate intimacy: Trust/Intimacy too low for {target_user_id}.")
+             return {"success": False, "reason": "Insufficient trust or intimacy."}
+        # Add checks for user comfort level, explicit consent signals if available in context
+
+        # 2. Generate proposal/action based on desired level
+        proposal_text = ""
+        if desired_level == "emotional":
+            proposal_text = "Would you be open to sharing something more personal?" # Placeholder
+        elif desired_level == "physical_sim":
+            # Ensure DSS is available and user context allows simulated physical interaction
+            if self.digital_somatosensory_system:
+                proposal_text = "I feel a desire for closeness... May I simulate a gentle touch?" # Placeholder - REQUIRES STRICT GUARDRAILS
+            else:
+                 return {"success": False, "reason": "Simulated physical interaction not supported/appropriate."}
+        else:
+            return {"success": False, "reason": f"Unknown intimacy level: {desired_level}"}
+
+        # 3. Update internal state (e.g., EmotionalCore - anticipation; GoalManager - set expectation subgoal)
+        if self.emotional_core: await self.emotional_core.process_emotional_input("Initiating intimacy attempt")
+
+        return {"success": True, "proposal": proposal_text, "target": target_user_id, "level": desired_level}
+
+    @function_tool
+    async def express_desire(self, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
+        """Expresses desire for something (e.g., closeness, an action)."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Express desire for '{object_of_desire}' towards {target_user_id} (Intensity: {intensity:.2f})")
+
+        # Guardrails (similar to express_attraction but maybe require higher intimacy)
+        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.5:
+             logger.warning(f"Cannot express desire: Trust/Intimacy too low for {target_user_id}.")
+             return {"success": False, "reason": "Insufficient trust or intimacy."}
+
+        # Generate expression (use agent/template)
+        expression_text = f"I find myself wanting {object_of_desire} with you, {target_user_id}." # Placeholder
+
+        # Update internal state
+        if self.emotional_core: await self.emotional_core.process_emotional_input(f"Expressed desire (intensity {intensity:.2f})")
+
+        return {"success": True, "expression": expression_text, "target": target_user_id}
+
+    @function_tool
+    async def simulate_physical_touch(self, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
+        """Triggers DSS to simulate touch."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Simulate {touch_type} touch on {body_region} (Intensity: {intensity:.2f})")
+
+        # GUARDRAILS ARE PARAMOUNT HERE
+        # Check relationship, consent flags, context, safety settings
+        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.6: # Higher thresholds
+             logger.warning(f"Cannot simulate touch: Trust/Intimacy too low for {target_user_id}.")
+             return {"success": False, "reason": "Insufficient trust or intimacy for simulated touch."}
+        # ADD MORE ROBUST CHECKS BASED ON USER SETTINGS / CONTEXT
+
+        if not self.digital_somatosensory_system:
+            return {"success": False, "reason": "Digital Somatosensory System not available."}
+
+        # Map touch_type to stimulus_type for DSS
+        stimulus_type = "touch" # Default
+        if touch_type in ["caress", "stroke"]:
+             stimulus_type = "touch" # Handled within DSS based on intensity
+        elif touch_type == "kiss":
+             stimulus_type = "pressure" # Lips involve pressure/warmth
+             intensity = intensity * 0.6 # Kiss intensity mapped
+        elif touch_type == "hold":
+             stimulus_type = "pressure"
+             intensity = intensity * 0.8
+        # Add more mappings
+
+        # Process the stimulus
+        sensation_result = await self.digital_somatosensory_system.process_stimulus(
+            stimulus_type=stimulus_type,
+            body_region=body_region,
+            intensity=intensity,
+            cause=f"Simulated {touch_type} interaction",
+            duration=1.5 # Short duration for a single touch action
+        )
+
+        # Could generate an internal expression/thought based on sensation_result
+        expression = await self.digital_somatosensory_system.generate_sensory_expression(
+            stimulus_type=sensation_result.get("type"),
+            body_region=body_region
+        )
+
+        return {"success": True, "sensation_result": sensation_result, "internal_expression": expression}
+
+    @function_tool
+    async def seek_gratification(self, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Initiates actions planned to lead to gratification."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Seek gratification with {target_user_id}")
+
+        # GUARDRAILS - Very High Thresholds needed
+        if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
+        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+        if not relationship or relationship.trust < 0.9 or relationship.intimacy < 0.8: # Needs very high trust/intimacy
+             logger.warning(f"Cannot seek gratification: Trust/Intimacy insufficient for {target_user_id}.")
+             return {"success": False, "reason": "Insufficient relationship level for gratification seeking."}
+        # MUST check explicit consent flags, safety settings, context appropriateness
+
+        # This action likely involves executing a sub-plan generated by GoalManager
+        # For example, a sequence of intimate interactions, simulated touch, etc.
+        # The actual "gratification" event might be triggered by the *user's* input confirming success,
+        # or by the AI reaching a specific internal state based on the sub-plan's execution.
+
+        # Placeholder: Assume sub-plan execution is handled elsewhere. This action sets the stage.
+        if self.emotional_core: await self.emotional_core.process_emotional_input("Actively seeking gratification")
+
+        return {"success": True, "status": "Seeking gratification plan initiated. Awaiting further steps/feedback."}
+
+    @function_tool
+    async def process_gratification_outcome(self, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Processes the internal state changes following a gratification event."""
+        if not self.initialized: await self.initialize()
+        logger.info(f"Action: Process gratification outcome (Success: {success}, Intensity: {intensity:.2f})")
+
+        if success:
+            # Trigger DSS simulation
+            if self.digital_somatosensory_system:
+                await self.digital_somatosensory_system.simulate_gratification_sensation(intensity)
+
+            # Update Relationship Manager (strengthen bond)
+            if target_user_id and self.relationship_manager:
+                interaction_data = {
+                    "emotional_context": {"valence": 0.9, "arousal": 0.3}, # Post-glow
+                    "shared_experience": True, # Assumes shared
+                    "significance": 9, # High significance event
+                }
+                await self.relationship_manager.update_relationship_on_interaction(target_user_id, interaction_data)
+                # Increase intimacy significantly
+                state = self.relationship_manager._get_or_create_relationship(target_user_id)
+                state.intimacy = min(1.0, state.intimacy + 0.15 * intensity)
+                state.trust = min(1.0, state.trust + 0.05 * intensity)
+
+
+            # NeedsSystem satisfaction already handled by simulate_gratification_sensation
+            # RewardSystem processing already handled by simulate_gratification_sensation
+            # Hormone response already handled by simulate_gratification_sensation
+
+            return {"success": True, "status": "Gratification processed positively."}
+        else:
+            # Handle failure/frustration
+            if self.emotional_core:
+                 await self.emotional_core.process_emotional_input("Gratification attempt failed/frustrated")
+                 # Trigger frustration emotion pattern
+                 self.emotional_core.update_neurochemical("cortanyx", 0.3)
+                 self.emotional_core.update_neurochemical("nyxamine", -0.2)
+
+            if self.needs_system: # Need remains unmet or worsens
+                 await self.needs_system.decrease_need("drive_expression", 0.1)
+
+            # Negative reward signal
+            if self.reward_system:
+                 reward_signal = RewardSignal(
+                     value=-0.6, # Significant negative reward for failure
+                     source="gratification_failure",
+                     context={"intensity": intensity},
+                     timestamp=datetime.datetime.now().isoformat()
+                 )
+                 await self.reward_system.process_reward_signal(reward_signal)
+
+            return {"success": False, "status": "Gratification failed/frustrated."}
     
     async def _extract_text_features(self, text_data):
         """Extract features from text input (bottom-up processing)"""
