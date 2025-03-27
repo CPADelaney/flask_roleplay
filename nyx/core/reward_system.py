@@ -202,64 +202,71 @@ class RewardSignalProcessor:
                     effects["emotional"] = True
             except Exception as e:
                 self.logger.error(f"Error applying reward to emotional core: {e}")
-        
-        # 2. Effect on identity (only for significant rewards)
+
+        # 2. Effect on identity (only for significant rewards)        
         if self.identity_evolution and abs(reward.value) >= self.identity_update_threshold:
             try:
-                # Extract context information
                 scenario_type = reward.context.get("scenario_type", "general")
                 interaction_type = reward.context.get("interaction_type", "general")
-                
-                # Update preferences based on reward
-                if reward.value > 0:
-                    # Positive reward reinforces preferences
-                    await self.identity_evolution.update_preference(
-                        category="scenario_types",
-                        item=scenario_type,
-                        adjustment=reward.value * 0.2
-                    )
-                    
-                    await self.identity_evolution.update_preference(
-                        category="interaction_styles",
-                        item=interaction_type,
-                        adjustment=reward.value * 0.2
-                    )
-                else:
-                    # Negative reward reduces preferences
-                    await self.identity_evolution.update_preference(
-                        category="scenario_types",
-                        item=scenario_type,
-                        adjustment=reward.value * 0.1  # Smaller impact for negative
-                    )
-                    
-                    await self.identity_evolution.update_preference(
-                        category="interaction_styles",
-                        item=interaction_type,
-                        adjustment=reward.value * 0.1
-                    )
-                
-                # For very strong rewards, update traits
+                somatic_type = reward.context.get("stimulus_type") # Check if reward came from sensation
+
+                # Base impact strength on reward value (abs for magnitude)
+                base_impact_strength = abs(reward.value) * 0.4 # Base scaling factor for identity impact
+
+                # Get adaptability (requires methods in IdentityEvolutionSystem)
+                scenario_adaptability = await self.identity_evolution.get_preference_adaptability(
+                    "scenario_types", scenario_type
+                )
+                interaction_adaptability = await self.identity_evolution.get_preference_adaptability(
+                    "interaction_styles", interaction_type
+                )
+
+                # Calculate final impact (sign depends on reward.value)
+                scenario_impact = reward.value * base_impact_strength * scenario_adaptability
+                interaction_impact = reward.value * base_impact_strength * interaction_adaptability
+
+                # Update preferences using 'impact' which considers adaptability internally
+                await self.identity_evolution.update_preference(
+                    category="scenario_types",
+                    preference=scenario_type, # Use 'preference' kwarg
+                    impact=scenario_impact
+                )
+                await self.identity_evolution.update_preference(
+                    category="interaction_styles",
+                    preference=interaction_type, # Use 'preference' kwarg
+                    impact=interaction_impact
+                )
+
+                # Update somatic preference if reward originated from sensation
+                if somatic_type and somatic_type in ["pain", "pleasure", "temperature", "pressure"]:
+                     somatic_adaptability = await self.identity_evolution.get_preference_adaptability(
+                         "somatic_preferences", somatic_type # Assumes this category exists
+                     )
+                     somatic_impact = reward.value * base_impact_strength * somatic_adaptability
+                     await self.identity_evolution.update_preference(
+                         category="somatic_preferences",
+                         preference=somatic_type,
+                         impact=somatic_impact
+                     )
+
+                # Update traits for very strong rewards (consider trait stability)
                 if abs(reward.value) > 0.9:
+                    trait_impact_strength = abs(reward.value) * 0.1 # Smaller impact for traits
+
                     traits_to_update = []
-                    
                     if reward.value > 0:
-                        # High positive rewards enhance positive traits
-                        traits_to_update = [
-                            ("curiosity", 0.05),
-                            ("adaptability", 0.05),
-                            ("confidence", 0.05)
-                        ]
+                        traits_to_update = ["curiosity", "adaptability", "confidence"]
                     else:
-                        # High negative rewards enhance caution-related traits
-                        traits_to_update = [
-                            ("cautiousness", 0.05),
-                            ("analytical", 0.05),
-                            ("patience", 0.05)
-                        ]
-                    
-                    for trait, value in traits_to_update:
-                        await self.identity_evolution.update_trait(trait, value)
-                
+                        traits_to_update = ["cautiousness", "analytical", "patience"]
+
+                    for trait in traits_to_update:
+                         trait_stability = await self.identity_evolution.get_trait_stability(trait)
+                         # Apply impact considering stability (handled within update_trait)
+                         await self.identity_evolution.update_trait(
+                             trait=trait,
+                             impact=(reward.value / abs(reward.value)) * trait_impact_strength # Keep sign, use strength
+                         )
+
                 effects["identity"] = True
             except Exception as e:
                 self.logger.error(f"Error applying reward to identity: {e}")
