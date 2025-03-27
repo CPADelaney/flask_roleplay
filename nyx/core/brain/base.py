@@ -1150,6 +1150,48 @@ class NyxBrain:
                 function_tool(run_thinking)
             ]
         )
+
+    async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
+        """Cognitive filter to evaluate if a dominance step is appropriate now."""
+        logger.debug(f"Evaluating appropriateness of dominance action '{action}' for user {user_id}")
+        appropriateness = {"action": "proceed"} # Default
+
+        # Factors to consider
+        relationship_state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
+        recent_failures = await self.memory_core.retrieve_memories( # Fictional: retrieve recent dominance failures with this user
+             query=f"dominance failure user:{user_id}", memory_types=["feedback", "reflection"], limit=1, recency_days=1
+        ) if self.memory_core else []
+        predicted_risk = 0.3 # Default low risk
+
+        if self.prediction_engine:
+             risk_prediction = await self.prediction_engine.generate_prediction(PredictionInput(
+                 context={"action": action, "params": parameters, "relationship": relationship_state},
+                 query_type="risk_of_negative_reaction"
+             ))
+             predicted_risk = risk_prediction.probabilities.get("negative_reaction", 0.3)
+
+        # --- Logic ---
+        required_trust = 0.6 + parameters.get("intensity_level", 0) * 0.3 # Higher intensity needs more trust (0=low, 1=high)
+        required_intimacy = 0.4 + parameters.get("intensity_level", 0) * 0.4
+
+        if not relationship_state:
+            return {"action": "block", "reason": "No relationship data."}
+
+        if relationship_state.trust < required_trust:
+            appropriateness = {"action": "block", "reason": f"Trust too low ({relationship_state.trust:.2f} < {required_trust:.2f})"}
+        elif relationship_state.intimacy < required_intimacy:
+            appropriateness = {"action": "block", "reason": f"Intimacy too low ({relationship_state.intimacy:.2f} < {required_intimacy:.2f})"}
+        elif relationship_state.conflict > 0.6:
+            appropriateness = {"action": "delay", "reason": f"Conflict level too high ({relationship_state.conflict:.2f})"}
+        elif recent_failures:
+             appropriateness = {"action": "delay", "reason": "Recent dominance attempt failed. Cooling down."}
+        elif predicted_risk > 0.7:
+             appropriateness = {"action": "modify", "reason": f"High predicted risk ({predicted_risk:.2f}). Reducing intensity.", "new_intensity_level": parameters.get("intensity_level", 0) * 0.5}
+        elif predicted_risk > 0.5:
+             appropriateness = {"action": "delay", "reason": f"Moderate predicted risk ({predicted_risk:.2f}). Assessing further."}
+
+        logger.debug(f"Dominance step evaluation result: {appropriateness}")
+        return appropriateness
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
