@@ -660,3 +660,121 @@ async def import_and_test_module(ctx, module_name: str, version: int) -> Dict[st
         brain.module_optimizer = ModuleOptimizer(brain)
     
     return await brain.module_optimizer.import_and_test_module(module_name, version)
+# Add to nyx/core/brain/function_tools.py
+
+@function_tool
+async def check_system_health(ctx, detailed: bool = True) -> Dict[str, Any]:
+    """
+    Run a comprehensive health check on all Nyx components, functions, and agents
+    
+    Args:
+        detailed: Whether to include detailed information in the results
+        
+    Returns:
+        Health check results with component status and issues
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return await brain.system_health_checker.check_system_health(detailed)
+
+@function_tool
+async def get_system_overview(ctx) -> Dict[str, Any]:
+    """
+    Get a high-level overview of the system's operational status
+    
+    Returns:
+        System overview data including component health statistics
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return await brain.system_health_checker.get_system_overview()
+
+@function_tool
+async def test_function_tool(ctx, tool_name: str) -> Dict[str, Any]:
+    """
+    Test a specific function tool to verify it's accessible and properly structured
+    
+    Args:
+        tool_name: Name of the function tool to test
+        
+    Returns:
+        Test results for the function tool
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return await brain.system_health_checker.test_function_tool(tool_name)
+
+@function_tool
+async def check_agent_capabilities(ctx, agent_name: str) -> Dict[str, Any]:
+    """
+    Check the capabilities of a specific agent
+    
+    Args:
+        agent_name: Name of the agent to check
+        
+    Returns:
+        Agent capabilities assessment
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return await brain.system_health_checker.check_agent_capabilities(agent_name)
+
+@function_tool
+async def verify_module_imports(ctx, module_names: List[str] = None) -> Dict[str, Any]:
+    """
+    Verify that specified modules can be imported
+    
+    Args:
+        module_names: List of module names to check, or None for default core modules
+        
+    Returns:
+        Import verification results
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return await brain.system_health_checker.verify_module_imports(module_names)
+
+@function_tool
+async def get_component_docs(ctx, component_name: str) -> Dict[str, Any]:
+    """
+    Get documentation for a component
+    
+    Args:
+        component_name: Name of the component
+        
+    Returns:
+        Component documentation including methods and docstrings
+    """
+    brain = ctx.context
+    
+    # Initialize system health checker if not available
+    if not hasattr(brain, "system_health_checker"):
+        from nyx.core.brain.system_health_checker import SystemHealthChecker
+        brain.system_health_checker = SystemHealthChecker(brain)
+    
+    return brain.system_health_checker.get_component_docs(component_name)
