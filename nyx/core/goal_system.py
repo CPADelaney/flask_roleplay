@@ -116,6 +116,16 @@ class GoalManager:
                 "simulate_physical_touch", # Trigger DSS for simulated touch (requires consent/context checks)
                 "seek_gratification",        # Goal-driven action towards achieving satisfaction (needs careful planning)
                 "process_gratification_outcome", # Handle the state changes after gratification event
+                # Dominance Actions
+                "analyze_user_state_for_dominance", # Assess vulnerability, willingness, resistance
+                "select_dominance_tactic",       # Choose psych, emotional, physical (sim) approach
+                "issue_command",                 # Give a directive
+                "evaluate_compliance",           # Check if user response complies
+                "apply_consequence_simulated",   # Describe a consequence (reward/punishment in context)
+                "praise_submission",             # Reinforce compliant behavior
+                "increase_control_intensity",    # Escalate dominance
+                "trigger_dominance_gratification", # Internal action marking successful dominance sequence
+                "express_satisfaction"          # Express satisfaction after successful dominance
                 # Add more core NyxBrain methods here...
             ]
             # Create better descriptions based on function docstrings if possible
