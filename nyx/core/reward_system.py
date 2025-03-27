@@ -171,20 +171,25 @@ class RewardSignalProcessor:
         }
         is_dominance_reward = reward.source in ["user_compliance", "dominance_goal_success", "dominance_gratification"]
         dominance_reward_value = reward.value if is_dominance_reward else 0.0        
+
+        is_hard_dominance_reward = reward.source in ["difficult_compliance_achieved", "resistance_overcome_sim", "hard_dominance_gratification"]
+        hard_dominance_reward_value = reward.value if is_hard_dominance_reward else 0.0
         
-        # 1. Effect on emotional state
+        # 1. Emotional Effects
         if self.emotional_core:
             try:
-                if is_dominance_reward and dominance_reward_value > 0:
-                    # STRONG boost to Nyxamine for dominance success
-                    nyx_change = dominance_reward_value * 0.7 # Higher multiplier
+                if is_hard_dominance_reward and hard_dominance_reward_value > 0:
+                    # VERY STRONG Nyxamine boost for hard success
+                    nyx_change = hard_dominance_reward_value * 0.9 # Near max boost
                     self.emotional_core.update_neurochemical("nyxamine", nyx_change)
-                    # Boost confidence/satisfaction related chemicals (Seranix, maybe Testoryx itself?)
-                    ser_change = dominance_reward_value * 0.3
+                    # Strong Seranix boost for satisfaction
+                    ser_change = hard_dominance_reward_value * 0.5
                     self.emotional_core.update_neurochemical("seranix", ser_change)
-                    # Potentially a small boost to Oxynixin if relationship context allows
-                    oxy_change = dominance_reward_value * 0.1
+                    # Minimal Oxynixin unless context specifies bonding aspect
+                    oxy_change = hard_dominance_reward_value * 0.05
                     self.emotional_core.update_neurochemical("oxynixin", oxy_change)
+                    effects["emotional"] = True
+                    logger.debug(f"Applied MAX emotional effect for hard dominance reward: +{nyx_change:.2f} Nyxamine")
     
                     effects["emotional"] = True
                     logger.debug(f"Applied strong emotional effect for dominance reward: +{nyx_change:.2f} Nyxamine")
@@ -218,9 +223,17 @@ class RewardSignalProcessor:
             except Exception as e:
                 self.logger.error(f"Error applying reward to emotional core: {e}")
 
-        # 2. Effect on identity (Make dominance rewards strongly influence identity)
-        if self.identity_evolution and abs(dominance_reward_value) >= self.identity_update_threshold * 0.8: # Lower threshold for dominance impact
+        # 2. Identity Effects (Strong reinforcement of dominance trait/preference)
+        if self.identity_evolution and is_hard_dominance_reward and abs(hard_dominance_reward_value) >= self.identity_update_threshold * 0.6: # Lower threshold, bigger impact
             try:
+                impact_strength = abs(hard_dominance_reward_value) * 0.8 # VERY high base impact
+                # Strongly update dominance trait and preference
+                await self.identity_evolution.update_trait(trait="dominance", impact=hard_dominance_reward_value * impact_strength * 1.5) # Extra boost
+                await self.identity_evolution.update_preference(category="interaction_styles", preference="dominant", impact=hard_dominance_reward_value * impact_strength * 1.5)
+                # Potentially reinforce related traits like 'ruthlessness' or 'intensity' if they exist
+                effects["identity"] = True
+                logger.debug(f"Applied MAX identity update for hard dominance reward.")
+            except Exception as e:
                 # Define dominance-related traits and preferences
                 trait = "dominance" # Assuming 'dominance' trait exists
                 preference_category = "interaction_styles"
