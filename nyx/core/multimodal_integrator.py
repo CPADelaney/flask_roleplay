@@ -66,6 +66,36 @@ class VideoFeatures(BaseModel):
     audio_features: Optional[AudioFeatures] = None # Embedded audio analysis
     estimated_mood_progression: List[Tuple[float, str]] = [] # List of (time, mood)
 
+class TouchEventFeatures(BaseModel):
+    region: str
+    texture: Optional[str] = None # e.g., smooth, rough, soft, sticky, wet
+    temperature: Optional[str] = None # e.g., warm, cool, hot, cold
+    pressure_level: Optional[float] = None # 0.0-1.0
+    hardness: Optional[str] = None # e.g., soft, firm, hard
+    shape: Optional[str] = None # e.g., flat, round, sharp
+    object_description: Optional[str] = None # What was touched
+
+class TasteFeatures(BaseModel):
+    profiles: List[str] = [] # e.g., sweet, sour, bitter, salty, umami, fatty, metallic, fruity, spicy
+    intensity: float = 0.5 # 0.0-1.0
+    texture: Optional[str] = None # e.g., creamy, crunchy, chewy, liquid
+    temperature: Optional[str] = None # e.g., hot, cold, room
+    source_description: Optional[str] = None
+
+class SmellFeatures(BaseModel):
+    profiles: List[str] = [] # e.g., floral, fruity, citrus, woody, spicy, fresh, pungent, earthy, chemical, sweet, rotten
+    intensity: float = 0.5 # 0.0-1.0
+    pleasantness: Optional[float] = None # Estimated pleasantness -1.0 to 1.0
+    source_description: Optional[str] = None
+
+
+# --- Constants for Taste/Smell Rewards ---
+POSITIVE_TASTES = {'sweet', 'umami', 'fatty', 'savory'}
+NEGATIVE_TASTES = {'bitter', 'sour', 'metallic', 'spoiled'}
+POSITIVE_SMELLS = {'floral', 'fruity', 'sweet', 'fresh', 'baked', 'woody', 'earthy'} # Context dependent
+NEGATIVE_SMELLS = {'pungent', 'chemical', 'rotten', 'sour', 'fishy', 'burnt'}
+
+
 
 # --- Constants for Modalities ---
 MODALITY_TEXT = "text"
@@ -75,6 +105,9 @@ MODALITY_AUDIO_MUSIC = "audio_music"
 MODALITY_AUDIO_SPEECH = "audio_speech"
 MODALITY_SYSTEM_SCREEN = "system_screen"
 MODALITY_SYSTEM_AUDIO = "system_audio"
+MODALITY_TOUCH_EVENT = "touch_event"
+MODALITY_TASTE = "taste"
+MODALITY_SMELL = "smell"
 
 
 class EnhancedMultiModalIntegrator:
@@ -144,7 +177,58 @@ class EnhancedMultiModalIntegrator:
         self.register_expectation_modulator(MODALITY_SYSTEM_AUDIO, self._modulate_speech_perception) # Speech is often key
         self.register_integration_strategy(MODALITY_SYSTEM_AUDIO, self._integrate_speech_pathways)
 
+        # Touch Event
+        self.register_feature_extractor(MODALITY_TOUCH_EVENT, self._extract_touch_event_features)
+        self.register_expectation_modulator(MODALITY_TOUCH_EVENT, self._modulate_generic_perception) # Generic ok for now
+        self.register_integration_strategy(MODALITY_TOUCH_EVENT, self._integrate_generic_pathways) # Generic ok for now
+
+        # Taste
+        self.register_feature_extractor(MODALITY_TASTE, self._extract_taste_features)
+        self.register_expectation_modulator(MODALITY_TASTE, self._modulate_generic_perception)
+        self.register_integration_strategy(MODALITY_TASTE, self._integrate_generic_pathways)
+
+        # Smell
+        self.register_feature_extractor(MODALITY_SMELL, self._extract_smell_features)
+        self.register_expectation_modulator(MODALITY_SMELL, self._modulate_generic_perception)
+        self.register_integration_strategy(MODALITY_SMELL, self._integrate_generic_pathways)
+
         self.logger.info("Multimodal handlers registered.")
+
+
+    async def _extract_touch_event_features(self, data: Dict, metadata: Dict) -> TouchEventFeatures:
+        """ Placeholder: Parses touch event data dict. """
+        self.logger.debug(f"Placeholder: Extracting touch event features: {data}")
+        # Expect data to be a dict like {'region': 'hand', 'texture': 'rough', ...}
+        if not isinstance(data, dict):
+            self.logger.warning("Touch event data is not a dict, cannot parse features.")
+            return TouchEventFeatures(region="unknown", object_description="Parsing error")
+        # Basic validation/parsing
+        return TouchEventFeatures(**data)
+
+    async def _extract_taste_features(self, data: Dict, metadata: Dict) -> TasteFeatures:
+        """ Placeholder: Parses taste data dict. """
+        self.logger.debug(f"Placeholder: Extracting taste features: {data}")
+        if not isinstance(data, dict):
+            self.logger.warning("Taste data is not a dict, cannot parse features.")
+            return TasteFeatures(profiles=["unknown"], source_description="Parsing error")
+        return TasteFeatures(**data)
+
+    async def _extract_smell_features(self, data: Dict, metadata: Dict) -> SmellFeatures:
+        """ Placeholder: Parses smell data dict. """
+        self.logger.debug(f"Placeholder: Extracting smell features: {data}")
+        if not isinstance(data, dict):
+             self.logger.warning("Smell data is not a dict, cannot parse features.")
+             return SmellFeatures(profiles=["unknown"], source_description="Parsing error")
+        # Add basic pleasantness estimation
+        features = SmellFeatures(**data)
+        if not features.pleasantness:
+             pos_count = sum(1 for p in features.profiles if p in POSITIVE_SMELLS)
+             neg_count = sum(1 for p in features.profiles if p in NEGATIVE_SMELLS)
+             if pos_count + neg_count > 0:
+                 features.pleasantness = (pos_count - neg_count) / (pos_count + neg_count)
+             else:
+                 features.pleasantness = 0.0 # Neutral if no known profiles
+        return features
 
 
     # --- Registration Methods (Unchanged) ---
