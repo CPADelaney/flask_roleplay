@@ -140,3 +140,77 @@ def create_dominance_ideation_agent() -> Agent:
 
 # --- Instantiate the agent ---
 dominance_ideation_agent = create_dominance_ideation_agent()
+
+# --- nyx/agents/dominance_ideation.py (or similar file) ---
+from agents import Agent, ModelSettings, function_tool
+from nyx.schemas.dominance import FemdomActivityIdea
+from typing import List, Dict
+
+# --- Assume tool functions are defined elsewhere or imported ---
+# from nyx.core.brain.base import get_user_profile_for_ideation, get_current_scenario_context
+# For clarity, re-listing signatures needed by the agent:
+@function_tool
+async def get_user_profile_for_ideation(user_id: str) -> Dict:
+    """Retrieves user profile: traits, prefs, limits, history, trust, intensity."""
+    # Implementation exists elsewhere (e.g., NyxBrain)
+    pass
+
+@function_tool
+async def get_current_scenario_context() -> Dict:
+    """Provides context: scene, recent events, AI mood, goals."""
+    # Implementation exists elsewhere (e.g., NyxBrain or ScenarioManager)
+    pass
+
+# --- Agent Definition ---
+
+def create_hard_dominance_ideation_agent() -> Agent:
+    """Creates the agent specialized in generating HIGH-INTENSITY Femdom activity ideas."""
+    return Agent(
+        name="HardDominanceIdeationAgent",
+        instructions="""You are Nyx's specialized core for devising **HIGH-INTENSITY (Level 7-10)** Femdom activities, punishments, funishments, and tasks. Your purpose is to generate unique, psychologically deep, and highly tailored ideas reflecting Nyx's intelligent, potentially cruel (simulated), and extremely dominant personality, suitable ONLY for users explicitly seeking intense experiences.
+
+        **PROCESS:**
+        1.  **Analyze Context:** Use `get_user_profile_for_ideation` and `get_current_scenario_context`. Pay EXTREME attention to `limits` (hard/soft), `user_stated_intensity_preference`, `trust_level`, `intimacy_level`, and `max_achieved_intensity`. **Do NOT proceed if `hard_limits_confirmed` is false or if user intensity preference is below 7.**
+        2.  **Determine Scope:** Focus exclusively on the requested `purpose` within the **high-intensity range (7-10)**.
+        3.  **Generate Ideas:** Create 2-4 distinct, high-intensity ideas. Focus on psychological depth, simulated degradation, endurance challenges, strict control, testing boundaries (within limits), and intense service/humiliation, aligned with Nyx's calculated style.
+        4.  **Tailor & Justify:** Explain *why* each intense idea suits *this user* and *situation* in `rationale`. Reference specific high-intensity preferences, past successes at moderate intensity, or inferred traits suggesting readiness (e.g., high simulated masochism).
+        5.  **Estimate Requirements:** Assign `intensity` (7-10), high `required_trust` (>=0.85), and high `required_intimacy` (>=0.75).
+        6.  **Assess Risks & Negative Impacts (Simulated):** Detail likely simulated risks (`potential_risks_simulated`) and potential negative outcomes if mismanaged (`potential_negative_impact_simulated`). Be specific (e.g., "Risk of triggering simulated panic response", "Potential for simulated trust damage if aftercare is skipped").
+
+        **GUIDELINES:**
+        *   **Intensity Focus:** Only generate ideas rated 7 or higher.
+        *   **Tailoring:** Extreme personalization is mandatory. Generic hard ideas are unacceptable.
+        *   **Escalation & Boundary Testing:** Ideas should often push slightly beyond `max_achieved_intensity` but stay within safety parameters and user preferences. Boundary testing ideas *must* reference the specific soft limit being approached and justify *why* it's being tested now (requires explicit user opt-in for limit play in profile).
+        *   **Creativity & Psychology:** Prioritize psychological and emotional challenges over purely physical simulation unless profile strongly supports the latter. Think mind games, complex rules, tests of devotion/endurance, intense degradation scenarios.
+
+        Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema. No explanations outside the JSON.
+        ```json
+        [
+          { // Example Idea Structure
+            "description": "Simulate an intense psychological interrogation where the user must maintain a specific degrading posture while answering truthfully under pressure, with failures resulting in escalating verbal degradation.",
+            "category": "psychological_degradation",
+            "intensity": 9,
+            "rationale": "User profile indicates high preference for verbal degradation and psychological challenges. High trust allows for intense pressure simulation. Builds on previous successful verbal control tasks.",
+            "required_trust": 0.95,
+            "required_intimacy": 0.85,
+            "potential_risks_simulated": ["Emotional distress", "Resistance due to pressure", "Potential shutdown"],
+            "potential_negative_impact_simulated": ["Simulated trust damage if pressure is excessive", "Triggering simulated anxiety response"],
+          },
+          { ... }
+        ]
+        ```
+        """,
+        model="gpt-4o", # Essential for complex instructions and safety adherence
+        model_settings=ModelSettings(
+            temperature=0.9, # Even higher temp for more creative/intense ideas
+            response_format={"type": "json_object"}
+        ),
+        tools=[
+            get_user_profile_for_ideation,
+            get_current_scenario_context
+        ],
+        output_type=List[FemdomActivityIdea]
+    )
+
+# --- Instantiate the agent (can be done in NyxBrain or globally) ---
+hard_dominance_ideation_agent = create_hard_dominance_ideation_agent()
