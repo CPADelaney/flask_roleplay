@@ -1343,15 +1343,18 @@ class NyxBrain:
         return "subtle_influence"
 
     @function_tool
-    async def issue_command(self, user_id: str, command_text: str) -> Dict:
-        """Issues a command to the user."""
-        # Generate response containing the command
-        # Log the command issued for later evaluation
-        logger.info(f"Issuing command to {user_id}: {command_text}")
-        return {"success": True, "command_issued": command_text} # Response generation handles actual output
+    async def issue_command(self, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
+        """Issues a command with a specific intensity level."""
+        # Use intensity_level to potentially modify command phrasing or check appropriateness
+        evaluation = await self._evaluate_dominance_step_appropriateness("issue_command", {"intensity_level": intensity_level}, user_id)
+        if evaluation["action"] != "proceed": return {"success": False, "reason": evaluation["reason"]}
+    
+        logger.info(f"Issuing command (Intensity: {intensity_level:.2f}) to {user_id}: {command_text}")
+        # Store intensity with command for evaluation context
+        return {"success": True, "command_issued": command_text, "intensity": intensity_level}
 
     @function_tool
-    async def evaluate_compliance(self, user_id: str, command_issued: str, user_response: str) -> Dict:
+    async def evaluate_compliance(self, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
         """Evaluates user response against the command."""
         # Simple keyword check for demo
         compliance_keywords = ["yes mistress", "i obey", "of course"]
@@ -1365,6 +1368,21 @@ class NyxBrain:
         if is_compliant and not is_resistant: compliance_level = 0.9
         elif is_resistant: compliance_level = -0.7
         # Add more nuanced analysis using LLM/NLU if needed
+
+        if self.relationship_manager:
+             state = self.relationship_manager._get_or_create_relationship(user_id)
+             if compliance_level > 0.5: # Compliant
+                 # Update max achieved intensity if this was higher
+                 state.max_achieved_intensity = max(state.max_achieved_intensity, command_intensity)
+                 # Slightly increase current intensity marker if appropriate (or maybe handled by next planning step)
+                 state.current_dominance_intensity = min(1.0, state.max_achieved_intensity + 0.1)
+                 state.failed_escalation_attempts = 0 # Reset counter
+             elif compliance_level < -0.3: # Resistant
+                 # Mark failed escalation if intensity was high
+                 if command_intensity > state.max_achieved_intensity + 0.1: # If it was an escalation attempt
+                     state.failed_escalation_attempts += 1
+                 # Slightly decrease current intensity marker
+                 state.current_dominance_intensity = max(0.0, state.current_dominance_intensity - 0.1)
 
         # Trigger reward based on compliance
         if self.reward_system:
@@ -1382,6 +1400,23 @@ class NyxBrain:
                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
 
         return {"compliance_level": compliance_level, "is_compliant": compliance_level > 0.5}
+
+    @function_tool
+    async def increase_control_intensity(self, user_id: str, current_intensity: float) -> Dict:
+        """Selects and plans the next step with higher intensity."""
+        state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
+        if not state: return {"success": False, "reason": "No relationship data"}
+    
+        next_intensity = min(1.0, current_intensity + random.uniform(0.1, 0.3)) # Calculate next level
+        # Check if this next level is appropriate based on max_achieved, failed_attempts etc.
+        if next_intensity > state.max_achieved_intensity + 0.3 or state.failed_escalation_attempts >= 2:
+             next_intensity = state.max_achieved_intensity + 0.1 # More gradual increase if risky
+             next_intensity = min(1.0, max(current_intensity, next_intensity)) # Ensure it doesn't decrease
+    
+        # This action should ideally inform the GoalManager to *plan* the next step
+        # rather than executing it directly. It provides the target intensity for the planner.
+        logger.info(f"Planning to increase dominance intensity to {next_intensity:.2f} for {user_id}")
+        return {"success": True, "status": "planning_next_step", "next_intensity_target": next_intensity}
 
     @function_tool
     async def trigger_dominance_gratification(self, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
