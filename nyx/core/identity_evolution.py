@@ -63,6 +63,13 @@ class IdentityProfile(BaseModel):
     last_update: str = Field(..., description="ISO timestamp of last update")
     evolution_rate: float = Field(..., description="Current identity evolution rate")
     coherence_score: float = Field(..., description="Identity coherence score (0.0-1.0)")
+    "dominance_target_profile": {
+        "submissiveness": 0.7, 
+        "resistance_challenge": 0.4, 
+        "intelligence": 0.6, 
+        "playfulness": 0.5,
+        "emotional_responsiveness": 0.8 
+    }
 
 class NeurochemicalImpact(BaseModel):
     """Schema for neurochemical impact from an experience"""
