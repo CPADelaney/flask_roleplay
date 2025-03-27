@@ -30,9 +30,10 @@ class RewardSignalProcessor:
     Simulates dopaminergic pathways for reinforcement learning.
     """
     
-    def __init__(self, emotional_core=None, identity_evolution=None):
+    def __init__(self, emotional_core=None, identity_evolution=None, somatosensory_system=None):
         self.emotional_core = emotional_core
         self.identity_evolution = identity_evolution
+        self.somatosensory_system = somatosensory_system
         
         # Reward signal history
         self.reward_history = []
@@ -165,7 +166,8 @@ class RewardSignalProcessor:
             "emotional": False,
             "identity": False,
             "learning": False,
-            "habit": False
+            "habit": False,
+            "somatic": False
         }
         
         # 1. Effect on emotional state
@@ -261,6 +263,37 @@ class RewardSignalProcessor:
                 effects["identity"] = True
             except Exception as e:
                 self.logger.error(f"Error applying reward to identity: {e}")
+
+        # 3. Effect on Somatic System (Induce sensation for strong rewards)
+        if self.somatosensory_system and abs(reward.value) >= 0.85:
+            try:
+                # Determine target region from context if possible, else default
+                body_region = reward.context.get("body_region", "skin")
+                if body_region not in self.somatosensory_system.body_regions:
+                    body_region = "skin" # Fallback to skin
+
+                if reward.value > 0: # Strong positive reward -> induce pleasure
+                    intensity = reward.value * 0.4 # Scale intensity
+                    await self.somatosensory_system.process_stimulus(
+                        stimulus_type="pleasure",
+                        body_region=body_region,
+                        intensity=intensity,
+                        cause=f"Strong reward ({reward.source})"
+                    )
+                    effects["somatic"] = "pleasure_induced"
+                    logger.debug(f"Induced pleasure (intensity {intensity:.2f}) in {body_region} due to strong reward.")
+               #  Optional: Induce discomfort/tension for strong negative rewards?
+                elif reward.value < 0: # Strong negative reward -> induce discomfort
+                    intensity = abs(reward.value) * 0.3
+                    # Maybe increase general tension instead of specific pain?
+                    current_tension = self.somatosensory_system.body_state.get("tension", 0.0)
+                    new_tension = min(1.0, current_tension + intensity * 0.2)
+                    self.somatosensory_system.body_state["tension"] = new_tension
+                    effects["somatic"] = "tension_induced"
+                    logger.debug(f"Induced tension ({new_tension:.2f}) due to strong negative reward.")
+
+            except Exception as e:
+                self.logger.error(f"Error applying reward to somatosensory system: {e}")
         
         # 3. Effect on habit formation
         if abs(reward.value) >= self.habit_formation_threshold:
