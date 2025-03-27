@@ -597,128 +597,196 @@ class EmotionalToolUtils:
             schedule_delay=3.0
         )
         add_trace_processor(emotion_trace_processor)
-# New utility functions to add to utils.py
-
-def create_standard_span(
-    span_type: str,
-    data: Dict[str, Any],
-    ctx: Optional[RunContextWrapper[EmotionalContext]] = None
-) -> Span:
-    """
-    Create a standardized span with consistent metadata
+    # New utility functions to add to utils.py
     
-    Args:
-        span_type: Type of span to create
-        data: Span data
-        ctx: Optional context wrapper
+    def create_standard_span(
+        span_type: str,
+        data: Dict[str, Any],
+        ctx: Optional[RunContextWrapper[EmotionalContext]] = None
+    ) -> Span:
+        """
+        Create a standardized span with consistent metadata
         
-    Returns:
-        Created span
-    """
-    # Add standard metadata
-    full_data = {
-        "type": span_type,
-        "timestamp": datetime.datetime.now().isoformat(),
-        **data
-    }
-    
-    # Add context data if available
-    if ctx is not None:
-        full_data["cycle"] = ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
-        
-        # Add metadata from context
-        if hasattr(ctx.context, "create_trace_metadata"):
-            trace_metadata = ctx.context.create_trace_metadata()
-            if "dominant_emotion" in trace_metadata:
-                full_data["dominant_emotion"] = trace_metadata["dominant_emotion"]
-    
-    # Create and return span
-    return custom_span(span_type, data=full_data)
-
-def check_sdk_compatibility() -> bool:
-    """
-    Check compatibility with the OpenAI Agents SDK version
-    
-    Returns:
-        True if compatible, False otherwise
-    """
-    try:
-        # The SDK doesn't currently provide a version, so we check for required components
-        from agents import (
-            Agent, Runner, function_tool, handoff, trace,
-            ModelSettings, RunConfig
-        )
-        
-        # Check for specific newer SDK features
-        features_present = {
-            "agent": hasattr(Agent, "clone"),
-            "runner": hasattr(Runner, "run_streamed"),
-            "function_tool": callable(function_tool),
-            "handoff": callable(handoff),
-            "trace": callable(trace)
+        Args:
+            span_type: Type of span to create
+            data: Span data
+            ctx: Optional context wrapper
+            
+        Returns:
+            Created span
+        """
+        # Add standard metadata
+        full_data = {
+            "type": span_type,
+            "timestamp": datetime.datetime.now().isoformat(),
+            **data
         }
         
-        # Consider compatible if all required features are present
-        return all(features_present.values())
-    except ImportError:
-        logger.warning("OpenAI Agents SDK not found")
-        return False
-
-def create_enhanced_run_config(
-    workflow_name: str,
-    conversation_id: str,
-    cycle_count: int,
-    context_data: Optional[Dict[str, Any]] = None,
-    model: Optional[str] = None,
-    temperature: float = 0.4,
-    max_tokens: int = 300,
-    trace_id: Optional[str] = None
-) -> RunConfig:
-    """
-    Create a standardized run configuration with SDK enhancements
-    
-    Args:
-        workflow_name: Name of the workflow
-        conversation_id: Conversation identifier
-        cycle_count: Current processing cycle count
-        context_data: Additional context metadata
-        model: Optional model override
-        temperature: Model temperature
-        max_tokens: Maximum tokens for response
-        trace_id: Optional trace identifier
+        # Add context data if available
+        if ctx is not None:
+            full_data["cycle"] = ctx.context.cycle_count if hasattr(ctx.context, "cycle_count") else 0
+            
+            # Add metadata from context
+            if hasattr(ctx.context, "create_trace_metadata"):
+                trace_metadata = ctx.context.create_trace_metadata()
+                if "dominant_emotion" in trace_metadata:
+                    full_data["dominant_emotion"] = trace_metadata["dominant_emotion"]
         
-    Returns:
-        Enhanced run configuration
-    """
-    # Generate trace ID with SDK function if not provided
-    if not trace_id:
-        trace_id = gen_trace_id()
+        # Create and return span
+        return custom_span(span_type, data=full_data)
     
-    # Create metadata with standard fields
-    metadata = {
-        "system": "nyx_emotional_core",
-        "version": "1.0",
-        "cycle": cycle_count,
-        "conversation_id": conversation_id,
-        "timestamp": datetime.datetime.now().isoformat()
-    }
+    def check_sdk_compatibility() -> bool:
+        """
+        Check compatibility with the OpenAI Agents SDK version
+        
+        Returns:
+            True if compatible, False otherwise
+        """
+        try:
+            # The SDK doesn't currently provide a version, so we check for required components
+            from agents import (
+                Agent, Runner, function_tool, handoff, trace,
+                ModelSettings, RunConfig
+            )
+            
+            # Check for specific newer SDK features
+            features_present = {
+                "agent": hasattr(Agent, "clone"),
+                "runner": hasattr(Runner, "run_streamed"),
+                "function_tool": callable(function_tool),
+                "handoff": callable(handoff),
+                "trace": callable(trace)
+            }
+            
+            # Consider compatible if all required features are present
+            return all(features_present.values())
+        except ImportError:
+            logger.warning("OpenAI Agents SDK not found")
+            return False
     
-    # Add custom context data
-    if context_data:
-        metadata.update(context_data)
-    
-    # Create run configuration with SDK features
-    return RunConfig(
-        workflow_name=workflow_name,
-        trace_id=trace_id,
-        group_id=conversation_id,
-        model=model,
-        model_settings=ModelSettings(
-            temperature=temperature,
-            top_p=0.95,
-            max_tokens=max_tokens
-        ),
-        handoff_input_filter=keep_relevant_history,
-        trace_include_sensitive_data=True,
-        trace_metadata=metadata
-    )
+    def create_enhanced_run_config(
+        workflow_name: str,
+        conversation_id: str,
+        cycle_count: int,
+        context_data: Optional[Dict[str, Any]] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.4,
+        max_tokens: int = 300,
+        trace_id: Optional[str] = None
+    ) -> RunConfig:
+        """
+        Create a standardized run configuration with SDK enhancements
+        
+        Args:
+            workflow_name: Name of the workflow
+            conversation_id: Conversation identifier
+            cycle_count: Current processing cycle count
+            context_data: Additional context metadata
+            model: Optional model override
+            temperature: Model temperature
+            max_tokens: Maximum tokens for response
+            trace_id: Optional trace identifier
+            
+        Returns:
+            Enhanced run configuration
+        """
+        # Generate trace ID with SDK function if not provided
+        if not trace_id:
+            trace_id = gen_trace_id()
+        
+        # Create metadata with standard fields
+        metadata = {
+            "system": "nyx_emotional_core",
+            "version": "1.0",
+            "cycle": cycle_count,
+            "conversation_id": conversation_id,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Add custom context data
+        if context_data:
+            metadata.update(context_data)
+        
+        # Create run configuration with SDK features
+        return RunConfig(
+            workflow_name=workflow_name,
+            trace_id=trace_id,
+            group_id=conversation_id,
+            model=model,
+            model_settings=ModelSettings(
+                temperature=temperature,
+                top_p=0.95,
+                max_tokens=max_tokens
+            ),
+            handoff_input_filter=keep_relevant_history,
+            trace_include_sensitive_data=True,
+            trace_metadata=metadata
+        )
+    def create_emotional_run_config(
+        workflow_name: str,
+        cycle_count: int,
+        conversation_id: Optional[str] = None,
+        input_text_length: Optional[int] = None,
+        pattern_analysis: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.4,
+        max_tokens: int = 300,
+        trace_id: Optional[str] = None,
+    ) -> RunConfig:
+        """
+        SDK-optimized factory for creating standardized run configurations
+        for emotional processing
+        
+        Args:
+            workflow_name: Name of the workflow
+            cycle_count: Current processing cycle count
+            conversation_id: Conversation identifier for grouping traces
+            input_text_length: Length of input text if available
+            pattern_analysis: Pattern analysis result if available
+            model: Model to use for inference (optional override)
+            temperature: Model temperature setting
+            max_tokens: Maximum tokens for model response
+            trace_id: Optional custom trace ID
+            
+        Returns:
+            Optimized run configuration
+        """
+        # Generate a proper trace ID using SDK function if not provided
+        if not trace_id:
+            trace_id = gen_trace_id()
+        elif not trace_id.startswith("trace_"):
+            trace_id = f"trace_{trace_id}"
+        
+        # Build metadata dictionary with standard fields
+        metadata = {
+            "system": "nyx_emotional_core",
+            "version": "1.0",
+            "cycle": cycle_count,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Add optional metadata
+        if input_text_length is not None:
+            metadata["input_text_length"] = input_text_length
+        
+        if pattern_analysis:
+            metadata["pattern_analysis"] = pattern_analysis
+            
+        if conversation_id:
+            metadata["conversation_id"] = conversation_id
+        
+        # Create run configuration with SDK features
+        return RunConfig(
+            workflow_name=workflow_name,
+            trace_id=trace_id,
+            group_id=conversation_id,
+            model=model,
+            model_settings=ModelSettings(
+                temperature=temperature,
+                top_p=0.95,
+                max_tokens=max_tokens
+            ),
+            handoff_input_filter=handoff_filters.keep_relevant_history,
+            trace_include_sensitive_data=True,
+            trace_metadata=metadata
+        )
