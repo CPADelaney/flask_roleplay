@@ -515,8 +515,7 @@ class EmotionalCore:
     
     def _neurochemical_input_filter(self, handoff_data):
         """
-        Custom input filter for neurochemical agent that preserves only relevant history
-        and adds preprocessing analysis
+        Enhanced handoff input filter using SDK patterns
         
         Args:
             handoff_data: The handoff input data
@@ -524,7 +523,7 @@ class EmotionalCore:
         Returns:
             Filtered handoff data
         """
-        # Use the base keep_relevant_history filter first
+        # Use the SDK's base filter first
         filtered_data = handoff_filters.keep_relevant_history(handoff_data)
         
         # Extract the last user message for analysis
@@ -536,7 +535,7 @@ class EmotionalCore:
         
         # Add preprocessed emotional analysis if we found a user message
         if last_user_message:
-            # Add a pre-analysis message to help the agent
+            # Create a system message with the analysis
             updated_items = list(filtered_data.pre_handoff_items)
             updated_items.append({
                 "role": "system",
