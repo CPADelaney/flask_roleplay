@@ -323,6 +323,43 @@ class GoalManager:
             #logger.debug("No suitable active goal found to execute.")
             return None
 
+        # --- Add Appropriateness Check Hook ---
+        is_dominance_action = step.action in [
+             "issue_command", "increase_control_intensity", "apply_consequence_simulated",
+             # Add other sensitive dominance actions here
+        ]
+        user_id_param = step.parameters.get("user_id", step.parameters.get("target_user_id"))
+
+        if is_dominance_action and user_id_param and self.brain and hasattr(self.brain, '_evaluate_dominance_step_appropriateness'):
+            try:
+                evaluation = await self.brain._evaluate_dominance_step_appropriateness(
+                    step.action, step.parameters, user_id_param
+                )
+                action_decision = evaluation.get("action", "proceed")
+
+                if action_decision == "block":
+                    logger.warning(f"Dominance step '{step.step_id}' blocked: {evaluation.get('reason')}")
+                    await self.update_goal_status(goal.id, "failed", error=f"Dominance step blocked: {evaluation.get('reason')}")
+                    self.active_goals.discard(goal.id)
+                    return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
+                elif action_decision == "delay":
+                    logger.info(f"Dominance step '{step.step_id}' delayed: {evaluation.get('reason')}")
+                    # Keep goal active but don't execute this step now.
+                    # Potentially add a short cooldown or re-evaluation flag.
+                    return {"delayed_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
+                elif action_decision == "modify":
+                    logger.info(f"Dominance step '{step.step_id}' modified: {evaluation.get('reason')}")
+                    # Modify step parameters (e.g., reduce intensity)
+                    if "new_intensity_level" in evaluation:
+                        step.parameters["intensity_level"] = evaluation["new_intensity_level"]
+                    # Proceed with modified step execution below
+            except Exception as e:
+                 logger.error(f"Error during dominance step evaluation: {e}")
+                 # Default to blocking if evaluation fails
+                 await self.update_goal_status(goal.id, "failed", error="Dominance evaluation failed.")
+                 self.active_goals.discard(goal.id)
+                 return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": "Evaluation error"}
+
         async with self._lock: # Lock for modifying goal state
             if goal_id not in self.goals:
                 logger.warning(f"Selected goal '{goal_id}' disappeared before execution.")
