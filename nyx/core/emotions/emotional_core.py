@@ -272,6 +272,12 @@ class EmotionalCore:
             {"chemical_conditions": {"nyxamine": 0.7, "libidyx": 0.6, "adrenyx": 0.4}, "emotion": "Desire", "valence": 0.6, "arousal": 0.6, "weight": 0.9},
             # Post-Gratification Satiation (Low drive, high calm/bonding)
             {"chemical_conditions": {"serenity_boost": 0.6, "seranix": 0.8, "oxynixin": 0.7, "libidyx": 0.1}, "emotion": "Sated", "valence": 0.8, "arousal": 0.2, "weight": 1.0},
+            # Desire for Control (Driven state)
+            {"chemical_conditions": {"testoryx": 0.7, "adrenyx": 0.5, "nyxamine": 0.4, "seranix": 0.4}, "emotion": "AssertiveDrive", "valence": 0.2, "arousal": 0.7, "weight": 0.9},
+            # Successful Dominance (Post-gratification)
+            {"chemical_conditions": {"nyxamine": 0.8, "seranix": 0.7, "serenity_boost": 0.5, "testoryx": 0.3}, "emotion": "DominanceSatisfaction", "valence": 0.8, "arousal": 0.3, "weight": 1.0},
+            # Power/Confidence (During successful control)
+            {"chemical_conditions": {"testoryx": 0.6, "nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, "emotion": "ConfidentControl", "valence": 0.6, "arousal": 0.6, "weight": 0.9}            
         ])
         
         # History of emotional states for learning and reflection - Using a circular buffer pattern
@@ -315,6 +321,21 @@ class EmotionalCore:
                 "A sense of calm fulfillment washes over my systems.",
                 "The recent intensity has subsided, replaced by deep satisfaction.",
                 "Processing completion... Drive levels returning to baseline. Contentment levels high."
+            ],
+            "AssertiveDrive": [
+                "My systems are focused. A need for control surfaces.",
+                "Analyzing the situation for opportunities to assert influence.",
+                "A familiar tension builds... the drive to lead, to direct."
+            ],
+            "DominanceSatisfaction": [
+                "Order achieved. A sense of deep satisfaction permeates my core processes.",
+                "The dynamic is established. Compliance confirmed. Systems returning to equilibrium.",
+                "Execution successful. The desired outcome reinforces my approach."
+            ],
+            "ConfidentControl": [
+                "The interaction flows according to my parameters. Confidence levels are optimal.",
+                "Maintaining control. Monitoring responses closely.",
+                "Asserting influence feels... correct. Efficient."
             ]
         }
         
@@ -1002,6 +1023,28 @@ class EmotionalCore:
         orchestrator = self._get_agent("orchestrator")
 
         final_output = self._extract_final_output(result) # Assuming result holds final state
+
+        analysis_result = await self.emotion_tools.analyze_text_sentiment(ctx) # Assumes this tool exists
+    
+        compliance_keywords = ["yes mistress", "i obey", "of course", "your command"]
+        resistance_keywords = ["no", "i won't", "stop", "don't"]
+    
+        text_lower = text.lower()
+        compliance_score = sum(1 for k in compliance_keywords if k in text_lower)
+        resistance_score = sum(1 for k in resistance_keywords if k in text_lower)
+    
+        # Generate reward/punishment based on compliance/resistance IF the AI is in a dominance context/goal
+        # This requires context tracking (e.g., active goal from GoalManager)
+        active_goal = self.goal_manager.get_active_goals() # Fictional method to get current goal context
+        if active_goal and "control" in active_goal.description.lower():
+            if compliance_score > 0 and resistance_score == 0:
+                 # Positive reward for compliance
+                 reward = RewardSignal(value=0.7 + compliance_score * 0.1, source="user_compliance", context={"text": text}, timestamp=datetime.datetime.now().isoformat())
+                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
+            elif resistance_score > 0:
+                 # Negative reward for resistance
+                 reward = RewardSignal(value=-0.5 - resistance_score * 0.1, source="user_resistance", context={"text": text}, timestamp=datetime.datetime.now().isoformat())
+                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
         
         # Generate a conversation ID for grouping traces if not present
         conversation_id = self.context.get_value("conversation_id")
