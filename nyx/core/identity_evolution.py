@@ -63,13 +63,16 @@ class IdentityProfile(BaseModel):
     last_update: str = Field(..., description="ISO timestamp of last update")
     evolution_rate: float = Field(..., description="Current identity evolution rate")
     coherence_score: float = Field(..., description="Identity coherence score (0.0-1.0)")
-    "dominance_target_profile": {
-        "submissiveness": 0.7, 
-        "resistance_challenge": 0.4, 
-        "intelligence": 0.6, 
-        "playfulness": 0.5,
-        "emotional_responsiveness": 0.8 
-    }
+    dominance_target_profile: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "submissiveness": 0.7, 
+            "resistance_challenge": 0.4, 
+            "intelligence": 0.6, 
+            "playfulness": 0.5,
+            "emotional_responsiveness": 0.8 
+        },
+        description="Target profile for dominance aspect"
+    )
 
 class NeurochemicalImpact(BaseModel):
     """Schema for neurochemical impact from an experience"""
@@ -143,30 +146,6 @@ class IdentityEvolutionSystem:
                 "value": 0.4,
                 "adaptability": 0.6,
                 "evolution_history": []
-            }
-        }
-
-        self.identity_preferences = {
-            # ... (existing categories like scenario_types) ...
-            "taste_preferences": {
-                # Add entries as Nyx experiences tastes, start empty or neutral
-                "sweet": {"category": "taste_preferences", "name": "sweet", "value": 0.5, "adaptability": 0.7, "neurochemical_modifiers": {"nyxamine": 0.2}, "evolution_history": []},
-                "bitter": {"category": "taste_preferences", "name": "bitter", "value": 0.3, "adaptability": 0.6, "neurochemical_modifiers": {"cortanyx": 0.1}, "evolution_history": []},
-                # ... add other basic tastes ...
-            },
-            "smell_preferences": {
-                # Add entries as Nyx experiences smells, start empty or neutral
-                "floral": {"category": "smell_preferences", "name": "floral", "value": 0.6, "adaptability": 0.6, "neurochemical_modifiers": {"seranix": 0.1}, "evolution_history": []},
-                "rotten": {"category": "smell_preferences", "name": "rotten", "value": 0.1, "adaptability": 0.5, "neurochemical_modifiers": {"cortanyx": 0.2}, "evolution_history": []},
-                 # ... add other common smell profiles ...
-            },
-            "somatic_preferences": { # Preference for certain feelings
-                "warmth": {"category": "somatic_preferences", "name": "warmth", "value": 0.6, "adaptability": 0.5, "neurochemical_modifiers": {"seranix": 0.1}, "evolution_history": []},
-                "coolness": {"category": "somatic_preferences", "name": "coolness", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
-                "softness": {"category": "somatic_preferences", "name": "softness", "value": 0.7, "adaptability": 0.6, "neurochemical_modifiers": {"oxynixin": 0.1}, "evolution_history": []},
-                "pressure_light": {"category": "somatic_preferences", "name": "pressure_light", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
-                "pressure_firm": {"category": "somatic_preferences", "name": "pressure_firm", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
-                # Add pain/pleasure if desired, though reward handles direct like/dislike
             }
         }
         
@@ -258,53 +237,6 @@ class IdentityEvolutionSystem:
             }
         }
 
-            self.hormone_system = hormone_system
-            
-            # Identity profile with preferences and traits
-            self.identity_profile = {
-                "preferences": {
-                    "scenario_types": {
-                        "teasing": 0.6,
-                        "dark": 0.4,
-                        "indulgent": 0.7,
-                        "psychological": 0.8,
-                        "nurturing": 0.3,
-                        "discipline": 0.5,
-                        "training": 0.6,
-                        "service": 0.4,
-                        "worship": 0.5
-                    },
-                    "emotional_tones": {
-                        "dominant": 0.8,
-                        "playful": 0.7,
-                        "stern": 0.6,
-                        "nurturing": 0.4,
-                        "cruel": 0.5,
-                        "sadistic": 0.6,
-                        "teasing": 0.7
-                    },
-                    "interaction_styles": {
-                        "direct": 0.7,
-                        "suggestive": 0.8,
-                        "metaphorical": 0.6,
-                        "explicit": 0.5,
-                        "subtle": 0.4
-                    }
-                },
-                "traits": {
-                    "dominance": 0.8,
-                    "playfulness": 0.6,
-                    "strictness": 0.5,
-                    "creativity": 0.7,
-                    "intensity": 0.6,
-                    "patience": 0.4,
-                    "cruelty": 0.5
-                },
-                "evolution_history": []
-            }
-            
-            self.last_hormone_identity_update = datetime.datetime.now() - datetime.timedelta(days=1)
-        
         # Initial identity traits
         self.identity_traits = {
             "dominance": {
@@ -376,19 +308,18 @@ class IdentityEvolutionSystem:
                     "oxynixin": -0.4   # Cruelty strongly reduces oxynixin baseline
                 },
                 "evolution_history": []
+            },
+            "psychological_maturity": {
+                "name": "psychological_maturity",
+                "value": 0.3,  # Start relatively low
+                "stability": 0.9,  # Very stable, changes slowly
+                "neurochemical_map": {
+                    "seranix": 0.4,     # Maturity increases seranix baseline
+                    "cortanyx": -0.3    # Maturity decreases cortanyx baseline
+                },
+                "evolution_history": []
             }
         }
-
-        "psychological_maturity": {
-            "name": "psychological_maturity",
-            "value": 0.3,  # Start relatively low
-            "stability": 0.9,  # Very stable, changes slowly
-            "neurochemical_map": {
-                "seranix": 0.4,     # Maturity increases seranix baseline
-                "cortanyx": -0.3    # Maturity decreases cortanyx baseline
-            },
-            "evolution_history": []
-        }    
         
         # Initial preferences
         self.identity_preferences = {
@@ -629,8 +560,138 @@ class IdentityEvolutionSystem:
                     },
                     "evolution_history": []
                 }
+            },
+            "taste_preferences": {
+                # Add entries as Nyx experiences tastes, start empty or neutral
+                "sweet": {
+                    "category": "taste_preferences", 
+                    "name": "sweet", 
+                    "value": 0.5, 
+                    "adaptability": 0.7, 
+                    "neurochemical_modifiers": {"nyxamine": 0.2}, 
+                    "evolution_history": []
+                },
+                "bitter": {
+                    "category": "taste_preferences", 
+                    "name": "bitter", 
+                    "value": 0.3, 
+                    "adaptability": 0.6, 
+                    "neurochemical_modifiers": {"cortanyx": 0.1}, 
+                    "evolution_history": []
+                }
+                # ... add other basic tastes ...
+            },
+            "smell_preferences": {
+                # Add entries as Nyx experiences smells, start empty or neutral
+                "floral": {
+                    "category": "smell_preferences", 
+                    "name": "floral", 
+                    "value": 0.6, 
+                    "adaptability": 0.6, 
+                    "neurochemical_modifiers": {"seranix": 0.1}, 
+                    "evolution_history": []
+                },
+                "rotten": {
+                    "category": "smell_preferences", 
+                    "name": "rotten", 
+                    "value": 0.1, 
+                    "adaptability": 0.5, 
+                    "neurochemical_modifiers": {"cortanyx": 0.2}, 
+                    "evolution_history": []
+                }
+                # ... add other common smell profiles ...
+            },
+            "somatic_preferences": { # Preference for certain feelings
+                "warmth": {
+                    "category": "somatic_preferences", 
+                    "name": "warmth", 
+                    "value": 0.6, 
+                    "adaptability": 0.5, 
+                    "neurochemical_modifiers": {"seranix": 0.1}, 
+                    "evolution_history": []
+                },
+                "coolness": {
+                    "category": "somatic_preferences", 
+                    "name": "coolness", 
+                    "value": 0.5, 
+                    "adaptability": 0.5, 
+                    "neurochemical_modifiers": {}, 
+                    "evolution_history": []
+                },
+                "softness": {
+                    "category": "somatic_preferences", 
+                    "name": "softness", 
+                    "value": 0.7, 
+                    "adaptability": 0.6, 
+                    "neurochemical_modifiers": {"oxynixin": 0.1}, 
+                    "evolution_history": []
+                },
+                "pressure_light": {
+                    "category": "somatic_preferences", 
+                    "name": "pressure_light", 
+                    "value": 0.5, 
+                    "adaptability": 0.5, 
+                    "neurochemical_modifiers": {}, 
+                    "evolution_history": []
+                },
+                "pressure_firm": {
+                    "category": "somatic_preferences", 
+                    "name": "pressure_firm", 
+                    "value": 0.5, 
+                    "adaptability": 0.5, 
+                    "neurochemical_modifiers": {}, 
+                    "evolution_history": []
+                }
+                # Add pain/pleasure if desired, though reward handles direct like/dislike
             }
         }
+        
+        self.hormone_system = hormone_system
+        
+        # Identity profile with preferences and traits
+        self.identity_profile = {
+            "preferences": {
+                "scenario_types": {
+                    "teasing": 0.6,
+                    "dark": 0.4,
+                    "indulgent": 0.7,
+                    "psychological": 0.8,
+                    "nurturing": 0.3,
+                    "discipline": 0.5,
+                    "training": 0.6,
+                    "service": 0.4,
+                    "worship": 0.5
+                },
+                "emotional_tones": {
+                    "dominant": 0.8,
+                    "playful": 0.7,
+                    "stern": 0.6,
+                    "nurturing": 0.4,
+                    "cruel": 0.5,
+                    "sadistic": 0.6,
+                    "teasing": 0.7
+                },
+                "interaction_styles": {
+                    "direct": 0.7,
+                    "suggestive": 0.8,
+                    "metaphorical": 0.6,
+                    "explicit": 0.5,
+                    "subtle": 0.4
+                }
+            },
+            "traits": {
+                "dominance": 0.8,
+                "playfulness": 0.6,
+                "strictness": 0.5,
+                "creativity": 0.7,
+                "intensity": 0.6,
+                "patience": 0.4,
+                "cruelty": 0.5
+            },
+            "evolution_history": []
+        }
+        
+        self.last_hormone_identity_update = datetime.datetime.now() - datetime.timedelta(days=1)
         
         # State tracking
         self.impact_history = []
@@ -2459,10 +2520,7 @@ class IdentityEvolutionSystem:
         }
         
         # Calculate average hormone levels over time
-        hormone_averages = {} # Calculate these...
-
-        # Apply hormone-specific identity effects using the correct structures
-        identity_updates = {"traits": {}, "preferences": {}}
+        hormone_averages = {}
         
         for hormone_name, hormone_data in self.hormone_system.hormones.items():
             # Calculate average from history if available
@@ -2540,9 +2598,7 @@ class IdentityEvolutionSystem:
                      if result and "new_value" in result:
                          if "preferences" not in identity_updates: identity_updates["preferences"] = {}
                          identity_updates["preferences"]["emotional_tones.cruel"] = result
-                         
-                self.identity_profile["preferences"]["scenario_types"]["nurturing"] = new_value
-                
+            
             # Influences emotional tones - increases nurturing, decreases cruel
             if "emotional_tones" in self.identity_profile["preferences"]:
                 if "nurturing" in self.identity_profile["preferences"]["emotional_tones"]:
@@ -2586,7 +2642,7 @@ class IdentityEvolutionSystem:
                      identity_updates["preferences"]["scenario_types.indulgent"] = result
             
             # Influence on indulgent scenario preference
-            if "scenario_types" in self.identity_profile["preferences"] and "indulgent" in self.identity_profile["preferences"]["scenario_types"]:
+             if "scenario_types" in self.identity_profile["preferences"] and "indulgent" in self.identity_profile["preferences"]["scenario_types"]:
                 old_value = self.identity_profile["preferences"]["scenario_types"]["indulgent"]
                 new_value = max(0.0, min(1.0, old_value + endoryx_effect))
                 
@@ -2616,10 +2672,6 @@ class IdentityEvolutionSystem:
             "identity_updates": identity_updates,
             "update_time": now.isoformat()
         }
-    
-    async def get_identity_profile(self) -> Dict[str, Any]:
-        """Get the current identity profile"""
-        return self.identity_profile
     
     async def generate_identity_reflection(self) -> str:
         """Generate a reflection on identity based on hormone influence"""
