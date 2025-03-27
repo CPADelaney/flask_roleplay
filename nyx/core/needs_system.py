@@ -123,16 +123,65 @@ class NeedsSystem:
         # Run all goal creations concurrently
         await asyncio.gather(*tasks)
 
-    async def satisfy_need(self, name: str, amount: float):
-        """Increases the satisfaction level of a need."""
+    async def satisfy_need(self, name: str, amount: float, context: Optional[Dict[str, Any]] = None):
+        """
+        Increases the satisfaction level of a need, potentially modified by context.
+
+        Args:
+            name: Name of the need.
+            amount: Base amount to satisfy by.
+            context: Optional dictionary providing context about the satisfaction event.
+                     For 'control_expression', context might include:
+                     - 'difficulty_level': float (0.0 easy -> 1.0 hard)
+                     - 'resistance_overcome': bool
+                     - 'intensity_achieved': float (0.0 -> 1.0)
+        """
         if name in self.needs:
             need = self.needs[name]
             original_level = need.level
-            need.level = min(need.target_level, need.level + amount)
+            modified_amount = amount
+            satisfaction_multiplier = 1.0
+            reason = "standard satisfaction"
+
+            # --- Contextual Modification for Control Expression ---
+            if name == "control_expression" and context:
+                difficulty = context.get("difficulty_level", 0.3) # Default moderate difficulty
+                resistance_overcome = context.get("resistance_overcome", False)
+                intensity = context.get("intensity_achieved", 0.5)
+
+                # Base multiplier on difficulty/intensity
+                satisfaction_multiplier = 0.5 + (difficulty * 0.5) + (intensity * 0.5) # Range 0.5 - 1.5
+
+                # Big boost for overcoming resistance
+                if resistance_overcome:
+                    satisfaction_multiplier *= 1.5 # Overcoming resistance is highly satisfying
+                    reason = "resistance overcome"
+                elif difficulty < 0.2: # Very easy compliance
+                    satisfaction_multiplier *= 0.7 # Less satisfying
+                    reason = "easy compliance"
+                else:
+                     reason = f"compliance at difficulty {difficulty:.1f}/intensity {intensity:.1f}"
+
+                # Clamp multiplier (e.g., 0.3 to 2.0)
+                satisfaction_multiplier = max(0.3, min(2.0, satisfaction_multiplier))
+                modified_amount = amount * satisfaction_multiplier
+            # --- End Contextual Modification ---
+
+            need.level = min(need.target_level, need.level + modified_amount)
             need.last_updated = datetime.datetime.now()
-            logger.debug(f"Satisfied need '{name}' by {amount:.2f}. Level: {original_level:.2f} -> {need.level:.2f}")
+            logger.debug(f"Satisfied need '{name}' by {modified_amount:.3f} (Base: {amount:.3f}, Multiplier: {satisfaction_multiplier:.2f}, Reason: {reason}). Level: {original_level:.2f} -> {need.level:.2f}")
         else:
             logger.warning(f"Attempted to satisfy unknown need: {name}")
+
+    # --- Make sure to call satisfy_need with context where appropriate ---
+    # Example in NyxBrain.trigger_dominance_gratification:
+    # await self.needs_system.satisfy_need(
+    #     "control_expression",
+    #     0.8, # Base satisfaction amount
+    #     context={"difficulty_level": context.get("difficulty", 0.7), # Pass difficulty if known
+    #              "resistance_overcome": context.get("resistance_overcome", False),
+    #              "intensity_achieved": intensity}
+    # )
 
     async def decrease_need(self, name: str, amount: float):
         """Decreases the satisfaction level of a need."""
