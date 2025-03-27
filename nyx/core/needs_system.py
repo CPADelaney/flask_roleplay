@@ -47,6 +47,7 @@ class NeedsSystem:
             "intimacy": NeedState(name="intimacy", importance=0.85, decay_rate=0.02, target_level=0.9), 
             "physical_closeness": NeedState(name="physical_closeness", importance=0.7, decay_rate=0.03),
             "drive_expression": NeedState(name="drive_expression", importance=0.6, decay_rate=0.05, level=0.2, target_level=0.8), 
+            "control_expression": NeedState(name="control_expression", importance=0.95, level=0.4, target_level=0.9, decay_rate=0.025) # High importance, decays faster
         }
         self.last_update_time = datetime.datetime.now()
         self.drive_threshold_for_goal = 0.4 # Minimum drive strength to trigger a goal
