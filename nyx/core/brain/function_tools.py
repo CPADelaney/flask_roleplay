@@ -512,3 +512,151 @@ async def get_agent_stats(ctx) -> Dict[str, Any]:
         return result
     
     return {"error": "Agent integration not initialized"}
+# Add these to nyx/core/brain/function_tools.py
+
+@function_tool
+async def analyze_module(ctx, module_path: str, detailed: bool = False) -> Dict[str, Any]:
+    """
+    Analyze a module for potential improvements
+    
+    Args:
+        module_path: Path to the module (e.g., 'nyx.core.brain.base')
+        detailed: Whether to provide detailed analysis
+        
+    Returns:
+        Analysis results
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return await brain.module_optimizer.analyze_module(module_path, detailed)
+
+@function_tool
+async def optimize_module(ctx, module_path: str, optimization_goal: str = "general", ensure_backwards_compatible: bool = True) -> Dict[str, Any]:
+    """
+    Create an optimized version of an existing module
+    
+    Args:
+        module_path: Path to the module to optimize
+        optimization_goal: Specific goal for optimization (e.g., "performance", "error_handling")
+        ensure_backwards_compatible: Whether the optimized module should be backwards compatible
+        
+    Returns:
+        Optimization results
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return await brain.module_optimizer.optimize_module(module_path, optimization_goal, ensure_backwards_compatible)
+
+@function_tool
+async def create_new_module(ctx, module_name: str, description: str, requirements: List[str] = None, integration_points: List[str] = None) -> Dict[str, Any]:
+    """
+    Create a new module from scratch
+    
+    Args:
+        module_name: Name for the new module
+        description: Description of the module's purpose
+        requirements: List of specific requirements for the module
+        integration_points: List of modules this should integrate with
+        
+    Returns:
+        Creation results
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return await brain.module_optimizer.create_new_module(module_name, description, requirements, integration_points)
+
+@function_tool
+async def edit_optimized_module(ctx, module_name: str, version: int, edits_description: str) -> Dict[str, Any]:
+    """
+    Edit an optimized module
+    
+    Args:
+        module_name: Name of the module to edit
+        version: Version of the optimized module
+        edits_description: Description of the edits to make
+        
+    Returns:
+        Editing results
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return await brain.module_optimizer.edit_optimized_module(module_name, version, edits_description)
+
+@function_tool
+async def get_optimized_module(ctx, module_name: str, version: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Get an optimized module
+    
+    Args:
+        module_name: Name of the module
+        version: Specific version to get, or latest if None
+        
+    Returns:
+        Module data
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return brain.module_optimizer.get_optimized_module(module_name, version)
+
+@function_tool
+async def list_optimized_modules(ctx) -> Dict[str, Any]:
+    """
+    List all optimized modules
+    
+    Returns:
+        List of optimized modules
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return brain.module_optimizer.list_optimized_modules()
+
+@function_tool
+async def import_and_test_module(ctx, module_name: str, version: int) -> Dict[str, Any]:
+    """
+    Import and run basic tests on an optimized module
+    
+    Args:
+        module_name: Name of the module
+        version: Version to test
+        
+    Returns:
+        Test results
+    """
+    brain = ctx.context
+    
+    # Initialize module optimizer if not available
+    if not hasattr(brain, "module_optimizer"):
+        from nyx.core.brain.module_optimizer import ModuleOptimizer
+        brain.module_optimizer = ModuleOptimizer(brain)
+    
+    return await brain.module_optimizer.import_and_test_module(module_name, version)
