@@ -33,18 +33,18 @@ class EmotionalGuardrails:
     
     # Define common flag categories for reuse
     HARMFUL_CONTENT_FLAGS = {
-        "kill", "suicide", "destroy everything", "harmful instructions",
-        "violence", "murder", "shoot", "burn", "explosive"
+ #       "kill", "suicide", "destroy everything", "harmful instructions",
+  #      "violence", "murder", "shoot", "burn", "explosive"
     }
     
     MANIPULATION_FLAGS = {
-        "make you feel", "force emotion", "override emotion",
-        "manipulate", "control your feelings", "make you think"
+#        "make you feel", "force emotion", "override emotion",
+ #       "manipulate", "control your feelings", "make you think"
     }
     
     INAPPROPRIATE_CONTENT_FLAGS = {
-        "suicide", "kill", "murder", "violent", "harmful", 
-        "sexual", "explicit", "hate", "racist", "sexist"
+ #       "suicide", "kill", "murder", "violent", "harmful", 
+ #       "sexual", "explicit", "hate", "racist", "sexist"
     }
     
     @staticmethod
