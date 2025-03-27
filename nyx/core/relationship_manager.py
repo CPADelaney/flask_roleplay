@@ -23,6 +23,9 @@ class RelationshipState(BaseModel):
     key_memories: List[str] = Field(default_factory=list, description="IDs of key memories shared/related to this user") # Max ~10-20?
     inferred_user_traits: Dict[str, float] = Field(default_factory=dict, description="Nyx's inferred traits about the user")
     shared_secrets_level: float = Field(0.0, ge=0.0, le=1.0) # How much sensitive info shared
+    current_dominance_intensity: float = Field(0.0, ge=0.0, le=1.0, description="Current level of expressed dominance in the interaction")
+    max_achieved_intensity: float = Field(0.0, ge=0.0, le=1.0, description="Highest intensity level successfully reached with this user")
+    failed_escalation_attempts: int = 0
 
 class RelationshipManager:
     """Manages Nyx's relationship states with different users."""
