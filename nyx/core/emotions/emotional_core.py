@@ -318,6 +318,7 @@ class EmotionalCore:
         
         # Dictionary to store lazily initialized agents
         self.agents = {}
+        self._initialize_agents()
         
         # Performance metrics
         self.performance_metrics = {
@@ -366,19 +367,114 @@ class EmotionalCore:
         add_trace_processor(emotion_trace_processor)
     
     def _initialize_base_agent(self) -> Agent[EmotionalContext]:
-        """
-        Initialize the base agent template that other agents will be cloned from
-        
-        Returns:
-            Base agent template
-        """
+        """Initialize the base agent template that other agents will be cloned from"""
         return Agent[EmotionalContext](
             name="Base Agent",
             model=self.base_model,
             model_settings=ModelSettings(temperature=0.4),
             hooks=self.agent_hooks,
-            instructions=f"{RECOMMENDED_PROMPT_PREFIX}\nYou are part of Nyx's emotional processing system."
+            instructions=get_dynamic_instructions  # Pass function directly for dynamic instructions
         )
+
+    
+    def _initialize_agents(self):
+        """Initialize all agents at once with better SDK patterns"""
+        # Create base agent for cloning
+        base_agent = self._initialize_base_agent()
+        
+        # Create neurochemical agent
+        self.agents["neurochemical"] = base_agent.clone(
+            name="Neurochemical Agent",
+            tools=[
+                function_tool(self.neurochemical_tools.update_neurochemical),
+                function_tool(self.neurochemical_tools.apply_chemical_decay),
+                function_tool(self.neurochemical_tools.process_chemical_interactions),
+                function_tool(self.neurochemical_tools.get_neurochemical_state)
+            ],
+            input_guardrails=[
+                EmotionalGuardrails.validate_emotional_input
+            ],
+            output_type=NeurochemicalResponse,
+            model_settings=ModelSettings(temperature=0.3)  # Lower temperature for precision
+        )
+        
+        # Create emotion derivation agent
+        self.agents["emotion_derivation"] = base_agent.clone(
+            name="Emotion Derivation Agent",
+            tools=[
+                function_tool(self.neurochemical_tools.get_neurochemical_state),
+                function_tool(self.emotion_tools.derive_emotional_state),
+                function_tool(self.emotion_tools.get_emotional_state_matrix)
+            ],
+            output_type=EmotionalStateMatrix,
+            model_settings=ModelSettings(temperature=0.4)
+        )
+        
+        # Create reflection agent
+        self.agents["reflection"] = base_agent.clone(
+            name="Emotional Reflection Agent",
+            tools=[
+                function_tool(self.emotion_tools.get_emotional_state_matrix),
+                function_tool(self.reflection_tools.generate_internal_thought),
+                function_tool(self.analyze_emotional_patterns)
+            ],
+            model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
+            output_type=InternalThoughtOutput
+        )
+        
+        # Create learning agent
+        self.agents["learning"] = base_agent.clone(
+            name="Emotional Learning Agent",
+            tools=[
+                function_tool(self.learning_tools.record_interaction_outcome),
+                function_tool(self.learning_tools.update_learning_rules),
+                function_tool(self.learning_tools.apply_learned_adaptations)
+            ],
+            model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
+        )
+        
+        # Create orchestrator with optimized handoffs
+        self.agents["orchestrator"] = base_agent.clone(
+            name="Emotion Orchestrator",
+            tools=[
+                function_tool(self.emotion_tools.analyze_text_sentiment)
+            ],
+            input_guardrails=[
+                EmotionalGuardrails.validate_emotional_input
+            ],
+            output_guardrails=[
+                EmotionalGuardrails.validate_emotional_output
+            ],
+            output_type=EmotionalResponseOutput
+        )
+        
+        # Configure handoffs after all agents are created
+        self.agents["orchestrator"].handoffs = [
+            handoff(
+                self.agents["neurochemical"], 
+                tool_name_override="process_emotions", 
+                tool_description_override="Process and update neurochemicals based on emotional input analysis.",
+                input_type=NeurochemicalRequest,
+                input_filter=self._neurochemical_input_filter,
+                on_handoff=self._on_neurochemical_handoff
+            ),
+            handoff(
+                self.agents["reflection"], 
+                tool_name_override="generate_reflection",
+                tool_description_override="Generate emotional reflection for deeper introspection.",
+                input_type=ReflectionRequest,
+                input_filter=self._reflection_input_filter,
+                on_handoff=self._on_reflection_handoff
+            ),
+            handoff(
+                self.agents["learning"],
+                tool_name_override="record_and_learn",
+                tool_description_override="Record interaction patterns and apply learning adaptations.",
+                input_type=LearningRequest,
+                input_filter=handoff_filters.keep_relevant_history,
+                on_handoff=self._on_learning_handoff
+            )
+        ]
     
     def _create_agent(self, agent_type: str) -> Agent[EmotionalContext]:
         """
@@ -874,17 +970,25 @@ class EmotionalCore:
             conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
             self.context.set_value("conversation_id", conversation_id)
         
-        # Define an enhanced run configuration
-        run_config = create_run_config(
+        # Create an enhanced RunConfig using the new SDK features
+        run_config = RunConfig(
             workflow_name="Emotional_Processing",
             trace_id=f"emotion_trace_{self.context.cycle_count}",
-            model=orchestrator.model,  # Use the model from the agent
-            temperature=0.4,
-            max_tokens=300,
-            cycle_count=self.context.cycle_count,
-            context_data={
+            group_id=conversation_id,  # Group all traces from this conversation
+            model=orchestrator.model,
+            model_settings=ModelSettings(
+                temperature=0.4,
+                top_p=0.95,
+                max_tokens=300
+            ),
+            handoff_input_filter=handoff_filters.keep_relevant_history,
+            trace_include_sensitive_data=True,
+            trace_metadata={
+                "system": "nyx_emotional_core",
+                "version": "1.0",
                 "input_text_length": len(text),
                 "pattern_analysis": self._quick_pattern_analysis(text),
+                "cycle_count": self.context.cycle_count,
                 "conversation_id": conversation_id
             }
         )
@@ -896,16 +1000,16 @@ class EmotionalCore:
         run_id = f"run_{datetime.datetime.now().timestamp()}"
         self.active_runs[run_id] = {
             "start_time": start_time,
-            "input": text[:100], # Truncate for logging
+            "input": text[:100],  # Truncate for logging
             "status": "running",
             "conversation_id": conversation_id
         }
         
-        # Run the orchestrator with context sharing and proper trace
+        # Run the orchestrator with proper trace using SDK features
         with trace(
             workflow_name="Emotional_Processing", 
             trace_id=f"emotion_trace_{self.context.cycle_count}",
-            group_id=conversation_id,  # Group all traces from this conversation
+            group_id=conversation_id,
             metadata={
                 "input_text_length": len(text),
                 "cycle_count": self.context.cycle_count,
@@ -926,6 +1030,7 @@ class EmotionalCore:
                         "current_cycle": self.context.cycle_count
                     })
                     
+                    # Execute the orchestrator with the run config
                     result = await Runner.run(
                         orchestrator,
                         structured_input,
@@ -933,19 +1038,11 @@ class EmotionalCore:
                         run_config=run_config,
                     )
                     
-                    # Update performance metrics
+                    # Calculate duration and update performance metrics
                     duration = (datetime.datetime.now() - start_time).total_seconds()
-                    self.performance_metrics["api_calls"] += 1
+                    self._update_performance_metrics(duration)
                     
-                    # Update running average of response time
-                    prev_avg = self.performance_metrics["average_response_time"]
-                    prev_count = self.performance_metrics["api_calls"] - 1
-                    if prev_count > 0:
-                        self.performance_metrics["average_response_time"] = (prev_avg * prev_count + duration) / self.performance_metrics["api_calls"]
-                    else:
-                        self.performance_metrics["average_response_time"] = duration
-                    
-                    # Record run completion
+                    # Mark run completion
                     self.active_runs[run_id]["status"] = "completed"
                     self.active_runs[run_id]["duration"] = duration
                     self.active_runs[run_id]["output"] = result.final_output
@@ -954,17 +1051,21 @@ class EmotionalCore:
                     self._record_emotional_state()
                     
                     return result.final_output
-                    
-                except MaxTurnsExceeded:
-                    logger.warning(f"Max turns exceeded in process_emotional_input for run {run_id}")
-                    self.active_runs[run_id]["status"] = "max_turns_exceeded"
-                    return {"error": "Processing exceeded maximum number of steps"}
-                    
-                except AgentsException as e:
-                    logger.error(f"Agent exception in process_emotional_input: {e}")
-                    self.active_runs[run_id]["status"] = "error"
-                    self.active_runs[run_id]["error"] = str(e)
-                    return {"error": f"Processing failed: {str(e)}"}
+                
+                except Exception as e:
+                    # Enhanced error handling with a custom_span
+                    with custom_span(
+                        "processing_error",
+                        data={
+                            "error_type": type(e).__name__,
+                            "message": str(e),
+                            "run_id": run_id
+                        }
+                    ):
+                        logger.error(f"Error in process_emotional_input: {e}")
+                        self.active_runs[run_id]["status"] = "error"
+                        self.active_runs[run_id]["error"] = str(e)
+                        return {"error": f"Processing failed: {str(e)}"}
     
     @with_emotion_trace
     async def process_emotional_input_streamed(self, text: str) -> AsyncIterator['StreamEvent']:
