@@ -10,6 +10,77 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
+from pydantic import BaseModel, Field
+
+from nyx.core.distributed_processing import DistributedProcessingManager
+from nyx.core.prediction_engine import PredictionEngine
+
+from issue_tracking_system import IssueTrackingSystem
+
+# Import core systems
+from nyx.core.emotional_core import EmotionalCore
+from nyx.core.memory_core import MemoryCore
+from nyx.core.reflection_engine import ReflectionEngine
+from nyx.core.experience_interface import ExperienceInterface
+from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
+from nyx.core.internal_feedback_system import InternalFeedbackSystem
+from nyx.core.meta_core import MetaCore
+from nyx.core.knowledge_core import KnowledgeCoreAgents
+from nyx.core.memory_orchestrator import MemoryOrchestrator
+from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
+from nyx.core.experience_consolidation import ExperienceConsolidationSystem
+from nyx.core.identity_evolution import IdentityEvolutionSystem
+from nyx.core.cross_user_experience import CrossUserExperienceManager
+from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator, SensoryInput, ExpectationSignal
+from nyx.core.attentional_controller import AttentionalController, AttentionalControl
+from nyx.core.reward_system import RewardSignalProcessor, RewardSignal
+
+from nyx.core.procedural_memory import (
+    ProceduralMemoryManager, EnhancedProceduralMemoryManager,
+    add_procedure, execute_procedure, transfer_procedure,
+    get_procedure_proficiency, list_procedures, get_transfer_statistics,
+    identify_chunking_opportunities, apply_chunking,
+    generalize_chunk_from_steps, find_matching_chunks,
+    transfer_chunk, transfer_with_chunking, find_similar_procedures,
+    refine_step
+)
+from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+
+from nyx.core.reflexive_system import ReflexiveSystem, initialize_reflexive_system
+
+from nyx.streamer.gamer_girl import (
+    AdvancedGameAgentSystem, 
+    GameSessionLearningManager,
+    CommentaryType, 
+    AnswerType
+)
+
+from nyx.api.thinking_tools import (
+    should_use_extended_thinking,
+    think_before_responding,
+    generate_reasoned_response
+)
+
+from nyx.streamer.integration import setup_enhanced_streaming
+
+from nyx.nyx_agent_sdk import (
+    memory_agent, reflection_agent, decision_agent, nyx_main_agent,
+    retrieve_memories, add_memory, determine_image_generation, 
+    get_user_model_guidance, generate_image_from_scene,
+    AgentContext, MemoryReflection, NarrativeResponse, ContentModeration,
+    initialize_agents, ResponseFilter, Runner
+)
+
+# Import function tools
+from nyx.api.function_tools import (
+    add_memory, retrieve_memories, create_reflection, create_abstraction,
+    construct_narrative, retrieve_experiences, share_experience,
+    get_emotional_state, update_emotion, set_emotion,
+    process_input, generate_response, run_maintenance, get_system_stats,
+    adapt_to_context, evaluate_response
+)
+
+
 from nyx.core.brain.processing.manager import ProcessingManager
 from nyx.core.brain.adaptation.self_config import SelfConfigManager
 from nyx.core.brain.system_health_checker import SystemHealthChecker
