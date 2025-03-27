@@ -2428,7 +2428,11 @@ class IdentityEvolutionSystem:
         }
         
         # Calculate average hormone levels over time
-        hormone_averages = {}
+        hormone_averages = {} # Calculate these...
+
+        # Apply hormone-specific identity effects using the correct structures
+        identity_updates = {"traits": {}, "preferences": {}}
+        
         for hormone_name, hormone_data in self.hormone_system.hormones.items():
             # Calculate average from history if available
             if hormone_data["evolution_history"]:
@@ -2443,17 +2447,18 @@ class IdentityEvolutionSystem:
         # Testoryx influences dominance and intensity traits
         if "testoryx" in hormone_averages:
             testoryx_level = hormone_averages["testoryx"]
-            testoryx_effect = (testoryx_level - 0.5) * 0.1  # Scale effect
-            
-            if "dominance" in self.identity_profile["traits"]:
-                old_value = self.identity_profile["traits"]["dominance"]
-                new_value = max(0.0, min(1.0, old_value + testoryx_effect))
-                identity_updates["traits"]["dominance"] = {
-                    "old": old_value,
-                    "new": new_value,
-                    "change": new_value - old_value
-                }
-                self.identity_profile["traits"]["dominance"] = new_value
+            testoryx_effect = (testoryx_level - 0.5) * 0.05 # Slow effect over time
+
+            if "dominance" in self.identity_traits:
+                # Use the existing update tool for consistency
+                result = await self._update_trait(ctx, trait="dominance", impact=testoryx_effect)
+                if result and "new_value" in result:
+                   identity_updates["traits"]["dominance"] = result
+
+            if "intensity" in self.identity_traits:
+                result = await self._update_trait(ctx, trait="intensity", impact=testoryx_effect * 0.7)
+                if result and "new_value" in result:
+                    identity_updates["traits"]["intensity"] = result
             
             if "intensity" in self.identity_profile["traits"]:
                 old_value = self.identity_profile["traits"]["intensity"]
@@ -2467,45 +2472,44 @@ class IdentityEvolutionSystem:
         
         # Estradyx influences patience and creativity
         if "estradyx" in hormone_averages:
-            estradyx_level = hormone_averages["estradyx"]
-            estradyx_effect = (estradyx_level - 0.5) * 0.1
-            
-            if "patience" in self.identity_profile["traits"]:
-                old_value = self.identity_profile["traits"]["patience"]
-                new_value = max(0.0, min(1.0, old_value + estradyx_effect))
-                identity_updates["traits"]["patience"] = {
-                    "old": old_value,
-                    "new": new_value,
-                    "change": new_value - old_value
-                }
-                self.identity_profile["traits"]["patience"] = new_value
-            
-            if "creativity" in self.identity_profile["traits"]:
-                old_value = self.identity_profile["traits"]["creativity"]
-                new_value = max(0.0, min(1.0, old_value + estradyx_effect * 0.6))
-                identity_updates["traits"]["creativity"] = {
-                    "old": old_value,
-                    "new": new_value,
-                    "change": new_value - old_value
-                }
-                self.identity_profile["traits"]["creativity"] = new_value
+             estradyx_level = hormone_averages["estradyx"]
+             estradyx_effect = (estradyx_level - 0.5) * 0.05
+
+             if "patience" in self.identity_traits:
+                 result = await self._update_trait(ctx, trait="patience", impact=estradyx_effect)
+                 if result and "new_value" in result:
+                     identity_updates["traits"]["patience"] = result
+
+             if "creativity" in self.identity_traits:
+                 result = await self._update_trait(ctx, trait="creativity", impact=estradyx_effect * 0.6)
+                 if result and "new_value" in result:
+                     identity_updates["traits"]["creativity"] = result
         
-        # Oxytonyx influences scenario preferences
+        # Oxytonyx influences scenario/emotional preferences
         if "oxytonyx" in hormone_averages:
             oxytonyx_level = hormone_averages["oxytonyx"]
-            oxytonyx_effect = (oxytonyx_level - 0.5) * 0.15
-            
-            # Increases preference for nurturing scenarios
-            if "scenario_types" in self.identity_profile["preferences"] and "nurturing" in self.identity_profile["preferences"]["scenario_types"]:
-                old_value = self.identity_profile["preferences"]["scenario_types"]["nurturing"]
-                new_value = max(0.0, min(1.0, old_value + oxytonyx_effect))
-                
-                identity_updates["preferences"]["scenario_types.nurturing"] = {
-                    "old": old_value,
-                    "new": new_value,
-                    "change": new_value - old_value
-                }
-                
+            oxytonyx_effect = (oxytonyx_level - 0.5) * 0.08
+
+            if "scenario_types" in self.identity_preferences and "nurturing" in self.identity_preferences["scenario_types"]:
+                result = await self._update_preference(ctx, category="scenario_types", preference="nurturing", impact=oxytonyx_effect)
+                if result and "new_value" in result:
+                    if "preferences" not in identity_updates: identity_updates["preferences"] = {}
+                    identity_updates["preferences"]["scenario_types.nurturing"] = result
+
+            if "emotional_tones" in self.identity_preferences:
+                 if "nurturing" in self.identity_preferences["emotional_tones"]:
+                     result = await self._update_preference(ctx, category="emotional_tones", preference="nurturing", impact=oxytonyx_effect)
+                     if result and "new_value" in result:
+                         if "preferences" not in identity_updates: identity_updates["preferences"] = {}
+                         identity_updates["preferences"]["emotional_tones.nurturing"] = result
+
+                 if "cruel" in self.identity_preferences["emotional_tones"]:
+                     # Oxytonyx reduces cruel preference
+                     result = await self._update_preference(ctx, category="emotional_tones", preference="cruel", impact=-oxytonyx_effect * 0.5)
+                     if result and "new_value" in result:
+                         if "preferences" not in identity_updates: identity_updates["preferences"] = {}
+                         identity_updates["preferences"]["emotional_tones.cruel"] = result
+                         
                 self.identity_profile["preferences"]["scenario_types"]["nurturing"] = new_value
                 
             # Influences emotional tones - increases nurturing, decreases cruel
@@ -2536,18 +2540,19 @@ class IdentityEvolutionSystem:
         
         # Endoryx influences playfulness and indulgent scenarios
         if "endoryx" in hormone_averages:
-            endoryx_level = hormone_averages["endoryx"]
-            endoryx_effect = (endoryx_level - 0.5) * 0.12
-            
-            if "playfulness" in self.identity_profile["traits"]:
-                old_value = self.identity_profile["traits"]["playfulness"]
-                new_value = max(0.0, min(1.0, old_value + endoryx_effect))
-                identity_updates["traits"]["playfulness"] = {
-                    "old": old_value,
-                    "new": new_value,
-                    "change": new_value - old_value
-                }
-                self.identity_profile["traits"]["playfulness"] = new_value
+             endoryx_level = hormone_averages["endoryx"]
+             endoryx_effect = (endoryx_level - 0.5) * 0.06
+
+             if "playfulness" in self.identity_traits:
+                 result = await self._update_trait(ctx, trait="playfulness", impact=endoryx_effect)
+                 if result and "new_value" in result:
+                     identity_updates["traits"]["playfulness"] = result
+
+             if "scenario_types" in self.identity_preferences and "indulgent" in self.identity_preferences["scenario_types"]:
+                 result = await self._update_preference(ctx, category="scenario_types", preference="indulgent", impact=endoryx_effect)
+                 if result and "new_value" in result:
+                     if "preferences" not in identity_updates: identity_updates["preferences"] = {}
+                     identity_updates["preferences"]["scenario_types.indulgent"] = result
             
             # Influence on indulgent scenario preference
             if "scenario_types" in self.identity_profile["preferences"] and "indulgent" in self.identity_profile["preferences"]["scenario_types"]:
