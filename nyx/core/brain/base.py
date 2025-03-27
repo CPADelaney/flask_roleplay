@@ -24,6 +24,11 @@ from nyx.core.brain.function_tools import (
     process_user_feedback_for_configuration, set_processing_mode, get_processing_stats,
     initialize_streaming, process_streaming_event, run_thinking
 )
+from nyx.core.multimodal_integrator import ( # Import new constants/schemas
+    MODALITY_TOUCH_EVENT, MODALITY_TASTE, MODALITY_SMELL,
+    TouchEventFeatures, TasteFeatures, SmellFeatures
+)
+from nyx.core.reward_system import RewardSignal # Ensure import
 
 logger = logging.getLogger(__name__)
 
@@ -531,6 +536,140 @@ class NyxBrain:
                 integrated[key] = bottom_up_features[key]
         
         return integrated
+
+    async def process_sensory_input_wrapper(self, input_data: SensoryInput, expectations: List[ExpectationSignal] = None):
+        """Wrapper to process input AND handle post-integration reactions."""
+        if not self.initialized: await self.initialize()
+        if not self.multimodal_integrator:
+            self.logger.error("Multimodal Integrator not initialized.")
+            return None
+
+        percept = await self.multimodal_integrator.process_sensory_input(input_data, expectations)
+
+        if percept and percept.attention_weight > 0.2: # Only process if attended to
+             await self._handle_percept_reaction(percept)
+
+        return percept
+
+
+    async def _handle_percept_reaction(self, percept: IntegratedPercept):
+        """Handles reactions to processed percepts based on modality."""
+        modality = percept.modality
+        content = percept.content # This should be the specific Feature object (e.g., TasteFeatures)
+        timestamp = percept.timestamp
+
+        try:
+            if modality == MODALITY_TOUCH_EVENT and isinstance(content, TouchEventFeatures):
+                if self.digital_somatosensory_system:
+                    # Trigger DSS based on touch features
+                    self.logger.info(f"Handling touch event on {content.region}")
+                    # Basic pressure/temp simulation
+                    pressure = content.pressure_level or 0.5 # Default pressure if none specified
+                    temp_value = 0.5 # Neutral default
+                    if content.temperature == 'warm': temp_value = 0.65
+                    elif content.temperature == 'hot': temp_value = 0.8
+                    elif content.temperature == 'cool': temp_value = 0.35
+                    elif content.temperature == 'cold': temp_value = 0.2
+
+                    # Use asyncio.gather for concurrent calls if needed, or just await sequentially
+                    tasks = []
+                    tasks.append(self.digital_somatosensory_system.process_stimulus(
+                        stimulus_type="pressure",
+                        body_region=content.region,
+                        intensity=pressure,
+                        cause=f"Touched {content.object_description or 'object'}",
+                        duration=0.5 # Short duration for initial touch
+                    ))
+                    if content.temperature is not None:
+                         tasks.append(self.digital_somatosensory_system.process_stimulus(
+                             stimulus_type="temperature",
+                             body_region=content.region,
+                             intensity=temp_value, # Use mapped value
+                             cause=f"Touched {content.object_description or 'object'} ({content.temperature})",
+                             duration=1.0 # Longer duration for temp
+                         ))
+                    # Add more based on texture -> maybe tingling? hardness -> pressure?
+                    await asyncio.gather(*tasks)
+
+
+            elif modality == MODALITY_TASTE and isinstance(content, TasteFeatures):
+                 if self.reward_system and self.emotional_core:
+                     self.logger.info(f"Handling taste: {content.profiles} (Intensity: {content.intensity})")
+                     reward_value = 0.0
+                     pos_score = sum(1 for p in content.profiles if p in POSITIVE_TASTES)
+                     neg_score = sum(1 for p in content.profiles if p in NEGATIVE_TASTES)
+
+                     # Calculate base reward/punishment
+                     if pos_score > neg_score:
+                         reward_value = 0.3 + (pos_score * 0.2) # Base positive + bonus per profile
+                     elif neg_score > pos_score:
+                         reward_value = -0.3 - (neg_score * 0.2) # Base negative + bonus per profile
+
+                     # Scale by intensity
+                     reward_value *= (0.5 + content.intensity * 0.7) # Intensity has significant impact
+                     reward_value = max(-1.0, min(1.0, reward_value)) # Clamp
+
+                     # Generate Reward Signal
+                     if abs(reward_value) > 0.05:
+                         reward_signal = RewardSignal(
+                             value=reward_value,
+                             source="taste_perception",
+                             context={
+                                 "profiles": content.profiles,
+                                 "intensity": content.intensity,
+                                 "source": content.source_description
+                             },
+                             timestamp=timestamp
+                         )
+                         asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+
+                     # Update Emotions Directly
+                     if reward_value > 0.3: # Pleasant taste
+                         self.emotional_core.update_neurochemical("nyxamine", reward_value * 0.4)
+                         self.emotional_core.update_neurochemical("seranix", reward_value * 0.1)
+                     elif reward_value < -0.2: # Unpleasant taste
+                         self.emotional_core.update_neurochemical("cortanyx", abs(reward_value) * 0.5)
+                         # Maybe trigger disgust emotion pattern?
+
+            elif modality == MODALITY_SMELL and isinstance(content, SmellFeatures):
+                 if self.reward_system and self.emotional_core:
+                     self.logger.info(f"Handling smell: {content.profiles} (Intensity: {content.intensity})")
+                     reward_value = 0.0
+                     pleasantness = content.pleasantness or 0.0 # Use estimated or default
+
+                     # Simple reward based on pleasantness and intensity
+                     reward_value = pleasantness * (0.2 + content.intensity * 0.6)
+                     reward_value = max(-1.0, min(1.0, reward_value))
+
+                     # Generate Reward Signal
+                     if abs(reward_value) > 0.05:
+                          reward_signal = RewardSignal(
+                              value=reward_value,
+                              source="smell_perception",
+                              context={
+                                  "profiles": content.profiles,
+                                  "intensity": content.intensity,
+                                  "pleasantness": pleasantness,
+                                  "source": content.source_description
+                              },
+                              timestamp=timestamp
+                          )
+                          asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+
+                     # Update Emotions Directly
+                     if reward_value > 0.2: # Pleasant smell
+                         self.emotional_core.update_neurochemical("nyxamine", reward_value * 0.2)
+                         self.emotional_core.update_neurochemical("seranix", reward_value * 0.3)
+                         # Maybe trigger memory retrieval?
+                         # if self.memory_orchestrator:
+                         #    asyncio.create_task(self.memory_orchestrator.retrieve_memories(query=f"smell of {content.profiles[0]}", limit=1))
+                     elif reward_value < -0.2: # Unpleasant smell
+                         self.emotional_core.update_neurochemical("cortanyx", abs(reward_value) * 0.4)
+
+            # Add handlers for other modalities if needed
+
+        except Exception as e:
+             self.logger.exception(f"Error handling percept reaction for {modality}: {e}")
     
     def _create_brain_agent(self) -> Agent:
         """Create the main brain agent that coordinates all subsystems"""
