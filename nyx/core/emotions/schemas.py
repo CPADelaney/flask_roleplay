@@ -223,7 +223,7 @@ class DigitalHormone(BaseModel):
                             description="Timestamp of last update")
 
 class EmotionalResponseOutput(BaseModel):
-    """Schema for complete emotional response output"""
+    """Enhanced schema for structured emotional response output"""
     primary_emotion: DerivedEmotion = Field(..., description="Primary emotion")
     intensity: confloat(ge=0.0, le=1.0) = Field(..., description="Overall intensity")
     response_text: str = Field(..., description="Text response")
@@ -241,6 +241,21 @@ class EmotionalResponseOutput(BaseModel):
     def arousal_category(self) -> EmotionArousal:
         """Get the arousal category for this response"""
         return EmotionArousal.from_value(self.arousal)
+        
+    @root_validator
+    def validate_emotional_state(cls, values):
+        """Ensure consistency between primary emotion and valence/arousal"""
+        if all(k in values for k in ["primary_emotion", "valence", "arousal"]):
+            primary = values["primary_emotion"]
+            if hasattr(primary, "valence") and hasattr(primary, "arousal"):
+                # Validate that overall valence isn't too far from primary emotion valence
+                if abs(primary.valence - values["valence"]) > 0.5:
+                    values["valence"] = (primary.valence + values["valence"]) / 2
+                    
+                # Validate that overall arousal isn't too far from primary emotion arousal
+                if abs(primary.arousal - values["arousal"]) > 0.5:
+                    values["arousal"] = (primary.arousal + values["arousal"]) / 2
+        return values
 
 # =============================================================================
 # Handoff Request/Response Models
