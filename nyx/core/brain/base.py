@@ -12,6 +12,7 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
 from nyx.core.brain.processing.manager import ProcessingManager
 from nyx.core.brain.adaptation.self_config import SelfConfigManager
+from nyx.core.brain.module_optimizer import ModuleOptimizer
 from nyx.core.brain.function_tools import (
     process_user_message, generate_agent_response, run_cognitive_cycle,
     get_brain_stats, perform_maintenance, get_identity_state,
@@ -112,6 +113,8 @@ class NyxBrain:
             "error_recovery_strategies": {},
             "error_recovery_stats": {}
         }
+
+        self.module_optimizer = ModuleOptimizer(self)
         
         # Agent system
         self.agent_capabilities_initialized = False
