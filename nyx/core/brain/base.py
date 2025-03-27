@@ -150,6 +150,7 @@ class NyxBrain:
         from nyx.core.temporal_perception import TemporalPerception
         from nyx.core.procedural_memory import ProceduralMemoryManager
         from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+        from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem # Import DSS
         from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
         from nyx.api.thinking_tools import ThinkingTools
         
@@ -211,7 +212,21 @@ class NyxBrain:
             self.reward_system = RewardSignalProcessor(
                 emotional_core=self.emotional_core,
                 identity_evolution=self.identity_evolution
+                somatosensory_system=None
             )
+
+            # Initialize somatosensory system with refs
+            self.digital_somatosensory_system = DigitalSomatosensorySystem(
+                memory_core=self.memory_core, # Or orchestrator?
+                emotional_core=self.emotional_core,
+                reward_system=self.reward_system
+            )
+            await self.digital_somatosensory_system.initialize()
+
+            # Now set the DSS reference in RewardSystem
+            self.reward_system.somatosensory_system = self.digital_somatosensory_system
+            # Optionally set DSS reference in IdentityEvolution if needed
+            self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
             
             # Initialize temporal perception
             self.temporal_perception = TemporalPerception()
@@ -612,6 +627,11 @@ class NyxBrain:
         """
         if not self.initialized:
             await self.initialize()
+
+        if not context: context = {}
+        # Add current somatic state to context for processing?
+        if self.digital_somatosensory_system:
+             context['somatic_state'] = await self.digital_somatosensory_system.get_body_state()
         
         # Use processing manager if available
         if self.processing_manager:
@@ -633,6 +653,13 @@ class NyxBrain:
         """
         if not self.initialized:
             await self.initialize()
+
+        if not context: context = {}
+        # Add current somatic/emotional state to context for response generation
+        if self.digital_somatosensory_system:
+             context['somatic_state'] = await self.digital_somatosensory_system.get_body_state()
+        if self.emotional_core:
+             context['emotional_state'] = self.emotional_core.get_emotional_state() # Assumes method exists
         
         # Use processing manager if available
         if self.processing_manager:
@@ -732,16 +759,27 @@ class NyxBrain:
             # Run hormone maintenance
             if self.hormone_system:
                 try:
-                    hormone_result = await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None))
-                    results["hormone_maintenance"] = hormone_result
-                    
-                    # Update identity from hormones if identity evolution is available
+                    hormone_cycle_result = await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None)) # Pass context wrapper
+                    results["hormone_cycle_update"] = hormone_cycle_result
+    
+                    # Update identity from hormones (now handled within hormone_cycle_result potentially or called separately)
                     if self.identity_evolution:
-                        identity_update = await self.identity_evolution.update_identity_from_hormones(RunContextWrapper(context=None))
+                        identity_update = await self.identity_evolution.update_identity_from_hormones(RunContextWrapper(context=None)) # Pass context wrapper
                         results["hormone_identity_update"] = identity_update
                 except Exception as e:
-                    logger.error(f"Error in hormone maintenance: {str(e)}")
+                    logger.error(f"Error in hormone maintenance/identity update: {str(e)}")
                     results["hormone_maintenance"] = {"error": str(e)}
+    
+            # Add DSS update call
+            if self.digital_somatosensory_system:
+                 try:
+                     # Pass current ambient temp if available, else None
+                     ambient_temp = None # Get from environment if possible
+                     dss_state = await self.digital_somatosensory_system.update(ambient_temperature=ambient_temp)
+                     results["dss_update_status"] = "completed"
+                 except Exception as e:
+                      logger.error(f"Error updating Digital Somatosensory System: {str(e)}")
+                      results["dss_update_status"] = {"error": str(e)}
             
             # Run memory maintenance
             if self.memory_orchestrator:
