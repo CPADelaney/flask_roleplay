@@ -14,8 +14,8 @@ from .flashbacks import FlashbackManager
 from .semantic import SemanticMemoryManager
 from .reconsolidation import ReconsolidationManager
 from .masks import ProgressiveRevealManager
-from app.db.connection import get_db_connection
-from app.utils.cache import get, set, delete
+from db.connection import get_db_connection
+from utils.cache import get, set, delete
 
 logger = logging.getLogger("memory_integrated")
 
