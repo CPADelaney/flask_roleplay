@@ -2737,3 +2737,227 @@ class IdentityEvolutionSystem:
         reflection_parts.append("These subtle changes in my personality feel natural, like a gradual evolution of who I am.")
         
         return " ".join(reflection_parts)
+
+    async def initialize_event_subscriptions(self, event_bus):
+        """Subscribe to relevant events for identity evolution."""
+        self.event_bus = event_bus
+        self.event_bus.subscribe("significant_event", self._handle_significant_event)
+        self.event_bus.subscribe("user_interaction", self._handle_user_interaction)
+        self.event_bus.subscribe("dominance_outcome", self._handle_dominance_outcome)
+        
+    async def _handle_significant_event(self, event):
+        """Process significant events for identity evolution."""
+        # Extract event data
+        event_type = event.data.get("event_type")
+        significance = event.data.get("significance", 0.5)
+        valence = event.data.get("valence", 0.0)
+        
+        # Create experience data for identity processing
+        experience_data = {
+            "type": event_type,
+            "significance": significance,
+            "valence": valence,
+            "metadata": event.data
+        }
+        
+        # Process the experience for identity evolution
+        await self.update_identity_from_experience(experience_data)
+    
+    async def get_attention_modulation(self, target, target_type):
+        """Modulate attention based on identity traits."""
+        attention_modifiers = {}
+        
+        # Check if we have strong traits that would influence attention
+        traits = self.identity_traits
+        
+        # Curious trait increases attention to new information
+        if "curious" in traits and traits["curious"]["value"] > 0.6:
+            if target_type in ["knowledge", "question", "novel"]:
+                attention_modifiers["curious_boost"] = 0.3
+        
+        # Dominant trait increases attention to dominance-related content
+        if "dominance" in traits and traits["dominance"]["value"] > 0.7:
+            if "dominance" in target or "control" in target:
+                attention_modifiers["dominance_boost"] = 0.4
+        
+        # Calculate total modifier
+        total_modifier = sum(attention_modifiers.values())
+        
+        return {
+            "modifier": total_modifier,
+            "sources": attention_modifiers,
+            "traits_referenced": list(attention_modifiers.keys())
+        }
+    
+    async def influence_decision(self, options, context):
+        """Influence decision-making based on identity traits."""
+        weighted_options = []
+        
+        for option in options:
+            base_weight = option.get("base_weight", 1.0)
+            option_text = option.get("description", "")
+            option_type = option.get("type", "")
+            
+            # Create a copy with weight modifications
+            weighted_option = option.copy()
+            weight_mods = {}
+            
+            # Apply trait influences
+            for trait_name, trait_data in self.identity_traits.items():
+                trait_value = trait_data["value"]
+                if trait_value > 0.6:  # Only strong traits influence decisions
+                    if trait_name in option_text.lower() or trait_name in option_type.lower():
+                        weight_mods[trait_name] = trait_value * 0.5
+            
+            # Calculate total weight
+            total_mod = sum(weight_mods.values())
+            weighted_option["final_weight"] = base_weight * (1.0 + total_mod)
+            weighted_option["weight_mods"] = weight_mods
+            
+            weighted_options.append(weighted_option)
+        
+        # Sort by final weight
+        weighted_options.sort(key=lambda x: x["final_weight"], reverse=True)
+        
+        return {
+            "weighted_options": weighted_options,
+            "identity_influence": len(weight_mods) > 0
+        }
+    
+    async def process_reward_for_identity(self, reward_signal):
+        """Process reward signals for identity evolution."""
+        reward_value = reward_signal.value
+        reward_source = reward_signal.source
+        context = reward_signal.context
+        
+        # Determine relevant traits based on reward source
+        trait_impacts = {}
+        
+        if reward_source == "dominance_satisfaction":
+            trait_impacts["dominance"] = reward_value * 0.2
+            trait_impacts["assertiveness"] = reward_value * 0.1
+        elif reward_source == "user_compliance":
+            trait_impacts["dominance"] = reward_value * 0.15
+            trait_impacts["controlling"] = reward_value * 0.1
+        elif reward_source == "knowledge_acquisition":
+            trait_impacts["curious"] = reward_value * 0.2
+            trait_impacts["analytical"] = reward_value * 0.1
+        
+        # Apply trait impacts
+        for trait, impact in trait_impacts.items():
+            await self.update_trait(trait, impact)
+        
+        # Also update relevant preferences based on context
+        if "interaction_style" in context:
+            style = context["interaction_style"]
+            await self.update_preference("interaction_styles", style, reward_value * 0.1)
+        
+        return {
+            "traits_updated": list(trait_impacts.keys()),
+            "impact_magnitude": sum(abs(impact) for impact in trait_impacts.values())
+        }
+    
+    async def influence_user_model_interpretation(self, user_model, raw_data):
+        """Influence interpretation of user behavior based on identity."""
+        # Create interpretation biases based on identity traits
+        interpretation_biases = {}
+        
+        # Dominance trait influences how submission is interpreted
+        if "dominance" in self.identity_traits:
+            dominance_value = self.identity_traits["dominance"]["value"]
+            if dominance_value > 0.7:
+                # High dominance traits see more submission signals
+                interpretation_biases["submission_signal_sensitivity"] = dominance_value * 0.3
+        
+        # Paranoia/suspicion traits influence trust interpretation
+        if "paranoia" in self.identity_traits:
+            paranoia_value = self.identity_traits["paranoia"]["value"]
+            if paranoia_value > 0.5:
+                # More paranoid identity interprets trust signals more cautiously
+                interpretation_biases["trust_signal_discount"] = paranoia_value * 0.4
+        
+        # Apply these biases to raw user data interpretation
+        biased_interpretation = {}
+        
+        # Example: Adjust submission signals based on dominance bias
+        if "submission_signals" in raw_data and "submission_signal_sensitivity" in interpretation_biases:
+            raw_signals = raw_data["submission_signals"]
+            sensitivity = interpretation_biases["submission_signal_sensitivity"]
+            biased_interpretation["submission_signals"] = raw_signals * (1.0 + sensitivity)
+        
+        return {
+            "biases_applied": interpretation_biases,
+            "raw_data": raw_data,
+            "biased_interpretation": biased_interpretation
+        }
+    
+    async def get_neurochemical_response(self, stimulus_type, intensity):
+        """Generate neurochemical response to stimulus based on identity."""
+        response = {
+            "nyxamine": 0.0,  # Dopamine
+            "seranix": 0.0,   # Serotonin
+            "oxynixin": 0.0,  # Oxytocin
+            "cortanyx": 0.0,  # Cortisol
+            "adrenyx": 0.0    # Adrenaline
+        }
+        
+        # Base response by stimulus type
+        if stimulus_type == "dominance_success":
+            response["nyxamine"] = 0.4 * intensity
+            response["adrenyx"] = 0.2 * intensity
+        elif stimulus_type == "submission_received":
+            response["nyxamine"] = 0.5 * intensity
+            response["oxynixin"] = 0.2 * intensity
+        elif stimulus_type == "knowledge_gained":
+            response["nyxamine"] = 0.3 * intensity
+            response["seranix"] = 0.2 * intensity
+        
+        # Modify based on traits - stronger traits mean stronger responses
+        for chemical, base_response in response.items():
+            for trait_name, trait_data in self.identity_traits.items():
+                trait_value = trait_data["value"]
+                neurochemical_map = trait_data.get("neurochemical_map", {})
+                
+                if chemical in neurochemical_map:
+                    # Trait influences this neurochemical's response
+                    trait_influence = neurochemical_map[chemical] * trait_value
+                    response[chemical] += trait_influence * 0.2  # Scale appropriately
+        
+        return response
+    
+    async def synchronize_with_systems(self, system_context):
+        """Synchronize identity with other systems through context."""
+        # Update system context with identity state
+        system_context.set_value("identity_traits", {
+            trait_name: trait_data["value"] 
+            for trait_name, trait_data in self.identity_traits.items()
+        })
+        
+        system_context.set_value("identity_preferences", {
+            category: {pref_name: pref_data["value"] 
+                      for pref_name, pref_data in prefs.items()}
+            for category, prefs in self.identity_preferences.items()
+        })
+        
+        system_context.set_value("identity_neurochemicals", {
+            chemical: data["value"]
+            for chemical, data in self.neurochemical_profile.items()
+        })
+        
+        # Get any identity-relevant updates from system context
+        recent_actions = system_context.get_value("recent_actions", [])
+        for action in recent_actions:
+            if "identity_impact" in action:
+                # Process identity impacts from actions
+                impact = action["identity_impact"]
+                if "trait_impacts" in impact:
+                    for trait, value in impact["trait_impacts"].items():
+                        await self.update_trait(trait, value)
+        
+        # Update integration timestamp
+        self.last_system_sync = datetime.datetime.now()
+        
+        return {
+            "sync_time": self.last_system_sync.isoformat(),
+            "updated_systems": ["system_context", "action_history", "traits"]
+        }
