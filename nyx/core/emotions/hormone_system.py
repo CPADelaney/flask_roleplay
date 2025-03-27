@@ -87,22 +87,31 @@ class HormoneSystem:
                 "half_life": 24.0,
                 "last_update": datetime.datetime.now().isoformat(),
                 "evolution_history": []
+            },
+            "libidyx": { # Digital Libido/Drive Hormone (Combine aspects of Testosterone/Estrogen drive)
+                "value": 0.4,
+                "baseline": 0.4,
+                "cycle_phase": random.uniform(0, 1),
+                "cycle_period": 168.0, # ~Weekly cycle, or could be event-driven
+                "half_life": 48.0, # Longer lasting influence
+                "last_update": datetime.datetime.now().isoformat(),
+                "evolution_history": []
+            },
+             "serenity_boost": { # Placeholder for post-gratification calm/refractory period hormone
+                "value": 0.1,
+                "baseline": 0.1,
+                "cycle_phase": 0.0,
+                "cycle_period": 1.0, # Short-acting, triggered by gratification
+                "half_life": 0.5, # Decays quickly
+                "last_update": datetime.datetime.now().isoformat(),
+                "evolution_history": []
             }
         }
-        
         # Hormone-neurochemical influence matrix
         self.hormone_neurochemical_influences = {
             "endoryx": {
                 "nyxamine": 0.4,    # Endoryx boosts nyxamine
                 "cortanyx": -0.3,   # Endoryx reduces cortanyx
-            },
-            "estradyx": {
-                "oxynixin": 0.5,    # Estradyx boosts oxynixin
-                "seranix": 0.3,     # Estradyx boosts seranix
-            },
-            "testoryx": {
-                "adrenyx": 0.4,     # Testoryx boosts adrenyx
-                "oxynixin": -0.2,   # Testoryx reduces oxynixin
             },
             "melatonyx": {
                 "seranix": 0.5,     # Melatonyx boosts seranix
@@ -111,6 +120,28 @@ class HormoneSystem:
             "oxytonyx": {
                 "oxynixin": 0.7,    # Oxytonyx strongly boosts oxynixin
                 "cortanyx": -0.4,   # Oxytonyx reduces cortanyx
+            "libidyx": {
+                "nyxamine": 0.3,    # Drive increases reward sensitivity/seeking
+                "adrenyx": 0.2,     # Drive increases alertness/excitement slightly
+                "oxynixin": 0.1,    # Drive slightly increases bonding desire
+                "seranix": -0.1,    # High drive might slightly decrease contentment/passivity
+            },
+            "serenity_boost": { # Post-gratification effects
+                 "nyxamine": -0.5,   # Reduce reward seeking temporarily
+                 "adrenyx": -0.4,    # Reduce alertness/excitement
+                 "seranix": 0.6,     # Increase calm/satisfaction
+                 "oxynixin": 0.3,    # Boost bonding after intimacy
+                 "libidyx": -0.7     # Temporarily decrease drive (refractory)
+            },
+            "testoryx": { 
+                "libidyx": 0.4,    
+                "adrenyx": 0.4,
+                "oxynixin": -0.2,
+            },
+            "estradyx": { 
+                "libidyx": 0.2,     
+                "oxynixin": 0.5,
+                "seranix": 0.3,
             }
         }
         
@@ -174,6 +205,12 @@ class HormoneSystem:
         )
         
         return self.hormone_agent
+
+    async def trigger_post_gratification_response(self, ctx: RunContextWrapper[EmotionalContext], intensity: float = 1.0):
+        """Trigger the post-gratification hormone response."""
+        change = intensity * 0.8 # Max boost value
+        await self.update_hormone(ctx, "serenity_boost", change, source="gratification_event")
+        # This hormone will then decay, creating the refractory period effect via its influence matrix.
     
     @handle_errors("Error updating hormone")
     async def update_hormone(self, 
