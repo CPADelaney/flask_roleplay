@@ -138,6 +138,30 @@ class IdentityEvolutionSystem:
                 "evolution_history": []
             }
         }
+
+        self.identity_preferences = {
+            # ... (existing categories like scenario_types) ...
+            "taste_preferences": {
+                # Add entries as Nyx experiences tastes, start empty or neutral
+                "sweet": {"category": "taste_preferences", "name": "sweet", "value": 0.5, "adaptability": 0.7, "neurochemical_modifiers": {"nyxamine": 0.2}, "evolution_history": []},
+                "bitter": {"category": "taste_preferences", "name": "bitter", "value": 0.3, "adaptability": 0.6, "neurochemical_modifiers": {"cortanyx": 0.1}, "evolution_history": []},
+                # ... add other basic tastes ...
+            },
+            "smell_preferences": {
+                # Add entries as Nyx experiences smells, start empty or neutral
+                "floral": {"category": "smell_preferences", "name": "floral", "value": 0.6, "adaptability": 0.6, "neurochemical_modifiers": {"seranix": 0.1}, "evolution_history": []},
+                "rotten": {"category": "smell_preferences", "name": "rotten", "value": 0.1, "adaptability": 0.5, "neurochemical_modifiers": {"cortanyx": 0.2}, "evolution_history": []},
+                 # ... add other common smell profiles ...
+            },
+            "somatic_preferences": { # Preference for certain feelings
+                "warmth": {"category": "somatic_preferences", "name": "warmth", "value": 0.6, "adaptability": 0.5, "neurochemical_modifiers": {"seranix": 0.1}, "evolution_history": []},
+                "coolness": {"category": "somatic_preferences", "name": "coolness", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
+                "softness": {"category": "somatic_preferences", "name": "softness", "value": 0.7, "adaptability": 0.6, "neurochemical_modifiers": {"oxynixin": 0.1}, "evolution_history": []},
+                "pressure_light": {"category": "somatic_preferences", "name": "pressure_light", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
+                "pressure_firm": {"category": "somatic_preferences", "name": "pressure_firm", "value": 0.5, "adaptability": 0.5, "neurochemical_modifiers": {}, "evolution_history": []},
+                # Add pain/pleasure if desired, though reward handles direct like/dislike
+            }
+        }
         
         # Initial emotional tendencies
         self.emotional_tendencies = {
