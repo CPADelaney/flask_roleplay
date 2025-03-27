@@ -89,6 +89,35 @@ class NarrativeEvent(Event):
             "summary": summary
         })
 
+class ReasoningEvent(Event):
+    """Reasoning result event."""
+    def __init__(self, source: str, query: str, result: Dict[str, Any], confidence: float):
+        super().__init__("reasoning_result", source, {
+            "query": query,
+            "result": result,
+            "confidence": confidence
+        })
+
+class DecisionEvent(Event):
+    """Decision event."""
+    def __init__(self, source: str, decision_type: str, options: List[Dict[str, Any]], 
+                selected_option: Dict[str, Any], confidence: float):
+        super().__init__("decision_made", source, {
+            "decision_type": decision_type,
+            "options": options,
+            "selected_option": selected_option,
+            "confidence": confidence
+        })
+
+class IntegrationStatusEvent(Event):
+    """Integration status update event."""
+    def __init__(self, source: str, component: str, status: str, details: Dict[str, Any] = None):
+        super().__init__("integration_status", source, {
+            "component": component,
+            "status": status,
+            "details": details or {}
+        })
+
 class EventBus:
     """
     Central event distribution system for inter-module communication.
