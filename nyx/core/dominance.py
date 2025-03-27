@@ -3,6 +3,18 @@
 from agents import Agent, ModelSettings, function_tool
 from nyx.schemas.dominance import FemdomActivityIdea # Assuming the schema is placed here
 from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+class FemdomActivityIdea(BaseModel):
+    description: str = Field(..., description="Detailed description of the activity/task/punishment.")
+    category: str = Field(..., description="Type: task, punishment, funishment, ritual, training, psychological, physical_sim, humiliation, service, etc.")
+    intensity: int = Field(..., ge=1, le=10, description="Intensity level (1=mundane, 5=moderate, 8=intense, 10=extreme/degrading).")
+    rationale: str = Field(..., description="Why this idea is tailored to the specific user and situation.")
+    required_trust: float = Field(..., ge=0.0, le=1.0, description="Estimated minimum trust level required.")
+    required_intimacy: float = Field(..., ge=0.0, le=1.0, description="Estimated minimum intimacy level required.")
+    potential_risks_simulated: List[str] = Field(default_factory=list, description="Simulated risks or challenges (e.g., emotional distress, resistance).")
+    safety_notes: Optional[str] = Field(None, description="Specific safety considerations for this simulated activity.")
 
 # --- Tool Functions (Need to be implemented or linked in NyxBrain/RelationshipManager) ---
 
