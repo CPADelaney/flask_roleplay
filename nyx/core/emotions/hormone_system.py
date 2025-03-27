@@ -132,11 +132,13 @@ class HormoneSystem:
                  "seranix": 0.6,     # Increase calm/satisfaction
                  "oxynixin": 0.3,    # Boost bonding after intimacy
                  "libidyx": -0.7     # Temporarily decrease drive (refractory)
+                 "testoryx": -0.6    # Temporarily reduce dominance drive hormone
             },
             "testoryx": { 
-                "libidyx": 0.4,    
-                "adrenyx": 0.4,
-                "oxynixin": -0.2,
+                "adrenyx": 0.4,     # Assertiveness link to alertness
+                "nyxamine": 0.2,    # Baseline drive link to reward seeking
+                "seranix": -0.2,    # High drive might reduce passivity
+                "libidyx": 0.3,     # Link to general drive hormone if desired
             },
             "estradyx": { 
                 "libidyx": 0.2,     
@@ -567,6 +569,12 @@ class HormoneSystem:
                                     "temporary_baseline": temporary_baseline,
                                     "timestamp": datetime.datetime.now().isoformat()
                                 })
+
+                     if self.emotional_core and 'testoryx' in self.hormones:
+                         testoryx_level = self.hormones['testoryx']['value']
+                         if testoryx_level > 0.6:
+                             nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
+                             influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence                
                 
                 # Store in context for tracking
                 ctx.context.set_value("hormone_influences", {
