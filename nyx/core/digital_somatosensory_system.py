@@ -8,6 +8,8 @@ import random
 import math
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
+import asyncio
+from nyx.core.reward_system import RewardSignal
 
 from agents import (
     Agent, Runner, trace, function_tool, 
@@ -96,7 +98,7 @@ class DigitalSomatosensorySystem:
     are memory-linked and influence Nyx's responses and behavior.
     """
     
-    def __init__(self, memory_core=None, emotional_core=None):
+    def __init__(self, memory_core=None, emotional_core=None, reward_system=None): 
         """
         Initialize the Digital Somatosensory System
         
@@ -106,6 +108,7 @@ class DigitalSomatosensorySystem:
         """
         self.memory_core = memory_core
         self.emotional_core = emotional_core
+        self.reward_system = reward_system 
         
         # Initialize body regions
         self.body_regions = {
@@ -1135,6 +1138,48 @@ class DigitalSomatosensorySystem:
             elif stimulus_type == "tingling":
                 region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
                 result["new_value"] = region.tingling
+
+            # --- Add Reward Generation ---
+            if self.reward_system:
+                reward_value = 0.0
+                source = f"somatic_{body_region}"
+                context = {
+                    "stimulus_type": stimulus_type,
+                    "intensity": intensity,
+                    "cause": cause,
+                    "body_region": body_region,
+                    "duration": duration
+                }
+                reward_generated = False
+    
+                if stimulus_type == "pleasure" and intensity >= 0.6:
+                    # Higher pleasure intensity -> stronger reward
+                    reward_value = (intensity - 0.5) * 0.8 # Scale reward
+                    reward_value = min(1.0, reward_value) # Cap reward
+                elif stimulus_type == "pain" and intensity >= self.pain_model["threshold"]:
+                    # Pain intensity relative to tolerance determines negative reward
+                    # Higher tolerance means less negative reward for the same pain intensity
+                    effective_pain = intensity / max(0.1, self.pain_model["tolerance"])
+                    reward_value = -min(1.0, effective_pain * 0.6) # Scale negative reward
+                elif stimulus_type == "temperature":
+                    # Discomfort from temperature can be a negative reward
+                    temp_deviation = abs(region.temperature - 0.5)
+                    if temp_deviation > 0.3: # Significant deviation from neutral
+                       reward_value = -min(0.5, temp_deviation * 0.5) # Mild negative reward for discomfort
+    
+                # Only send reward if significant
+                if abs(reward_value) > 0.1:
+                    reward_signal = RewardSignal(
+                        value=reward_value,
+                        source=source,
+                        context=context,
+                        timestamp=datetime.datetime.now().isoformat()
+                    )
+                    # Use asyncio.create_task for non-blocking call
+                    asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+                    result["reward_generated"] = reward_value
+                    reward_generated = True
+                    logger.debug(f"Generated reward {reward_value:.2f} from {source}")
             
             # Add to sensation memory
             memory_entry = {
