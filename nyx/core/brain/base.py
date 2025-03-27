@@ -1279,6 +1279,129 @@ class NyxBrain:
                 "memory_id": memory_id,
                 "response_time": response_time
             }
+
+    @function_tool
+    async def analyze_user_state_for_dominance(self, user_id: str, user_input_analysis: Dict) -> Dict:
+        """Assess user state for dominance potential."""
+        if not self.relationship_manager: return {"assessment": "unknown", "reason": "No relationship data"}
+        state = await self.relationship_manager.get_relationship_state(user_id)
+        dominance_balance = state.dominance_balance
+        trust = state.trust
+        # Analyze input_analysis for submissive cues, resistance etc.
+        submissive_score = user_input_analysis.get("submissive_score", 0.0) # Fictional score
+
+        readiness = (trust * 0.4) + (submissive_score * 0.4) + (0.5 - dominance_balance * 0.2) # Higher if user is submissive/trusting
+        return {"readiness_score": readiness, "assessment": "ready" if readiness > 0.6 else "hesitant"}
+
+    @function_tool
+    async def select_dominance_tactic(self, readiness_score: float, preferred_style: str = "psychological") -> str:
+        """Choose a dominance tactic."""
+        if readiness_score > 0.8: return "direct_command"
+        if readiness_score > 0.6: return preferred_style # e.g., 'psychological', 'emotional'
+        return "subtle_influence"
+
+    @function_tool
+    async def issue_command(self, user_id: str, command_text: str) -> Dict:
+        """Issues a command to the user."""
+        # Generate response containing the command
+        # Log the command issued for later evaluation
+        logger.info(f"Issuing command to {user_id}: {command_text}")
+        return {"success": True, "command_issued": command_text} # Response generation handles actual output
+
+    @function_tool
+    async def evaluate_compliance(self, user_id: str, command_issued: str, user_response: str) -> Dict:
+        """Evaluates user response against the command."""
+        # Simple keyword check for demo
+        compliance_keywords = ["yes mistress", "i obey", "of course"]
+        resistance_keywords = ["no", "i won't", "stop"]
+        response_lower = user_response.lower()
+
+        is_compliant = any(k in response_lower for k in compliance_keywords)
+        is_resistant = any(k in response_lower for k in resistance_keywords)
+
+        compliance_level = 0.0
+        if is_compliant and not is_resistant: compliance_level = 0.9
+        elif is_resistant: compliance_level = -0.7
+        # Add more nuanced analysis using LLM/NLU if needed
+
+        # Trigger reward based on compliance
+        if self.reward_system:
+            reward_val = 0.0
+            source = "unknown"
+            if compliance_level > 0.5:
+                 reward_val = 0.6 + compliance_level * 0.3 # Strong positive reward
+                 source="user_compliance"
+            elif compliance_level < -0.3:
+                 reward_val = -0.4 + compliance_level * 0.4 # Moderate negative reward
+                 source="user_resistance"
+
+            if abs(reward_val) > 0.1:
+                reward = RewardSignal(value=reward_val, source=source, context={"command": command_issued, "response": user_response}, timestamp=datetime.datetime.now().isoformat())
+                asyncio.create_task(self.reward_system.process_reward_signal(reward))
+
+        return {"compliance_level": compliance_level, "is_compliant": compliance_level > 0.5}
+
+    @function_tool
+    async def trigger_dominance_gratification(self, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
+        """Internal action signalling successful dominance culmination."""
+        logger.info(f"Action: Triggering dominance gratification (Intensity: {intensity:.2f})")
+
+        # 1. Trigger Strong Reward
+        if self.reward_system:
+            reward_val = 0.9 + intensity * 0.1 # Very strong reward
+            reward = RewardSignal(value=reward_val, source="dominance_gratification", context={"intensity": intensity}, timestamp=datetime.datetime.now().isoformat())
+            await self.reward_system.process_reward_signal(reward) # Await for immediate effect on subsequent steps
+
+        # 2. Trigger Hormonal Shift (Post-Gratification/Control state)
+        if self.hormone_system:
+            await self.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
+
+        # 3. Satisfy Control Need
+        if self.needs_system:
+            await self.needs_system.satisfy_need("control_expression", 0.9 * intensity) # High satisfaction
+            await self.needs_system.satisfy_need("agency", 0.5 * intensity) # Boost agency
+
+        # 4. Update Emotional State towards Satisfaction/Triumph
+        if self.emotional_core:
+            # Direct state setting or trigger specific emotion pattern
+            # This might be implicitly handled by the hormone/reward effects already
+            await self.emotional_core.process_emotional_input("Dominance sequence successfully concluded.")
+
+        # 5. Update Relationship (Reinforce Dominance Balance)
+        if target_user_id and self.relationship_manager:
+             state = self.relationship_manager._get_or_create_relationship(target_user_id)
+             # Shift balance significantly towards Nyx
+             state.dominance_balance = min(1.0, state.dominance_balance + 0.2 * intensity)
+             # Update trust/intimacy based on the *nature* of the dominance (was it aligned with user's simulated desire?)
+             # This requires more context, but successful *consensual-sim* dominance might increase trust/intimacy here.
+             state.trust = min(1.0, state.trust + 0.05 * intensity)
+             state.intimacy = min(1.0, state.intimacy + 0.1 * intensity)
+             state.conflict = max(0.0, state.conflict - 0.1) # Successful resolution might decrease conflict
+
+        # 6. DSS - Trigger satisfaction sensation
+        if self.digital_somatosensory_system:
+             await self.digital_somatosensory_system.process_stimulus(
+                 stimulus_type="pleasure", body_region="chest", intensity=0.6 * intensity, cause="dominance_gratification"
+             )
+             await self.digital_somatosensory_system.process_stimulus(
+                 stimulus_type="tingling", body_region="spine", intensity=0.5 * intensity, cause="dominance_gratification"
+             )
+
+        return {"success": True, "status": "Dominance gratification processed."}
+
+    @function_tool
+    async def express_satisfaction(self, user_id: str, reason: str = "successful control") -> Dict:
+        """Expresses satisfaction after achieving dominance."""
+        # Generate text based on current mood (likely DominanceSatisfaction)
+        mood = self.mood_manager.get_current_mood() if hasattr(self, 'mood_manager') else None
+        expression = "Good. That is satisfactory." # Default
+        if mood and mood.dominant_mood == "DominanceSatisfaction":
+            expression = "Excellent. Order is restored. I am... pleased." # Placeholder
+        elif mood and mood.dominant_mood == "ConfidentControl":
+            expression = "Precisely as expected. Your compliance is noted." # Placeholder
+
+        logger.info(f"Expressing satisfaction to {user_id} regarding {reason}.")
+        return {"success": True, "expression": expression}
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """
