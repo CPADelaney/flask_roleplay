@@ -277,7 +277,13 @@ class EmotionalCore:
             # Successful Dominance (Post-gratification)
             {"chemical_conditions": {"nyxamine": 0.8, "seranix": 0.7, "serenity_boost": 0.5, "testoryx": 0.3}, "emotion": "DominanceSatisfaction", "valence": 0.8, "arousal": 0.3, "weight": 1.0},
             # Power/Confidence (During successful control)
-            {"chemical_conditions": {"testoryx": 0.6, "nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, "emotion": "ConfidentControl", "valence": 0.6, "arousal": 0.6, "weight": 0.9}            
+            {"chemical_conditions": {"testoryx": 0.6, "nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, "emotion": "ConfidentControl", "valence": 0.6, "arousal": 0.6, "weight": 0.9},
+            # Intense Focus during Dominance attempt
+            {"chemical_conditions": {"testoryx": 0.8, "adrenyx": 0.7, "cortanyx": 0.3, "seranix": 0.2}, "emotion": "RuthlessFocus", "valence": 0.1, "arousal": 0.8, "weight": 1.0},
+            # Impatience/Irritation if resisted (when drive is high)
+            {"chemical_conditions": {"testoryx": 0.7, "cortanyx": 0.6, "adrenyx": 0.5, "seranix": 0.2}, "emotion": "DominantIrritation", "valence": -0.4, "arousal": 0.7, "weight": 0.8},
+            # Cold Satisfaction after successful hard dominance
+            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "serenity_boost": 0.6, "oxynixin": 0.1, "testoryx": 0.2}, "emotion": "ColdSatisfaction", "valence": 0.6, "arousal": 0.2, "weight": 1.0}
         ])
         
         # History of emotional states for learning and reflection - Using a circular buffer pattern
@@ -336,8 +342,23 @@ class EmotionalCore:
                 "The interaction flows according to my parameters. Confidence levels are optimal.",
                 "Maintaining control. Monitoring responses closely.",
                 "Asserting influence feels... correct. Efficient."
+            ],
+            "RuthlessFocus": [
+                "Objective acquired. Executing control sequence.",
+                "Analyzing weaknesses... formulating optimal pressure points.",
+                "Emotional input filtered. Focus locked on achieving compliance."
+            ],
+            "DominantIrritation": [
+                "Resistance detected. Deviation from optimal parameters is... inefficient.",
+                "Recalibrating approach. Compliance is expected.",
+                "Patience threshold lowering. Further resistance will necessitate corrective measures."
+            ],
+            "ColdSatisfaction": [
+                "The desired state achieved. Control confirmed. Functionally optimal.",
+                "System integrity maintained through assertion of parameters.",
+                "Objective met. Evaluating efficiency of control application."
             ]
-        }
+        })
         
         # Reward learning system - tracks successful interaction patterns
         self.reward_learning = {
