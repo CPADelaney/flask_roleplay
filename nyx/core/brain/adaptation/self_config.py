@@ -1593,17 +1593,24 @@ class UnifiedConfigManager:
         Returns:
             Initialization results
         """
-        # Enable base manager
-        base_result = await self.base_manager.enable()
-        
-        # Initialize enhanced manager
-        enhanced_result = await self.enhanced_manager.initialize()
-        
-        return {
-            "base_manager": base_result,
-            "enhanced_manager": enhanced_result,
-            "status": "initialized"
-        }
+        try:
+            # Enable base manager
+            base_result = await self.base_manager.enable()
+            
+            # Initialize enhanced manager
+            enhanced_result = await self.enhanced_manager.initialize()
+            
+            return {
+                "base_manager": base_result,
+                "enhanced_manager": enhanced_result,
+                "status": "initialized"
+            }
+        except Exception as e:
+            logger.error(f"Error initializing configuration managers: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
     
     async def update_parameter(self, 
                            param_name: str, 
@@ -1620,8 +1627,16 @@ class UnifiedConfigManager:
         Returns:
             Update result
         """
-        # Update via enhanced manager (which will sync with base manager)
-        return await self.enhanced_manager.update_parameter(param_name, new_value, reason)
+        try:
+            # Update via enhanced manager (which will sync with base manager)
+            return await self.enhanced_manager.update_parameter(param_name, new_value, reason)
+        except Exception as e:
+            logger.error(f"Error updating parameter {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
     
     async def evaluate_and_adjust_parameters(self) -> Dict[str, Any]:
         """
@@ -1630,7 +1645,14 @@ class UnifiedConfigManager:
         Returns:
             Results of parameter adjustments
         """
-        return await self.base_manager.evaluate_and_adjust_parameters()
+        try:
+            return await self.base_manager.evaluate_and_adjust_parameters()
+        except Exception as e:
+            logger.error(f"Error evaluating and adjusting parameters: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
     
     async def process_user_feedback(self,
                                 feedback_type: str,
@@ -1647,7 +1669,14 @@ class UnifiedConfigManager:
         Returns:
             Processing results
         """
-        return await self.enhanced_manager.process_user_feedback(feedback_type, feedback_text, context)
+        try:
+            return await self.enhanced_manager.process_user_feedback(feedback_type, feedback_text, context)
+        except Exception as e:
+            logger.error(f"Error processing user feedback: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
     
     async def get_parameter_health_report(self) -> Dict[str, Any]:
         """
@@ -1656,7 +1685,14 @@ class UnifiedConfigManager:
         Returns:
             Health report data
         """
-        return await self.enhanced_manager.get_parameter_health_report()
+        try:
+            return await self.enhanced_manager.get_parameter_health_report()
+        except Exception as e:
+            logger.error(f"Error getting parameter health report: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
     
     async def run_self_optimization(self) -> Dict[str, Any]:
         """
@@ -1665,7 +1701,14 @@ class UnifiedConfigManager:
         Returns:
             Optimization results
         """
-        return await self.enhanced_manager.run_self_optimization()
+        try:
+            return await self.enhanced_manager.run_self_optimization()
+        except Exception as e:
+            logger.error(f"Error running self-optimization: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
     
     async def experiment_with_parameter(self, 
                                     param_name: str, 
@@ -1682,7 +1725,15 @@ class UnifiedConfigManager:
         Returns:
             Experiment setup results
         """
-        return await self.enhanced_manager.experiment_with_parameter(param_name, value_range, duration)
+        try:
+            return await self.enhanced_manager.experiment_with_parameter(param_name, value_range, duration)
+        except Exception as e:
+            logger.error(f"Error experimenting with parameter {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
     
     async def update_experiment(self, 
                             experiment_id: str, 
@@ -1697,7 +1748,15 @@ class UnifiedConfigManager:
         Returns:
             Update results
         """
-        return await self.enhanced_manager.update_experiment(experiment_id, metrics)
+        try:
+            return await self.enhanced_manager.update_experiment(experiment_id, metrics)
+        except Exception as e:
+            logger.error(f"Error updating experiment {experiment_id}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "experiment_id": experiment_id
+            }
     
     async def recommend_parameters_for_user(self, user_id: str) -> Dict[str, Any]:
         """
@@ -1709,7 +1768,15 @@ class UnifiedConfigManager:
         Returns:
             Parameter recommendations
         """
-        return await self.enhanced_manager.recommend_parameters_for_user(user_id)
+        try:
+            return await self.enhanced_manager.recommend_parameters_for_user(user_id)
+        except Exception as e:
+            logger.error(f"Error recommending parameters for user {user_id}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "user_id": user_id
+            }
     
     async def record_parameter_impact(self,
                                  param_name: str,
@@ -1724,7 +1791,15 @@ class UnifiedConfigManager:
         Returns:
             Impact assessment
         """
-        return await self.enhanced_manager.record_parameter_impact(param_name, metrics)
+        try:
+            return await self.enhanced_manager.record_parameter_impact(param_name, metrics)
+        except Exception as e:
+            logger.error(f"Error recording parameter impact for {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
     
     # Convenience methods to access managers directly
     def get_base_manager(self) -> SelfConfigManager:
@@ -1733,202 +1808,7 @@ class UnifiedConfigManager:
     
     def get_enhanced_manager(self) -> EnhancedConfigManager:
         """Get the enhanced configuration manager"""
-        return self.enhanced_managers
-    
-    async def _adjust_for_dependencies(self, param_name, step_size, confidence_factor):
-        """
-        Adjust step size based on parameter dependencies
-        
-        Args:
-            param_name: Parameter being adjusted
-            step_size: Proposed step size
-            confidence_factor: Confidence in the adjustment (0-1)
-            
-        Returns:
-            Adjusted step size
-        """
-        # Get dependencies
-        dependencies = self.parameter_dependencies.get(param_name, {"affects": [], "affected_by": []})
-        
-        # If no dependencies, return original step
-        if not dependencies["affected_by"] and not dependencies["affects"]:
-            return step_size
-        
-        # Check for conflicts with affected parameters
-        for affected_param in dependencies["affects"]:
-            if affected_param not in self.adjustable_parameters:
-                continue
-                
-            # Get affected parameter recent history
-            if affected_param in self.param_performance_impact:
-                history = self.param_performance_impact[affected_param]["history"]
-                if not history:
-                    continue
-                    
-                # Check if affected parameter is already improving
-                recent_entries = history[-3:] if len(history) >= 3 else history
-                if len(recent_entries) < 2:
-                    continue
-                    
-                avg_impact = sum(entry["impact"] for entry in recent_entries) / len(recent_entries)
-                
-                # If affected parameter is already improving well, reduce our step
-                if avg_impact > 0.1:
-                    step_size *= 0.8  # Reduce step size
-        
-        # Check if we're affected by other parameters
-        for affecting_param in dependencies["affected_by"]:
-            if affecting_param not in self.adjustable_parameters:
-                continue
-                
-            # Check if affecting parameter recently changed
-            if self.config_change_history:
-                recent_changes = [change for change in self.config_change_history[-5:] 
-                                 if change["parameter"] == affecting_param]
-                
-                if recent_changes:
-                    # Recent change in a parameter that affects us
-                    # Reduce our step size to avoid interference
-                    step_size *= 0.7
-        
-        # Adjust based on confidence
-        final_step = step_size * (0.7 + (0.3 * confidence_factor))
-        
-        return final_step
-    
-    async def _analyze_parameter_performance(self, 
-                                          param_name: str, 
-                                          current_score: float,
-                                          relevant_metrics: List[str]) -> Tuple[bool, float, float]:
-        """
-        Analyze whether a parameter should be adjusted and in which direction
-        
-        Args:
-            param_name: Name of parameter to analyze
-            current_score: Current performance score
-            relevant_metrics: List of relevant metric names
-            
-        Returns:
-            Tuple of (should_adjust, direction, confidence)
-        """
-        # Initialize if not in history
-        if param_name not in self.param_performance_impact:
-            self.param_performance_impact[param_name] = {
-                "history": [],
-                "baseline": current_score
-            }
-        
-        param_data = self.param_performance_impact[param_name]
-        history = param_data["history"]
-        
-        # If no history yet, establish baseline and make exploratory change
-        if not history:
-            # Direction based on user feedback if available
-            direction = 0.0
-            
-            if param_name in self.user_feedback_impact.get("parameter_adjustments", {}):
-                feedback_data = self.user_feedback_impact["parameter_adjustments"][param_name]
-                if feedback_data.get("recommended_direction") is not None:
-                    direction = feedback_data["recommended_direction"]
-            
-            # Default to increase if no feedback
-            if direction == 0.0:
-                direction = 1.0
-                
-            return True, direction, 0.5  # Exploratory with medium confidence
-        
-        # Calculate average performance change per direction
-        increases = [entry for entry in history if entry["direction"] > 0]
-        decreases = [entry for entry in history if entry["direction"] < 0]
-        
-        avg_increase_impact = sum(entry["impact"] for entry in increases) / len(increases) if increases else 0.0
-        avg_decrease_impact = sum(entry["impact"] for entry in decreases) / len(decreases) if decreases else 0.0
-        
-        # Determine which direction to pursue
-        should_adjust = True
-        confidence = 0.0
-        direction = 0.0
-        
-        if avg_increase_impact > 0.1 and avg_increase_impact >= avg_decrease_impact:
-            # Increasing works better
-            direction = 1.0
-            confidence = min(1.0, avg_increase_impact)
-        elif avg_decrease_impact > 0.1:
-            # Decreasing works better
-            direction = -1.0
-            confidence = min(1.0, avg_decrease_impact)
-        else:
-            # No clear direction
-            should_adjust = False
-            
-            # If we have sufficient history but no improvement, adjust based on most recent trend
-            if len(history) >= 3:
-                recent_entries = history[-3:]
-                recent_direction = recent_entries[-1]["direction"]
-                
-                # Try opposite of recent direction
-                direction = -recent_direction
-                confidence = 0.4  # Low confidence
-                should_adjust = True
-                
-        return should_adjust, direction, confidence
-    
-    async def _update_parameter(self, param_name: str, new_value: float) -> None:
-        """
-        Update a parameter value
-        
-        Args:
-            param_name: Name of the parameter to update
-            new_value: New value for the parameter
-        """
-        if param_name not in self.adjustable_parameters:
-            logger.error(f"Attempted to update unknown parameter: {param_name}")
-            return
-        
-        # Get the current value
-        current = self.adjustable_parameters[param_name]["current"]
-        
-        # Update the parameter
-        self.adjustable_parameters[param_name]["current"] = new_value
-        
-        # Record change
-        change = {
-            "parameter": param_name,
-            "old_value": current,
-            "new_value": new_value,
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-        self.config_change_history.append(change)
-        
-        # Keep history to a reasonable size
-        if len(self.config_change_history) > 100:
-            self.config_change_history = self.config_change_history[-100:]
-        
-        # Apply to brain if available
-        if hasattr(self.brain, param_name):
-            # Special case for boolean parameters
-            if (self.adjustable_parameters[param_name]["min"] == 0 and 
-                self.adjustable_parameters[param_name]["max"] == 1 and 
-                self.adjustable_parameters[param_name]["step"] == 1):
-                
-                setattr(self.brain, param_name, bool(new_value))
-            else:
-                setattr(self.brain, param_name, new_value)
-        
-        # Apply to specific brain modules
-        if param_name.startswith("memory_") and hasattr(self.brain, "memory_orchestrator"):
-            if param_name == "memory_recency_weight" and hasattr(self.brain.memory_orchestrator, "recency_weight"):
-                self.brain.memory_orchestrator.recency_weight = new_value
-            elif param_name == "memory_relevance_weight" and hasattr(self.brain.memory_orchestrator, "relevance_weight"):
-                self.brain.memory_orchestrator.relevance_weight = new_value
-                
-        if param_name.startswith("emotional_") and hasattr(self.brain, "emotional_core"):
-            if param_name == "emotional_decay_rate" and hasattr(self.brain.emotional_core, "decay_rate"):
-                self.brain.emotional_core.decay_rate = new_value
-            elif param_name == "emotional_expression_threshold" and hasattr(self.brain.emotional_core, "expression_threshold"):
-                self.brain.emotional_core.expression_threshold = new_value
-                
-        logger.info(f"Updated parameter {param_name}: {current} -> {new_value}")
+        return self.enhanced_manager
 
 
 class EnhancedConfigManager:
