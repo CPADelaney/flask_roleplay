@@ -944,59 +944,198 @@ class DigitalSomatosensorySystem:
         logger.info("Digital Somatosensory System initialized successfully")
         return True
     
-    async def update(self, ambient_temperature: Optional[float] = None):
+    async def update(self, ambient_temperature: Optional[float] = None) -> Dict[str, Any]:
         """
-        Update the somatosensory system
-        
+        Update the somatosensory system, including decay, environmental effects,
+        and interplay with the emotional core.
+
         Args:
-            ambient_temperature: Optional ambient temperature to use for update
-            
+            ambient_temperature: Optional ambient temperature to use for update (0.0-1.0).
+
         Returns:
-            Updated body state
+            Updated comprehensive body state analysis dictionary.
         """
+        # Use trace for the whole update process
         with trace(workflow_name="Somatic_Update", group_id=self.trace_group_id):
             now = datetime.datetime.now()
-            
-            # Calculate time since last update
-            last_update = self.body_state["last_update"]
+
+            # 1. Calculate time since last update
+            last_update = self.body_state.get("last_update", now) # Use .get with default
             duration = (now - last_update).total_seconds()
-            
-            # Update timestamps
+
+            # Avoid excessive updates or large jumps if duration is very small or large
+            if duration <= 0.1: # Less than 0.1 second, negligible change
+                # Still might need to return the *current* state via agent if requested elsewhere
+                # but avoid internal processing loops. Let's return the cached state for efficiency.
+                # If direct agent call is desired every time, remove this early return.
+                return await self.get_body_state() # Return current state analysis
+
+            duration = min(duration, 3600.0) # Cap duration at 1 hour to prevent huge jumps
+
+            # Update timestamp immediately
             self.body_state["last_update"] = now
-            
-            # If ambient temperature provided, update temperature model
+
+            # 2. Update Temperature Model if ambient temperature provided
             if ambient_temperature is not None:
-                await self._update_body_temperature(
-                    RunContextWrapper(context=None),
-                    ambient_temperature=ambient_temperature, 
-                    duration=duration
-                )
-            
-            # Decay sensations over time
-            self._decay_sensations(duration)
-            
-            # Process pain memory updates
-            self._decay_pain_memories()
-            self._update_pain_tolerance()
-            
-            # Update body state metrics
-            # Fatigue increases slowly over time, resets during maintenance
-            self.body_state["fatigue"] = min(1.0, self.body_state["fatigue"] + (0.01 * duration / 3600.0))
-            
-            # Use the body orchestration agent to get the current body state
-            body_state_input = {
-                "action": "update",
-                "ambient_temperature": ambient_temperature,
-                "duration": duration
-            }
-            
+                # Ensure ambient temp is within valid range
+                ambient_temperature = max(0.0, min(1.0, ambient_temperature))
+                try:
+                    await self._update_body_temperature(
+                        RunContextWrapper(context=None), # Pass context wrapper
+                        ambient_temperature=ambient_temperature,
+                        duration=duration
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating body temperature: {e}")
+
+            # 3. Decay Sensations Over Time
             try:
-                # Use the orchestrator to get body state
-                result = await self.process_body_experience(body_state_input)
-                return result.get("body_state_impact", await self.get_body_state())
+                self._decay_sensations(duration)
+            except Exception as e:
+                    logger.error(f"Error decaying sensations: {e}")
+
+            # 4. Process Pain Memory Updates
+            try:
+                self._decay_pain_memories()
+                self._update_pain_tolerance()
+            except Exception as e:
+                    logger.error(f"Error processing pain memories: {e}")
+
+            # 5. Update Intrinsic Body State Metrics (e.g., fatigue)
+            # Fatigue increases slowly over time, resets during maintenance
+            try:
+                fatigue_increase_rate = 0.01 / 3600.0 # Per second rate (0.01 per hour)
+                current_fatigue = self.body_state.get("fatigue", 0.0)
+                self.body_state["fatigue"] = min(1.0, current_fatigue + (fatigue_increase_rate * duration))
+            except Exception as e:
+                 logger.error(f"Error updating fatigue: {e}")
+
+            # 6. Reflect Emotions onto Body State (Top-down: Emotion -> Body)
+            if self.emotional_core:
+                try:
+                    # Assumes get_emotional_state returns {'neurochemicals': {...}}
+                    # If it's async, await it. If sync, call directly. Adjust as needed.
+                    emotional_state_data = self.emotional_core.get_emotional_state()
+                    neurochemicals = emotional_state_data.get("neurochemicals", {})
+                    logger.debug(f"Raw neurochemicals from EmotionalCore: {neurochemicals}")
+
+
+                    # Cortanyx (Stress) -> Increase Tension
+                    cortanyx_level = neurochemicals.get("cortanyx")
+                    if cortanyx_level is not None and cortanyx_level > 0.6:
+                        tension_increase = (cortanyx_level - 0.5) * 0.25 # Higher stress = more tension
+                        current_tension = self.body_state.get("tension", 0.0)
+                        self.body_state["tension"] = min(1.0, current_tension + tension_increase * (duration / 60.0)) # Scale by time (minutes)
+                        logger.debug(f"Increased tension by {tension_increase * (duration / 60.0):.4f} due to Cortanyx {cortanyx_level:.2f}")
+
+
+                    # Seranix (Calm) -> Reduce Tension
+                    seranix_level = neurochemicals.get("seranix")
+                    if seranix_level is not None and seranix_level > 0.7:
+                        tension_decrease = (seranix_level - 0.6) * 0.20 # Higher calm = less tension
+                        current_tension = self.body_state.get("tension", 0.0)
+                        self.body_state["tension"] = max(0.0, current_tension - tension_decrease * (duration / 60.0)) # Scale by time (minutes)
+                        logger.debug(f"Decreased tension by {tension_decrease * (duration / 60.0):.4f} due to Seranix {seranix_level:.2f}")
+
+
+                    # Adrenyx (Fear/Excitement) -> Tingling / Temp Shift (Subtle)
+                    adrenyx_level = neurochemicals.get("adrenyx")
+                    if adrenyx_level is not None and adrenyx_level > 0.7:
+                        tingle_intensity = (adrenyx_level - 0.6) * 0.15
+                        # Apply subtle tingling, maybe focused on 'skin' or 'hands'/'feet'
+                        for region_name in ["skin", "hands", "feet"]:
+                            if region_name in self.body_regions:
+                                region = self.body_regions[region_name]
+                                # Ensure tingling doesn't rise too fast
+                                region.tingling = min(1.0, region.tingling + tingle_intensity * (duration / 120.0)) # Slower update (e.g., over 2 mins)
+                        logger.debug(f"Increased tingling due to Adrenyx {adrenyx_level:.2f}")
+                        # Optional: Simulate feeling cold? (Very subtle effect)
+                        temp_shift = -(adrenyx_level - 0.6) * 0.01
+                        self.temperature_model["body_temperature"] = max(0.0, min(1.0, self.temperature_model["body_temperature"] + temp_shift * (duration / 60.0)))
+
+
+                    # Oxynixin (Bonding) -> Pain Tolerance (Very Slow Adjustment)
+                    oxynixin_level = neurochemicals.get("oxynixin")
+                    if oxynixin_level is not None and oxynixin_level > 0.6:
+                        tolerance_increase = (oxynixin_level - 0.5) * 0.10
+                        current_tolerance = self.pain_model.get("tolerance", 0.7)
+                        new_tolerance = min(0.95, current_tolerance + tolerance_increase * (duration / 3600.0)) # Scale by time (hours)
+                        if new_tolerance != current_tolerance:
+                             self.pain_model["tolerance"] = new_tolerance
+                             logger.debug(f"Pain tolerance adjusted to {new_tolerance:.3f} due to Oxynixin {oxynixin_level:.2f}")
+
+
+                except Exception as e:
+                    logger.exception(f"Error reflecting emotions onto body state: {e}") # Use logger.exception for traceback
+
+
+            # 7. Reflect Overall Body State onto Emotions (Bottom-up: Body -> Emotion)
+            if self.emotional_core:
+                try:
+                    # Need to run these within the context for potential tool calls
+                    ctx_wrapper = RunContextWrapper(context=None) # Simple wrapper for internal calls
+                    comfort = await self._calculate_overall_comfort(ctx_wrapper)
+                    tension = self.body_state.get("tension", 0.0) # Use .get for safety
+
+
+                    # Comfort -> Seranix (mood stability)
+                    if comfort > 0.6:
+                        ser_change = (comfort - 0.5) * 0.15 # Positive comfort boosts mood stability
+                        # Ensure update_neurochemical handles potential async nature if needed
+                        self.emotional_core.update_neurochemical("seranix", ser_change)
+                        logger.debug(f"Increased Seranix by {ser_change:.3f} due to comfort {comfort:.2f}")
+
+
+                    # Discomfort -> Cortanyx (stress)
+                    elif comfort < -0.4:
+                        cor_change = abs(comfort + 0.3) * 0.20 # Discomfort increases stress
+                        self.emotional_core.update_neurochemical("cortanyx", cor_change)
+                        logger.debug(f"Increased Cortanyx by {cor_change:.3f} due to discomfort {comfort:.2f}")
+
+
+                    # High Tension -> Cortanyx (additionally, if not already high from discomfort)
+                    if tension > 0.6:
+                        if comfort >= -0.4: # Only add tension effect if comfort isn't the primary driver
+                             cor_change_tension = (tension - 0.5) * 0.15
+                             self.emotional_core.update_neurochemical("cortanyx", cor_change_tension)
+                             logger.debug(f"Increased Cortanyx by {cor_change_tension:.3f} due to tension {tension:.2f}")
+
+
+                except Exception as e:
+                    logger.exception(f"Error reflecting body state onto emotions: {e}")
+
+
+            # 8. Use the body orchestration agent to get the final, integrated body state analysis
+            body_state_input = {
+                "action": "analyze_body_state", # Ask the agent to analyze the current state after updates
+                "ambient_temperature": ambient_temperature,
+                "duration_since_last": duration,
+                # Optionally pass the calculated comfort/tension if the agent needs it explicitly
+                "calculated_comfort": comfort,
+                "calculated_tension": tension,
+            }
+
+
+            try:
+                # Try using the orchestrator agent to get the final analysis
+                result_data = await self.process_body_experience(body_state_input)
+
+                # The orchestrator for "analyze_body_state" should ideally return the BodyStateOutput structure.
+                # Let's assume process_body_experience returns the *parsed* Pydantic model or a dict matching it.
+                if isinstance(result_data, dict) and "dominant_sensation" in result_data:
+                     # It looks like the correct structure (or a dict matching it)
+                     logger.debug("Somatic update completed via agent orchestration.")
+                     return result_data # Return the structured analysis
+                else:
+                    # If the structure is wrong, log it and fall back.
+                    logger.warning(f"Agent orchestration for update returned unexpected format: {type(result_data)}. Falling back.")
+                    # Fallback: Directly call get_body_state which should also use the agent
+                    return await self.get_body_state()
+
             except Exception as e:
                 # Fallback to direct method if orchestration fails
-                logger.error(f"Body state orchestration failed, using fallback: {e}")
+                logger.exception(f"Body state orchestration failed during update, using fallback get_body_state: {e}")
+                # Use the method that calls the Body State Agent directly
                 return await self.get_body_state()
     
     async def process_body_experience(self, stimulus_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1138,6 +1277,47 @@ class DigitalSomatosensorySystem:
             elif stimulus_type == "tingling":
                 region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
                 result["new_value"] = region.tingling
+
+            region = self.body_regions[body_region]
+
+            emotional_impact = {}
+            if self.emotional_core:
+                if stimulus_type == "pleasure" and region.pleasure > 0.5:
+                    # Scale impact by intensity beyond threshold
+                    scaled_intensity = (region.pleasure - 0.5) * 2.0
+                    # Pleasure -> Nyxamine (reward), Seranix (calm), Oxynixin (bonding)
+                    nyx_change = scaled_intensity * 0.35
+                    ser_change = scaled_intensity * 0.15
+                    oxy_change = scaled_intensity * 0.10
+                    self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    self.emotional_core.update_neurochemical("seranix", ser_change)
+                    self.emotional_core.update_neurochemical("oxynixin", oxy_change)
+                    emotional_impact = {"nyxamine": nyx_change, "seranix": ser_change, "oxynixin": oxy_change}
+    
+                elif stimulus_type == "pain" and region.pain > self.pain_model["threshold"]:
+                    # Scale impact by intensity relative to tolerance
+                    effective_pain = region.pain / max(0.1, self.pain_model["tolerance"])
+                    # Pain -> Cortanyx (stress), Adrenyx (alertness/fear), slight decrease in Seranix
+                    cor_change = effective_pain * 0.45
+                    adr_change = effective_pain * 0.25
+                    ser_change = -effective_pain * 0.10 # Pain reduces mood stability slightly
+                    self.emotional_core.update_neurochemical("cortanyx", cor_change)
+                    self.emotional_core.update_neurochemical("adrenyx", adr_change)
+                    self.emotional_core.update_neurochemical("seranix", ser_change)
+                    emotional_impact = {"cortanyx": cor_change, "adrenyx": adr_change, "seranix": ser_change}
+    
+                elif stimulus_type == "temperature":
+                    # Discomfort from temperature -> Cortanyx
+                    temp_deviation = abs(region.temperature - 0.5)
+                    if temp_deviation > 0.3: # Significant deviation
+                       cor_change = temp_deviation * 0.25
+                       self.emotional_core.update_neurochemical("cortanyx", cor_change)
+                       emotional_impact = {"cortanyx": cor_change}
+    
+                # Include impact in the result dict if any occurred
+                if emotional_impact:
+                    result["emotional_impact"] = emotional_impact
+                    logger.debug(f"Applied emotional impact from {stimulus_type}: {emotional_impact}")
 
             # --- Add Reward Generation ---
             if self.reward_system:
