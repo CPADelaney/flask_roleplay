@@ -222,6 +222,460 @@ class SystemHealthChecker:
         self.last_check_results = results
         
         return results
+
+    # Add these methods to the SystemHealthChecker class
+    
+    async def discover_all_modules(self, base_dir: str = None) -> Dict[str, Any]:
+        """
+        Scan all Python modules in the Nyx codebase and analyze their structure
+        
+        Args:
+            base_dir: Base directory to scan (defaults to detecting the nyx/core directory)
+            
+        Returns:
+            Complete module map with dependencies and theoretical capabilities
+        """
+        # Determine base directory if not provided
+        if not base_dir:
+            if hasattr(self.brain, "__file__"):
+                # Get the directory of the brain module
+                brain_file = getattr(self.brain, "__file__")
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(brain_file)))
+            else:
+                # Try to find the nyx directory in sys.path
+                for path in sys.path:
+                    potential_path = os.path.join(path, 'nyx', 'core')
+                    if os.path.isdir(potential_path):
+                        base_dir = potential_path
+                        break
+                
+                if not base_dir:
+                    return {
+                        "success": False,
+                        "error": "Could not determine base directory for nyx/core"
+                    }
+        
+        # Verify the directory exists
+        if not os.path.isdir(base_dir):
+            return {
+                "success": False,
+                "error": f"Directory not found: {base_dir}"
+            }
+        
+        logger.info(f"Scanning modules in: {base_dir}")
+        
+        # Results container
+        results = {
+            "modules": {},
+            "dependencies": {},
+            "classes": {},
+            "functions": {},
+            "stats": {
+                "total_modules": 0,
+                "total_classes": 0,
+                "total_functions": 0,
+                "total_dependencies": 0
+            }
+        }
+        
+        # Scan all Python files recursively
+        for root, dirs, files in os.walk(base_dir):
+            for file in files:
+                if file.endswith('.py'):
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, base_dir)
+                    
+                    # Convert to module path format
+                    module_path = os.path.splitext(rel_path)[0].replace(os.path.sep, '.')
+                    
+                    # Get full module path including nyx.core prefix if needed
+                    if not module_path.startswith('nyx.core'):
+                        # Detect the right prefix by checking parent directories
+                        parts = []
+                        current = os.path.dirname(base_dir)
+                        while os.path.basename(current) != 'nyx' and current != os.path.dirname(current):
+                            parts.insert(0, os.path.basename(current))
+                            current = os.path.dirname(current)
+                        
+                        if os.path.basename(current) == 'nyx':
+                            prefix = 'nyx.' + '.'.join(parts)
+                            module_path = f"{prefix}.{module_path}"
+                    
+                    # Analyze this module
+                    module_info = await self._analyze_module_code(full_path, module_path)
+                    
+                    if module_info:
+                        results["modules"][module_path] = module_info
+                        results["stats"]["total_modules"] += 1
+                        results["stats"]["total_classes"] += len(module_info.get("classes", []))
+                        results["stats"]["total_functions"] += len(module_info.get("functions", []))
+                        results["stats"]["total_dependencies"] += len(module_info.get("imports", []))
+                        
+                        # Add to dependencies map
+                        results["dependencies"][module_path] = module_info.get("imports", [])
+                        
+                        # Track classes and functions for later analysis
+                        for class_info in module_info.get("classes", []):
+                            class_name = class_info["name"]
+                            full_name = f"{module_path}.{class_name}"
+                            results["classes"][full_name] = {
+                                "module": module_path,
+                                "info": class_info
+                            }
+                        
+                        for func_info in module_info.get("functions", []):
+                            func_name = func_info["name"]
+                            full_name = f"{module_path}.{func_name}"
+                            results["functions"][full_name] = {
+                                "module": module_path,
+                                "info": func_info
+                            }
+        
+        # Analyze dependencies to determine theoretical accessibility
+        results["theoretical_accessibility"] = await self._analyze_theoretical_accessibility(results)
+        
+        # Add missing components - compare with what we can actually access
+        results["missing_components"] = await self._find_missing_components(results)
+        
+        return {
+            "success": True,
+            "results": results
+        }
+    
+    async def _analyze_module_code(self, file_path: str, module_path: str) -> Dict[str, Any]:
+        """
+        Analyze a Python module file to extract its structure
+        
+        Args:
+            file_path: Path to the Python file
+            module_path: Dot-notation module path
+            
+        Returns:
+            Module information including imports, classes, functions
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+            
+            # Parse the code
+            tree = ast.parse(code)
+            
+            # Extract imports
+            imports = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for name in node.names:
+                        imports.append(name.name)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        for name in node.names:
+                            imports.append(f"{node.module}.{name.name}")
+            
+            # Extract classes
+            classes = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    class_info = {
+                        "name": node.name,
+                        "methods": [],
+                        "attributes": [],
+                        "bases": [base.id if hasattr(base, 'id') else "complex_base" for base in node.bases if hasattr(base, 'id')]
+                    }
+                    
+                    # Get docstring
+                    class_info["docstring"] = ast.get_docstring(node)
+                    
+                    # Get methods
+                    for method in [n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+                        method_info = {
+                            "name": method.name,
+                            "is_async": isinstance(method, ast.AsyncFunctionDef),
+                            "args": [arg.arg for arg in method.args.args],
+                            "has_docstring": ast.get_docstring(method) is not None
+                        }
+                        class_info["methods"].append(method_info)
+                    
+                    # Get attributes (approximation - this is not perfect)
+                    for attr in [n for n in node.body if isinstance(n, ast.Assign)]:
+                        for target in attr.targets:
+                            if isinstance(target, ast.Name):
+                                class_info["attributes"].append(target.id)
+                    
+                    classes.append(class_info)
+            
+            # Extract top-level functions
+            functions = []
+            for node in [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+                func_info = {
+                    "name": node.name,
+                    "is_async": isinstance(node, ast.AsyncFunctionDef),
+                    "args": [arg.arg for arg in node.args.args],
+                    "has_docstring": ast.get_docstring(node) is not None,
+                    "is_decorated": bool(node.decorator_list)
+                }
+                
+                # Check if it might be a function tool
+                if func_info["is_decorated"]:
+                    for decorator in node.decorator_list:
+                        if hasattr(decorator, 'id') and decorator.id == 'function_tool':
+                            func_info["is_function_tool"] = True
+                        elif isinstance(decorator, ast.Call) and hasattr(decorator.func, 'id') and decorator.func.id == 'function_tool':
+                            func_info["is_function_tool"] = True
+                
+                functions.append(func_info)
+            
+            # Get module docstring
+            module_docstring = ast.get_docstring(tree)
+            
+            return {
+                "path": file_path,
+                "module": module_path,
+                "imports": imports,
+                "classes": classes,
+                "functions": functions,
+                "docstring": module_docstring,
+                "loc": len(code.splitlines())
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing module {module_path}: {str(e)}")
+            return None
+    
+    async def _analyze_theoretical_accessibility(self, scan_results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze the dependency graph to determine what should theoretically be accessible
+        
+        Args:
+            scan_results: Results from module scanning
+            
+        Returns:
+            Theoretical accessibility analysis
+        """
+        # Build dependency graph
+        import networkx as nx
+        G = nx.DiGraph()
+        
+        # Add all modules as nodes
+        for module in scan_results["modules"]:
+            G.add_node(module)
+        
+        # Add dependencies as edges
+        for module, deps in scan_results["dependencies"].items():
+            for dep in deps:
+                # Only add edges for dependencies we know about
+                if dep in scan_results["modules"]:
+                    G.add_edge(module, dep)
+        
+        # Find entry points (likely used by brain.py)
+        entry_points = []
+        for module in scan_results["modules"]:
+            if "brain.base" in module or module.endswith("__init__"):
+                entry_points.append(module)
+        
+        # Determine what should be accessible from the entry points
+        accessible = set()
+        for entry in entry_points:
+            # Add the entry point
+            accessible.add(entry)
+            
+            # Add everything reachable from this entry
+            if entry in G:
+                for dep in nx.descendants(G, entry):
+                    accessible.add(dep)
+        
+        # Map of what each module should have access to
+        accessibility_map = {}
+        for module in scan_results["modules"]:
+            reachable = set()
+            if module in G:
+                for dep in nx.descendants(G, module):
+                    reachable.add(dep)
+            
+            accessibility_map[module] = {
+                "can_access": list(reachable),
+                "accessible_from_entry": module in accessible
+            }
+        
+        # Analyze what components should be accessible based on import patterns
+        imported_components = {}
+        for module, module_info in scan_results["modules"].items():
+            for imp in module_info.get("imports", []):
+                # Check if this import corresponds to a known module
+                for known_module in scan_results["modules"]:
+                    if imp == known_module or imp.startswith(known_module + "."):
+                        # This module is importing something from a known module
+                        if known_module not in imported_components:
+                            imported_components[known_module] = set()
+                        
+                        # If it's importing a specific component from the module
+                        if imp != known_module:
+                            component = imp[len(known_module)+1:]
+                            imported_components[known_module].add(component)
+        
+        return {
+            "accessibility_map": accessibility_map,
+            "entry_points": entry_points,
+            "imported_components": {k: list(v) for k, v in imported_components.items()}
+        }
+    
+    async def _find_missing_components(self, scan_results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Find components that should be accessible but aren't
+        
+        Args:
+            scan_results: Results from module scanning
+            
+        Returns:
+            List of missing components
+        """
+        missing = []
+        
+        # Check each class that should be accessible
+        for full_class_name, class_info in scan_results["classes"].items():
+            module_path = class_info["module"]
+            
+            # If this class is in a module accessible from entry points
+            if scan_results["theoretical_accessibility"]["accessibility_map"].get(
+                module_path, {}).get("accessible_from_entry", False):
+                
+                # Try to import and access it
+                try:
+                    module_name, class_name = full_class_name.rsplit(".", 1)
+                    module = importlib.import_module(module_name)
+                    
+                    if not hasattr(module, class_name):
+                        missing.append({
+                            "type": "class",
+                            "name": full_class_name,
+                            "module": module_path,
+                            "reason": "Class defined but not accessible via import"
+                        })
+                except (ImportError, ModuleNotFoundError) as e:
+                    missing.append({
+                        "type": "class",
+                        "name": full_class_name,
+                        "module": module_path,
+                        "reason": f"Module import failed: {str(e)}"
+                    })
+        
+        # Check function tools
+        for full_func_name, func_info in scan_results["functions"].items():
+            if func_info["info"].get("is_function_tool", False):
+                # This should be a function tool accessible to the brain
+                function_name = func_info["info"]["name"]
+                
+                # Check if it's registered with the brain
+                tool_found = False
+                if hasattr(self.brain, "brain_agent") and hasattr(self.brain.brain_agent, "tools"):
+                    for tool in self.brain.brain_agent.tools:
+                        if (hasattr(tool, "function") and hasattr(tool.function, "__name__") 
+                                and tool.function.__name__ == function_name):
+                            tool_found = True
+                            break
+                
+                if not tool_found:
+                    missing.append({
+                        "type": "function_tool",
+                        "name": function_name,
+                        "full_name": full_func_name,
+                        "module": func_info["module"],
+                        "reason": "Function tool defined but not registered with brain agent"
+                    })
+        
+        return missing
+    
+    async def compare_theoretical_vs_actual(self) -> Dict[str, Any]:
+        """
+        Compare what should theoretically be accessible vs what is actually accessible
+        
+        Returns:
+            Comparison results
+        """
+        # Run the module discovery
+        discovery_results = await self.discover_all_modules()
+        if not discovery_results.get("success", False):
+            return discovery_results
+        
+        # Run a health check to get actual component status
+        health_results = await self.check_system_health(detailed=True)
+        
+        # Compare the results
+        comparison = {
+            "mismatches": [],
+            "missing_components": [],
+            "unexpected_components": [],
+            "health_status": health_results["overall_status"]
+        }
+        
+        # Check for missing components from discovery
+        for missing in discovery_results["results"]["missing_components"]:
+            comparison["missing_components"].append({
+                "name": missing["name"],
+                "type": missing["type"],
+                "reason": missing["reason"]
+            })
+        
+        # Check for unexpected components not found in code analysis
+        for component_name in health_results["components"]:
+            found = False
+            # Check against classes from discovery
+            for full_class_name in discovery_results["results"]["classes"]:
+                if full_class_name.endswith("." + component_name):
+                    found = True
+                    break
+            
+            if not found:
+                comparison["unexpected_components"].append({
+                    "name": component_name,
+                    "type": "component",
+                    "status": health_results["components"][component_name]["status"]
+                })
+        
+        # Check for function tool mismatches
+        theoretical_function_tools = []
+        for func_name, func_info in discovery_results["results"]["functions"].items():
+            if func_info["info"].get("is_function_tool", False):
+                theoretical_function_tools.append(func_name.split(".")[-1])
+        
+        actual_function_tools = []
+        for tool_name in health_results["function_tools"]:
+            if tool_name.startswith("function_tool."):
+                actual_function_tools.append(tool_name.replace("function_tool.", ""))
+        
+        # Find tools that should exist but don't
+        for tool in theoretical_function_tools:
+            if tool not in actual_function_tools:
+                comparison["mismatches"].append({
+                    "name": tool,
+                    "type": "function_tool",
+                    "issue": "Tool defined in code but not available at runtime"
+                })
+        
+        # Find tools that exist but weren't found in code analysis
+        for tool in actual_function_tools:
+            if tool not in theoretical_function_tools:
+                comparison["mismatches"].append({
+                    "name": tool,
+                    "type": "function_tool",
+                    "issue": "Tool available at runtime but not found in code analysis"
+                })
+        
+        # Summary statistics
+        comparison["stats"] = {
+            "theoretical_components": len(discovery_results["results"]["classes"]),
+            "actual_components": len(health_results["components"]),
+            "theoretical_function_tools": len(theoretical_function_tools),
+            "actual_function_tools": len(actual_function_tools),
+            "missing_count": len(comparison["missing_components"]),
+            "unexpected_count": len(comparison["unexpected_components"]),
+            "mismatch_count": len(comparison["mismatches"])
+        }
+        
+        return {
+            "success": True,
+            "comparison": comparison,
+            "discovery": discovery_results["results"],
+            "health_check": health_results
+        }
     
     async def _check_component(self, 
                            name: str, 
