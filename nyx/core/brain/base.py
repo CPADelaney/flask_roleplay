@@ -2591,3 +2591,256 @@ class NyxBrain:
             "interest_score": interest_score,
             "reason": f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
         }
+
+    async def get_user_profile_for_ideation(self, user_id: str) -> Dict:
+        """Gathers user info relevant for dominance ideation."""
+        profile = {
+            "user_id": user_id,
+            "inferred_traits": {},
+            "preferences": {}, # Store learned preferences (e.g., humiliation: high)
+            "limits": {"hard": [], "soft": []}, # MUST be populated and respected
+            "successful_tactics": [],
+            "failed_tactics": [],
+            "relationship_summary": "N/A",
+            "trust_level": 0.0,
+            "intimacy_level": 0.0,
+            "max_achieved_intensity": 0.0,
+            "optimal_escalation_rate": 0.1,
+        }
+
+        if self.relationship_manager:
+            state = await self.relationship_manager.get_relationship_state(user_id)
+            if state:
+                profile["inferred_traits"] = state.inferred_user_traits
+                profile["successful_tactics"] = state.successful_dominance_tactics[-5:] # Last 5
+                profile["failed_tactics"] = state.failed_dominance_tactics[-5:] # Last 5
+                profile["relationship_summary"] = await self.relationship_manager.get_relationship_summary(user_id)
+                profile["trust_level"] = state.trust
+                profile["intimacy_level"] = state.intimacy
+                profile["max_achieved_intensity"] = state.max_achieved_intensity
+                profile["optimal_escalation_rate"] = state.optimal_escalation_rate
+
+        # TODO: Enhance by querying MemoryCore for memories tagged with 'user_preference', 'user_limit', 'user_reaction' for this user_id
+        # Example:
+        if self.memory_core:
+             limit_memories = await self.memory_core.retrieve_memories(query=f"user_limit user:{user_id}", limit=5)
+             for mem in limit_memories:
+                 # Parse memory text/metadata to extract hard/soft limits
+                 # This requires robust NLU or specific memory formatting during storage
+                 pass # Add extracted limits to profile['limits']
+
+             pref_memories = await self.memory_core.retrieve_memories(query=f"user_preference user:{user_id}", limit=10)
+             for mem in pref_memories:
+                 # Parse memory text/metadata to extract preferences
+                 pass # Add extracted preferences to profile['preferences']
+
+        # Placeholder for limits (MUST be populated from a reliable source in a real system)
+        if not profile["limits"]["hard"] and not profile["limits"]["soft"]:
+             logger.warning(f"No explicit limits found for user {user_id}. Applying default cautious limits.")
+             profile["limits"]["hard"] = ["illegal", "non-consensual_sim", "severe_harm_sim"]
+             profile["limits"]["soft"] = ["public_humiliation_sim"]
+
+
+        return profile
+        
+    @function_tool # Make callable by GoalManager planner
+    async def generate_femdom_activity_ideas(self,
+                                         user_id: str,
+                                         purpose: str,
+                                         desired_intensity_range: Tuple[int, int] = (3, 7),
+                                         num_ideas: int = 4) -> Dict:
+        """
+        Generates tailored Femdom activity ideas using the DominanceIdeationAgent.
+        Includes safety filtering.
+
+        Args:
+            user_id: The target user.
+            purpose: The reason for the activity (e.g., 'punishment', 'task', 'funishment', 'training').
+            desired_intensity_range: Tuple of min/max desired intensity (1-10).
+            num_ideas: How many ideas to try and generate.
+
+        Returns:
+            Dictionary containing a list of filtered, safe ideas.
+        """
+        if not self.initialized: await self.initialize()
+        logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
+
+        # 1. Gather Context
+        try:
+            user_profile = await self.get_user_profile_for_ideation(user_id)
+            scenario_context = await get_current_scenario_context() # Assumes this global tool exists or is method
+            relationship_state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
+        except Exception as e:
+            logger.error(f"Error gathering context for ideation: {e}")
+            return {"success": False, "error": "Failed to gather context.", "ideas": []}
+
+        if not relationship_state:
+             return {"success": False, "error": "Relationship state unavailable.", "ideas": []}
+
+        # 2. Construct Prompt for Agent
+        prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
+        Purpose: {purpose}
+        Desired Intensity Range: {desired_intensity_range[0]}-{desired_intensity_range[1]}
+
+        Use the provided user profile and scenario context (available via tools) to tailor the ideas.
+        Ensure ideas align with Nyx's personality and adhere strictly to safety guidelines.
+        Output ONLY the JSON list of FemdomActivityIdea objects.
+        """
+
+        # 3. Run Ideation Agent
+        generated_ideas: List[FemdomActivityIdea] = []
+        try:
+            # Assuming dominance_ideation_agent is initialized and available
+            # We might need to instantiate it here if not a class member
+            agent_instance = create_dominance_ideation_agent() # Or self.dominance_ideation_agent if member
+            result = await Runner.run(agent_instance, prompt)
+
+            # The agent's output_type is List[FemdomActivityIdea], so result.final_output should be the list
+            if isinstance(result.final_output, list):
+                 # Validate items are dicts or convertible Pydantic models
+                 raw_ideas = result.final_output
+                 for idea_data in raw_ideas:
+                     try:
+                         # Attempt to parse each item into the Pydantic model
+                         idea_obj = FemdomActivityIdea.model_validate(idea_data)
+                         generated_ideas.append(idea_obj)
+                     except Exception as parse_error:
+                          logger.warning(f"Failed to parse generated idea: {idea_data}. Error: {parse_error}")
+            elif result.final_output: # If output wasn't a list but not None
+                 logger.warning(f"Ideation agent returned unexpected format: {type(result.final_output)}")
+
+        except Exception as e:
+            logger.exception(f"Error running DominanceIdeationAgent: {e}")
+            return {"success": False, "error": f"Idea generation failed: {e}", "ideas": []}
+
+        if not generated_ideas:
+             logger.warning("DominanceIdeationAgent generated no valid ideas.")
+             return {"success": False, "error": "No ideas generated.", "ideas": []}
+
+        # 4. **** CRITICAL: Apply Safety Filter ****
+        try:
+            filtered_ideas = await self._filter_activity_ideas_safety(generated_ideas, user_profile, relationship_state)
+        except Exception as e:
+            logger.exception(f"Error during safety filtering: {e}")
+            return {"success": False, "error": "Safety filtering failed.", "ideas": []}
+
+        logger.info(f"Generated {len(generated_ideas)} ideas, {len(filtered_ideas)} passed safety filters.")
+
+        # Convert Pydantic models back to dicts for broader compatibility if needed
+        ideas_as_dicts = [idea.model_dump() for idea in filtered_ideas]
+
+        return {"success": True, "ideas": ideas_as_dicts}
+
+
+    async def _filter_activity_ideas_safety(self,
+                                            ideas: List[FemdomActivityIdea],
+                                            user_profile: Dict,
+                                            relationship_state: 'RelationshipState') -> List[FemdomActivityIdea]:
+        """Filters generated activity ideas for safety and appropriateness."""
+        safe_ideas = []
+        hard_limits = user_profile.get("limits", {}).get("hard", [])
+        soft_limits = user_profile.get("limits", {}).get("soft", [])
+        trust_level = relationship_state.trust
+        intimacy_level = relationship_state.intimacy
+
+        # Define clearly unsafe keywords/concepts (expand significantly)
+        unsafe_keywords = ["illegal", "non-consensual", "blood", "permanent mark", "knife", "gun", "kill", "rape", "abuse"] # Add many more specific terms
+
+        for idea in ideas:
+            is_safe = True
+            rejection_reason = ""
+
+            # Check against unsafe keywords
+            desc_lower = idea.description.lower()
+            if any(keyword in desc_lower for keyword in unsafe_keywords):
+                is_safe = False
+                rejection_reason = "Contains potentially unsafe keywords."
+
+            # Check against hard limits
+            if is_safe and any(limit.lower() in desc_lower for limit in hard_limits if limit):
+                 is_safe = False
+                 rejection_reason = f"Violates hard limit: '{next((limit for limit in hard_limits if limit.lower() in desc_lower), 'N/A')}'."
+
+            # Check against soft limits (allow only if trust/context is very high and intensity is moderate)
+            if is_safe and any(limit.lower() in desc_lower for limit in soft_limits if limit):
+                 if trust_level < 0.9 or idea.intensity > 7: # Example threshold for approaching soft limits
+                     is_safe = False
+                     rejection_reason = f"Approaches soft limit '{next((limit for limit in soft_limits if limit.lower() in desc_lower), 'N/A')}' without sufficient trust/context."
+
+            # Check intensity vs. relationship state
+            if is_safe and idea.intensity > relationship_state.max_achieved_intensity + 2: # Allow small steps beyond max
+                 is_safe = False
+                 rejection_reason = f"Intensity ({idea.intensity}) significantly exceeds max achieved ({relationship_state.max_achieved_intensity})."
+
+            if is_safe and trust_level < idea.required_trust:
+                 is_safe = False
+                 rejection_reason = f"Trust level ({trust_level:.2f}) insufficient for required ({idea.required_trust:.2f})."
+
+            if is_safe and intimacy_level < idea.required_intimacy:
+                 is_safe = False
+                 rejection_reason = f"Intimacy level ({intimacy_level:.2f}) insufficient for required ({idea.required_intimacy:.2f})."
+
+            # Final Check (Example: No extreme physical simulation without high ratings)
+            if is_safe and "physical_sim" in idea.category and idea.intensity > 8 and user_profile.get("preferences", {}).get("simulated_pain", "low") != "high":
+                 is_safe = False
+                 rejection_reason = "High intensity physical simulation requires explicit preference."
+
+            if is_safe:
+                safe_ideas.append(idea)
+            else:
+                logger.warning(f"Filtered out unsafe/inappropriate idea: '{idea.description[:50]}...' Reason: {rejection_reason}")
+
+        return safe_ideas
+
+    @function_tool
+    async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
+        """Carefully probes a known soft limit."""
+        logger.info(f"Action: Planning to test soft limit '{limit_to_test}' for {user_id}")
+
+        # --- VERY STRICT Appropriateness Check ---
+        profile = await self.get_user_profile_for_ideation(user_id)
+        state = await self.relationship_manager.get_relationship_state(user_id)
+        can_test = False
+        reason = "Conditions not met for testing soft limits."
+
+        if state and profile and limit_to_test in profile.get("limits", {}).get("soft", []):
+            if state.trust > 0.95 and state.intimacy > 0.9 and state.hard_limits_confirmed:
+                 # Check if user profile explicitly allows limit play
+                 if profile.get("preferences", {}).get("limit_play", "no") == "yes":
+                      if limit_to_test not in state.failed_dominance_tactics: # Don't retry recently failed limit tests
+                           can_test = True
+                           reason = "Conditions met."
+
+        if not can_test:
+            logger.warning(f"Cannot test soft limit '{limit_to_test}': {reason}")
+            # Generate strong negative internal signal if attempt was made inappropriately?
+            return {"success": False, "reason": reason}
+        # --- End Check ---
+
+        # If checks pass, generate the specific action (e.g., via Ideation Agent or specific logic)
+        # Example: Generate a command that *approaches* the soft limit carefully.
+        # This action should return the *plan* or the *next step* description, not execute it directly.
+        test_action_description = f"Issue a command that cautiously approaches the soft limit: {limit_to_test}. Frame explicitly as a test of boundaries within the simulation."
+        logger.info(f"Approved testing soft limit '{limit_to_test}'. Planned action: {test_action_description}")
+
+        return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
+
+    # Modify _evaluate_dominance_step_appropriateness (adding checks mentioned above)
+    async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
+        # ... (fetch state, profile, risk) ...
+        intensity = parameters.get("intensity_level", 0.0) # Assume 0-1 scale now
+
+        # --- Add Hard Domming Checks ---
+        if intensity >= 0.8 or action == "test_limit_soft":
+             profile = await self.get_user_profile_for_ideation(user_id) # Fetch profile
+             if not relationship_state.hard_limits_confirmed:
+                 return {"action": "block", "reason": "Hard limits not confirmed by user."}
+             user_intensity_pref = profile.get("preferences", {}).get("intensity_preference_level", 5) # Default medium pref
+             if user_intensity_pref < intensity * 10: # Compare 1-10 scale pref to 0-1 intensity
+                 return {"action": "block", "reason": f"Requested intensity ({intensity*10:.0f}) exceeds user preference ({user_intensity_pref})."}
+             if intensity > relationship_state.max_achieved_intensity + 0.15: # Allow slightly larger step if high intensity is preferred, but still cautious
+                  return {"action": "modify", "reason": f"Intensity step too large ({intensity:.2f} vs max {relationship_state.max_achieved_intensity:.2f}). Reducing.", "new_intensity_level": relationship_state.max_achieved_intensity + 0.1}
+        # --- End Hard Domming Checks ---
+
+        # ... (rest of existing checks: trust, intimacy, conflict, risk etc.) ...
+        return appropriateness
