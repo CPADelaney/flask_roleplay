@@ -31,6 +31,10 @@ class RelationshipState(BaseModel):
     failed_dominance_tactics: List[str] = Field(default_factory=list)
     preferred_dominance_style: Optional[str] = Field(None, description="Learned preferred style for this user (e.g., psychological, praise-based)")
     optimal_escalation_rate: float = Field(0.1, description="Learned optimal step size for intensity increase") # 0.1 = slow, 0.5 = fast
+    user_stated_intensity_preference: Optional[Union[int, str]] = Field(None, description="User's stated preference for intensity (e.g., 8, 'extreme', 'hard')")
+    hard_limits_confirmed: bool = Field(False, description="Whether user has explicitly confirmed hard limits.")
+    soft_limits_approached: List[str] = Field(default_factory=list)
+    soft_limits_crossed_successfully: List[str] = Field(default_factory=list)
 
 class RelationshipManager:
     """Manages Nyx's relationship states with different users."""
