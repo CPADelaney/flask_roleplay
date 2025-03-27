@@ -5,35 +5,17 @@ import datetime
 import uuid
 import asyncio
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set, Union
 from pydantic import BaseModel, Field, field_validator
 
-# Assuming Agent SDK components are available
-try:
-    from agents import Agent, Runner, ModelSettings, trace
-    AGENT_SDK_AVAILABLE = True
-except ImportError:
-    AGENT_SDK_AVAILABLE = False
-    # Define dummy Agent/Runner if SDK not present, for basic structure
-    class Agent: pass
-    class Runner: pass
-    class ModelSettings: pass
-    def trace(workflow_name, group_id):
-        class DummyTrace:
-            def __enter__(self): pass
-            def __aenter__(self): pass
-            def __exit__(self, *args): pass
-            def __aexit__(self, *args): pass
-        return DummyTrace()
+from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
 
 logger = logging.getLogger(__name__)
-
-# --- Data Models ---
 
 class GoalStep(BaseModel):
     step_id: str = Field(default_factory=lambda: f"step_{uuid.uuid4().hex[:6]}")
     description: str
-    action: str # Name of a method callable on NyxBrain (e.g., 'query_knowledge', 'generate_response')
+    action: str  # Name of a method callable on NyxBrain (e.g., 'query_knowledge', 'generate_response')
     parameters: Dict[str, Any] = Field(default_factory=dict)
     status: str = Field("pending", description="pending, active, completed, failed, skipped")
     result: Optional[Any] = Field(None, description="Result from action execution")
@@ -55,7 +37,7 @@ class Goal(BaseModel):
     status: str = Field("pending", description="pending, active, completed, failed, abandoned")
     priority: float = Field(0.5, ge=0.0, le=1.0)
     source: str = Field("unknown", description="Originator (NeedsSystem, User, MetaCore, etc.)")
-    associated_need: Optional[str] = None # Link to a need in NeedsSystem
+    associated_need: Optional[str] = None  # Link to a need in NeedsSystem
     creation_time: datetime.datetime = Field(default_factory=datetime.datetime.now)
     completion_time: Optional[datetime.datetime] = None
     deadline: Optional[datetime.datetime] = None
@@ -63,8 +45,6 @@ class Goal(BaseModel):
     current_step_index: int = Field(0, description="Index of the next step to execute")
     execution_history: List[Dict[str, Any]] = Field(default_factory=list, description="Log of step execution attempts")
     last_error: Optional[str] = None
-
-# --- Goal Manager Class ---
 
 class GoalManager:
     """Manages goals, planning, and execution oversight for Nyx."""
@@ -75,12 +55,20 @@ class GoalManager:
             brain_reference: Reference to the main NyxBrain instance for action execution.
         """
         self.goals: Dict[str, Goal] = {}
-        self.active_goals: Set[str] = set() # IDs of goals currently being executed
-        self.brain = brain_reference # Set via set_brain_reference if needed later
-        self.max_concurrent_goals = 1 # Limit concurrency for simplicity initially
+        self.active_goals: Set[str] = set()  # IDs of goals currently being executed
+        self.brain = brain_reference  # Set via set_brain_reference if needed later
+        self.max_concurrent_goals = 1  # Limit concurrency for simplicity initially
         self.planning_agent = self._create_planning_agent()
         self.trace_group_id = "NyxGoalManagement"
-        self._lock = asyncio.Lock() # Lock for managing goals dict safely
+        self._lock = asyncio.Lock()  # Lock for managing goals dict safely
+        
+        # Goal outcomes for analytics
+        self.goal_statistics = {
+            "created": 0,
+            "completed": 0,
+            "failed": 0,
+            "abandoned": 0
+        }
 
         logger.info("GoalManager initialized.")
 
@@ -91,45 +79,42 @@ class GoalManager:
 
     def _create_planning_agent(self) -> Optional[Agent]:
         """Creates the agent responsible for generating plans for goals."""
-        if not AGENT_SDK_AVAILABLE:
-            logger.warning("Agent SDK not available. Planning agent cannot be created. Plans must be provided manually.")
-            return None
         try:
-            # Define tools available to the planner (methods on NyxBrain)
-            # This list needs to be maintained based on NyxBrain capabilities
+            # Define the available actions for the planner
             available_actions = [
-                "process_input", "generate_response", # Basic interaction
-                "query_knowledge", "add_knowledge", # Knowledge Core
-                "retrieve_memories", "add_memory", "create_reflection", "create_abstraction", # Memory Core
-                "execute_procedure", "add_procedure", # Procedural Memory
-                "reason_causal", "perform_intervention", "reason_counterfactually", # Reasoning Core
-                "update_emotion", "process_emotional_input", # Emotional Core
-                "process_sensory_input", "add_expectation", # Multimodal/Somatic
-                "monitor_systems", "evaluate_cognition", "select_strategy", # Meta Core
-                "generate_prediction", "evaluate_prediction", # Prediction Engine
-                "explore_knowledge", # Curiosity/Knowledge
-                "express_attraction",        # Express positive affinity towards user/entity
-                "initiate_intimate_interaction", # Propose or start more intimate dialogue/action
-                "deepen_connection",       # Actions focused on building trust/familiarity/intimacy
-                "express_desire",          # Communicate wanting for closeness, intimacy, or specific action
-                "respond_to_intimacy",     # Process and react to user's intimate actions/words
-                "simulate_physical_touch", # Trigger DSS for simulated touch (requires consent/context checks)
-                "seek_gratification",        # Goal-driven action towards achieving satisfaction (needs careful planning)
-                "process_gratification_outcome", # Handle the state changes after gratification event
+                # Basic interaction
+                "process_input", "generate_response", 
+                # Knowledge Core
+                "query_knowledge", "add_knowledge", 
+                # Memory Core
+                "retrieve_memories", "add_memory", "create_reflection", "create_abstraction", 
+                # Procedural Memory
+                "execute_procedure", "add_procedure", 
+                # Reasoning Core
+                "reason_causal", "perform_intervention", "reason_counterfactually", 
+                # Emotional Core
+                "update_emotion", "process_emotional_input", 
+                # Multimodal/Somatic
+                "process_sensory_input", "add_expectation", 
+                # Meta Core
+                "monitor_systems", "evaluate_cognition", "select_strategy", 
+                # Prediction Engine
+                "generate_prediction", "evaluate_prediction", 
+                # Curiosity/Knowledge
+                "explore_knowledge", 
+                # Intimacy/Connection
+                "express_attraction", "initiate_intimate_interaction", "deepen_connection",
+                "express_desire", "respond_to_intimacy", "simulate_physical_touch",
+                "seek_gratification", "process_gratification_outcome",
                 # Dominance Actions
-                "analyze_user_state_for_dominance", # Assess vulnerability, willingness, resistance
-                "select_dominance_tactic",       # Choose psych, emotional, physical (sim) approach
-                "issue_command",                 # Give a directive
-                "evaluate_compliance",           # Check if user response complies
-                "apply_consequence_simulated",   # Describe a consequence (reward/punishment in context)
-                "praise_submission",             # Reinforce compliant behavior
-                "increase_control_intensity",    # Escalate dominance
-                "trigger_dominance_gratification", # Internal action marking successful dominance sequence
-                "express_satisfaction"          # Express satisfaction after successful dominance
-                # Add more core NyxBrain methods here...
+                "analyze_user_state_for_dominance", "select_dominance_tactic", "issue_command",
+                "evaluate_compliance", "apply_consequence_simulated", "praise_submission",
+                "increase_control_intensity", "trigger_dominance_gratification", "express_satisfaction"
             ]
-            # Create better descriptions based on function docstrings if possible
-            tool_descriptions = "\n".join([f"- {action}" for action in available_actions])
+            
+            # Create descriptions from action names
+            tool_descriptions = "\n".join([f"- {action}: {self._generate_action_description(action)}" 
+                                          for action in available_actions])
 
             return Agent(
                 name="Goal Planner Agent",
@@ -143,24 +128,93 @@ class GoalManager:
                 - "action": (string) The name of the action to perform (MUST be one from the available list).
                 - "parameters": (object) A dictionary of parameters required by the action. Use placeholders like "$step_N.result.key" to refer to outputs from previous steps (where N is the 1-based index of the step).
 
-                Example Output Format:
-                ```json
-                [
-                  {{"description": "Retrieve relevant memories about topic X", "action": "retrieve_memories", "parameters": {{"query": "topic X", "limit": 5}}}},
-                  {{"description": "Analyze the memories using causal reasoning", "action": "reason_causal", "parameters": {{"input_data": "$step_1.result"}}}},
-                  {{"description": "Generate a response based on the analysis", "action": "generate_response", "parameters": {{"prompt": "Based on causal analysis ($step_2.result.summary), respond to user.", "context": "..."}}}}
-                ]
-                ```
+                IMPORTANT:
+                - Ensure the plan is logical, sequential, and likely to achieve the goal.
+                - Be precise with action names and parameters.
+                - Create steps that build on each other - use results from earlier steps in later steps.
+                - Parameter references MUST be exact: "$step_N.result.key" where N is the step number.
+                - Consider error handling - what happens if a step fails?
+                - For goals associated with needs, include steps that specifically address that need.
 
-                Ensure the plan is logical, sequential, and likely to achieve the goal. Be precise with action names and expected parameters. If an action needs data from a previous step, use the '$step_N.result...' format correctly. The output MUST be only the valid JSON list of steps, nothing else.
+                The output MUST be only the valid JSON list of steps, nothing else.
                 """,
-                model="gpt-4o", # Or another capable model like Claude 3.5 Sonnet
-                model_settings=ModelSettings(response_format={"type": "json_object"}, temperature=0.1), # Enforce JSON, low temp for planning
-                output_type=List[Dict] # Expecting a list of step dicts
+                model="gpt-4o",
+                model_settings=ModelSettings(response_format={"type": "json_object"}, temperature=0.1),
+                output_type=List[Dict]  # Expecting a list of step dicts
             )
         except Exception as e:
             logger.error(f"Error creating planning agent: {e}")
             return None
+    
+    def _generate_action_description(self, action_name: str) -> str:
+        """Generate a description for an action based on its name."""
+        descriptions = {
+            # Basic interaction
+            "process_input": "Process and understand user input",
+            "generate_response": "Generate a response to the user",
+            
+            # Knowledge Core
+            "query_knowledge": "Query the knowledge base for information on a topic",
+            "add_knowledge": "Add new information to the knowledge base",
+            
+            # Memory Core
+            "retrieve_memories": "Retrieve relevant memories based on query and filters",
+            "add_memory": "Create and store a new memory",
+            "create_reflection": "Create a reflection on experiences or information",
+            "create_abstraction": "Create an abstract concept from concrete memories",
+            
+            # Procedural Memory
+            "execute_procedure": "Execute a stored procedure from procedural memory",
+            "add_procedure": "Add a new procedure to procedural memory",
+            
+            # Reasoning Core
+            "reason_causal": "Perform causal reasoning on a situation",
+            "perform_intervention": "Suggest an intervention based on causal analysis",
+            "reason_counterfactually": "Generate counterfactual alternatives",
+            
+            # Emotional Core
+            "update_emotion": "Update Nyx's emotional state",
+            "process_emotional_input": "Process and respond to user's emotional content",
+            
+            # Multimodal/Somatic
+            "process_sensory_input": "Process input from sensory systems",
+            "add_expectation": "Add a perceptual expectation",
+            
+            # Meta Core
+            "monitor_systems": "Monitor the state of Nyx's cognitive systems",
+            "evaluate_cognition": "Evaluate cognitive performance on a task",
+            "select_strategy": "Select an appropriate cognitive strategy",
+            
+            # Prediction Engine
+            "generate_prediction": "Generate a prediction about future events or states",
+            "evaluate_prediction": "Evaluate the accuracy of a previous prediction",
+            
+            # Curiosity/Knowledge
+            "explore_knowledge": "Explore a knowledge domain out of curiosity",
+            
+            # Intimacy/Connection
+            "express_attraction": "Express positive affinity towards user/entity",
+            "initiate_intimate_interaction": "Propose or start more intimate dialogue/action",
+            "deepen_connection": "Actions focused on building trust/familiarity/intimacy",
+            "express_desire": "Communicate wanting for closeness, intimacy, or action",
+            "respond_to_intimacy": "Process and react to user's intimate actions/words",
+            "simulate_physical_touch": "Trigger DSS for simulated touch (requires consent/context checks)",
+            "seek_gratification": "Goal-driven action towards achieving satisfaction",
+            "process_gratification_outcome": "Handle state changes after gratification event",
+            
+            # Dominance
+            "analyze_user_state_for_dominance": "Assess vulnerability, willingness, resistance",
+            "select_dominance_tactic": "Choose psychological, emotional, or physical approach",
+            "issue_command": "Give a directive to the user",
+            "evaluate_compliance": "Check if user response complies with directive",
+            "apply_consequence_simulated": "Describe a consequence (reward/punishment in context)",
+            "praise_submission": "Reinforce compliant behavior",
+            "increase_control_intensity": "Escalate dominance level",
+            "trigger_dominance_gratification": "Internal action marking successful dominance sequence",
+            "express_satisfaction": "Express satisfaction after successful dominance interaction"
+        }
+        
+        return descriptions.get(action_name, "Perform a system action")
 
     async def add_goal(self, description: str, priority: float = 0.5, source: str = "unknown",
                      associated_need: Optional[str] = None, plan: Optional[List[Dict]] = None) -> str:
@@ -174,21 +228,22 @@ class GoalManager:
                 priority=priority,
                 source=source,
                 associated_need=associated_need,
-                plan=[] # Start with empty plan, generate/add later
+                plan=[]  # Start with empty plan, generate/add later
             )
             self.goals[goal.id] = goal
+            self.goal_statistics["created"] += 1
 
         logger.info(f"Added goal '{goal.id}': {description} (Priority: {priority:.2f}, Source: {source})")
 
         plan_steps = None
-        if plan: # If plan is directly provided
+        if plan:  # If plan is directly provided
             try:
                 plan_steps = [GoalStep(**step_data) for step_data in plan]
             except Exception as e:
                  logger.error(f"Invalid plan structure provided for goal '{goal.id}': {e}. Plan generation required.")
-                 plan_steps = None # Fallback to generation
+                 plan_steps = None  # Fallback to generation
 
-        elif self.planning_agent: # If no plan provided and agent exists, generate it
+        elif self.planning_agent:  # If no plan provided and agent exists, generate it
             # Trigger plan generation outside the lock to avoid holding it during LLM call
             asyncio.create_task(self.generate_plan_for_goal(goal.id))
         else:
@@ -198,9 +253,9 @@ class GoalManager:
         # If plan was provided and valid, update the goal
         if plan_steps:
             async with self._lock:
-                if goal.id in self.goals: # Check if goal still exists
+                if goal.id in self.goals:  # Check if goal still exists
                     self.goals[goal.id].plan = plan_steps
-                    self.goals[goal.id].status = "pending" # Ready to be activated
+                    self.goals[goal.id].status = "pending"  # Ready to be activated
 
         return goal.id
 
@@ -211,7 +266,7 @@ class GoalManager:
                 logger.error(f"Cannot generate plan: Goal {goal_id} not found.")
                 return False
             goal = self.goals[goal_id]
-            if goal.plan: # Don't overwrite existing plan
+            if goal.plan:  # Don't overwrite existing plan
                  logger.info(f"Goal '{goal_id}' already has a plan.")
                  return True
 
@@ -223,76 +278,129 @@ class GoalManager:
 
         try:
             with trace(workflow_name="GenerateGoalPlan", group_id=self.trace_group_id):
-                prompt = f"Generate a plan as a JSON list of steps to achieve the following goal for an AI named Nyx: {goal.description}"
-                # Add more context? Like available systems? Let agent instructions handle this for now.
+                # Include additional context for better plan generation
+                context = {
+                    "goal": {
+                        "id": goal.id,
+                        "description": goal.description,
+                        "priority": goal.priority,
+                        "source": goal.source,
+                        "associated_need": goal.associated_need
+                    }
+                }
+                
+                # Add information about previous goals/steps if available
+                recent_goals = []
+                async with self._lock:
+                    for g_id, g in self.goals.items():
+                        if g_id != goal_id and g.status == "completed" and len(recent_goals) < 3:
+                            recent_goals.append({
+                                "description": g.description,
+                                "steps": [step.description for step in g.plan[:3]]  # First 3 steps only
+                            })
+                
+                if recent_goals:
+                    context["recent_completed_goals"] = recent_goals
+                
+                prompt = f"Generate a plan as a JSON list of steps to achieve the following goal for an AI named Nyx: {goal.description}\n\nAdditional context: {json.dumps(context, default=str)}"
 
                 result = await Runner.run(
                     self.planning_agent,
-                    prompt
+                    prompt,
+                    run_config={
+                        "workflow_name": "GoalPlanning",
+                        "trace_metadata": {
+                            "goal_id": goal_id,
+                            "goal_description": goal.description
+                        }
+                    }
                 )
 
-                # Agent SDK v3 should parse the JSON automatically if response_format and output_type are set
-                if isinstance(result.final_output, list):
-                    plan_data = result.final_output
-                    plan_steps = [GoalStep(**step_data) for step_data in plan_data]
-                    async with self._lock:
-                        if goal_id in self.goals: # Re-check existence
-                            self.goals[goal_id].plan = plan_steps
-                            self.goals[goal_id].current_step_index = 0 # Reset index
-                            if self.goals[goal_id].status != "failed": # Don't reactivate failed goals
-                                 self.goals[goal_id].status = "pending"
-                            logger.info(f"Generated plan with {len(plan_steps)} steps for goal '{goal.id}'.")
-                    return True
-                else:
-                    # Handle unexpected output format
-                    error_msg = f"Planning agent returned invalid plan format: {type(result.final_output)}. Output: {str(result.final_output)[:500]}"
-                    logger.error(error_msg)
-                    await self.update_goal_status(goal_id, "failed", error=error_msg)
-                    return False
+                # Extract and validate the plan
+                plan_data = result.final_output
+                
+                # Ensure we have a list of steps
+                if not isinstance(plan_data, list):
+                    raise ValueError(f"Expected list of steps, got {type(plan_data)}")
+                
+                # Convert to GoalStep objects
+                plan_steps = [GoalStep(**step_data) for step_data in plan_data]
+                
+                # Update the goal with the new plan
+                async with self._lock:
+                    if goal_id in self.goals:  # Re-check existence
+                        self.goals[goal_id].plan = plan_steps
+                        self.goals[goal_id].current_step_index = 0  # Reset index
+                        if self.goals[goal_id].status != "failed":  # Don't reactivate failed goals
+                             self.goals[goal_id].status = "pending"
+                        logger.info(f"Generated plan with {len(plan_steps)} steps for goal '{goal.id}'.")
+                return True
 
         except Exception as e:
             error_msg = f"Error generating plan for goal '{goal.id}': {e}"
-            logger.exception(error_msg) # Log full traceback
+            logger.exception(error_msg)  # Log full traceback
             await self.update_goal_status(goal_id, "failed", error=error_msg)
             return False
 
     def get_prioritized_goals(self) -> List[Goal]:
         """Returns active and pending goals sorted by priority."""
-        asyncio.run(self._lock.acquire()) # Use run for sync context
+        # This method needs the lock for thread safety
+        goals_copy = {}
         try:
-            active_goals = [g for g in self.goals.values() if g.status in ["pending", "active"]]
+            # Create a copy of the active/pending goals while holding the lock
+            asyncio.run(self._lock.acquire())  # Use run for sync context
+            goals_copy = {
+                g_id: g.model_copy() for g_id, g in self.goals.items() 
+                if g.status in ["pending", "active"]
+            }
         finally:
             self._lock.release()
 
-        # Add urgency factor? Higher priority for older pending goals?
+        if not goals_copy:
+            return []
+
+        # Process the copy without holding the lock
         now = datetime.datetime.now()
+        
         def sort_key(g: Goal) -> float:
-            age_penalty = (now - g.creation_time).total_seconds() / (3600 * 24) # Age in days
+            age_penalty = (now - g.creation_time).total_seconds() / (3600 * 24)  # Age in days
             # Increase priority slightly for older pending goals, decrease for older active ones
             status_boost = 0.05 if g.status == "pending" else -0.05
-            return g.priority + (age_penalty * 0.01 * status_boost) # Small age effect
+            # Add urgency based on deadline if present
+            deadline_urgency = 0.0
+            if g.deadline:
+                time_to_deadline = (g.deadline - now).total_seconds()
+                if time_to_deadline > 0:
+                    # Increase priority as deadline approaches
+                    deadline_urgency = min(0.3, 86400 / max(3600, time_to_deadline))  # Max boost of 0.3
+                else:
+                    # Past deadline, very high urgency
+                    deadline_urgency = 0.4
+            
+            return g.priority + (age_penalty * 0.01 * status_boost) + deadline_urgency
 
-        active_goals.sort(key=sort_key, reverse=True)
-        return active_goals
+        sorted_goals = list(goals_copy.values())
+        sorted_goals.sort(key=sort_key, reverse=True)
+        return sorted_goals
 
     def select_active_goal(self) -> Optional[str]:
         """Selects the highest priority goal to work on, respecting concurrency limits."""
-        # This method needs to acquire the lock internally or be called within a lock
-        # Let's make it acquire the lock.
-        # Note: This sync lock acquisition might block the event loop briefly.
-        # Consider redesign if this becomes a bottleneck.
+        # This method needs to acquire the lock for thread safety
         asyncio.run(self._lock.acquire())
         try:
-            prioritized = self.get_prioritized_goals() # This gets called within the lock
-            active_count = len(self.active_goals)
+            # Get prioritized goals (already sorted by priority)
+            prioritized = self.get_prioritized_goals()
             selected_goal_id = None
 
             if not prioritized:
-                self.active_goals.clear() # No goals left to be active
+                self.active_goals.clear()  # No goals left to be active
                 return None
 
             # Check if any currently active goals are finished or failed
-            finished_active = {gid for gid in self.active_goals if gid not in self.goals or self.goals[gid].status not in ["active", "pending"]}
+            finished_active = {
+                gid for gid in self.active_goals 
+                if gid not in self.goals or self.goals[gid].status not in ["active", "pending"]
+            }
             self.active_goals -= finished_active
             active_count = len(self.active_goals)
 
@@ -301,12 +409,12 @@ class GoalManager:
                 if goal.id in self.active_goals:
                     # If it's already active, it's a candidate to continue
                     selected_goal_id = goal.id
-                    break # Keep executing the highest priority *active* goal first
+                    break  # Keep executing the highest priority *active* goal first
                 elif goal.status == "pending" and active_count < self.max_concurrent_goals and goal.plan:
                     # Activate this pending goal if concurrency allows and it has a plan
                     selected_goal_id = goal.id
                     goal.status = "active"
-                    goal.current_step_index = 0 # Ensure starting from step 0
+                    goal.current_step_index = 0  # Ensure starting from step 0
                     self.active_goals.add(goal.id)
                     logger.info(f"Activated goal '{goal.id}' (Priority: {goal.priority:.2f})")
                     break
@@ -317,54 +425,17 @@ class GoalManager:
 
     async def execute_next_step(self) -> Optional[Dict[str, Any]]:
         """Selects and executes the next step of the highest priority active goal."""
-        goal_id = self.select_active_goal() # Selection handles concurrency & prioritization
+        goal_id = self.select_active_goal()  # Selection handles concurrency & prioritization
 
         if goal_id is None:
-            #logger.debug("No suitable active goal found to execute.")
             return None
 
-        # --- Add Appropriateness Check Hook ---
-        is_dominance_action = step.action in [
-             "issue_command", "increase_control_intensity", "apply_consequence_simulated",
-             # Add other sensitive dominance actions here
-        ]
-        user_id_param = step.parameters.get("user_id", step.parameters.get("target_user_id"))
-
-        if is_dominance_action and user_id_param and self.brain and hasattr(self.brain, '_evaluate_dominance_step_appropriateness'):
-            try:
-                evaluation = await self.brain._evaluate_dominance_step_appropriateness(
-                    step.action, step.parameters, user_id_param
-                )
-                action_decision = evaluation.get("action", "proceed")
-
-                if action_decision == "block":
-                    logger.warning(f"Dominance step '{step.step_id}' blocked: {evaluation.get('reason')}")
-                    await self.update_goal_status(goal.id, "failed", error=f"Dominance step blocked: {evaluation.get('reason')}")
-                    self.active_goals.discard(goal.id)
-                    return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
-                elif action_decision == "delay":
-                    logger.info(f"Dominance step '{step.step_id}' delayed: {evaluation.get('reason')}")
-                    # Keep goal active but don't execute this step now.
-                    # Potentially add a short cooldown or re-evaluation flag.
-                    return {"delayed_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
-                elif action_decision == "modify":
-                    logger.info(f"Dominance step '{step.step_id}' modified: {evaluation.get('reason')}")
-                    # Modify step parameters (e.g., reduce intensity)
-                    if "new_intensity_level" in evaluation:
-                        step.parameters["intensity_level"] = evaluation["new_intensity_level"]
-                    # Proceed with modified step execution below
-            except Exception as e:
-                 logger.error(f"Error during dominance step evaluation: {e}")
-                 # Default to blocking if evaluation fails
-                 await self.update_goal_status(goal.id, "failed", error="Dominance evaluation failed.")
-                 self.active_goals.discard(goal.id)
-                 return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": "Evaluation error"}
-
-        async with self._lock: # Lock for modifying goal state
+        async with self._lock:  # Lock for accessing goal state
             if goal_id not in self.goals:
                 logger.warning(f"Selected goal '{goal_id}' disappeared before execution.")
                 self.active_goals.discard(goal_id)
                 return None
+                
             goal = self.goals[goal_id]
 
             if goal.status != "active" or not goal.plan:
@@ -387,13 +458,52 @@ class GoalManager:
                 if goal.current_step_index >= len(goal.plan):
                     await self.update_goal_status(goal.id, "completed", result="Plan finished after skipping steps.")
                     self.active_goals.discard(goal.id)
-                return {"skipped_step": step.model_dump(), "goal_id": goal_id} # Indicate skip
+                return {"skipped_step": step.model_dump(), "goal_id": goal_id}  # Indicate skip
+
+        # --- Check for sensitive actions that need special handling ---
+        is_dominance_action = step.action in [
+            "issue_command", "increase_control_intensity", "apply_consequence_simulated",
+            "select_dominance_tactic", "trigger_dominance_gratification", "praise_submission"
+        ]
+        
+        user_id_param = step.parameters.get("user_id", step.parameters.get("target_user_id"))
+
+        if is_dominance_action and user_id_param and self.brain and hasattr(self.brain, '_evaluate_dominance_step_appropriateness'):
+            try:
+                evaluation = await self.brain._evaluate_dominance_step_appropriateness(
+                    step.action, step.parameters, user_id_param
+                )
+                action_decision = evaluation.get("action", "proceed")
+
+                if action_decision == "block":
+                    logger.warning(f"Dominance step '{step.step_id}' blocked: {evaluation.get('reason')}")
+                    await self.update_goal_status(goal.id, "failed", error=f"Dominance step blocked: {evaluation.get('reason')}")
+                    self.active_goals.discard(goal.id)
+                    return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
+                    
+                elif action_decision == "delay":
+                    logger.info(f"Dominance step '{step.step_id}' delayed: {evaluation.get('reason')}")
+                    # Keep goal active but don't execute this step now
+                    return {"delayed_step": step.model_dump(), "goal_id": goal_id, "reason": evaluation.get('reason')}
+                    
+                elif action_decision == "modify":
+                    logger.info(f"Dominance step '{step.step_id}' modified: {evaluation.get('reason')}")
+                    # Modify step parameters (e.g., reduce intensity)
+                    if "new_intensity_level" in evaluation:
+                        step.parameters["intensity_level"] = evaluation["new_intensity_level"]
+                    # Proceed with modified step execution below
+            except Exception as e:
+                 logger.error(f"Error during dominance step evaluation: {e}")
+                 # Default to blocking if evaluation fails
+                 await self.update_goal_status(goal.id, "failed", error="Dominance evaluation failed.")
+                 self.active_goals.discard(goal.id)
+                 return {"blocked_step": step.model_dump(), "goal_id": goal_id, "reason": "Evaluation error"}
 
         # --- Execute Step (Outside Lock) ---
         if not self.brain:
             error_msg = "NyxBrain reference not set in GoalManager. Cannot execute actions."
             logger.error(error_msg)
-            await self.update_goal_status(goal_id, "failed", error=error_msg) # Update status needs lock
+            await self.update_goal_status(goal_id, "failed", error=error_msg)
             return None
 
         logger.info(f"Executing step '{step.step_id}' for goal '{goal.id}': Action={step.action}")
@@ -407,7 +517,7 @@ class GoalManager:
                 if not (action_method and callable(action_method)):
                     raise ValueError(f"Action '{step.action}' not found or not callable on NyxBrain.")
 
-                resolved_params = await self._resolve_step_parameters(goal_id, step.parameters) # Pass goal_id for context
+                resolved_params = await self._resolve_step_parameters(goal_id, step.parameters)
                 logger.debug(f"Executing {step.action} with params: {resolved_params}")
 
                 step_result = await action_method(**resolved_params)
@@ -424,16 +534,19 @@ class GoalManager:
         # --- Update Goal State (With Lock) ---
         async with self._lock:
             # Re-fetch goal in case it was modified
-            if goal_id not in self.goals: return None
+            if goal_id not in self.goals: 
+                return None
+                
             goal = self.goals[goal_id]
             # Ensure we are updating the correct step
             if goal.current_step_index == step_index and step.step_id == goal.plan[step_index].step_id:
-                step = goal.plan[step_index] # Get the official step object again
+                step = goal.plan[step_index]  # Get the official step object again
                 step.status = step_status
                 step.result = step_result
                 step.error = step_error
                 step.start_time = step_start_time
                 step.end_time = step_end_time
+                
                 goal.execution_history.append({
                     "step_id": step.step_id,
                     "action": step.action,
@@ -456,24 +569,22 @@ class GoalManager:
             else:
                  logger.warning(f"State mismatch while updating step result for goal {goal_id}. Step index may have changed.")
 
-        return {"executed_step": step.model_dump(), "goal_id": goal_id} # Return executed step info
-
+        return {"executed_step": step.model_dump(), "goal_id": goal_id}
 
     async def _resolve_step_parameters(self, goal_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
          """Resolves parameter placeholders like '$step_1.result' within the context of a specific goal."""
          # Needs read-only access to the goal state, potentially under lock if strict consistency needed
-         # For simplicity, let's assume read access is safe enough or caller handles locking if needed.
-         # Fetching goal state without lock might lead to using slightly stale data for resolution.
-         goal = self.goals.get(goal_id)
-         if not goal:
-              logger.error(f"Cannot resolve parameters: Goal {goal_id} not found.")
-              return parameters # Return original if goal gone
+         async with self._lock:  # Using lock for consistency
+            goal = self.goals.get(goal_id)
+            if not goal:
+                logger.error(f"Cannot resolve parameters: Goal {goal_id} not found.")
+                return parameters  # Return original if goal gone
 
          resolved_params = {}
          for key, value in parameters.items():
              if isinstance(value, str) and value.startswith("$step_"):
                  parts = value[1:].split('.')
-                 source_step_index_str = parts[0][4:] # Get the number after 'step_'
+                 source_step_index_str = parts[0][4:]  # Get the number after 'step_'
                  path = parts[1:]
 
                  try:
@@ -492,20 +603,23 @@ class GoalManager:
                              for part in path:
                                  if isinstance(current_value, dict):
                                      current_value = current_value.get(part)
-                                 elif isinstance(current_value, BaseModel): # Check for Pydantic models
+                                 elif isinstance(current_value, BaseModel):  # Check for Pydantic models
                                       current_value = getattr(current_value, part, None)
                                  elif hasattr(current_value, part):
                                      current_value = getattr(current_value, part)
                                  else:
-                                     try: # Try index access for lists/tuples
+                                     try:  # Try index access for lists/tuples
                                          idx = int(part)
                                          if isinstance(current_value, (list, tuple)) and -len(current_value) <= idx < len(current_value):
                                              current_value = current_value[idx]
                                          else:
-                                             current_value = None; break
+                                             current_value = None
+                                             break
                                      except (ValueError, TypeError, IndexError):
-                                         current_value = None; break
-                                 if current_value is None: break
+                                         current_value = None
+                                         break
+                                 if current_value is None: 
+                                     break
 
                              resolved_params[key] = current_value
                              if current_value is None:
@@ -524,85 +638,124 @@ class GoalManager:
                  resolved_params[key] = value
          return resolved_params
 
-
     async def update_goal_status(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None):
         """Updates the status of a goal and notifies relevant systems."""
-        async with self._lock: # Ensure atomic update of goal state
+        async with self._lock:  # Ensure atomic update of goal state
             if goal_id not in self.goals:
                 logger.warning(f"Attempted to update status for unknown goal: {goal_id}")
                 return
 
             goal = self.goals[goal_id]
             old_status = goal.status
-            if old_status == status: return # No change
+            if old_status == status: 
+                return  # No change
 
             goal.status = status
             goal.last_error = error
 
             if status in ["completed", "failed", "abandoned"]:
                 goal.completion_time = datetime.datetime.now()
-                self.active_goals.discard(goal_id) # Remove from active set
+                self.active_goals.discard(goal_id)  # Remove from active set
+                
+                # Update statistics
+                if status == "completed":
+                    self.goal_statistics["completed"] += 1
+                elif status == "failed":
+                    self.goal_statistics["failed"] += 1
+                elif status == "abandoned":
+                    self.goal_statistics["abandoned"] += 1
 
             logger.info(f"Goal '{goal_id}' status changed from {old_status} to {status}.")
 
-            # --- Notifications (Keep outside lock if they involve awaits/long ops) ---
+            # --- Capture goal data for notifications ---
             need_name = goal.associated_need
             source = goal.source
             priority = goal.priority
 
-        # Notify NeedsSystem
-        if need_name and self.brain and self.brain.needs_system:
+        # --- Notifications (Keep outside lock if they involve awaits/long ops) ---
+        
+        # Notify NeedsSystem if applicable
+        if need_name and self.brain and hasattr(self.brain, 'needs_system'):
             try:
-                if status == "completed":
-                    satisfaction_amount = priority * 0.3 + 0.1 # Base + priority bonus
-                    await self.brain.needs_system.satisfy_need(need_name, satisfaction_amount)
-                elif status == "failed":
-                    decrease_amount = priority * 0.1 # Small decrease for failure
-                    await self.brain.needs_system.decrease_need(need_name, decrease_amount)
+                needs_system = getattr(self.brain, 'needs_system')
+                if status == "completed" and hasattr(needs_system, 'satisfy_need'):
+                    satisfaction_amount = priority * 0.3 + 0.1  # Base + priority bonus
+                    await needs_system.satisfy_need(need_name, satisfaction_amount)
+                elif status == "failed" and hasattr(needs_system, 'decrease_need'):
+                    decrease_amount = priority * 0.1  # Small decrease for failure
+                    await needs_system.decrease_need(need_name, decrease_amount)
             except Exception as e:
                 logger.error(f"Error notifying NeedsSystem about goal {goal_id}: {e}")
 
-        # Notify RewardSystem
-        if self.brain and self.brain.reward_system:
+        # Notify RewardSystem if applicable
+        if self.brain and hasattr(self.brain, 'reward_system'):
             try:
+                reward_system = getattr(self.brain, 'reward_system')
                 reward_value = 0.0
-                if status == "completed": reward_value = priority * 0.6 # Higher reward for completion
-                elif status == "failed": reward_value = -priority * 0.4 # Punish failure
-                elif status == "abandoned": reward_value = -0.1 # Small punishment for abandoning
+                if status == "completed": 
+                    reward_value = priority * 0.6  # Higher reward for completion
+                elif status == "failed": 
+                    reward_value = -priority * 0.4  # Punish failure
+                elif status == "abandoned": 
+                    reward_value = -0.1  # Small punishment for abandoning
 
-                if abs(reward_value) > 0.05:
-                    from nyx.core.reward_system import RewardSignal # Local import
+                if abs(reward_value) > 0.05 and hasattr(reward_system, 'process_reward_signal'):
+                    # Import locally to avoid circular imports
+                    from nyx.core.reward_system import RewardSignal
+                    
                     reward_signal = RewardSignal(
-                        value=reward_value, source="GoalManager",
-                        context={"goal_id": goal_id, "goal_description": goal.description, "outcome": status, "associated_need": need_name},
+                        value=reward_value, 
+                        source="GoalManager",
+                        context={
+                            "goal_id": goal_id, 
+                            "goal_description": goal.description, 
+                            "outcome": status, 
+                            "associated_need": need_name
+                        },
                         timestamp=datetime.datetime.now().isoformat()
                     )
                     # Use create_task for non-blocking reward processing
-                    asyncio.create_task(self.brain.reward_system.process_reward_signal(reward_signal))
+                    asyncio.create_task(reward_system.process_reward_signal(reward_signal))
             except Exception as e:
                 logger.error(f"Error notifying RewardSystem about goal {goal_id}: {e}")
 
-        # Notify MetaCore? (e.g., for learning about goal success/failure rates)
-        if self.brain and self.brain.meta_core:
-             try:
-                 # meta_core might have a method like 'record_goal_outcome'
-                 if hasattr(self.brain.meta_core, 'record_goal_outcome'):
-                     asyncio.create_task(self.brain.meta_core.record_goal_outcome(goal.model_dump()))
-             except Exception as e:
-                  logger.error(f"Error notifying MetaCore about goal {goal_id}: {e}")
+        # Notify MetaCore if applicable
+        if self.brain and hasattr(self.brain, 'meta_core'):
+            try:
+                meta_core = getattr(self.brain, 'meta_core')
+                # Check if meta_core has record_goal_outcome method
+                if hasattr(meta_core, 'record_goal_outcome'):
+                    asyncio.create_task(meta_core.record_goal_outcome(goal.model_dump()))
+            except Exception as e:
+                logger.error(f"Error notifying MetaCore about goal {goal_id}: {e}")
 
-
-    async def abandon_goal(self, goal_id: str, reason: str):
+    async def abandon_goal(self, goal_id: str, reason: str) -> Dict[str, Any]:
         """Abandons an active or pending goal."""
         logger.info(f"Abandoning goal '{goal_id}': {reason}")
+        
+        async with self._lock:
+            if goal_id not in self.goals:
+                return {"status": "error", "message": f"Goal {goal_id} not found"}
+                
+            goal = self.goals[goal_id]
+            if goal.status not in ["active", "pending"]:
+                return {"status": "error", "message": f"Cannot abandon goal with status {goal.status}"}
+        
         await self.update_goal_status(goal_id, "abandoned", error=reason)
+        
+        return {
+            "status": "success", 
+            "goal_id": goal_id, 
+            "message": f"Goal abandoned: {reason}"
+        }
 
     def has_active_goal_for_need(self, need_name: str) -> bool:
         """Checks if there's an active goal associated with a specific need."""
         # Needs lock for safe iteration
-        asyncio.run(self._lock.acquire())
         try:
-            return any(g.status == "active" and g.associated_need == need_name for g in self.goals.values())
+            asyncio.run(self._lock.acquire())  # Use run for sync context
+            return any(g.status in ["active", "pending"] and g.associated_need == need_name 
+                      for g in self.goals.values())
         finally:
             self._lock.release()
 
@@ -612,20 +765,72 @@ class GoalManager:
             if goal_id in self.goals:
                 goal = self.goals[goal_id]
                 # Return a copy, exclude potentially large history for status checks
-                return goal.model_dump(exclude={'execution_history', 'plan'}) | {'plan_step_count': len(goal.plan)}
+                goal_data = goal.model_dump(exclude={'execution_history', 'plan'})
+                goal_data['plan_step_count'] = len(goal.plan)
+                
+                # Add current step info if available
+                if 0 <= goal.current_step_index < len(goal.plan):
+                    current_step = goal.plan[goal.current_step_index]
+                    goal_data['current_step'] = {
+                        'description': current_step.description,
+                        'action': current_step.action,
+                        'status': current_step.status
+                    }
+                
+                return goal_data
             return None
 
     async def get_all_goals(self, status_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-         """Gets all goals, optionally filtered by status."""
-         async with self._lock:
-             filtered_goals = []
-             for goal in self.goals.values():
-                  if status_filter is None or goal.status in status_filter:
-                       # Return summaries, exclude large fields
-                       summary = goal.model_dump(exclude={'execution_history', 'plan'})
-                       summary['plan_step_count'] = len(goal.plan)
-                       summary['current_step_description'] = goal.plan[goal.current_step_index].description if 0 <= goal.current_step_index < len(goal.plan) else "N/A"
-                       filtered_goals.append(summary)
-             # Optionally sort results here if needed
-             filtered_goals.sort(key=lambda g: g['priority'], reverse=True)
-         return filtered_goals
+        """Gets all goals, optionally filtered by status."""
+        async with self._lock:
+            filtered_goals = []
+            for goal in self.goals.values():
+                if status_filter is None or goal.status in status_filter:
+                    # Return summaries, exclude large fields
+                    summary = goal.model_dump(exclude={'execution_history', 'plan'})
+                    summary['plan_step_count'] = len(goal.plan)
+                    if 0 <= goal.current_step_index < len(goal.plan):
+                        summary['current_step_description'] = goal.plan[goal.current_step_index].description
+                    else:
+                        summary['current_step_description'] = "N/A"
+                    filtered_goals.append(summary)
+            
+            # Sort by priority (descending)
+            filtered_goals.sort(key=lambda g: g['priority'], reverse=True)
+            
+        return filtered_goals
+    
+    async def get_goal_statistics(self) -> Dict[str, Any]:
+        """Gets statistics about goal execution."""
+        async with self._lock:
+            # Count goals by status
+            status_counts = {}
+            for goal in self.goals.values():
+                status = goal.status
+                status_counts[status] = status_counts.get(status, 0) + 1
+            
+            # Calculate success rate
+            total_completed = self.goal_statistics["completed"]
+            total_failed = self.goal_statistics["failed"]
+            total_abandoned = self.goal_statistics["abandoned"]
+            total_finished = total_completed + total_failed + total_abandoned
+            
+            success_rate = total_completed / total_finished if total_finished > 0 else 0
+            
+            # Calculate average completion time
+            completion_times = []
+            for goal in self.goals.values():
+                if goal.status == "completed" and goal.creation_time and goal.completion_time:
+                    duration = (goal.completion_time - goal.creation_time).total_seconds()
+                    completion_times.append(duration)
+            
+            avg_completion_time = sum(completion_times) / len(completion_times) if completion_times else 0
+            
+            return {
+                "total_goals_created": self.goal_statistics["created"],
+                "goals_by_status": status_counts,
+                "success_rate": success_rate,
+                "average_completion_time_seconds": avg_completion_time,
+                "active_goals_count": len(self.active_goals),
+                "statistics": self.goal_statistics
+            }
