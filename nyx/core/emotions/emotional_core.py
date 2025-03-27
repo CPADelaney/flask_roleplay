@@ -967,7 +967,7 @@ class EmotionalCore:
                     return {"error": f"Processing failed: {str(e)}"}
     
     @with_emotion_trace
-    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[StreamEvent]:
+    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator['StreamEvent']:
         """
         Enhanced version that processes input with streaming responses
         to provide real-time emotional reactions with structured events
@@ -1059,6 +1059,10 @@ class EmotionalCore:
                     
                     # Stream events as they happen with enhanced structure and typing
                     async for event in result.stream_events():
+                        # Skip raw events for efficiency
+                        if event.type == "raw_response_event":
+                            continue
+                        
                         if event.type == "run_item_stream_event":
                             if event.item.type == "message_output_item":
                                 # Yield full message output only if it's small
@@ -1165,25 +1169,22 @@ class EmotionalCore:
                                 last_agent = event.new_agent.name
                     
                     # Final complete state event
-                    if hasattr(result, "final_output") and result.final_output:
-                        final_data = {
-                            "timestamp": datetime.datetime.now().isoformat(),
-                            "duration": (datetime.datetime.now() - self.active_runs[run_id]["start_time"]).total_seconds()
-                        }
+                    final_data = {
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "duration": (
+                            datetime.datetime.now()
+                            - self.active_runs[run_id]["start_time"]
+                        ).total_seconds()
+                    }
+                    
+                    final_output = self._extract_final_output(result)
+                    if final_output:
+                        final_data["final_output"] = final_output
                         
-                        # Add structured output if available
-                        if hasattr(result.final_output, "primary_emotion"):
-                            final_data["final_output"] = {
-                                "primary_emotion": result.final_output.primary_emotion.name,
-                                "intensity": result.final_output.intensity,
-                                "valence": result.final_output.valence,
-                                "arousal": result.final_output.arousal
-                            }
-                            
-                        yield StreamEvent(
-                            type="stream_complete",
-                            data=final_data
-                        )
+                    yield StreamEvent(
+                        type="stream_complete",
+                        data=final_data
+                    )
                     
                     # Update run status
                     self.active_runs[run_id]["status"] = "completed"
@@ -1193,29 +1194,46 @@ class EmotionalCore:
                     self._record_emotional_state()
                     
                 except MaxTurnsExceeded:
-                    logger.warning(f"Max turns exceeded in process_emotional_input_streamed for run {run_id}")
-                    self.active_runs[run_id]["status"] = "max_turns_exceeded"
-                    
-                    yield StreamEvent(
-                        type="stream_error",
+                    with custom_span(
+                        "streaming_error",
                         data={
-                            "error": "Processing exceeded maximum number of steps",
-                            "timestamp": datetime.datetime.now().isoformat()
+                            "error_type": "max_turns_exceeded",
+                            "run_id": run_id,
+                            "cycle": self.context.cycle_count
                         }
-                    )
+                    ):
+                        logger.warning(f"Max turns exceeded in process_emotional_input_streamed for run {run_id}")
+                        self.active_runs[run_id]["status"] = "max_turns_exceeded"
+                        
+                        yield StreamEvent(
+                            type="stream_error",
+                            data={
+                                "error": "Processing exceeded maximum number of steps",
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
+                        )
                     
                 except AgentsException as e:
-                    logger.error(f"Agent exception in process_emotional_input_streamed: {e}")
-                    self.active_runs[run_id]["status"] = "error"
-                    self.active_runs[run_id]["error"] = str(e)
-                    
-                    yield StreamEvent(
-                        type="stream_error",
+                    with custom_span(
+                        "streaming_error",
                         data={
-                            "error": f"Processing failed: {str(e)}",
-                            "timestamp": datetime.datetime.now().isoformat()
+                            "error_type": "agent_exception",
+                            "run_id": run_id,
+                            "cycle": self.context.cycle_count,
+                            "error_detail": str(e)
                         }
-                    )
+                    ):
+                        logger.error(f"Agent exception in process_emotional_input_streamed: {e}")
+                        self.active_runs[run_id]["status"] = "error"
+                        self.active_runs[run_id]["error"] = str(e)
+                        
+                        yield StreamEvent(
+                            type="stream_error",
+                            data={
+                                "error": f"Processing failed: {str(e)}",
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
+                        )
     
     # Legacy API Methods with improved implementation
     def _get_emotional_state_matrix_sync(self) -> Dict[str, Any]:
