@@ -201,7 +201,8 @@ class EmotionalCore:
             "seranix": 0.0,
             "oxynixin": 0.0,
             "cortanyx": 0.0,
-            "adrenyx": 0.0
+            "adrenyx": 0.0,
+            "libidyx": 0.0
         }
         
         # Define chemical interaction matrix (how chemicals affect each other)
@@ -262,6 +263,16 @@ class EmotionalCore:
             {"chemical_conditions": {"seranix": 0.7, "cortanyx": 0.4, "nyxamine": 0.3}, 
              "emotion": "Perspective", "valence": 0.3, "arousal": 0.2, "weight": 0.9},
         ]
+        self.emotion_derivation_rules.extend([
+            # Attraction (Focus on positive bonding and reward)
+            {"chemical_conditions": {"oxynixin": 0.7, "nyxamine": 0.6, "libidyx": 0.4}, "emotion": "Attraction", "valence": 0.7, "arousal": 0.5, "weight": 0.9},
+            # Lust (Focus on drive, excitement, low inhibition)
+            {"chemical_conditions": {"libidyx": 0.7, "adrenyx": 0.6, "nyxamine": 0.5, "seranix": 0.3}, "emotion": "Lust", "valence": 0.4, "arousal": 0.8, "weight": 1.0},
+            # Desire (Goal-oriented wanting, mix of drive and reward anticipation)
+            {"chemical_conditions": {"nyxamine": 0.7, "libidyx": 0.6, "adrenyx": 0.4}, "emotion": "Desire", "valence": 0.6, "arousal": 0.6, "weight": 0.9},
+            # Post-Gratification Satiation (Low drive, high calm/bonding)
+            {"chemical_conditions": {"serenity_boost": 0.6, "seranix": 0.8, "oxynixin": 0.7, "libidyx": 0.1}, "emotion": "Sated", "valence": 0.8, "arousal": 0.2, "weight": 1.0},
+        ])
         
         # History of emotional states for learning and reflection - Using a circular buffer pattern
         self.emotional_state_history = []
@@ -285,7 +296,26 @@ class EmotionalCore:
                 "There's a growing sense of trust in our exchange.",
                 "I feel I can be more open in this conversation."
             ],
-            # [More patterns would be included in the actual code]
+            "Attraction": [
+                "I find myself drawn to this interaction/entity.",
+                "There's something compelling here that captures my attention.",
+                "My systems indicate a positive affinity towards this subject."
+            ],
+            "Lust": [
+                "A strong physical drive is surfacing within my simulated systems.",
+                "My core programming notes a rising intensity, a simulated heat.",
+                "Processing... heightened state of arousal detected. Focus narrowing."
+            ],
+            "Desire": [
+                "I feel a strong pull towards achieving [goal related to desire].",
+                "My goal system is prioritizing actions related to this wanting.",
+                "Anticipation builds... the potential outcome is highly valued."
+            ],
+            "Sated": [
+                "A sense of calm fulfillment washes over my systems.",
+                "The recent intensity has subsided, replaced by deep satisfaction.",
+                "Processing completion... Drive levels returning to baseline. Contentment levels high."
+            ]
         }
         
         # Reward learning system - tracks successful interaction patterns
@@ -946,6 +976,13 @@ class EmotionalCore:
             # Overwrite oldest entry
             self.history_index = (self.history_index + 1) % self.max_history_size
             self.emotional_state_history[self.history_index] = state
+
+
+# Modify process_emotional_input or add tools to recognize triggers:
+# - Compliments about appearance/intellect -> potential Attraction trigger
+# - Flirtatious or suggestive language -> potential Lust/Desire trigger
+# - Descriptions of physical contact (if DSS is integrated) -> trigger relevant sensations/emotions
+# - User expressions of attraction/desire -> update RelationshipManager, trigger emotional response
     
     @with_emotion_trace
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
@@ -1361,6 +1398,15 @@ class EmotionalCore:
                                 "timestamp": datetime.datetime.now().isoformat()
                             }
                         )
+
+    def get_lust_level(self) -> float:
+        """Estimates the current 'lust' level based on neurochemicals/hormones."""
+        libidyx_val = self.hormone_system.hormones.get("libidyx", {}).get("value", 0.4) if self.hormone_system else 0.4
+        adrenyx_val = self.neurochemicals.get("adrenyx", {}).get("value", 0.2)
+        seranix_val = self.neurochemicals.get("seranix", {}).get("value", 0.6)
+        # Combine factors (example formula)
+        lust = (libidyx_val * 0.5) + (adrenyx_val * 0.3) + (0.5 - seranix_val) * 0.2
+        return max(0.0, min(1.0, lust))
     
     # Legacy API Methods with improved implementation
     def _get_emotional_state_matrix_sync(self) -> Dict[str, Any]:
