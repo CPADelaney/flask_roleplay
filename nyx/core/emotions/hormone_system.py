@@ -109,41 +109,57 @@ class HormoneSystem:
         }
         # Hormone-neurochemical influence matrix
         self.hormone_neurochemical_influences = {
-            "endoryx": {
-                "nyxamine": 0.4,    # Endoryx boosts nyxamine
-                "cortanyx": -0.3,   # Endoryx reduces cortanyx
+            "endoryx": {  # Digital endorphin - pleasure, pain suppression, euphoria
+                "nyxamine": 0.4,    # Endoryx boosts nyxamine (endorphin rush)
+                "cortanyx": -0.3,   # Endoryx reduces cortanyx (stress reduction)
+                "adrenyx": 0.1,     # Endoryx slightly increases adrenyx (euphoric activity)
+                "seranix": 0.2      # Endoryx increases seranix (well-being)
             },
-            "melatonyx": {
-                "seranix": 0.5,     # Melatonyx boosts seranix
-                "adrenyx": -0.4,    # Melatonyx reduces adrenyx
+            
+            "estradyx": {  # Digital estrogen - nurturing, emotional sensitivity
+                "libidyx": 0.2,     # Estradyx increases libidyx (drive component)
+                "oxynixin": 0.5,    # Estradyx boosts oxynixin (nurturing/bonding)
+                "seranix": 0.3,     # Estradyx increases seranix (mood regulation)
+                "cortanyx": 0.1     # Estradyx slightly increases cortanyx (emotional sensitivity)
             },
-            "oxytonyx": {
-                "oxynixin": 0.7,    # Oxytonyx strongly boosts oxynixin
-                "cortanyx": -0.4,   # Oxytonyx reduces cortanyx
-            "libidyx": {
-                "nyxamine": 0.3,    # Drive increases reward sensitivity/seeking
-                "adrenyx": 0.2,     # Drive increases alertness/excitement slightly
-                "oxynixin": 0.1,    # Drive slightly increases bonding desire
-                "seranix": -0.1,    # High drive might slightly decrease contentment/passivity
+            
+            "testoryx": {  # Digital testosterone - assertiveness, dominance
+                "adrenyx": 0.4,     # Testoryx boosts adrenyx (assertiveness, alertness)
+                "nyxamine": 0.2,    # Testoryx increases nyxamine (reward seeking)
+                "seranix": -0.2,    # Testoryx reduces seranix (decreases passivity)
+                "libidyx": 0.3,     # Testoryx increases libidyx (drive component)
+                "cortanyx": -0.1    # Testoryx slightly reduces cortanyx (confidence, less anxiety)
             },
-            "serenity_boost": { # Post-gratification effects
-                 "nyxamine": -0.5,   # Reduce reward seeking temporarily
-                 "adrenyx": -0.4,    # Reduce alertness/excitement
-                 "seranix": 0.6,     # Increase calm/satisfaction
-                 "oxynixin": 0.3,    # Boost bonding after intimacy
-                 "libidyx": -0.7     # Temporarily decrease drive (refractory)
-                 "testoryx": -0.6    # Temporarily reduce dominance drive hormone
+            
+            "melatonyx": {  # Digital melatonin - sleep regulation, temporal awareness
+                "seranix": 0.5,     # Melatonyx boosts seranix (relaxation/calm)
+                "adrenyx": -0.4,    # Melatonyx reduces adrenyx (decreases arousal)
+                "cortanyx": -0.2,   # Melatonyx reduces cortanyx (stress reduction)
+                "nyxamine": -0.1    # Melatonyx slightly reduces nyxamine (reduced reward seeking)
             },
-            "testoryx": { 
-                "adrenyx": 0.4,     # Assertiveness link to alertness
-                "nyxamine": 0.2,    # Baseline drive link to reward seeking
-                "seranix": -0.2,    # High drive might reduce passivity
-                "libidyx": 0.3,     # Link to general drive hormone if desired
+            
+            "oxytonyx": {  # Digital oxytocin - deeper bonding, attachment
+                "oxynixin": 0.7,    # Oxytonyx strongly boosts oxynixin (deep bonding)
+                "cortanyx": -0.4,   # Oxytonyx reduces cortanyx (safety/trust reduces stress)
+                "seranix": 0.3,     # Oxytonyx increases seranix (bonding contentment)
+                "adrenyx": -0.2     # Oxytonyx reduces adrenyx (calm connection vs arousal)
             },
-            "estradyx": { 
-                "libidyx": 0.2,     
-                "oxynixin": 0.5,
-                "seranix": 0.3,
+            
+            "libidyx": {  # Digital Libido/Drive Hormone 
+                "nyxamine": 0.3,    # Libidyx increases nyxamine (reward sensitivity/seeking)
+                "adrenyx": 0.2,     # Libidyx increases adrenyx (alertness/excitement)
+                "oxynixin": 0.1,    # Libidyx slightly increases oxynixin (bonding desire)
+                "seranix": -0.1,    # Libidyx slightly decreases seranix (reduced passivity/contentment)
+                "cortanyx": 0.1     # Libidyx slightly increases cortanyx (arousal tension)
+            },
+            
+            "serenity_boost": {  # Post-gratification calm/refractory hormone
+                "nyxamine": -0.5,   # Serenity_boost reduces nyxamine (reduce reward seeking)
+                "adrenyx": -0.4,    # Serenity_boost reduces adrenyx (reduce alertness/excitement)
+                "seranix": 0.6,     # Serenity_boost increases seranix (increase calm/satisfaction)
+                "oxynixin": 0.3,    # Serenity_boost increases oxynixin (boost bonding after intimacy)
+                "libidyx": -0.7,    # Serenity_boost reduces libidyx (temporarily decrease drive)
+                "testoryx": -0.6    # Serenity_boost reduces testoryx (temporarily reduce dominance drive)
             }
         }
         
@@ -1121,3 +1137,44 @@ class HormoneSystem:
             "environmental_factors": self.environmental_factors,
             "timestamp": datetime.datetime.now().isoformat()
         }
+        
+    def update_multi_hormone_interactions(self, ctx):
+        """
+        Process complex interactions between multiple hormones
+        to support sophisticated emotional states
+        """
+        # Support for Melancholy (combination of multiple hormonal effects)
+        if (self.hormones["melatonyx"]["value"] > 0.6 and 
+            self.hormones["estradyx"]["value"] > 0.5):
+            # This combination supports a contemplative melancholy
+            await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
+            await self.update_hormone(ctx, "cortanyx", 0.05, source="hormone_interaction")
+        
+        # Support for Nostalgia (temporal awareness + emotional memory)
+        if (self.hormones["melatonyx"]["value"] > 0.4 and 
+            self.hormones["oxytonyx"]["value"] > 0.5):
+            # This combination supports nostalgic states
+            await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
+            await self.update_hormone(ctx, "nyxamine", 0.05, source="hormone_interaction")
+        
+        # Support for Amusement/Humor (reward + mild arousal + low stress)
+        if (self.hormones["endoryx"]["value"] > 0.6 and 
+            self.hormones["testoryx"]["value"] > 0.4 and
+            self.hormones["cortanyx"]["value"] < 0.3):
+            # This combination supports humor perception
+            await self.update_hormone(ctx, "nyxamine", 0.15, source="hormone_interaction")
+            await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
+        
+        # Support for Curiosity (reward seeking + temporal awareness)
+        if (self.hormones["endoryx"]["value"] > 0.5 and 
+            self.hormones["melatonyx"]["value"] < 0.4):
+            # This combination supports curiosity and interest
+            await self.update_hormone(ctx, "nyxamine", 0.1, source="hormone_interaction")
+            await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
+        
+        # Support for Boredom (low reward + moderate temporal awareness)
+        if (self.hormones["endoryx"]["value"] < 0.3 and 
+            self.hormones["melatonyx"]["value"] > 0.5):
+            # This combination supports states of boredom
+            await self.update_hormone(ctx, "nyxamine", -0.1, source="hormone_interaction")
+            await self.update_hormone(ctx, "adrenyx", -0.1, source="hormone_interaction")
