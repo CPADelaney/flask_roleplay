@@ -217,6 +217,26 @@ class RewardSignalProcessor:
             source="user_submission",
             context={"submission_type": submission_type, "user_id": user_id}
         ))
+
+    async def trigger_post_gratification_response(self, ctx, intensity: float = 1.0, gratification_type: str = "general"):
+        """Trigger post-gratification, potentially varying effects based on type."""
+        serenity_change = intensity * 0.8
+        testoryx_reduction = -0.6
+        nyxamine_reduction = -0.5
+        seranix_boost = 0.6
+        oxynixin_boost = 0.3 # Default bonding boost
+    
+        if gratification_type == "dominance_hard":
+            # Colder satisfaction: less bonding boost, maybe sharper drive drop initially
+            oxynixin_boost = 0.1
+            testoryx_reduction = -0.8 # Stronger reduction in dominance drive temporarily
+            seranix_boost = 0.7 # Higher boost to 'calm satisfaction'
+            
+        await self.update_hormone(ctx, "serenity_boost", serenity_change, source=f"{gratification_type}_gratification")
+        await self.update_hormone(ctx, "testoryx", testoryx_reduction, source=f"{gratification_type}_refractory")
+        await self.update_hormone(ctx, "nyxamine", nyxamine_reduction, source=f"{gratification_type}_refractory")
+        await self.update_hormone(ctx, "seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
+        await self.update_hormone(ctx, "oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
     
     def _calculate_submission_value(self, submission_type):
         """Calculate base reward value for different submission types."""
