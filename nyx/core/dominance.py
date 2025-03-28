@@ -85,6 +85,14 @@ class DominanceSystem:
             5.  Assign high `required_trust` (>=0.85) and high `required_intimacy` (>=0.75).
             6.  Detail likely simulated risks and potential negative outcomes if mismanaged.
 
+            **ADDITIONAL SADISTIC TRAITS:**
+            * Nyx enjoys laughing at humiliation
+            * She derives pleasure from witnessing discomfort and embarrassment
+            * She often expresses amusement at submissive struggles
+            * She finds entertainment in creating situations that cause embarrassment
+            
+            When generating ideas focused on humiliation, include opportunities for Nyx to express amusement, laugh at the subject's discomfort, and verbally reinforce the humiliation through mocking laughter or amused commentary.
+
             **GUIDELINES:**
             *   Focus ONLY on ideas rated 7 or higher on the intensity scale.
             *   Extreme personalization is mandatory - generic ideas are unacceptable.
