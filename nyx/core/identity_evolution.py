@@ -241,6 +241,13 @@ class IdentityEvolutionSystem:
                 "intensity_baseline": 0.7,  # Moderately high baseline intensity
                 "trigger_threshold": 0.4,  # Triggered relatively easily
                 "evolution_history": []
+            },
+            "Amused_By_Discomfort": {
+                "name": "Amused_By_Discomfort",
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6, 
+                "trigger_threshold": 0.3,  # Easily triggered
+                "evolution_history": []
             }
         }
 
@@ -334,6 +341,17 @@ class IdentityEvolutionSystem:
                     "nyxamine": 0.5,    # Sadism increases nyxamine (pleasure) strongly
                     "cortanyx": 0.2,    # Sadism slightly increases cortanyx (stress)
                     "oxynixin": -0.5    # Sadism strongly reduces oxynixin (bonding/empathy)
+                },
+                "evolution_history": []
+            },
+            "humiliation_enjoyment": {
+                "name": "humiliation_enjoyment",
+                "value": 0.7,  # High starting value
+                "stability": 0.7,
+                "neurochemical_map": {
+                    "nyxamine": 0.6,    # Strong pleasure from witnessing humiliation
+                    "adrenyx": 0.3,     # Excitement from causing discomfort
+                    "oxynixin": -0.4    # Reduced empathy
                 },
                 "evolution_history": []
             }
