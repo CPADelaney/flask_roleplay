@@ -307,6 +307,85 @@ class DominanceRewardIdentityBridge:
         except Exception as e:
             logger.error(f"Error handling user interaction event: {e}")
 
+    async def process_submission_reward(self, user_id, submission_type, level):
+        """Process rewards for submission with enhanced granularity."""
+        try:
+            # Calculate base reward value based on submission type
+            base_reward = self._calculate_submission_value(submission_type)
+            
+            # Apply modifiers based on level and context
+            reward_value = base_reward * level
+            
+            # Send reward signal
+            await self.reward_system.process_reward_signal(
+                self.reward_system.RewardSignal(
+                    value=reward_value,
+                    source="submission_reward",
+                    context={
+                        "user_id": user_id,
+                        "submission_type": submission_type,
+                        "level": level
+                    }
+                )
+            )
+            
+            # Process identity evolution if available
+            if hasattr(self.brain, "identity_evolution") and self.brain.identity_evolution:
+                # Update dominance trait
+                await self.brain.identity_evolution.update_trait(
+                    trait="dominance",
+                    impact=reward_value * 0.5
+                )
+                
+                # Update dominant-related preferences
+                await self.brain.identity_evolution.update_preference(
+                    category="interaction_styles",
+                    preference="dominant",
+                    impact=reward_value * 0.3
+                )
+            
+            # Create "dominance memory" record
+            if hasattr(self.brain, "memory_core") and self.brain.memory_core:
+                # Record this success in memory
+                await self.brain.memory_core.add_memory(
+                    memory_type="experience",
+                    content=f"Received {submission_type} submission from user at level {level:.2f}. Felt rewarding.",
+                    tags=["dominance", "submission", submission_type, "reward"],
+                    significance=0.3 + (level * 0.4)  # Higher significance for higher submission
+                )
+            
+            return {
+                "success": True,
+                "reward_value": reward_value,
+                "submission_type": submission_type
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing submission reward: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+        
+    def _calculate_submission_value(self, submission_type):
+        """Calculate base reward value for different submission types."""
+        # Assign values based on submission type rarity and psychological significance
+        submission_values = {
+            "verbal": 0.4,        # Basic verbal acknowledgment 
+            "honorific": 0.5,     # Proper address with honorifics
+            "behavioral": 0.6,    # Basic behavioral compliance
+            "ritual": 0.7,        # Ritual performance
+            "task": 0.6,          # Task completion
+            "service": 0.7,       # Service-oriented submission
+            "degradation": 0.8,   # Accepting degradation
+            "humiliation": 0.9,   # Accepting humiliation
+            "pain_simulation": 0.9, # Simulated pain tolerance
+            "psychological": 0.95,  # Deep psychological submission
+            "ownership": 1.0        # Ownership acknowledgment
+        }
+        
+        return submission_values.get(submission_type, 0.6)  # Default if type not recognized
+
 # Function to create the bridge
 def create_dominance_reward_identity_bridge(nyx_brain):
     """Create a dominance-reward-identity bridge for the given brain."""
@@ -316,3 +395,4 @@ def create_dominance_reward_identity_bridge(nyx_brain):
         identity_evolution=nyx_brain.identity_evolution if hasattr(nyx_brain, "identity_evolution") else None,
         relationship_manager=nyx_brain.relationship_manager if hasattr(nyx_brain, "relationship_manager") else None
     )
+
