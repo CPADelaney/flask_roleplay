@@ -105,7 +105,7 @@ class ConditioningSystem:
             
             # Record reinforcement
             self.total_reinforcements += 1
-            
+
             logger.info(f"Reinforced classical association: {association_key} ({old_strength:.2f} → {new_strength:.2f})")
             
             return {
@@ -133,6 +133,19 @@ class ConditioningSystem:
             self.total_associations += 1
             
             logger.info(f"Created new classical association: {association_key} ({association.association_strength:.2f})")
+
+
+            if hasattr(self, "event_bus"):
+                await self.publish_conditioning_event(
+                    event_type="conditioning_update",
+                    data={
+                        "update_type": "classical" if "classical_conditioning" in self.process_classical_conditioning.__name__ else "operant",
+                        "association_key": association_key,
+                        "association_type": result["type"],
+                        "strength": result["new_strength"] if "new_strength" in result else result["strength"],
+                        "user_id": context.get("user_id", "default")
+                    }
+                )
             
             return {
                 "association_key": association_key,
@@ -140,6 +153,64 @@ class ConditioningSystem:
                 "strength": association.association_strength,
                 "reinforcement_count": 1
             }
+
+    async def initialize_event_subscriptions(self, event_bus):
+        """Initialize event subscriptions for the conditioning system"""
+        self.event_bus = event_bus
+        
+        # Subscribe to relevant events
+        self.event_bus.subscribe("user_input", self._handle_user_input_event)
+        self.event_bus.subscribe("reward_generated", self._handle_reward_event)
+        self.event_bus.subscribe("dominance_action", self._handle_dominance_event)
+        self.event_bus.subscribe("experience_recorded", self._handle_experience_event)
+        
+        logger.info("Conditioning system subscribed to events")
+    
+    async def _handle_user_input_event(self, event):
+        """Handle user input events for potential conditioning"""
+        user_id = event.data.get("user_id", "default")
+        input_text = event.data.get("text", "")
+        
+        # Check for patterns that might trigger conditioning
+        patterns = self._detect_patterns(input_text)
+        for pattern in patterns:
+            await self.trigger_conditioned_response(
+                stimulus=pattern,
+                context={"user_id": user_id, "source": "user_input"}
+            )
+    
+    async def _handle_dominance_event(self, event):
+        """Handle dominance-related events for conditioning"""
+        action_type = event.data.get("action_type", "")
+        outcome = event.data.get("outcome", "")
+        intensity = event.data.get("intensity", 0.5)
+        user_id = event.data.get("user_id", "default")
+        
+        # Only process successful dominance actions
+        if outcome != "success":
+            return
+        
+        # Reinforce dominance behaviors
+        await self.process_operant_conditioning(
+            behavior=f"dominance_{action_type}",
+            consequence_type="positive_reinforcement",
+            intensity=intensity,
+            context={"user_id": user_id, "source": "dominance_system"}
+        )
+    
+    async def publish_conditioning_event(self, event_type, data):
+        """Publish a conditioning-related event"""
+        if not hasattr(self, "event_bus"):
+            logger.warning("Cannot publish event: event bus not initialized")
+            return
+        
+        event = Event(
+            event_type=event_type,
+            source="conditioning_system",
+            data=data
+        )
+        
+        await self.event_bus.publish(event)
     
     async def process_operant_conditioning(self,
                                         behavior: str,
@@ -249,7 +320,19 @@ class ConditioningSystem:
             self.total_associations += 1
             
             logger.info(f"Created new operant association: {association_key} ({association.association_strength:.2f})")
-            
+
+            if hasattr(self, "event_bus"):
+                await self.publish_conditioning_event(
+                    event_type="conditioning_update",
+                    data={
+                        "update_type": "classical" if "classical_conditioning" in self.process_classical_conditioning.__name__ else "operant",
+                        "association_key": association_key,
+                        "association_type": result["type"],
+                        "strength": result["new_strength"] if "new_strength" in result else result["strength"],
+                        "user_id": context.get("user_id", "default")
+                    }
+                )
+                        
             return {
                 "association_key": association_key,
                 "type": "new_association",
