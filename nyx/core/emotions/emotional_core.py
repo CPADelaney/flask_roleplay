@@ -1369,24 +1369,24 @@ class EmotionalCore:
             try:
                 current_neurochemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
                 ctx = RunContextWrapper(context=self.context) # Create context wrapper
-
+        
                 # Example: Sustained high stress (Cortanyx) might slowly affect Endoryx/Testoryx
                 if current_neurochemicals.get("cortanyx", 0) > 0.75:
                     await self.hormone_system.update_hormone(ctx, "endoryx", -0.02, source="sustained_stress")
                     await self.hormone_system.update_hormone(ctx, "testoryx", -0.01, source="sustained_stress")
-
+        
                 # Example: Sustained high bonding (Oxynixin) might boost Oxytonyx
                 if current_neurochemicals.get("oxynixin", 0) > 0.75:
                     await self.hormone_system.update_hormone(ctx, "oxytonyx", 0.03, source="sustained_bonding")
-
+        
                 # Example: Sustained pleasure/reward (Nyxamine) might boost Endoryx
                 if current_neurochemicals.get("nyxamine", 0) > 0.80:
                      await self.hormone_system.update_hormone(ctx, "endoryx", 0.02, source="sustained_pleasure")
-
+        
                 self.last_hormone_influence_check = datetime.datetime.now()
-
+        
             except Exception as e:
-                logger.error(f"Error triggering hormone updates from emotional state: {e}")        
+                logger.error(f"Error triggering hormone updates from emotional state: {e}")
         
         # Generate a run ID for tracking
         run_id = f"run_{datetime.datetime.now().timestamp()}"
