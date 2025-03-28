@@ -63,6 +63,8 @@ class NyxBrain:
         self.needs_system = None
         self.goal_manager = None
         self.streaming_core = None
+
+        self.dev_log_storage = None
         
         # Component managers
         self.processing_manager = None
@@ -187,6 +189,10 @@ async def initialize(self):
         from nyx.core.mood_manager import MoodManager
         from nyx.core.theory_of_mind import TheoryOfMind
         from nyx.core.imagination_simulator import ImaginationSimulator
+
+        from nyx.dev_log.storage import get_dev_log_storage
+        self.dev_log_storage = get_dev_log_storage()
+        await self.dev_log_storage.initialize()
         
         # Import integration components
         from nyx.core.integration.event_bus import get_event_bus
