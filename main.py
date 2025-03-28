@@ -13,6 +13,7 @@ from flasgger import Swagger
 from flask_talisman import Talisman
 from flask_wtf.csrf import CSRFProtect
 from prometheus_flask_exporter import PrometheusMetrics
+from mcp_orchestrator import MCPOrchestrator
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -439,38 +440,51 @@ def create_flask_app():
             return False
     
     @app.before_first_request
-    async def initialize_systems():
-        """Initialize all required systems on application startup."""
-        try:
-            from db.schema_and_seed import create_all_tables, seed_initial_data
-            from db.schema_migrations import ensure_schema_version
-            
-            ensure_schema_version()
-            logger.info("Database migrations completed successfully")
-            
-            create_all_tables()
-            seed_initial_data()
-            logger.info("Database tables initialized successfully")
-            
-            await initialize_nyx_memory_system()
-            logger.info("Nyx memory system initialized successfully")
-            
-            # Add this line to initialize OpenAI integration
-            await initialize_openai_integration()
-            logger.info("OpenAI integration initialized successfully")
-            
-            await register_conflict_system()
-            logger.info("Conflict system initialized successfully")
-            
-            await NPCLearningManager.initialize_system()
-            logger.info("NPC learning system initialized successfully")
-            
-            from logic.universal_updater import initialize_universal_updater
-            await initialize_universal_updater()
-            logger.info("Universal updater initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Error initializing systems: {str(e)}", exc_info=True)
+async def initialize_systems():
+    """Initialize all required systems on application startup."""
+    try:
+        from db.schema_and_seed import create_all_tables, seed_initial_data
+        from db.schema_migrations import ensure_schema_version
+        
+        ensure_schema_version()
+        logger.info("Database migrations completed successfully")
+        
+        create_all_tables()
+        seed_initial_data()
+        logger.info("Database tables initialized successfully")
+        
+        await initialize_nyx_memory_system()
+        logger.info("Nyx memory system initialized successfully")
+        
+        # Add this line to initialize OpenAI integration
+        await initialize_openai_integration()
+        logger.info("OpenAI integration initialized successfully")
+        
+        # Add these lines to initialize the MCP orchestrator
+        from mcp_orchestrator import MCPOrchestrator
+        app.mcp_orchestrator = MCPOrchestrator()
+        await app.mcp_orchestrator.initialize()
+        logger.info("MCP orchestrator initialized successfully")
+
+        # Initialize a global NyxBrain instance
+        from nyx.core.brain.base import NyxBrain
+        system_user_id = 0  # Use a system user ID
+        system_conversation_id = 0  # Use a system conversation ID
+        app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+        logger.info("Global NyxBrain instance initialized successfully")
+        
+        await register_conflict_system()
+        logger.info("Conflict system initialized successfully")
+        
+        await NPCLearningManager.initialize_system()
+        logger.info("NPC learning system initialized successfully")
+        
+        from logic.universal_updater import initialize_universal_updater
+        await initialize_universal_updater()
+        logger.info("Universal updater initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Error initializing systems: {str(e)}", exc_info=True)
     
     ###########################################################################
     # ROUTES
