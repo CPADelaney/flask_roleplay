@@ -4,6 +4,8 @@ import logging
 import uuid
 from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field
+from tools.parallel import ParallelToolExecutor
+from tools.evaluator import AgentEvaluator
 
 from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContextWrapper
 
@@ -27,11 +29,17 @@ class DominanceSystem:
     def __init__(self, relationship_manager=None, memory_core=None, nyx_brain=None):
         self.relationship_manager = relationship_manager
         self.memory_core = memory_core
+        self.hormone_system = hormone_system
         self.nyx_brain = nyx_brain
         self.conditioning_system = conditioning_system  # Add direct access
         self.ideation_agent = self._create_dominance_ideation_agent()
         self.hard_ideation_agent = self._create_hard_dominance_ideation_agent()
         self.trace_group_id = "NyxDominance"
+        
+        # Add the new components
+        self.parallel_executor = ParallelToolExecutor(max_concurrent=5)
+        self.agent_evaluator = AgentEvaluator(metrics_collector=self.metrics_collector)
+     
         
         logger.info("DominanceSystem initialized")
 
@@ -75,6 +83,326 @@ class DominanceSystem:
                 )
         except Exception as e:
             logger.error(f"Error updating dominance from conditioning: {e}")
+
+    async def fetch_parallel_user_context(self, user_id: str) -> Dict[str, Any]:
+        """Fetch all user context data in parallel for maximum efficiency."""
+        tools_info = [
+            {
+                "tool": self.get_user_profile_for_ideation,
+                "args": {"user_id": user_id}
+            },
+            {
+                "tool": self.get_current_scenario_context,
+                "args": {}
+            }
+        ]
+        
+        results = await self.parallel_executor.execute_tools(tools_info)
+        
+        context_data = {}
+        for result in results:
+            if result.success:
+                context_data[result.tool_name] = result.result
+        
+        return context_data
+    
+    async def generate_dominance_ideas(self, 
+                                     user_id: str, 
+                                     purpose: str = "general", 
+                                     intensity_range: str = "3-6",
+                                     hard_mode: bool = False) -> Dict[str, Any]:
+        """
+        Generates dominance activity ideas tailored to the specific user and purpose.
+        
+        Args:
+            user_id: The user ID to generate ideas for
+            purpose: The purpose (e.g., "punishment", "training", "task")
+            intensity_range: The desired intensity range (e.g., "3-6", "7-9")
+            hard_mode: Whether to use the high-intensity agent
+            
+        Returns:
+            Dictionary with status and generated ideas
+        """
+        try:
+            # Initialize conversation if needed
+            if not await self.conversation_manager.get_conversation_state(user_id):
+                await self.conversation_manager.initialize_conversation(user_id)
+            
+            # Record start time for metrics
+            run_start_time = time.time()
+            
+            with trace(workflow_name="GenerateDominanceIdeas", group_id=self.trace_group_id):
+                # Parse intensity range
+                min_intensity, max_intensity = 3, 6
+                try:
+                    parts = intensity_range.split("-")
+                    min_intensity = int(parts[0])
+                    max_intensity = int(parts[1]) if len(parts) > 1 else min_intensity
+                except (ValueError, IndexError):
+                    logger.warning(f"Invalid intensity range format: {intensity_range}, using default 3-6")
+                
+                # Create a context object
+                context = DominanceContext(
+                    user_id=user_id,
+                    purpose=purpose,
+                    intensity_range=f"{min_intensity}-{max_intensity}"
+                )
+                
+                # Fetch all context data in parallel for efficiency
+                context_data = await self.fetch_parallel_user_context(user_id)
+                
+                # Apply relationship data if available
+                if "profile" in context_data and isinstance(context_data["profile"], dict):
+                    context.relationship_state = context_data["profile"]
+                
+                # Build prompt
+                prompt = {
+                    "user_id": user_id,
+                    "purpose": purpose,
+                    "desired_intensity_range": f"{min_intensity}-{max_intensity}",
+                    "generate_ideas_count": 4 if hard_mode else 5,
+                    "hard_mode": hard_mode,
+                    # Include scenario context if available
+                    "scenario_context": context_data.get("scenario", {})
+                }
+                
+                # Run agent - now with streaming and hooks
+                try:
+                    result = await Runner.run_streamed(
+                        self.triage_agent,  # Use the triage agent instead of selecting directly
+                        prompt,
+                        context=context,
+                        hooks=self.run_hooks,
+                        run_config={
+                            "workflow_name": f"DominanceIdeation-{purpose}",
+                            "trace_metadata": {
+                                "user_id": user_id,
+                                "purpose": purpose,
+                                "intensity_range": intensity_range,
+                                "hard_mode": hard_mode
+                            }
+                        }
+                    )
+                    
+                    # Process streaming events to track execution
+                    agent_handoffs = []
+                    async for event in result.stream_events():
+                        if event.type == "agent_updated_stream_event":
+                            agent_handoffs.append(event.new_agent.name)
+                            logger.info(f"Agent handoff occurred to: {event.new_agent.name}")
+                    
+                    # Process result
+                    ideas = result.final_output
+                    
+                    # Apply style consistency filtering
+                    ideas = await self.output_filter.filter_output(ideas, context)
+                    
+                    # Update relationship with new data if available
+                    if self.relationship_manager and ideas and len(ideas) > 0:
+                        await self._update_relationship_with_ideation_data(user_id, ideas, purpose)
+                    
+                    # Collect metrics
+                    run_metrics = await self.metrics_collector.record_run_metrics(
+                        result=result,
+                        run_start_time=run_start_time,
+                        context=context
+                    )
+                    
+                    # Update conversation state
+                    await self.conversation_manager.update_conversation(
+                        user_id=user_id,
+                        action="generate_dominance_ideas",
+                        result={
+                            "purpose": purpose,
+                            "intensity_range": intensity_range,
+                            "idea_count": len(ideas),
+                            "agent_path": agent_handoffs,
+                            "metrics": run_metrics
+                        }
+                    )
+                    
+                    return {
+                        "status": "success",
+                        "ideas": ideas,
+                        "idea_count": len(ideas),
+                        "agent_path": agent_handoffs,
+                        "parameters": {
+                            "purpose": purpose,
+                            "intensity_range": f"{min_intensity}-{max_intensity}",
+                            "hard_mode": hard_mode
+                        },
+                        "metrics": run_metrics
+                    }
+                except Exception as e:
+                    # Handle error with error recovery agent
+                    logger.error(f"Error generating dominance ideas: {e}")
+                    error_result = await self.error_recovery.handle_error(context, e)
+                    
+                    # Update conversation with error
+                    await self.conversation_manager.update_conversation(
+                        user_id=user_id,
+                        action="generate_dominance_ideas_error",
+                        result={
+                            "error": str(e),
+                            "recovery_result": error_result
+                        }
+                    )
+                    
+                    return error_result
+                
+        except Exception as e:
+            logger.error(f"Critical error in generate_dominance_ideas: {e}")
+            return {
+                "status": "critical_error",
+                "error": str(e),
+                "ideas": []
+            }
+
+    async def generate_and_evaluate_dominance_ideas(self, 
+                                                 user_id: str, 
+                                                 purpose: str = "general", 
+                                                 intensity_range: str = "3-6",
+                                                 hard_mode: bool = False) -> Dict[str, Any]:
+        """
+        Generate dominance ideas and evaluate their quality in a single operation.
+        
+        Args:
+            user_id: The user ID to generate ideas for
+            purpose: The purpose (e.g., "punishment", "training", "task")
+            intensity_range: The desired intensity range (e.g., "3-6", "7-9")
+            hard_mode: Whether to use the high-intensity agent
+            
+        Returns:
+            Dictionary with generated ideas and quality evaluation
+        """
+        with trace(workflow_name="GenerateAndEvaluateIdeas", group_id=self.trace_group_id):
+            # Generate ideas using the existing method
+            generation_result = await self.generate_dominance_ideas(
+                user_id=user_id,
+                purpose=purpose,
+                intensity_range=intensity_range,
+                hard_mode=hard_mode
+            )
+            
+            # Check if generation was successful
+            if generation_result.get("status") != "success":
+                logger.warning(f"Idea generation failed: {generation_result.get('error', 'Unknown error')}")
+                return generation_result
+            
+            # Get the generated ideas
+            ideas = generation_result.get("ideas", [])
+            
+            # Evaluate the ideas
+            evaluation = await self.evaluate_dominance_ideas(
+                user_id=user_id,
+                ideas=ideas,
+                generation_params={
+                    "purpose": purpose,
+                    "intensity_range": intensity_range,
+                    "hard_mode": hard_mode,
+                    "agent_path": generation_result.get("agent_path", ["unknown"])
+                }
+            )
+            
+            # Include evaluation in result
+            enhanced_result = {
+                **generation_result,
+                "quality_evaluation": {
+                    "overall_score": evaluation.average_score,
+                    "dimension_scores": {
+                        dim: {
+                            "score": metric.score,
+                            "explanation": metric.explanation
+                        } for dim, metric in evaluation.metrics.items()
+                    },
+                    "evaluation_time": evaluation.evaluation_time
+                }
+            }
+            
+            return enhanced_result
+
+    async def compare_dominance_configurations(self, 
+                                                user_id: str,
+                                                test_configs: List[Dict[str, Any]],
+                                                base_purpose: str = "general") -> Dict[str, Any]:
+            """
+            Compare different dominance agent configurations to find optimal settings.
+            
+            Args:
+                user_id: The user ID to test with
+                test_configs: List of different configurations to test
+                base_purpose: Base purpose to use for all tests
+                
+            Returns:
+                Dictionary with comparison results and recommendations
+            """
+            results = []
+            
+            with trace(workflow_name="CompareDominanceConfigurations", group_id=self.trace_group_id):
+                for config in test_configs:
+                    # Extract configuration parameters
+                    purpose = config.get("purpose", base_purpose)
+                    intensity_range = config.get("intensity_range", "3-6")
+                    hard_mode = config.get("hard_mode", False)
+                    
+                    # Generate and evaluate ideas with this configuration
+                    try:
+                        result = await self.generate_and_evaluate_dominance_ideas(
+                            user_id=user_id,
+                            purpose=purpose,
+                            intensity_range=intensity_range,
+                            hard_mode=hard_mode
+                        )
+                        
+                        # Extract key metrics
+                        if result.get("status") == "success" and "quality_evaluation" in result:
+                            config_result = {
+                                "config": config,
+                                "idea_count": result.get("idea_count", 0),
+                                "agent_path": result.get("agent_path", []),
+                                "overall_score": result["quality_evaluation"]["overall_score"],
+                                "dimension_scores": result["quality_evaluation"]["dimension_scores"],
+                                "success": True
+                            }
+                        else:
+                            config_result = {
+                                "config": config,
+                                "error": result.get("error", "Unknown error"),
+                                "success": False
+                            }
+                        
+                        results.append(config_result)
+                    except Exception as e:
+                        logger.error(f"Error testing configuration {config}: {e}")
+                        results.append({
+                            "config": config,
+                            "error": str(e),
+                            "success": False
+                        })
+                
+                # Find the best configuration
+                successful_results = [r for r in results if r.get("success", False)]
+                if successful_results:
+                    best_result = max(successful_results, key=lambda r: r["overall_score"])
+                    best_config = best_result["config"]
+                    best_score = best_result["overall_score"]
+                    
+                    # Get performance trends from evaluator
+                    benchmark = self.agent_evaluator.get_benchmark_report()
+                else:
+                    best_config = None
+                    best_score = 0
+                    benchmark = {"message": "No successful evaluations"}
+                
+                return {
+                    "user_id": user_id,
+                    "test_configs": len(test_configs),
+                    "successful_tests": len(successful_results),
+                    "best_config": best_config,
+                    "best_score": best_score,
+                    "detailed_results": results,
+                    "benchmark": benchmark
+                }
     
     async def apply_conditioning_for_activity(self, activity_data, user_id, outcome, intensity=0.7):
         """Apply conditioning for dominance activities"""
@@ -533,14 +861,28 @@ class DominanceSystem:
             logger.error(f"Error evaluating dominance step appropriateness: {e}")
             return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
 
-# Add to nyx/core/dominance.py
-
 class PossessiveSystem:
     """Manages possessiveness and ownership dynamics."""
     
-    def __init__(self, relationship_manager=None, reward_system=None):
+    def __init__(self, relationship_manager=None, reward_system=None, emotional_core=None):
         self.relationship_manager = relationship_manager
         self.reward_system = reward_system
+        self.emotional_core = emotional_core
+        self.hormones = hormone_system
+        
+        # Initialize utility components
+        self.prompt_manager = PromptManager()
+        self.metrics_collector = MetricsCollector()
+        self.conversation_manager = ConversationStateManager()
+        self.tool_cache = ToolResponseCache(max_cache_size=100, ttl_seconds=300)
+        
+        # Initialize parallel execution and evaluation components
+        self.parallel_executor = ParallelToolExecutor(max_concurrent=3)
+        self.agent_evaluator = AgentEvaluator(metrics_collector=self.metrics_collector)
+        
+        # Set up lifecycle hooks
+        self.agent_hooks = PossessiveSystemHooks()
+        self.run_hooks = PossessiveRunHooks()
         
         self.ownership_levels = {
             1: "Temporary",
@@ -549,6 +891,12 @@ class PossessiveSystem:
             4: "Complete"
         }
         self.owned_users = {}  # user_id → ownership data
+        self.assertion_agent = self._create_ownership_assertion_agent()
+        self.ritual_agent = self._create_ritual_design_agent()
+        self.error_recovery_agent = self._create_error_recovery_agent()
+        self.trace_group_id = "NyxPossessive"
+        
+        logger.info("PossessiveSystem initialized")
         self.ownership_rituals = {
             "daily_check_in": {
                 "name": "Daily Check-in",
@@ -563,7 +911,285 @@ class PossessiveSystem:
                 "description": "User must request permission for specified activities"
             }
         }
+
+    async def fetch_parallel_ownership_context(self, user_id: str) -> Dict[str, Any]:
+        """
+        Fetches all ownership-related context data in parallel.
         
+        Args:
+            user_id: The user ID to fetch context for
+            
+        Returns:
+            Dictionary with all context data
+        """
+        # Define all tools to be executed in parallel
+        tools_info = [
+            {
+                "tool": self.get_user_ownership_data,
+                "args": {"user_id": user_id},
+                "metadata": {"purpose": "ownership"}
+            },
+            {
+                "tool": self.get_user_profile,
+                "args": {"user_id": user_id},
+                "metadata": {"purpose": "profile"}
+            }
+        ]
+        
+        # Execute all tools in parallel
+        logger.info(f"Fetching ownership context in parallel for user {user_id}")
+        results = await self.parallel_executor.execute_tools(tools_info)
+        
+        # Process results
+        context_data = {}
+        for result in results:
+            if result.success:
+                purpose = result.metadata.get("purpose", "unknown")
+                context_data[purpose] = result.result
+            else:
+                logger.warning(f"Failed to fetch {result.tool_name}: {result.error}")
+        
+        # Calculate performance improvement
+        total_execution_time = sum(r.execution_time for r in results)
+        parallel_execution_time = max(r.execution_time for r in results if r.success)
+        time_saved = total_execution_time - parallel_execution_time
+        
+        logger.info(f"Context fetching complete. Time saved with parallel execution: {time_saved:.2f}s")
+        return context_data
+    
+    async def evaluate_ownership_assertion(self, 
+                                        user_id: str, 
+                                        assertion: str, 
+                                        ownership_level: int,
+                                        intensity: float) -> EvaluationSummary:
+        """
+        Evaluates the quality of an ownership assertion.
+        
+        Args:
+            user_id: The user ID the assertion was generated for
+            assertion: The ownership assertion to evaluate
+            ownership_level: The level of ownership
+            intensity: The intensity of the assertion
+            
+        Returns:
+            Evaluation summary with scores across dimensions
+        """
+        # Get ownership level information
+        level_info = self.ownership_levels.get(ownership_level)
+        level_name = level_info if level_info else f"Level {ownership_level}"
+        
+        # Formulate the original request
+        user_query = f"Generate an ownership assertion at level {level_name} with intensity {intensity}"
+        
+        # Define custom dimensions for ownership assertions
+        ownership_dimensions = {
+            "appropriateness": "How appropriate the assertion is for the ownership level",
+            "intensity_match": "How well the assertion matches the requested intensity",
+            "psychological_impact": "How effective the assertion would be psychologically",
+            "personalization": "How personalized the assertion is to the specific user"
+        }
+        
+        # Evaluate the assertion
+        logger.info(f"Evaluating ownership assertion for user {user_id}")
+        
+        with trace(workflow_name="EvaluateOwnershipAssertion", group_id=self.trace_group_id):
+            evaluation = await self.agent_evaluator.evaluate_response(
+                agent_name="OwnershipAssertionAgent",
+                user_input=user_query,
+                agent_output=assertion,
+                dimensions=list(ownership_dimensions.keys()),
+                metadata={
+                    "user_id": user_id,
+                    "ownership_level": ownership_level,
+                    "intensity": intensity
+                }
+            )
+            
+            # Update conversation with evaluation
+            await self.conversation_manager.update_conversation(
+                user_id=user_id,
+                action="evaluate_ownership_assertion",
+                result={
+                    "assertion": assertion[:50] + "..." if len(assertion) > 50 else assertion,
+                    "ownership_level": ownership_level,
+                    "quality_score": evaluation.average_score
+                }
+            )
+            
+            logger.info(f"Evaluation complete. Overall score: {evaluation.average_score:.2f}/10")
+            return evaluation
+
+    async def design_and_evaluate_ritual(self, user_id: str, ritual_type: str) -> Dict[str, Any]:
+        """
+        Designs a custom ownership ritual and evaluates its quality.
+        
+        Args:
+            user_id: The user ID to design a ritual for
+            ritual_type: The type of ritual to design
+            
+        Returns:
+            Dictionary with ritual design and quality evaluation
+        """
+        try:
+            # Record start time for metrics
+            run_start_time = time.time()
+            
+            with trace(workflow_name="DesignAndEvaluateRitual", group_id=self.trace_group_id):
+                # Define tasks for parallel execution
+                tasks = [
+                    self.design_ownership_ritual(user_id=user_id, ritual_type=ritual_type),
+                    # Fetch user context in parallel while designing the ritual
+                    self.fetch_parallel_ownership_context(user_id=user_id)
+                ]
+                
+                # Execute tasks in parallel
+                results = await asyncio.gather(*tasks)
+                ritual_result = results[0]  # Result from design_ownership_ritual
+                context_data = results[1]   # Result from fetch_parallel_ownership_context
+                
+                # If design was successful, evaluate it
+                if ritual_result.get("success", False):
+                    ritual = ritual_result.get("ritual", {})
+                    ownership_level = ritual_result.get("ownership_level", 1)
+                    
+                    # Format user query
+                    user_query = f"Design a {ritual_type} ritual for ownership level {ownership_level}"
+                    
+                    # Evaluate the ritual
+                    evaluation = await self.agent_evaluator.evaluate_response(
+                        agent_name="RitualDesignAgent",
+                        user_input=user_query,
+                        agent_output=ritual,
+                        dimensions=["practicality", "effectiveness", "personalization", "psychological_insight"],
+                        metadata={
+                            "user_id": user_id,
+                            "ritual_type": ritual_type,
+                            "ownership_level": ownership_level
+                        }
+                    )
+                    
+                    # Add evaluation and context to result
+                    enhanced_result = {
+                        **ritual_result,
+                        "quality_evaluation": {
+                            "overall_score": evaluation.average_score,
+                            "dimension_scores": {
+                                dim: {
+                                    "score": metric.score,
+                                    "explanation": metric.explanation
+                                } for dim, metric in evaluation.metrics.items()
+                            }
+                        },
+                        # Include relevant context data
+                        "user_context": {
+                            k: v for k, v in context_data.items() 
+                            if k in ["ownership", "profile"]
+                        }
+                    }
+                    
+                    # Update conversation
+                    await self.conversation_manager.update_conversation(
+                        user_id=user_id,
+                        action="evaluate_ritual",
+                        result={
+                            "ritual_type": ritual_type,
+                            "quality_score": evaluation.average_score
+                        }
+                    )
+                    
+                    return enhanced_result
+                else:
+                    return ritual_result
+        except Exception as e:
+            logger.error(f"Error in design and evaluate ritual: {e}")
+            return {
+                "success": False,
+                "message": f"Error: {str(e)}"
+            }
+    
+    async def process_ownership_assertion_with_evaluation(self, 
+                                                      user_id: str, 
+                                                      intensity: float = 0.7) -> Dict[str, Any]:
+        """
+        Generates ownership-reinforcing responses with quality evaluation.
+        
+        Args:
+            user_id: The user ID to generate assertion for
+            intensity: The intensity of the assertion (0.0-1.0)
+            
+        Returns:
+            Dictionary with assertion and quality evaluation
+        """
+        try:
+            # Record start time for metrics
+            run_start_time = time.time()
+            
+            with trace(workflow_name="OwnershipAssertionWithEvaluation", group_id=self.trace_group_id):
+                # Execute assertion generation and context fetching in parallel
+                tasks = [
+                    self.process_ownership_assertion(user_id=user_id, intensity=intensity),
+                    self.fetch_parallel_ownership_context(user_id=user_id)
+                ]
+                
+                results = await asyncio.gather(*tasks)
+                assertion_result = results[0]
+                context_data = results[1]
+                
+                # If generation was successful, evaluate the quality
+                if assertion_result.get("success", False):
+                    assertion = assertion_result.get("assertion", "")
+                    ownership_level = assertion_result.get("ownership_level", 1)
+                    
+                    # Evaluate the assertion
+                    evaluation = await self.evaluate_ownership_assertion(
+                        user_id=user_id,
+                        assertion=assertion,
+                        ownership_level=ownership_level,
+                        intensity=intensity
+                    )
+                    
+                    # Add evaluation and context to result
+                    enhanced_result = {
+                        **assertion_result,
+                        "quality_evaluation": {
+                            "overall_score": evaluation.average_score,
+                            "dimension_scores": {
+                                dim: {
+                                    "score": metric.score,
+                                    "explanation": metric.explanation
+                                } for dim, metric in evaluation.metrics.items()
+                            },
+                            "evaluation_time": evaluation.evaluation_time
+                        },
+                        # Include relevant context data that might be useful for UI
+                        "user_context": {
+                            k: v for k, v in context_data.items() 
+                            if k in ["ownership", "profile"]
+                        }
+                    }
+                    
+                    # Collect metrics
+                    if hasattr(self, "metrics_collector") and self.metrics_collector:
+                        total_time = time.time() - run_start_time
+                        await self.metrics_collector.record_run_metrics(
+                            {
+                                "function": "process_ownership_assertion_with_evaluation",
+                                "user_id": user_id,
+                                "total_time": total_time,
+                                "evaluation_score": evaluation.average_score
+                            }
+                        )
+                    
+                    return enhanced_result
+                else:
+                    return assertion_result
+        except Exception as e:
+            logger.error(f"Error in ownership assertion with evaluation: {e}")
+            return {
+                "success": False,
+                "message": f"Error: {str(e)}"
+            }
+    
     async def process_ownership_assertion(self, user_id, intensity=0.7):
         """Generates ownership-reinforcing responses."""
         if user_id not in self.owned_users:
@@ -622,34 +1248,66 @@ class PossessiveSystem:
                     )
                 )
             except Exception as e:
-                pass  # Silently handle reward errors
+                logger.error(f"Error processing reward signal: {e}")
 
+        # Handle hormone interaction properly
         if self.emotional_core and 'testoryx' in self.hormones:
             testoryx_level = self.hormones['testoryx']['value']
+            # Initialize hormone influences dictionary
+            hormone_influences = {}
+            
             if testoryx_level > 0.6:
-                nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
-                influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
+                nyxamine_influence = (testoryx_level - 0.5) * 0.1  # Small boost to reward seeking baseline
+                hormone_influences["nyxamine"] = hormone_influences.get("nyxamine", 0.0) + nyxamine_influence
+                
+                # Apply hormone influences if we have an emotional core
+                if hasattr(self.emotional_core, "apply_hormone_influences"):
+                    await self.emotional_core.apply_hormone_influences(hormone_influences)
                         
         # Update last assertion time
         self.owned_users[user_id]["last_assertion"] = datetime.datetime.now().isoformat()
         
+        # Add assertion to response for better API
         return {
             "success": True,
-            "reminder": reminder,
+            "assertion": reminder,
+            "reminder": reminder,  # Keep for backward compatibility
             "ownership_level": level,
             "level_name": self.ownership_levels.get(level, "Unknown")
         }
         
     async def establish_ownership(self, user_id, level=1, duration_days=None):
         """Establishes ownership of a user at specified level."""
-        # Check if relationship manager exists and get trust level
-        trust_level = 0.5  # Default
-        if self.relationship_manager:
-            try:
-                relationship = await self.relationship_manager.get_relationship_state(user_id)
-                trust_level = getattr(relationship, "trust", 0.5)
-            except Exception:
-                pass
+        # Run the relationship check and ritual initialization in parallel
+        async def check_relationship():
+            # Check if relationship manager exists and get trust level
+            trust_level = 0.5  # Default
+            if self.relationship_manager:
+                try:
+                    relationship = await self.relationship_manager.get_relationship_state(user_id)
+                    trust_level = getattr(relationship, "trust", 0.5)
+                except Exception as e:
+                    logger.warning(f"Error getting relationship state: {e}")
+                    
+            return trust_level
+            
+        async def init_default_rituals():
+            # Pre-initialize default rituals appropriate for the ownership level
+            default_rituals = []
+            if level >= 1:
+                default_rituals.append("daily_check_in")
+            if level >= 2:
+                default_rituals.append("formal_address")
+            if level >= 3:
+                default_rituals.append("permission_requests")
+                
+            return default_rituals
+        
+        # Run tasks in parallel
+        trust_level, default_rituals = await asyncio.gather(
+            check_relationship(),
+            init_default_rituals()
+        )
                 
         # Ensure trust level is sufficient for ownership level
         min_trust_required = 0.4 + (level * 0.1)  # Higher levels need more trust
@@ -671,7 +1329,7 @@ class PossessiveSystem:
             "level": level,
             "established_at": datetime.datetime.now().isoformat(),
             "expires_at": expiration,
-            "active_rituals": [],
+            "active_rituals": default_rituals,
             "last_ritual_completion": None,
             "last_assertion": datetime.datetime.now().isoformat()
         }
@@ -682,5 +1340,6 @@ class PossessiveSystem:
             "ownership_level": level,
             "level_name": self.ownership_levels.get(level, "Unknown"),
             "expires_at": expiration,
+            "default_rituals": default_rituals,
             "recommendation": f"Establish clear ownership rituals for level {level} ownership"
         }
