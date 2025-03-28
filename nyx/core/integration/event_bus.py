@@ -21,6 +21,27 @@ class Event:
     def __str__(self):
         return f"Event(type={self.event_type}, source={self.source}, time={self.timestamp.isoformat()})"
 
+class ConditioningEvent(Event):
+    """Conditioning-related event."""
+    def __init__(self, source: str, association_type: str, association_key: str, 
+                 strength: float, user_id: Optional[str] = None):
+        super().__init__("conditioning_update", source, {
+            "association_type": association_type,  # "classical" or "operant"
+            "association_key": association_key,
+            "strength": strength,
+            "user_id": user_id
+        })
+
+class ConditionedResponseEvent(Event):
+    """Triggered conditioned response event."""
+    def __init__(self, source: str, stimulus: str, responses: List[Dict[str, Any]], 
+                 user_id: Optional[str] = None):
+        super().__init__("conditioned_response", source, {
+            "stimulus": stimulus,
+            "triggered_responses": responses,
+            "user_id": user_id
+        })
+
 class EmotionalEvent(Event):
     """Emotional state change event."""
     def __init__(self, source: str, emotion: str, valence: float, arousal: float, intensity: float = 0.5):
