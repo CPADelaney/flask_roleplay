@@ -252,6 +252,12 @@ class SubmissionProgression:
                     weight=weight
                 )
             
+            # Add new fields
+            user_data.assigned_path = None
+            user_data.assigned_path_date = None
+            user_data.milestones = {}
+            user_data.unlocked_features = []
+            
             # Apply any initial data if provided
             if initial_data:
                 if "limits" in initial_data:
@@ -271,6 +277,13 @@ class SubmissionProgression:
                     level_id = initial_data["level"]
                     if level_id in self.submission_levels:
                         user_data.current_level_id = level_id
+                        
+                # Set initial path if provided
+                if "path" in initial_data:
+                    path_id = initial_data["path"]
+                    if hasattr(self, "dominance_paths") and path_id in self.dominance_paths:
+                        user_data.assigned_path = path_id
+                        user_data.assigned_path_date = datetime.datetime.now()
             
             # Calculate initial submission score
             user_data.total_submission_score = self._calculate_submission_score(user_data)
@@ -782,6 +795,87 @@ class SubmissionProgression:
                     )
                 except Exception as e:
                     logger.error(f"Error processing reward: {e}")
+        
+        # Update relationship manager if available and milestones were completed
+        if newly_completed and self.relationship_manager:
+            try:
+                await self.relationship_manager.update_relationship_attribute(
+                    user_id,
+                    "completed_milestones",
+                    [m["id"] for m in already_completed + newly_completed]
+                )
+            except Exception as e:
+                logger.error(f"Error updating relationship data: {e}")
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "path_id": path_id,
+            "path_name": path.name,
+            "newly_completed_milestones": newly_completed,
+            "upcoming_milestones": upcoming_milestones[:3],  # Top 3 upcoming
+            "already_completed_milestones": already_completed,
+            "progress_summary": {
+                "total_milestones": len(path.progression_milestones),
+                "completed": len(already_completed) + len(newly_completed),
+                "completion_percentage": ((len(already_completed) + len(newly_completed)) / len(path.progression_milestones)) * 100
+            }
+        }
+    
+    
+    # Add this method to the SubmissionProgression class
+    
+    async def get_available_unlocks(self, user_id: str) -> Dict[str, Any]:
+        """
+        Gets all features, tasks, privileges unlocked by the user through milestone completion.
+        
+        Args:
+            user_id: The user to check
+            
+        Returns:
+            List of unlocked features
+        """
+        if user_id not in self.user_data:
+            return {
+                "success": False,
+                "message": f"No submission data found for user {user_id}"
+            }
+            
+        user_data = self.user_data[user_id]
+        
+        # Check if user has milestones
+        if not hasattr(user_data, "milestones"):
+            return {
+                "success": True,
+                "unlocks": [],
+                "message": "No milestones completed yet"
+            }
+        
+        # Collect all unlocks from completed milestones
+        all_unlocks = []
+        unique_unlocks = set()
+        
+        for milestone_id, milestone in user_data.milestones.items():
+            if milestone.completed:
+                for unlock in milestone.unlocks:
+                    if unlock not in unique_unlocks:
+                        unique_unlocks.add(unlock)
+                        all_unlocks.append({
+                            "id": unlock,
+                            "from_milestone": milestone.name,
+                            "level": milestone.level,
+                            "unlocked_on": milestone.completion_date.isoformat() if milestone.completion_date else "unknown"
+                        })
+        
+        # Sort by level (highest first)
+        all_unlocks.sort(key=lambda u: u["level"], reverse=True)
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "unlocks": all_unlocks,
+            "total_unlocks": len(all_unlocks)
+        }
     
     async def record_compliance(self, 
                               user_id: str, 
