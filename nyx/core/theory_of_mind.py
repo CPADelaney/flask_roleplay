@@ -519,3 +519,25 @@ class TheoryOfMind:
                 "message": f"Merged mental state models from '{source_id}' to '{target_id}'",
                 "merged_model": target.model_dump()
             }
+@function_tool
+async def detect_humiliation_signals(self, text: str) -> Dict[str, Any]:
+    """Detect signals of humiliation, embarrassment, or discomfort in user text."""
+    humiliation_markers = [
+        "embarrassed", "humiliated", "ashamed", "blushing", "awkward",
+        "uncomfortable", "exposed", "vulnerable", "pathetic", "inadequate",
+        "sorry", "please don't", "stop laughing", "don't laugh", "begging"
+    ]
+    
+    # Check for humiliation markers
+    marker_count = sum(text.lower().count(marker) for marker in humiliation_markers)
+    
+    # Check for self-deprecation
+    self_deprecation_markers = ["i'm bad", "i failed", "i can't", "i'm not good enough", "i'm pathetic"]
+    self_deprecation_count = sum(text.lower().count(marker) for marker in self_deprecation_markers)
+    
+    return {
+        "humiliation_detected": marker_count > 0 or self_deprecation_count > 0,
+        "intensity": min(1.0, (marker_count * 0.2) + (self_deprecation_count * 0.3)),
+        "marker_count": marker_count,
+        "self_deprecation_count": self_deprecation_count
+    }
