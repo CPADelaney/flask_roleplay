@@ -727,6 +727,10 @@ async def initialize(self):
             
             # Set initialization flag
             self.agent_capabilities_initialized = True
+
+            domination_result = await self.initialize_domination_procedures()
+            if domination_result["success"]:
+                logger.info(f"Domination procedures initialized for brain {self.user_id}/{self.conversation_id}")
             
             logger.info(f"Agent capabilities initialized for brain {self.user_id}/{self.conversation_id}")
             
