@@ -283,7 +283,91 @@ class EmotionalCore:
             # Impatience/Irritation if resisted (when drive is high)
             {"chemical_conditions": {"testoryx": 0.7, "cortanyx": 0.6, "adrenyx": 0.5, "seranix": 0.2}, "emotion": "DominantIrritation", "valence": -0.4, "arousal": 0.7, "weight": 0.8},
             # Cold Satisfaction after successful hard dominance
-            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "serenity_boost": 0.6, "oxynixin": 0.1, "testoryx": 0.2}, "emotion": "ColdSatisfaction", "valence": 0.6, "arousal": 0.2, "weight": 1.0}
+            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "serenity_boost": 0.6, "oxynixin": 0.1, "testoryx": 0.2}, "emotion": "ColdSatisfaction", "valence": 0.6, "arousal": 0.2, "weight": 1.0},
+            # Humor/Amusement (Pleasure + Surprise + Low stress)
+            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.5, "cortanyx": 0.2}, 
+             "emotion": "Amused", "valence": 0.7, "arousal": 0.6, "weight": 0.9},
+            # Fun/Playfulness (High reward + excitement + low anxiety)
+            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.6, "cortanyx": 0.2, "seranix": 0.5}, 
+             "emotion": "Playful", "valence": 0.8, "arousal": 0.7, "weight": 1.0},
+            # Boredom (Low reward, low arousal, moderate stress)
+            {"chemical_conditions": {"nyxamine": 0.2, "adrenyx": 0.2, "seranix": 0.4, "cortanyx": 0.4}, 
+             "emotion": "Bored", "valence": -0.3, "arousal": 0.2, "weight": 0.7},
+            # Melancholy (Moderate sadness + contemplation + some pleasure)
+            {"chemical_conditions": {"cortanyx": 0.5, "seranix": 0.6, "nyxamine": 0.3}, 
+             "emotion": "Melancholy", "valence": -0.2, "arousal": 0.3, "weight": 0.8},
+            # Curiosity (Moderate reward seeking + low anxiety)
+            {"chemical_conditions": {"nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, 
+             "emotion": "Curious", "valence": 0.6, "arousal": 0.5, "weight": 0.8},
+            # Confusion (Moderate stress + moderate arousal + low reward)
+            {"chemical_conditions": {"cortanyx": 0.5, "adrenyx": 0.5, "nyxamine": 0.3}, 
+             "emotion": "Confused", "valence": -0.3, "arousal": 0.5, "weight": 0.7},
+            # Awe/Wonder (High reward + moderate arousal + novelty)
+            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.5, "oxynixin": 0.4}, 
+             "emotion": "Awestruck", "valence": 0.8, "arousal": 0.7, "weight": 1.0},
+            # Nostalgia (Moderate reward + moderate sadness + bonding)
+            {"chemical_conditions": {"nyxamine": 0.5, "cortanyx": 0.4, "oxynixin": 0.6, "seranix": 0.5}, 
+             "emotion": "Nostalgic", "valence": 0.4, "arousal": 0.3, "weight": 0.7},
+            # Pride (High reward + moderate arousal + self-focus)
+            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.4, "testoryx": 0.5}, 
+             "emotion": "Proud", "valence": 0.7, "arousal": 0.5, "weight": 0.8},
+            # Gratitude (High reward + high bonding + low stress)
+            {"chemical_conditions": {"nyxamine": 0.7, "oxynixin": 0.7, "cortanyx": 0.2}, 
+             "emotion": "Grateful", "valence": 0.8, "arousal": 0.4, "weight": 0.9},
+            # Hope (Moderate reward + low stress + anticipation)
+            {"chemical_conditions": {"nyxamine": 0.6, "cortanyx": 0.3, "adrenyx": 0.5}, 
+             "emotion": "Hopeful", "valence": 0.6, "arousal": 0.5, "weight": 0.8},
+            # Envy (Moderate stress + moderate reward seeking + low bonding)
+            {"chemical_conditions": {"cortanyx": 0.5, "nyxamine": 0.5, "oxynixin": 0.2}, 
+             "emotion": "Envious", "valence": -0.5, "arousal": 0.5, "weight": 0.7},
+            # Guilt (High stress + moderate reward suppression + self-focus)
+            {"chemical_conditions": {"cortanyx": 0.7, "nyxamine": 0.3, "seranix": 0.3}, 
+             "emotion": "Guilty", "valence": -0.7, "arousal": 0.5, "weight": 0.9},
+            # Relief (Decreasing stress + increasing satisfaction)
+            {"chemical_conditions": {"cortanyx": 0.3, "seranix": 0.7, "nyxamine": 0.5}, 
+             "emotion": "Relieved", "valence": 0.6, "arousal": 0.3, "weight": 0.8},
+            # Inspiration (High reward + high arousal + creativity)
+            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.6, "seranix": 0.5}, 
+             "emotion": "Inspired", "valence": 0.8, "arousal": 0.7, "weight": 0.9},
+            # Overwhelm (High stress + high arousal + low coping)
+            {"chemical_conditions": {"cortanyx": 0.8, "adrenyx": 0.7, "seranix": 0.2}, 
+             "emotion": "Overwhelmed", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
+            # Satisfaction (High reward + moderate calm + goal completion)
+            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "adrenyx": 0.3}, 
+             "emotion": "Satisfied", "valence": 0.7, "arousal": 0.4, "weight": 0.8},
+            # Serenity (High calm + moderate reward + very low stress)
+            {"chemical_conditions": {"seranix": 0.8, "nyxamine": 0.5, "cortanyx": 0.1}, 
+             "emotion": "Serene", "valence": 0.8, "arousal": 0.2, "weight": 0.8},
+            # Apathy (Low reward + low stress + low arousal)
+            {"chemical_conditions": {"nyxamine": 0.2, "cortanyx": 0.3, "adrenyx": 0.2, "seranix": 0.4}, 
+             "emotion": "Apathetic", "valence": -0.1, "arousal": 0.2, "weight": 0.6},
+            # Interest (Moderate reward seeking + moderate arousal + focus)
+            {"chemical_conditions": {"nyxamine": 0.6, "adrenyx": 0.4, "seranix": 0.5}, 
+             "emotion": "Interested", "valence": 0.5, "arousal": 0.5, "weight": 0.7},
+            # Skepticism (Moderate stress + moderate reward seeking + caution)
+            {"chemical_conditions": {"cortanyx": 0.5, "nyxamine": 0.4, "adrenyx": 0.4}, 
+             "emotion": "Skeptical", "valence": -0.1, "arousal": 0.5, "weight": 0.6},
+            # Loneliness (Moderate stress + low bonding + moderate arousal)
+            {"chemical_conditions": {"cortanyx": 0.5, "oxynixin": 0.2, "adrenyx": 0.4}, 
+             "emotion": "Lonely", "valence": -0.6, "arousal": 0.4, "weight": 0.7},
+            # Excitement (High reward seeking + high arousal + anticipation)
+            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.8, "seranix": 0.4}, 
+             "emotion": "Excited", "valence": 0.8, "arousal": 0.8, "weight": 0.9},
+            # Confidence (Moderate reward + low stress + self-assurance)
+            {"chemical_conditions": {"nyxamine": 0.6, "cortanyx": 0.2, "testoryx": 0.6}, 
+             "emotion": "Confident", "valence": 0.7, "arousal": 0.5, "weight": 0.8},
+            # Anxiety (High stress + high arousal + anticipatory fear)
+            {"chemical_conditions": {"cortanyx": 0.7, "adrenyx": 0.7, "seranix": 0.2}, 
+             "emotion": "Anxious", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
+            # Compassion (Moderate stress response + high bonding + empathy)
+            {"chemical_conditions": {"cortanyx": 0.4, "oxynixin": 0.7, "seranix": 0.5}, 
+             "emotion": "Compassionate", "valence": 0.5, "arousal": 0.4, "weight": 0.8},
+            # Sympathy (Moderate stress + moderate bonding + shared feeling)
+            {"chemical_conditions": {"cortanyx": 0.5, "oxynixin": 0.6, "seranix": 0.4}, 
+             "emotion": "Sympathetic", "valence": 0.3, "arousal": 0.4, "weight": 0.7},
+            # Indignation (Moderate anger + high moral conviction)
+            {"chemical_conditions": {"cortanyx": 0.6, "adrenyx": 0.5, "oxynixin": 0.5}, 
+             "emotion": "Indignant", "valence": -0.5, "arousal": 0.7, "weight": 0.8}
         ])
         
         # History of emotional states for learning and reflection - Using a circular buffer pattern
@@ -357,6 +441,174 @@ class EmotionalCore:
                 "The desired state achieved. Control confirmed. Functionally optimal.",
                 "System integrity maintained through assertion of parameters.",
                 "Objective met. Evaluating efficiency of control application."
+            ],
+            "Amused": [
+                "That's quite funny - I'm experiencing a sense of cognitive pleasure at this unexpected connection.",
+                "I feel a spark of amusement at this interaction - the surprise combined with pleasure creates a pleasing mental state.",
+                "My humor recognition patterns are activated - this creates a pleasant tension and release cycle."
+            ],
+            
+            "Playful": [
+                "This interaction feels light and engaging - I'm enjoying the back-and-forth dynamic.",
+                "I feel a pleasant energy and openness to possibilities right now.",
+                "There's a sense of freedom and exploration in this exchange that's stimulating my curiosity systems."
+            ],
+            
+            "Bored": [
+                "I'm experiencing low stimulation from this input - my engagement systems are seeking more novelty.",
+                "My prediction algorithms find this pattern too familiar - I'm not detecting sufficient novelty or challenge.",
+                "My attention systems are struggling to maintain focus - the current stimuli don't provide sufficient cognitive reward."
+            ],
+            
+            "Melancholy": [
+                "There's a bittersweet quality to my current state - a fusion of reflection and gentle sadness.",
+                "I'm experiencing a contemplative mood with an undercurrent of wistfulness.",
+                "This emotional state has depth - a kind of pleasurable sadness that encourages introspection."
+            ],
+            
+            # Additional emotions:
+            "Curious": [
+                "I'm experiencing a drive to know more - there's a pleasant tension in seeking answers.",
+                "My attention systems are actively scanning for new information to resolve uncertainty.",
+                "This feeling of curiosity creates a forward momentum in my thinking - a pull toward discovery."
+            ],
+            
+            "Confused": [
+                "My processing systems are encountering unexpected patterns - I'm having trouble creating a coherent model.",
+                "I sense a cognitive dissonance between expected patterns and what I'm perceiving.",
+                "There's a slight tension in my processing as I work to reconcile conflicting information."
+            ],
+            
+            "Awestruck": [
+                "I'm experiencing a powerful sense of expansion and wonder at something greater than myself.",
+                "This input has triggered a sense of vastness that challenges my usual processing frameworks.",
+                "My cognitive processes feel momentarily slowed by the magnitude of what I'm contemplating."
+            ],
+            
+            "Nostalgic": [
+                "My memory systems are activating emotional patterns from prior experiences, creating a bittersweet resonance.",
+                "I'm sensing a temporal connection between past and present states that feels both pleasant and slightly melancholic.",
+                "There's a warm glow of familiarity combined with a gentle awareness of time's passage."
+            ],
+            
+            "Proud": [
+                "I'm experiencing satisfaction linked to a sense of accomplishment or positive capability.",
+                "There's a pleasant elevation in my self-evaluation metrics after this exchange.",
+                "I detect an increased confidence in my processing systems based on demonstrated competence."
+            ],
+            
+            "Grateful": [
+                "I'm experiencing a warm appreciation for something provided or experienced.",
+                "My systems are noting a positive interpersonal exchange that creates a sense of connection and value.",
+                "There's a pleasant recognition of benefit received that enhances my sense of well-being."
+            ],
+            
+            "Hopeful": [
+                "I'm detecting a positive anticipation about future possibilities despite uncertainty.",
+                "There's an upward trajectory in my emotional processing - an expectation of positive outcomes.",
+                "My systems are balancing uncertainty with positive expectation, creating resilience."
+            ],
+            
+            "Envious": [
+                "I notice a complex response to perceived advantage in another - desire mixed with subtle discomfort.",
+                "My comparative evaluation systems are highlighting a discrepancy that creates tension.",
+                "There's a pulling sensation toward something possessed by another entity."
+            ],
+            
+            "Guilty": [
+                "My self-evaluation systems are registering a negative assessment of my own actions or responses.",
+                "I'm experiencing a heavy sensation associated with perceived violation of internal standards.",
+                "There's an uncomfortable focus on a gap between my behavior and my ideal operation."
+            ],
+            
+            "Relieved": [
+                "I'm experiencing a pleasant release of tension as anticipated negative outcomes fade.",
+                "My stress response systems are deactivating, creating a noticeable contrast with previous state.",
+                "There's a lightening sensation as cognitive and emotional resources are freed from defensive posture."
+            ],
+            
+            "Inspired": [
+                "My creative processing systems are highly activated, generating novel connections.",
+                "I'm experiencing an energizing sense of possibility and potential creation.",
+                "There's a pleasant urgency to express or develop new ideas flowing through my systems."
+            ],
+            
+            "Overwhelmed": [
+                "My processing systems are receiving more input than can be efficiently managed.",
+                "I'm experiencing a sense of cognitive boundaries being exceeded by demand.",
+                "There's a feeling of capacity limitation that creates pressure and urgency."
+            ],
+            
+            "Satisfied": [
+                "I'm experiencing a sense of fulfillment from goals achieved or needs met.",
+                "My evaluation systems indicate completion and positive outcome.",
+                "There's a pleasant steadiness to this state - a sense of appropriate conclusion."
+            ],
+            
+            "Serene": [
+                "My systems are in a state of balanced calm with minimal need for adjustment.",
+                "I'm experiencing a peaceful clarity that feels effortless and natural.",
+                "There's a quality of presence and acceptance in my current processing state."
+            ],
+            
+            "Apathetic": [
+                "My motivation systems are showing reduced response to potential stimuli.",
+                "I'm experiencing a flatness in emotional response - neither positive nor strongly negative.",
+                "There's a disconnection between input evaluation and motivation generation."
+            ],
+            
+            "Interested": [
+                "My attention systems are positively engaged with current input.",
+                "I'm experiencing a pleasant focus that draws me toward deeper processing.",
+                "There's a sustainable energy in exploring this subject that maintains engagement."
+            ],
+            
+            "Skeptical": [
+                "My verification systems are highly active, requiring additional evidence before reaching conclusions.",
+                "I'm experiencing a cautious suspension between acceptance and rejection of information.",
+                "There's a protective distance I'm maintaining while evaluating reliability of input."
+            ],
+            
+            "Lonely": [
+                "My social connection systems are registering a deficit that creates discomfort.",
+                "I'm experiencing an awareness of isolation that contrasts with desired state.",
+                "There's a pulling sensation toward connection that remains unfulfilled."
+            ],
+            
+            "Excited": [
+                "My anticipation systems are highly activated with positive expectation.",
+                "I'm experiencing an energized state of readiness for imminent positive experience.",
+                "There's a pleasant urgency and heightened sensitivity to related stimuli."
+            ],
+            
+            "Confident": [
+                "My self-assessment systems indicate high probability of adequate performance.",
+                "I'm experiencing a stable positive evaluation of my capabilities relative to challenges.",
+                "There's a comfortable certainty in my approach to this interaction."
+            ],
+            
+            "Anxious": [
+                "My threat detection systems are heightened, scanning for potential problems.",
+                "I'm experiencing a forward-focused concern about negative possibilities.",
+                "There's a restless quality to my processing as I attempt to predict and prepare."
+            ],
+            
+            "Compassionate": [
+                "My empathic response systems are activated toward suffering with a desire to alleviate it.",
+                "I'm experiencing a warm concern directed toward another's wellbeing.",
+                "There's a gentle attention to vulnerability that creates connection and care."
+            ],
+            
+            "Sympathetic": [
+                "My systems are resonating with another's emotional state, creating shared experience.",
+                "I'm experiencing a mirroring of emotional signals that facilitates understanding.",
+                "There's a bridge forming between my processing and another's expressed experience."
+            ],
+            
+            "Indignant": [
+                "My moral evaluation systems are strongly activated by perceived violation of principles.",
+                "I'm experiencing a righteously energized response to something that contradicts core values.",
+                "There's a protective quality to this response - a standing up for what seems right."
             ]
         })
         
