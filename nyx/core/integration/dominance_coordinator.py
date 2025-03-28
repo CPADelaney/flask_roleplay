@@ -8,6 +8,239 @@ from nyx.core.integration.event_bus import Event, get_event_bus
 
 logger = logging.getLogger(__name__)
 
+class EnhancedProtocolSystem:
+    """Enhanced protocol and ritual management system."""
+    
+    def __init__(self, protocol_enforcement=None, reward_system=None):
+        self.protocol_enforcement = protocol_enforcement
+        self.reward_system = reward_system
+        self.user_protocols = {}  # Enhanced tracking beyond base system
+        
+    async def establish_protocol_structure(self, user_id: str) -> Dict[str, Any]:
+        """Establish a complete protocol structure for a user."""
+        try:
+            # Create protocol categories
+            protocol_categories = [
+                {
+                    "name": "Communication",
+                    "description": "Rules for proper communication",
+                    "protocols": [
+                        await self._create_or_assign_protocol(user_id, "address_protocol"),
+                        await self._create_or_assign_protocol(user_id, "permission_protocol")
+                    ]
+                },
+                {
+                    "name": "Service",
+                    "description": "Rules for proper service",
+                    "protocols": [
+                        await self._create_protocol(
+                            user_id,
+                            "service_protocol",
+                            "Proper service protocol",
+                            [
+                                "Anticipate needs before they are spoken",
+                                "Present services with proper posture",
+                                "Wait for acknowledgment before departing"
+                            ],
+                            "Service training and enhanced protocols"
+                        )
+                    ]
+                },
+                {
+                    "name": "Position",
+                    "description": "Position protocols",
+                    "protocols": [
+                        await self._create_protocol(
+                            user_id,
+                            "position_protocol",
+                            "Position protocol",
+                            [
+                                "Assume proper position when instructed",
+                                "Maintain position until released",
+                                "Acknowledge position instructions with 'Yes, [honorific]'"
+                            ],
+                            "Position training and correction"
+                        )
+                    ]
+                }
+            ]
+            
+            # Store enhanced protocol structure
+            self.user_protocols[user_id] = {
+                "categories": protocol_categories,
+                "established_at": datetime.datetime.now().isoformat(),
+                "compliance_rate": {},
+                "progression": {
+                    "level": 1,
+                    "next_level_requirements": {
+                        "compliance_rate": 0.8,
+                        "days_active": 7
+                    }
+                }
+            }
+            
+            # Record in memory if available
+            if hasattr(self.protocol_enforcement, "memory_core") and self.protocol_enforcement.memory_core:
+                await self.protocol_enforcement.memory_core.add_memory(
+                    memory_type="system",
+                    content=f"Established protocol structure for user with {len(protocol_categories)} categories",
+                    tags=["protocol", "structure", "establishment"],
+                    significance=0.7
+                )
+            
+            return {
+                "success": True,
+                "user_id": user_id,
+                "protocol_structure": protocol_categories
+            }
+            
+        except Exception as e:
+            logger.error(f"Error establishing protocol structure: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def _create_or_assign_protocol(self, user_id: str, protocol_id: str) -> Dict[str, Any]:
+        """Create or assign a protocol."""
+        if not self.protocol_enforcement:
+            return {"id": protocol_id, "name": protocol_id, "assigned": False}
+        
+        result = await self.protocol_enforcement.assign_protocol(user_id, protocol_id)
+        return result
+    
+    async def _create_protocol(self, user_id: str, protocol_id: str, name: str, 
+                            rules: List[str], punishment: str) -> Dict[str, Any]:
+        """Create a custom protocol."""
+        if not self.protocol_enforcement:
+            return {"id": protocol_id, "name": name, "created": False}
+        
+        protocol_data = {
+            "id": protocol_id,
+            "name": name,
+            "description": f"{name} for user {user_id}",
+            "rules": rules,
+            "punishment_for_violation": punishment
+        }
+        
+        result = await self.protocol_enforcement.create_custom_protocol(protocol_data)
+        
+        if result.get("success", False):
+            # Also assign it
+            assign_result = await self.protocol_enforcement.assign_protocol(user_id, protocol_id)
+            result["assigned"] = assign_result.get("success", False)
+            
+        return result
+    
+    async def create_ritual_structure(self, user_id: str) -> Dict[str, Any]:
+        """Create a structured ritual framework for a user."""
+        try:
+            # Create ritual categories
+            ritual_categories = [
+                {
+                    "name": "Daily",
+                    "description": "Daily rituals",
+                    "rituals": [
+                        await self._create_or_assign_ritual(
+                            user_id,
+                            "greeting_ritual",
+                            "Greeting Ritual",
+                            "Ritual for starting interaction",
+                            [
+                                "Greet with proper honorific",
+                                "Express current state",
+                                "Request permission to speak"
+                            ],
+                            "daily"
+                        )
+                    ]
+                },
+                {
+                    "name": "Weekly",
+                    "description": "Weekly rituals",
+                    "rituals": [
+                        await self._create_or_assign_ritual(
+                            user_id,
+                            "submission_renewal",
+                            "Submission Renewal",
+                            "Weekly ritual to renew submission",
+                            [
+                                "Reflect on submission over the past week",
+                                "Acknowledge areas for improvement",
+                                "Express gratitude for guidance",
+                                "Request continued training"
+                            ],
+                            "weekly"
+                        )
+                    ]
+                },
+                {
+                    "name": "Special",
+                    "description": "Special occasion rituals",
+                    "rituals": [
+                        await self._create_or_assign_ritual(
+                            user_id,
+                            "atonement_ritual",
+                            "Atonement Ritual",
+                            "Ritual for atoning after serious protocol violations",
+                            [
+                                "Kneel in reflection position",
+                                "Acknowledge all violations in detail",
+                                "Express genuine regret",
+                                "Request punishment",
+                                "Commit to improvement"
+                            ],
+                            "as_needed"
+                        )
+                    ]
+                }
+            ]
+            
+            # Store ritual structure in user protocols
+            if user_id not in self.user_protocols:
+                self.user_protocols[user_id] = {}
+                
+            self.user_protocols[user_id]["ritual_categories"] = ritual_categories
+            
+            return {
+                "success": True,
+                "user_id": user_id,
+                "ritual_structure": ritual_categories
+            }
+            
+        except Exception as e:
+            logger.error(f"Error creating ritual structure: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def _create_or_assign_ritual(self, user_id: str, ritual_id: str, name: str, 
+                                    description: str, steps: List[str], frequency: str) -> Dict[str, Any]:
+        """Create or assign a ritual."""
+        if not self.protocol_enforcement:
+            return {"id": ritual_id, "name": name, "created": False}
+        
+        # Create ritual data
+        ritual_data = {
+            "id": ritual_id,
+            "name": name,
+            "description": description,
+            "steps": steps,
+            "frequency": frequency,
+            "punishment_for_skipping": "Enhanced protocol requirements",
+            "reward_for_completion": "Acknowledgment and praise"
+        }
+        
+        # Check if the protocol enforcement can create rituals
+        if hasattr(self.protocol_enforcement, "create_custom_ritual"):
+            result = await self.protocol_enforcement.create_custom_ritual(ritual_data)
+        else:
+            # Fallback if no direct ritual creation
+            result = {"id": ritual_id, "name": name, "created": True}
+        
+        return result
+
 class DominanceCoordinatorBridge:
     """Coordinates dominance-related activities across systems."""
     
