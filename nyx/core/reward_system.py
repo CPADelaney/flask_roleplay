@@ -208,6 +208,35 @@ class RewardSignalProcessor:
                 "effects": effects,
                 "learning": learning_updates
             }
+
+    async def process_submission_reward(self, submission_type, compliance_level, user_id):
+        """Processes rewards for various types of submission."""
+        reward_value = compliance_level * self._calculate_submission_value(submission_type)
+        return await self.process_reward_signal(RewardSignal(
+            value=reward_value,
+            source="user_submission",
+            context={"submission_type": submission_type, "user_id": user_id}
+        ))
+    
+    def _calculate_submission_value(self, submission_type):
+        """Calculate base reward value for different submission types."""
+        # Assign values based on submission type rarity and psychological significance
+        submission_values = {
+            "verbal": 0.4,        # Basic verbal acknowledgment 
+            "honorific": 0.5,     # Proper address with honorifics
+            "behavioral": 0.6,    # Basic behavioral compliance
+            "ritual": 0.7,        # Ritual performance
+            "task": 0.6,          # Task completion
+            "service": 0.7,       # Service-oriented submission
+            "degradation": 0.8,   # Accepting degradation
+            "humiliation": 0.9,   # Accepting humiliation
+            "pain_simulation": 0.9, # Simulated pain tolerance
+            "psychological": 0.95,  # Deep psychological submission
+            "ownership": 1.0        # Ownership acknowledgment
+        }
+        
+        # Use default medium value for unknown types
+        return submission_values.get(submission_type, 0.6)    
     
     async def _update_dopamine_level(self, reward_value: float) -> float:
         """Update dopamine level based on reward value and time decay"""
