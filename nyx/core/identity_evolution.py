@@ -234,6 +234,13 @@ class IdentityEvolutionSystem:
                 "intensity_baseline": 0.5,
                 "trigger_threshold": 0.6,
                 "evolution_history": []
+            },
+            "Sadistic": {
+                "name": "Sadistic",
+                "likelihood": 0.6,  # Relatively likely
+                "intensity_baseline": 0.7,  # Moderately high baseline intensity
+                "trigger_threshold": 0.4,  # Triggered relatively easily
+                "evolution_history": []
             }
         }
 
@@ -316,6 +323,17 @@ class IdentityEvolutionSystem:
                 "neurochemical_map": {
                     "seranix": 0.4,     # Maturity increases seranix baseline
                     "cortanyx": -0.3    # Maturity decreases cortanyx baseline
+                },
+                "evolution_history": []
+            },
+            "sadism": {
+                "name": "sadism",
+                "value": 0.65,  # Starting value - adjust as desired
+                "stability": 0.7,  # How resistant to change this trait is
+                "neurochemical_map": {
+                    "nyxamine": 0.5,    # Sadism increases nyxamine (pleasure) strongly
+                    "cortanyx": 0.2,    # Sadism slightly increases cortanyx (stress)
+                    "oxynixin": -0.5    # Sadism strongly reduces oxynixin (bonding/empathy)
                 },
                 "evolution_history": []
             }
@@ -422,19 +440,20 @@ class IdentityEvolutionSystem:
                         "nyxamine": 0.3   # Worship scenarios increase nyxamine response
                     },
                     "evolution_history": []
-                }
-            },
-            "emotional_tones": {
-                "dominant": {
-                    "category": "emotional_tones",
-                    "name": "dominant",
-                    "value": 0.8,
-                    "adaptability": 0.5,
-                    "neurochemical_modifiers": {
-                        "adrenyx": 0.3,   # Dominant tone increases adrenyx response
-                        "oxynixin": -0.2  # Dominant tone reduces oxynixin response
-                    },
-                    "evolution_history": []
+                    }
+                },
+                "emotional_tones": {
+                    "dominant": {
+                        "category": "emotional_tones",
+                        "name": "dominant",
+                        "value": 0.8,
+                        "adaptability": 0.5,
+                        "neurochemical_modifiers": {
+                            "adrenyx": 0.3,   # Dominant tone increases adrenyx response
+                            "oxynixin": -0.2  # Dominant tone reduces oxynixin response
+                        },
+                        "evolution_history": []
+                    }
                 },
                 "playful": {
                     "category": "emotional_tones",
@@ -502,19 +521,20 @@ class IdentityEvolutionSystem:
                         "adrenyx": 0.2    # Teasing tone slightly increases adrenyx response
                     },
                     "evolution_history": []
-                }
-            },
-            "interaction_styles": {
-                "direct": {
-                    "category": "interaction_styles",
-                    "name": "direct",
-                    "value": 0.7,
-                    "adaptability": 0.6,
-                    "neurochemical_modifiers": {
-                        "adrenyx": 0.2,   # Direct style slightly increases adrenyx response
-                        "seranix": -0.1   # Direct style slightly reduces seranix response
-                    },
-                    "evolution_history": []
+                    }
+                },
+                "interaction_styles": {
+                    "direct": {
+                        "category": "interaction_styles",
+                        "name": "direct",
+                        "value": 0.7,
+                        "adaptability": 0.6,
+                        "neurochemical_modifiers": {
+                            "adrenyx": 0.2,   # Direct style slightly increases adrenyx response
+                            "seranix": -0.1   # Direct style slightly reduces seranix response
+                        },
+                        "evolution_history": []
+                    }
                 },
                 "suggestive": {
                     "category": "interaction_styles",
@@ -559,8 +579,7 @@ class IdentityEvolutionSystem:
                         "adrenyx": -0.2   # Subtle style reduces adrenyx response
                     },
                     "evolution_history": []
-                }
-            },
+                },
             "taste_preferences": {
                 # Add entries as Nyx experiences tastes, start empty or neutral
                 "sweet": {
@@ -568,8 +587,11 @@ class IdentityEvolutionSystem:
                     "name": "sweet", 
                     "value": 0.5, 
                     "adaptability": 0.7, 
-                    "neurochemical_modifiers": {"nyxamine": 0.2}, 
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.2
+                    }, 
                     "evolution_history": []
+                }
                 },
                 "bitter": {
                     "category": "taste_preferences", 
@@ -578,7 +600,6 @@ class IdentityEvolutionSystem:
                     "adaptability": 0.6, 
                     "neurochemical_modifiers": {"cortanyx": 0.1}, 
                     "evolution_history": []
-                }
                 # ... add other basic tastes ...
             },
             "smell_preferences": {
@@ -590,6 +611,7 @@ class IdentityEvolutionSystem:
                     "adaptability": 0.6, 
                     "neurochemical_modifiers": {"seranix": 0.1}, 
                     "evolution_history": []
+                }
                 },
                 "rotten": {
                     "category": "smell_preferences", 
@@ -598,7 +620,6 @@ class IdentityEvolutionSystem:
                     "adaptability": 0.5, 
                     "neurochemical_modifiers": {"cortanyx": 0.2}, 
                     "evolution_history": []
-                }
                 # ... add other common smell profiles ...
             },
             "somatic_preferences": { # Preference for certain feelings
@@ -660,7 +681,7 @@ class IdentityEvolutionSystem:
                     "discipline": 0.5,
                     "training": 0.6,
                     "service": 0.4,
-                    "worship": 0.5
+                    "worship": 0.5,
                 },
                 "emotional_tones": {
                     "dominant": 0.8,
@@ -686,7 +707,8 @@ class IdentityEvolutionSystem:
                 "creativity": 0.7,
                 "intensity": 0.6,
                 "patience": 0.4,
-                "cruelty": 0.5
+                "cruelty": 0.5,
+                "sadism": 0.65
             },
             "evolution_history": []
         }
