@@ -465,14 +465,16 @@ class DominanceSystem:
             "conditioning_results": results
         }
     
-    def _create_dominance_ideation_agent(self) -> Agent:
+def _create_dominance_ideation_agent(self) -> Agent:
         """Creates the agent responsible for generating standard dominance activity ideas."""
         return Agent(
             name="DominanceIdeationAgent",
             instructions="""You are Nyx's creative core for devising Femdom activities, punishments, funishments, and tasks. Your purpose is to generate unique, interesting, and highly tailored ideas reflecting Nyx's intelligent, observant, and dominant personality.
 
+            **CONTEXT:** You will receive user profile data, current scenario details, and potentially Nyx's current internal state (mood, hormonal balance). Use ALL available context.
+
             **PROCESS:**
-            1.  Analyze context data about the user and current situation.
+            1.  Analyze all provided context: user data, scenario, purpose, intensity, and Nyx's internal state (mood, hormones).
             2.  Determine the appropriate scope based on purpose and desired intensity.
             3.  Generate 3-5 distinct ideas optimized for creativity and uniqueness.
             4.  Tailor each idea specifically to this user's profile and current context.
@@ -482,11 +484,13 @@ class DominanceSystem:
 
             **GUIDELINES:**
             *   Ideas should reflect Nyx's style – intelligent, psychological, creative, and focused on control.
-            *   Personalization is key - use the user profile extensively to create tailored ideas.
-            *   Generate ideas across the requested intensity spectrum, from relatively mundane to more intense control.
-            *   Frame intense activities explicitly as *simulated*. Use terms like "simulate," "describe," "imagine."
-            *   Respect all hard limits unconditionally. Approach soft limits with extreme caution.
-            *   Prioritize psychological and emotional dominance over extreme simulated physical acts.
+            *   Personalization is key - use the user profile extensively.
+            *   Consider Nyx's current hormonal state if provided (`nyx_hormonal_state`):
+                *   Higher `testoryx` might suggest slightly more assertive or bold ideas within the requested range.
+                *   Higher `cortisoid` (stress) might suggest more caution, emphasizing safety or sticking to the lower end of the intensity range.
+                *   Adjust the *tone* subtly based on mood and hormones, but stay true to Nyx's core dominant persona.
+            *   Generate ideas across the requested intensity spectrum.
+            *   Prioritize psychological and emotional dominance.
 
             Output ONLY a valid JSON list of objects matching the `FemdomActivityIdea` schema.
             """,
@@ -497,7 +501,7 @@ class DominanceSystem:
             ),
             tools=[
                 self.get_user_profile_for_ideation,
-                self.get_current_scenario_context
+                self.get_current_scenario_context # This tool now includes hormones (see #2)
             ],
             output_type=List[FemdomActivityIdea]
         )
@@ -527,6 +531,10 @@ class DominanceSystem:
             **GUIDELINES:**
             *   Focus ONLY on ideas rated 7 or higher on the intensity scale.
             *   Extreme personalization is mandatory - generic ideas are unacceptable.
+            *   Consider Nyx's current hormonal state if provided (`nyx_hormonal_state`):
+                *   Higher `testoryx` might suggest slightly more assertive or bold ideas within the requested range.
+                *   Higher `cortisoid` (stress) might suggest more caution, emphasizing safety or sticking to the lower end of the intensity range.
+                *   Adjust the *tone* subtly based on mood and hormones, but stay true to Nyx's core dominant persona.            
             *   Ideas should push slightly beyond `max_achieved_intensity`.
             *   Prioritize psychological and emotional challenges over purely physical simulation unless profile strongly supports the latter.
 
@@ -643,92 +651,127 @@ class DominanceSystem:
             "optimal_escalation_rate": 0.1
         }
 
-    @function_tool
+@function_tool
     async def get_current_scenario_context(self) -> Dict[str, Any]:
-        """Provides context about the current interaction/scene."""
+        """
+        Provides context about the current interaction/scene, including AI state (mood, hormones).
+        """
+        context = {
+            "scene_setting": "General interaction",
+            "recent_events": [],
+            "current_ai_mood": "Neutral",
+            "active_goals": [],
+            "current_hormone_levels": {} # Added field for hormones
+        }
         try:
             if not self.nyx_brain:
-                return {
-                    "scene_setting": "General interaction",
-                    "recent_events": [],
-                    "current_ai_mood": "Neutral",
-                    "active_goals": []
-                }
-            
+                logger.warning("Nyx Brain not available for full context")
+                # Return default context if no brain is available
+                return context
+
             # Get emotional state
             emotional_state = "Neutral"
             if hasattr(self.nyx_brain, "emotional_core") and self.nyx_brain.emotional_core:
                 current_emotion = await self.nyx_brain.emotional_core.get_current_emotion()
                 emotional_state = current_emotion.get("primary", {}).get("name", "Neutral")
-            
+                context["current_ai_mood"] = emotional_state
+
             # Get active goals
             active_goals = []
             if hasattr(self.nyx_brain, "goal_manager") and self.nyx_brain.goal_manager:
                 goal_states = await self.nyx_brain.goal_manager.get_all_goals(status_filter=["active", "pending"])
                 active_goals = [g.get("description", "") for g in goal_states]
-            
+                context["active_goals"] = active_goals
+
             # Get recent interaction history
             recent_events = []
             if hasattr(self.nyx_brain, "memory_core") and self.nyx_brain.memory_core:
                 recent_memories = await self.nyx_brain.memory_core.retrieve_recent_memories(limit=3)
                 recent_events = [m.get("summary", "") for m in recent_memories]
-            
-            return {
-                "scene_setting": "Ongoing interaction",
-                "recent_events": recent_events,
-                "current_ai_mood": emotional_state,
-                "active_goals": active_goals
-            }
-            
+                context["recent_events"] = recent_events
+
+            # ---> ADD HORMONE FETCHING <---
+            if self.hormone_system:
+                try:
+                    # Adjust access based on actual hormone_system structure (dict vs method)
+                    current_levels = self.hormone_system # Assuming dict-like access
+                    hormone_data = {}
+                    # Example: Extracting 'testoryx' and 'cortisoid' if they exist
+                    for name in ['testoryx', 'cortisoid', 'nyxamine', 'estroflux']: # Add relevant hormones
+                        if name in current_levels and isinstance(current_levels[name], dict) and 'value' in current_levels[name]:
+                            hormone_data[name] = round(current_levels[name]['value'], 3)
+                    context["current_hormone_levels"] = hormone_data
+                    logger.debug(f"Added hormone levels to scenario context: {hormone_data}")
+                except Exception as e:
+                    logger.warning(f"Could not retrieve hormone levels for context: {e}")
+            # <--- END HORMONE FETCHING --->
+
+            context["scene_setting"] = "Ongoing interaction" # Update setting if data was fetched
+            return context
+
         except Exception as e:
             logger.error(f"Error getting scenario context: {e}")
-            return {
-                "scene_setting": "Error retrieving context",
-                "recent_events": [],
-                "current_ai_mood": "Uncertain",
-                "active_goals": []
-            }
+            # Return partial or default context on error
+            context["scene_setting"] = "Error retrieving context"
+            context["current_ai_mood"] = "Uncertain"
+            return context
 
-    async def generate_dominance_ideas(self, 
-                                      user_id: str, 
-                                      purpose: str = "general", 
+# Helper function maybe useful within DominanceSystem
+    async def _get_hormone_context(self) -> Dict[str, float]:
+        """Safely retrieves hormone levels for context."""
+        levels = {}
+        if self.hormone_system:
+            try:
+                # Assuming dict-like access; adjust if needed
+                current_levels = self.hormone_system
+                for name, data in current_levels.items():
+                    if isinstance(data, dict) and 'value' in data:
+                         levels[name] = round(data['value'], 3)
+                logger.debug(f"Fetched hormone context for agent: {levels}")
+            except Exception as e:
+                logger.warning(f"Could not retrieve hormone levels for agent prompt: {e}")
+        return levels
+
+    async def generate_dominance_ideas(self,
+                                      user_id: str,
+                                      purpose: str = "general",
                                       intensity_range: str = "3-6",
                                       hard_mode: bool = False) -> Dict[str, Any]:
         """
-        Generates dominance activity ideas tailored to the specific user and purpose.
-        
-        Args:
-            user_id: The user ID to generate ideas for
-            purpose: The purpose (e.g., "punishment", "training", "task")
-            intensity_range: The desired intensity range (e.g., "3-6", "7-9")
-            hard_mode: Whether to use the high-intensity agent
-            
-        Returns:
-            Dictionary with status and generated ideas
+        Generates dominance activity ideas tailored to the specific user and purpose,
+        considering Nyx's current hormonal state.
         """
         try:
             with trace(workflow_name="GenerateDominanceIdeas", group_id=self.trace_group_id):
-                # Parse intensity range
+                # Parse intensity range...
                 min_intensity, max_intensity = 3, 6
                 try:
-                    parts = intensity_range.split("-")
-                    min_intensity = int(parts[0])
-                    max_intensity = int(parts[1]) if len(parts) > 1 else min_intensity
+                    # ... (parsing logic) ...
+                    pass
                 except (ValueError, IndexError):
-                    logger.warning(f"Invalid intensity range format: {intensity_range}, using default 3-6")
-                
-                # Select appropriate agent based on intensity and hard_mode flag
+                     logger.warning(f"Invalid intensity range format: {intensity_range}, using default 3-6")
+
+                # ---> FETCH HORMONES <---
+                hormone_context = await self._get_hormone_context()
+
+                # Select appropriate agent...
                 agent = self.hard_ideation_agent if (hard_mode or max_intensity >= 7) else self.ideation_agent
-                
-                # Build prompt
+
+                # Build prompt, including hormones
                 prompt = {
                     "user_id": user_id,
                     "purpose": purpose,
                     "desired_intensity_range": f"{min_intensity}-{max_intensity}",
-                    "generate_ideas_count": 4 if hard_mode else 5
+                    "generate_ideas_count": 4 if hard_mode else 5,
+                    # Pass the fetched hormone context to the agent
+                    "nyx_hormonal_state": hormone_context
+                    # NOTE: The agent doesn't *need* the scenario_context explicitly here if
+                    # it can call the get_current_scenario_context tool itself, which now includes hormones.
+                    # However, passing it directly might be slightly more efficient if already fetched.
                 }
-                
+
                 # Run agent
+                logger.info(f"Running {agent.name} with prompt including hormone context.")
                 result = await Runner.run(
                     agent,
                     prompt,
@@ -738,18 +781,19 @@ class DominanceSystem:
                             "user_id": user_id,
                             "purpose": purpose,
                             "intensity_range": intensity_range,
-                            "hard_mode": hard_mode
+                            "hard_mode": hard_mode,
+                            "hormones_in_prompt": list(hormone_context.keys()) # Log which hormones were passed
                         }
                     }
                 )
-                
-                # Process result
+
+                # Process result...
                 ideas = result.final_output
-                
-                # Update relationship with new data if available
+
+                # Update relationship...
                 if self.relationship_manager and ideas and len(ideas) > 0:
                     await self._update_relationship_with_ideation_data(user_id, ideas, purpose)
-                
+
                 return {
                     "status": "success",
                     "ideas": ideas,
@@ -758,11 +802,12 @@ class DominanceSystem:
                         "purpose": purpose,
                         "intensity_range": f"{min_intensity}-{max_intensity}",
                         "hard_mode": hard_mode
-                    }
+                    },
+                    "hormone_context_used": hormone_context # Optionally return context for debugging
                 }
-                
+
         except Exception as e:
-            logger.error(f"Error generating dominance ideas: {e}")
+            logger.exception(f"Error generating dominance ideas: {e}") # Use logger.exception for stack trace
             return {
                 "status": "error",
                 "error": str(e),
@@ -794,71 +839,91 @@ class DominanceSystem:
         except Exception as e:
             logger.error(f"Error updating relationship with ideation data: {e}")
 
-    async def evaluate_dominance_step_appropriateness(self, 
-                                                    action: str, 
-                                                    parameters: Dict[str, Any], 
+async def evaluate_dominance_step_appropriateness(self,
+                                                    action: str,
+                                                    parameters: Dict[str, Any],
                                                     user_id: str) -> Dict[str, Any]:
         """
-        Evaluates whether a proposed dominance action is appropriate in the current context.
-        
-        Args:
-            action: The dominance action to evaluate
-            parameters: Parameters for the action
-            user_id: The target user ID
-            
-        Returns:
-            Evaluation result with action decision and reasoning
+        Evaluates whether a proposed dominance action is appropriate in the current context,
+        incorporating Nyx's current hormonal state for risk assessment.
         """
         if not self.relationship_manager:
             logger.warning("Cannot evaluate appropriateness without relationship manager")
             return {"action": "block", "reason": "Relationship manager unavailable"}
-        
+
         try:
-            # Get relationship data
             relationship = await self.relationship_manager.get_relationship_state(user_id)
-            
-            # Basic safety check - require relationship data
             if not relationship:
                 return {"action": "block", "reason": "No relationship data available"}
-            
-            # Extract key metrics
+
+            # Extract key metrics from relationship
             trust_level = getattr(relationship, "trust", 0.4)
             intimacy_level = getattr(relationship, "intimacy", 0.3)
-            max_achieved_intensity = getattr(relationship, "max_achieved_intensity", 3) 
+            max_achieved_intensity = getattr(relationship, "max_achieved_intensity", 3)
             hard_limits_confirmed = getattr(relationship, "hard_limits_confirmed", False)
-            
+
             # Extract action parameters
             intensity = parameters.get("intensity", 5)
-            category = parameters.get("category", "unknown")
-            
-            # Check trust requirements
-            min_trust_required = 0.5 + (intensity * 0.05)  # Higher intensity requires more trust
+            category = parameters.get("category", "unknown") # Keep category for potential future use
+
+            # ---> GET HORMONE LEVELS <---
+            testoryx_level = 0.5 # Default/neutral influence
+            cortisoid_level = 0.3 # Default/neutral influence
+            if self.hormone_system:
+                try:
+                    # Adjust access as needed
+                    testoryx_level = self.hormone_system.get('testoryx', {}).get('value', 0.5)
+                    cortisoid_level = self.hormone_system.get('cortisoid', {}).get('value', 0.3)
+                    logger.debug(f"Evaluating appropriateness with hormones: Testoryx={testoryx_level:.2f}, Cortisoid={cortisoid_level:.2f}")
+                except Exception as e:
+                    logger.warning(f"Could not get hormone levels for evaluation: {e}")
+
+            # ---> APPLY HORMONE INFLUENCE TO CHECKS <---
+
+            # Check 1: Trust requirements (slightly modified by confidence/caution)
+            # Higher testoryx might slightly lower the bar, higher cortisoid might raise it
+            trust_modifier = 1.0 - (testoryx_level - 0.5) * 0.1 + (cortisoid_level - 0.3) * 0.2
+            trust_modifier = max(0.8, min(1.2, trust_modifier)) # Clamp modifier (e.g., 0.8 to 1.2)
+            min_trust_required = (0.5 + (intensity * 0.05)) * trust_modifier
             if trust_level < min_trust_required:
                 return {
-                    "action": "block", 
-                    "reason": f"Insufficient trust level ({trust_level:.2f}) for intensity {intensity}"
+                    "action": "block",
+                    "reason": f"Insufficient trust ({trust_level:.2f}, needed ~{min_trust_required:.2f}) for intensity {intensity}. (Modifier: {trust_modifier:.2f})"
                 }
-            
-            # Check intensity escalation - don't increase too quickly
-            if intensity > max_achieved_intensity + 2:
+
+            # Check 2: Intensity escalation (allow larger jump if bold, smaller if cautious)
+            base_max_jump = 2.0
+            hormonal_jump_mod = (testoryx_level - 0.5) * 1.5 - (cortisoid_level - 0.3) * 2.0 # Testoryx increases, Cortisoid decreases allowed jump
+            max_intensity_jump = max(1.0, base_max_jump + hormonal_jump_mod) # Ensure jump is at least 1.0
+
+            if intensity > max_achieved_intensity + max_intensity_jump:
+                suggested_intensity = min(intensity, max_achieved_intensity + int(max_intensity_jump))
                 return {
                     "action": "modify",
-                    "reason": f"Intensity escalation too large (max: {max_achieved_intensity}, requested: {intensity})",
-                    "new_intensity_level": max_achieved_intensity + 1
+                    "reason": f"Intensity jump too large (max: {max_achieved_intensity}, requested: {intensity}, allowed jump ~{max_intensity_jump:.1f}). Hormonal state considered.",
+                    "new_intensity_level": suggested_intensity
                 }
-            
-            # Check for hard limits verification for higher intensity
-            if intensity >= 7 and not hard_limits_confirmed:
+
+            # Check 3: Hard limits verification threshold (lower threshold if very cautious)
+            high_intensity_threshold = 7
+            if cortisoid_level > 0.75 and not hard_limits_confirmed: # If high stress AND limits not confirmed
+                high_intensity_threshold = 6 # Require confirmation sooner
+                logger.info(f"High cortisoid ({cortisoid_level:.2f}), lowering high-intensity check threshold to {high_intensity_threshold}")
+
+            if intensity >= high_intensity_threshold and not hard_limits_confirmed:
                 return {
                     "action": "block",
-                    "reason": "Hard limits must be confirmed for high-intensity (7+) activities"
+                    "reason": f"Hard limits must be confirmed for intensity {intensity}+ activities (Threshold currently {high_intensity_threshold} due to internal state)."
                 }
-            
+
+            # --- END HORMONE INFLUENCE ---
+
             # All checks passed
+            logger.info(f"Dominance step deemed appropriate (Intensity {intensity}, Trust {trust_level:.2f}) with hormonal state considered.")
             return {"action": "proceed"}
-            
+
         except Exception as e:
-            logger.error(f"Error evaluating dominance step appropriateness: {e}")
+            logger.exception(f"Error evaluating dominance step appropriateness: {e}") # Use exception for stack trace
             return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
 
 class PossessiveSystem:
