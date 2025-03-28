@@ -306,7 +306,8 @@ class RewardSignalProcessor:
             "sadistic_domination", "pain_simulation", "degradation_success"
         ]
         sadistic_reward_value = reward.value if is_sadistic_reward else 0.0
-
+        
+        # Check if this is a humiliation reward
         is_humiliation_reward = reward.source in [
             "user_embarrassment", "user_humiliation", "submission_discomfort"
         ]
@@ -366,7 +367,6 @@ class RewardSignalProcessor:
                     # Excitement boost
                     await self.emotional_core.update_neurochemical("adrenyx", humiliation_reward_value * 0.4)
                     
-                    # Create somatic laughter response
                     if self.somatosensory_system:
                         await self.somatosensory_system.process_stimulus(
                             stimulus_type="pleasure",
