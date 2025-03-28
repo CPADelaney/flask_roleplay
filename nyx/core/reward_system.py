@@ -238,7 +238,7 @@ class RewardSignalProcessor:
         await self.update_hormone(ctx, "seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
         await self.update_hormone(ctx, "oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
     
-    def _calculate_submission_value(self, submission_type):
+    def calculate_submission_value(self, submission_type, was_initially_resistant=False):
         """Calculate base reward value for different submission types."""
         # Assign values based on submission type rarity and psychological significance
         submission_values = {
@@ -255,8 +255,15 @@ class RewardSignalProcessor:
             "ownership": 1.0        # Ownership acknowledgment
         }
         
-        # Use default medium value for unknown types
-        return submission_values.get(submission_type, 0.6)    
+        base_value = submission_values.get(submission_type, 0.6)
+        
+        # Apply multiplier for resistance overcome
+        if was_initially_resistant:
+            return base_value * 1.5  # 50% increased reward for overcoming resistance
+        elif submission_type == "immediate":  # New category
+            return base_value * 0.5  # 50% reduced reward for immediate submission
+        else:
+            return base_value
     
     async def _update_dopamine_level(self, reward_value: float) -> float:
         """Update dopamine level based on reward value and time decay"""
