@@ -146,6 +146,25 @@ class SynergyOptimizerAgent:
             )
             
             self.last_analysis_time = self.brain.system_context.current_time
+
+            from dev_log.api import add_synergy_recommendation
+            
+            # Log recommendations to dev log
+            for recommendation in recommendations:
+                await add_synergy_recommendation(
+                    title=recommendation["description"],
+                    content=f"Priority: {recommendation['priority']}\nExpected impact: {recommendation['expected_impact']}",
+                    from_module=recommendation.get("from_module"),
+                    to_module=recommendation.get("to_module"),
+                    priority=recommendation["priority"],
+                    expected_impact=recommendation["expected_impact"],
+                    source_module="synergy_optimizer",
+                    metadata={
+                        "recommendation_type": recommendation["type"],
+                        "event_type": recommendation.get("event_type"),
+                        "sources": recommendation.get("sources", [])
+                    }
+                )
             
             return recommendations
     
