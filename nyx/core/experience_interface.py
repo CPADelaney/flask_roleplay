@@ -2630,4 +2630,136 @@ class ExperienceInterface:
             if additional_experiences:
                 experiences.extend(additional_experiences)
         
-        return experiences                                                     
+        return experiences         
+        
+    async def initialize_event_subscriptions(self, event_bus):
+        """Initialize event subscriptions for the experience interface"""
+        self.event_bus = event_bus
+        
+        # Subscribe to relevant events
+        self.event_bus.subscribe("conditioning_update", self._handle_conditioning_update)
+        self.event_bus.subscribe("conditioned_response", self._handle_conditioned_response)
+        
+        logger.info("Experience interface subscribed to events")
+    
+    async def _handle_conditioning_update(self, event):
+        """Store experiences based on significant conditioning events"""
+        update_type = event.data.get("update_type", "")
+        association_key = event.data.get("association_key", "")
+        association_type = event.data.get("association_type", "")
+        strength = event.data.get("strength", 0.0)
+        
+        # Only create experiences for significant conditioning events
+        if strength < 0.6:
+            return
+        
+        # Create the experience
+        experience_text = f"Formed a conditioning connection between {association_key} with strength {strength:.2f}"
+        
+        # Store the experience
+        await self._store_experience(
+            memory_text=experience_text,
+            scenario_type="conditioning",
+            entities=[],
+            emotional_context=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else None,
+            significance=strength * 7,  # Scale to 0-10 scale but lower importance
+            tags=["conditioning", update_type, association_type],
+            user_id=event.data.get("user_id", "default")
+        )
+    
+    async def _handle_conditioned_response(self, event):
+        """Record experiences from triggered conditioned responses"""
+        stimulus = event.data.get("stimulus", "")
+        responses = event.data.get("triggered_responses", [])
+        user_id = event.data.get("user_id", "default")
+        
+        if not responses:
+            return
+        
+        # Get strongest response
+        strongest = max(responses, key=lambda r: r.get("strength", 0))
+        response_text = strongest.get("response", "Unknown response")
+        strength = strongest.get("strength", 0.5)
+        
+        # Create experience text
+        experience_text = f"Responded to '{stimulus}' stimulus with: {response_text}"
+        
+        # Store the experience
+        await self._store_experience(
+            memory_text=experience_text,
+            scenario_type="conditioned_response",
+            entities=[],
+            emotional_context=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else None,
+            significance=strength * 6,  # Scale to 0-10
+            tags=["conditioning", "response", stimulus],
+            user_id=user_id
+        )
+    
+    async def analyze_conditioning_patterns(self, user_id=None, time_period="recent"):
+        """Analyze conditioning patterns from stored experiences"""
+        # Search for conditioning-related experiences
+        query = "conditioning pattern response"
+        
+        experiences = await self.retrieve_experiences_enhanced(
+            query=query,
+            limit=20,
+            user_id=user_id
+        )
+        
+        if not experiences:
+            return {
+                "patterns_found": 0,
+                "has_analysis": False,
+                "message": "No conditioning patterns found in experiences"
+            }
+        
+        # Group by stimulus type
+        stimulus_groups = {}
+        for exp in experiences:
+            tags = exp.get("tags", [])
+            for tag in tags:
+                if tag not in ["conditioning", "response", "classical", "operant"]:
+                    # Potential stimulus
+                    if tag not in stimulus_groups:
+                        stimulus_groups[tag] = []
+                    stimulus_groups[tag].append(exp)
+        
+        # Analyze trends for each stimulus
+        pattern_analysis = {}
+        for stimulus, exps in stimulus_groups.items():
+            if len(exps) < 2:
+                continue
+                
+            # Sort by timestamp
+            sorted_exps = sorted(exps, key=lambda e: e.get("timestamp", ""))
+            
+            # Calculate trend
+            significances = [e.get("significance", 5) for e in sorted_exps]
+            avg_significance = sum(significances) / len(significances)
+            
+            first_half = significances[:len(significances)//2]
+            second_half = significances[len(significances)//2:]
+            
+            trend = "stable"
+            if len(first_half) > 0 and len(second_half) > 0:
+                first_avg = sum(first_half) / len(first_half)
+                second_avg = sum(second_half) / len(second_half)
+                
+                if second_avg > first_avg * 1.2:
+                    trend = "strengthening"
+                elif second_avg < first_avg * 0.8:
+                    trend = "weakening"
+            
+            pattern_analysis[stimulus] = {
+                "experience_count": len(exps),
+                "average_significance": avg_significance,
+                "trend": trend,
+                "earliest": sorted_exps[0].get("timestamp", "unknown"),
+                "latest": sorted_exps[-1].get("timestamp", "unknown")
+            }
+        
+        return {
+            "patterns_found": len(pattern_analysis),
+            "has_analysis": True,
+            "patterns": pattern_analysis
+        }
