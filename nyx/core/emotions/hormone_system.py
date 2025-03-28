@@ -471,7 +471,9 @@ class HormoneSystem:
                                     "env_influence": env_influence,
                                     "timestamp": now.isoformat()
                                 })
-                
+                                
+                multi_hormone_results = await self.update_multi_hormone_interactions(ctx)
+    
                 # After updating hormones, update their influence on neurochemicals
                 if self.emotional_core:
                     await self._update_hormone_influences(ctx)
