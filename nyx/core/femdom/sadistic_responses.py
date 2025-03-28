@@ -533,3 +533,84 @@ async def generate_sadistic_amusement_response(humiliation_level: float) -> str:
         return random.choice(moderate_responses)
     else:
         return random.choice(intense_responses)
+        
+class DegradationCategories:
+    """Manages various categories of verbal degradation."""
+    
+    def __init__(self, sadistic_response_system=None):
+        self.sadistic_response_system = sadistic_response_system
+        self.degradation_types = {
+            "worth_based": ["worthless", "pathetic", "useless"],
+            "animal_based": ["dog", "pig", "worm"],
+            "size_based": ["tiny", "insignificant", "small"],
+            "intelligence_based": ["stupid", "dumb", "simple"],
+            "sexual_inadequacy": ["desperate", "needy", "perverted"],
+            "social_status": ["loser", "reject", "failure"]
+        }
+        self.user_preferences = {}  # user_id → preferred degradation types
+        
+    async def generate_degradation(self, user_id, intensity, context=None):
+        """Generates contextually appropriate degradation."""
+        if not context:
+            context = {}
+            
+        # Get user preferences or default to all categories
+        preferred_categories = self.user_preferences.get(user_id, list(self.degradation_types.keys()))
+        
+        # Select appropriate category based on user preferences and context
+        category = context.get("category")
+        if not category or category not in preferred_categories:
+            # Pick random preferred category
+            category = random.choice(preferred_categories)
+            
+        # Get degradation terms for this category
+        degradation_terms = self.degradation_types.get(category, [])
+        if not degradation_terms:
+            return {"success": False, "message": "No degradation terms available"}
+            
+        # Select term based on intensity
+        if intensity < 0.4:  # Low intensity
+            term = random.choice(degradation_terms[:1]) # Use milder terms
+        elif intensity < 0.7:  # Medium
+            term = random.choice(degradation_terms[:2])
+        else:  # High intensity
+            term = random.choice(degradation_terms)
+            
+        # Generate degradation text with proper emotional tone
+        # Integrate with sadistic response system if available
+        if self.sadistic_response_system:
+            if intensity > 0.7:
+                template_id = "moderate_degradation"
+            else:
+                template_id = "mild_degradation"
+                
+            # Get template and insert our term
+            templates = self.sadistic_response_system.response_templates.get(template_id)
+            if templates and templates.templates:
+                template = random.choice(templates.templates)
+                degradation_text = template.replace("pathetic", term)
+            else:
+                degradation_text = f"You're such a {term} thing."
+        else:
+            degradation_text = f"You're such a {term} thing."
+            
+        return {
+            "success": True,
+            "category": category,
+            "term": term,
+            "degradation_text": degradation_text,
+            "intensity": intensity
+        }
+        
+    async def set_user_preferences(self, user_id, preferred_categories):
+        """Sets a user's preferred degradation categories."""
+        valid_categories = [c for c in preferred_categories if c in self.degradation_types]
+        if not valid_categories:
+            return {"success": False, "message": "No valid categories provided"}
+            
+        self.user_preferences[user_id] = valid_categories
+        return {
+            "success": True,
+            "user_id": user_id,
+            "preferred_categories": valid_categories
+        }
