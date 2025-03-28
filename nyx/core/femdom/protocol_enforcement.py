@@ -666,7 +666,7 @@ class HonorificsEnforcement:
         # Check for presence of required terms
         has_honorific = any(honorific.lower() in message.lower() for honorific in user_honorifics)
         
-        # Don't check very short messages or status updates
+        # Don't check very short messages or commands
         if len(message.split()) < 4 or message.startswith("/"):
             return {"compliant": True, "violation": None}
             
