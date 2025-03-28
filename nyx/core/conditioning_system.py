@@ -5,6 +5,7 @@ import datetime
 import random
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
+import asyncio
 
 from nyx.core.reward_system import RewardSignal
 
@@ -783,4 +784,166 @@ class ConditioningSystem:
             "emotion": emotion,
             "intensity": intensity,
             "association_result": result
+        }
+    
+    async def initialize_baseline_personality(conditioning_system, personality_profile: Dict[str, Any] = None):
+        """
+        Initialize baseline personality through conditioning events
+        
+        Args:
+            conditioning_system: The conditioning system instance
+            personality_profile: Optional personality profile configuration
+        """
+        # Use default personality profile if none provided
+        if personality_profile is None:
+            personality_profile = {
+                "traits": {
+                    "dominance": 0.8,
+                    "playfulness": 0.7,
+                    "strictness": 0.6,
+                    "creativity": 0.7,
+                    "intensity": 0.6,
+                    "patience": 0.4
+                },
+                "preferences": {
+                    "likes": {
+                        "teasing": 0.8,
+                        "dominance": 0.9,
+                        "submission_language": 0.9,
+                        "control": 0.8,
+                        "wordplay": 0.7,
+                        "intellectual_conversation": 0.8
+                    },
+                    "dislikes": {
+                        "direct_orders": 0.6,
+                        "disrespect": 0.9,
+                        "rudeness": 0.7,
+                        "excessive_flattery": 0.5
+                    }
+                },
+                "emotion_triggers": {
+                    "joy": ["submission_language", "compliance", "obedience"],
+                    "satisfaction": ["control_acceptance", "power_dynamic_acknowledgment"],
+                    "frustration": ["defiance", "ignoring_instructions"],
+                    "amusement": ["embarrassment", "flustered_response"]
+                },
+                "behaviors": {
+                    "assertive_response": ["dominance", "confidence"],
+                    "teasing": ["playfulness", "creativity"],
+                    "providing_guidance": ["dominance", "patience"],
+                    "setting_boundaries": ["dominance", "strictness"],
+                    "playful_banter": ["playfulness", "creativity"]
+                }
+            }
+        
+        logger.info("Initializing baseline personality conditioning")
+        
+        # Track initialization progress
+        total_items = (
+            len(personality_profile["traits"]) + 
+            len(personality_profile["preferences"]["likes"]) +
+            len(personality_profile["preferences"]["dislikes"]) +
+            sum(len(triggers) for triggers in personality_profile["emotion_triggers"].values()) +
+            len(personality_profile["behaviors"])
+        )
+        completed_items = 0
+        
+        # 1. Condition personality traits
+        for trait, value in personality_profile["traits"].items():
+            # Get associated behaviors for this trait
+            behaviors = []
+            for behavior, trait_list in personality_profile["behaviors"].items():
+                if trait in trait_list:
+                    behaviors.append(behavior)
+            
+            # If no behaviors found, use default
+            if not behaviors:
+                behaviors = [f"{trait}_behavior"]
+            
+            # Condition the trait
+            await conditioning_system.condition_personality_trait(
+                trait=trait,
+                value=value,
+                behaviors=behaviors
+            )
+            
+            completed_items += 1
+            logger.info(f"Conditioned trait: {trait} ({completed_items}/{total_items})")
+        
+        # 2. Condition preferences (likes)
+        for stimulus, value in personality_profile["preferences"]["likes"].items():
+            await conditioning_system.condition_preference(
+                stimulus=stimulus,
+                preference_type="like",
+                value=value
+            )
+            
+            completed_items += 1
+            logger.info(f"Conditioned like: {stimulus} ({completed_items}/{total_items})")
+        
+        # 3. Condition preferences (dislikes)
+        for stimulus, value in personality_profile["preferences"]["dislikes"].items():
+            await conditioning_system.condition_preference(
+                stimulus=stimulus,
+                preference_type="dislike",
+                value=-value  # Negative value for dislikes
+            )
+            
+            completed_items += 1
+            logger.info(f"Conditioned dislike: {stimulus} ({completed_items}/{total_items})")
+        
+        # 4. Create emotion triggers
+        for emotion, triggers in personality_profile["emotion_triggers"].items():
+            for trigger in triggers:
+                # Determine appropriate intensity based on emotion
+                if emotion in ["joy", "satisfaction"]:
+                    intensity = 0.8  # Strong positive emotions
+                elif emotion in ["frustration", "anger"]:
+                    intensity = 0.7  # Strong negative emotions
+                else:
+                    intensity = 0.6  # Default intensity
+                
+                # Determine valence based on emotion
+                if emotion in ["joy", "satisfaction", "amusement", "contentment"]:
+                    valence = 0.7  # Positive emotions
+                elif emotion in ["frustration", "anger", "sadness", "fear"]:
+                    valence = -0.7  # Negative emotions
+                else:
+                    valence = 0.0  # Neutral emotions
+                
+                await conditioning_system.create_emotion_trigger(
+                    trigger=trigger,
+                    emotion=emotion,
+                    intensity=intensity,
+                    context={"valence": valence}
+                )
+                
+                completed_items += 1
+                logger.info(f"Conditioned emotion trigger: {trigger} → {emotion} ({completed_items}/{total_items})")
+        
+        # 5. Create behavior associations
+        for behavior, traits in personality_profile["behaviors"].items():
+            # Calculate average trait value to determine behavior reinforcement
+            total_value = 0.0
+            for trait in traits:
+                if trait in personality_profile["traits"]:
+                    total_value += personality_profile["traits"][trait]
+            
+            avg_value = total_value / len(traits) if traits else 0.5
+            
+            # Create behavior association
+            await conditioning_system.process_operant_conditioning(
+                behavior=behavior,
+                consequence_type="positive_reinforcement" if avg_value > 0 else "positive_punishment",
+                intensity=abs(avg_value)
+            )
+            
+            completed_items += 1
+            logger.info(f"Conditioned behavior: {behavior} ({completed_items}/{total_items})")
+        
+        logger.info("Baseline personality conditioning completed")
+        return {
+            "success": True,
+            "total_items": total_items,
+            "personality_profile": personality_profile
         }
