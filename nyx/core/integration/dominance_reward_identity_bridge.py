@@ -48,7 +48,7 @@ class DominanceRewardIdentityBridge:
         }
         
         # Identity integration strength
-        self.identity_impact_factor = 0.4  # How strongly dominance successes impact identity
+        self.identity_impact_factor = 0.7  # How strongly dominance successes impact identity
         
         # Integration event subscriptions
         self._subscribed = False
