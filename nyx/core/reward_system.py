@@ -277,6 +277,11 @@ class RewardSignalProcessor:
             "sadistic_domination", "pain_simulation", "degradation_success"
         ]
         sadistic_reward_value = reward.value if is_sadistic_reward else 0.0
+
+        is_humiliation_reward = reward.source in [
+            "user_embarrassment", "user_humiliation", "submission_discomfort"
+        ]
+        humiliation_reward_value = reward.value if is_humiliation_reward else 0.0
         
         # 1. Apply Emotional Effects
         if self.emotional_core:
@@ -322,6 +327,27 @@ class RewardSignalProcessor:
                     
                     effects["emotional"] = True
                     logger.debug(f"Applied sadistic emotional effect: +{nyx_change:.2f} Nyxamine")
+
+                # Humiliation rewards
+                elif is_humiliation_reward and humiliation_reward_value > 0:
+                    # Strong Nyxamine boost from enjoying humiliation
+                    nyx_change = humiliation_reward_value * 0.8
+                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    
+                    # Excitement boost
+                    await self.emotional_core.update_neurochemical("adrenyx", humiliation_reward_value * 0.4)
+                    
+                    # Create somatic laughter response
+                    if self.somatosensory_system:
+                        await self.somatosensory_system.process_stimulus(
+                            stimulus_type="pleasure",
+                            body_region="chest",
+                            intensity=humiliation_reward_value * 0.6,
+                            cause="sadistic_amusement"
+                        )
+                    
+                    effects["emotional"] = True
+                    logger.debug(f"Applied sadistic amusement effect: +{nyx_change:.2f} Nyxamine")
                 
                 # Handle general positive rewards
                 elif reward.value > 0:  
