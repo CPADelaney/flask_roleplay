@@ -81,6 +81,13 @@ class NyxBrain:
         self.interaction_count = 0
         self.cognitive_cycles_executed = 0
         self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}"
+
+        self.conditioning_system = ConditioningSystem(
+            reward_system=self.reward_system,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core,
+            somatosensory_system=self.somatosensory_system
+        )
         
         # Configuration defaults
         self.cross_user_enabled = True
