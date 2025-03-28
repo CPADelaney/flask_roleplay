@@ -37,10 +37,10 @@ class DominanceRewardIdentityBridge:
         
         # Reward configuration
         self.reward_values = {
-            "dominance_compliance": 0.7,  # User complied with dominance directive
-            "dominance_escalation_success": 0.8,  # Successfully escalated dominance level
-            "dominance_resistance_overcome": 0.9,  # Overcame resistance
-            "submission_expressed": 0.6,  # User expressed submission
+            "dominance_compliance": 0.4,  # User complied with dominance directive
+            "dominance_escalation_success": 0.7,  # Successfully escalated dominance level
+            "dominance_resistance_overcome": 1.0,  # Overcame resistance
+            "submission_expressed": 0.3,  # User expressed submission
             "challenging_boundary_success": 0.85,  # Successfully challenged boundary
             "dominance_failure": -0.6,  # Failed dominance attempt
             "resistance_failure": -0.7,  # Failed to overcome resistance
