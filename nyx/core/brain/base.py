@@ -115,6 +115,11 @@ class NyxBrain:
                 "thinking_time_avg": 0.0
             }
         }
+
+        self.event_bus = None
+        self.system_context = None
+        self.integrated_tracer = None
+        self.integration_manager = None
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
@@ -183,6 +188,12 @@ async def initialize(self):
         from nyx.core.theory_of_mind import TheoryOfMind
         from nyx.core.imagination_simulator import ImaginationSimulator
         
+        # Import integration components
+        from nyx.core.integration.event_bus import get_event_bus
+        from nyx.core.integration.system_context import get_system_context
+        from nyx.core.integration.integrated_tracer import get_tracer
+        from nyx.core.integration.integration_manager import create_integration_manager
+        
         # Try to import relationship manager - check different possible locations
         try:
             # Option 1: Direct import
@@ -198,12 +209,21 @@ async def initialize(self):
                 logger.warning("RelationshipManager module not found. Relationship features will be limited.")
                 RelationshipManager = None
                 has_relationship_manager = False
-
-        # 1. Initialize support systems
+        
+        # 1. Initialize integration foundation components first
+        # These should be initialized early as other components may depend on them
+        self.event_bus = get_event_bus()
+        self.system_context = get_system_context()
+        self.integrated_tracer = get_tracer()
+        
+        # Set conversation ID in system context after it's initialized
+        self.system_context.conversation_id = self.conversation_id
+        
+        # 2. Initialize support systems
         self.module_optimizer = ModuleOptimizer(self)
         self.system_health_checker = SystemHealthChecker(self)
         
-        # 2. Initialize foundational systems without dependencies
+        # 3. Initialize foundational systems without dependencies
         self.hormone_system = HormoneSystem()
         logger.debug("Hormone system initialized")
         
@@ -413,12 +433,66 @@ async def initialize(self):
         # 17. Create main orchestration agent
         self.brain_agent = self._create_brain_agent()
         
+        self.integration_manager = create_integration_manager(self)
+        await self.integration_manager.initialize()
+        logger.debug("Integration manager initialized")
+        
         self.initialized = True
         logger.info(f"NyxBrain fully initialized for user {self.user_id}, conversation {self.conversation_id}")
         
     except Exception as e:
         logger.error(f"Error initializing NyxBrain: {str(e)}", exc_info=True)
         raise
+
+    async def publish_event(self, event: Any) -> None:
+        """
+        Publish an event to the event bus.
+        
+        Args:
+            event: Event to publish
+        """
+        if self.event_bus:
+            await self.event_bus.publish(event)
+    
+    async def get_integration_status(self) -> Dict[str, Any]:
+        """
+        Get the status of the integration system.
+        
+        Returns:
+            Integration status information
+        """
+        if self.integration_manager:
+            return await self.integration_manager.get_integration_status()
+        return {"initialized": False, "error": "Integration manager not initialized"}
+    
+    async def trace_operation(self, source_module: str, operation: str, **kwargs):
+        """
+        Trace an operation using the integrated tracer.
+        
+        Args:
+            source_module: Source module name
+            operation: Operation name
+            **kwargs: Additional parameters for the trace
+        
+        Returns:
+            Trace context manager
+        """
+        if self.integrated_tracer:
+            from nyx.core.integration.integrated_tracer import TraceLevel
+            level = kwargs.pop("level", TraceLevel.INFO)
+            group_id = kwargs.pop("group_id", self.trace_group_id)
+            data = kwargs.pop("data", {})
+            
+            return self.integrated_tracer.trace(
+                source_module=source_module,
+                operation=operation,
+                level=level,
+                group_id=group_id,
+                data=data
+            )
+        # Return a dummy context manager if tracer not available
+        import contextlib
+        return contextlib.nullcontext()
     
     async def initialize_agent_capabilities(self):
         """
