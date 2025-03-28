@@ -252,7 +252,7 @@ class IdentityEvolutionSystem:
         }
 
         # Initial identity traits
-        self.identity_traits = {
+        self. = {
             "dominance": {
                 "name": "dominance",
                 "value": 0.8,
@@ -295,8 +295,8 @@ class IdentityEvolutionSystem:
             },
             "patience": {
                 "name": "patience",
-                "value": 0.4,
-                "stability": 0.6,
+                "value": 0.8,
+                "stability": 0.8,
                 "neurochemical_map": {
                     "seranix": 0.4,    # Patience increases seranix baseline
                     "cortanyx": -0.3   # Patience reduces cortanyx baseline
@@ -325,8 +325,8 @@ class IdentityEvolutionSystem:
             },
             "psychological_maturity": {
                 "name": "psychological_maturity",
-                "value": 0.3,  # Start relatively low
-                "stability": 0.9,  # Very stable, changes slowly
+                "value": 0.5,  # Start relatively low
+                "stability": 0.7,  # Very stable, changes slowly
                 "neurochemical_map": {
                     "seranix": 0.4,     # Maturity increases seranix baseline
                     "cortanyx": -0.3    # Maturity decreases cortanyx baseline
@@ -352,6 +352,17 @@ class IdentityEvolutionSystem:
                     "nyxamine": 0.6,    # Strong pleasure from witnessing humiliation
                     "adrenyx": 0.3,     # Excitement from causing discomfort
                     "oxynixin": -0.4    # Reduced empathy
+                },
+                "evolution_history": []
+            },
+            "strategic": {
+                "name": "strategic",
+                "value": 0.8,  
+                "stability": 0.8, 
+                "neurochemical_map": {
+                    "nyxamine": 0.3,   
+                    "cortanyx": -0.2,   
+                    "adrenyx": 0.2    
                 },
                 "evolution_history": []
             }
