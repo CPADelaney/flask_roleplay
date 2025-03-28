@@ -519,6 +519,7 @@ class TheoryOfMind:
                 "message": f"Merged mental state models from '{source_id}' to '{target_id}'",
                 "merged_model": target.model_dump()
             }
+            
 @function_tool
 async def detect_humiliation_signals(self, text: str) -> Dict[str, Any]:
     """Detect signals of humiliation, embarrassment, or discomfort in user text."""
