@@ -237,6 +237,62 @@ class RewardSignalProcessor:
         await self.update_hormone(ctx, "nyxamine", nyxamine_reduction, source=f"{gratification_type}_refractory")
         await self.update_hormone(ctx, "seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
         await self.update_hormone(ctx, "oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
+
+    async def process_conditioning_reward(self, conditioning_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process rewards generated from conditioning events
+        
+        Args:
+            conditioning_result: Result from conditioning process
+            
+        Returns:
+            Processing results
+        """
+        # Extract data from conditioning result
+        association_key = conditioning_result.get("association_key", "unknown")
+        association_type = conditioning_result.get("type", "unknown")
+        is_reinforcement = conditioning_result.get("is_reinforcement", True)
+        is_positive = conditioning_result.get("is_positive", True)
+        intensity = min(1.0, max(0.0, conditioning_result.get("new_strength", 0.5)))
+        
+        # Calculate reward value based on conditioning results
+        reward_value = 0.0
+        
+        if association_type == "new_association":
+            # New associations provide positive reward (learning reward)
+            reward_value = 0.3 + (intensity * 0.3)
+        elif association_type == "reinforcement" or association_type == "update":
+            # Reinforcement effectiveness depends on the type
+            if is_reinforcement:
+                if is_positive:
+                    # Positive reinforcement (adding something good)
+                    reward_value = 0.4 + (intensity * 0.4)
+                else:
+                    # Negative reinforcement (removing something bad)
+                    reward_value = 0.3 + (intensity * 0.3)
+            else:
+                if is_positive:
+                    # Positive punishment (adding something bad)
+                    reward_value = -0.3 - (intensity * 0.3)
+                else:
+                    # Negative punishment (removing something good)
+                    reward_value = -0.2 - (intensity * 0.2)
+        
+        # Create a reward signal
+        reward_signal = RewardSignal(
+            value=reward_value,
+            source="conditioning_system",
+            context={
+                "association_key": association_key,
+                "association_type": association_type,
+                "is_reinforcement": is_reinforcement,
+                "is_positive": is_positive,
+                "intensity": intensity
+            }
+        )
+        
+        # Process the reward signal
+        return await self.process_reward_signal(reward_signal)
     
     def calculate_submission_value(self, submission_type, was_initially_resistant=False):
         """Calculate base reward value for different submission types."""
