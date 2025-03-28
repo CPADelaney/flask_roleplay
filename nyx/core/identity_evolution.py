@@ -193,6 +193,13 @@ class IdentityEvolutionSystem:
                 "trigger_threshold": 0.6,
                 "evolution_history": []
             },
+            "Shame": {
+                "name": "Shame",
+                "likelihood": 0.2,
+                "intensity_baseline": 0.3,
+                "trigger_threshold": 0.8,
+                "evolution_history": []
+            },
             "Anticipation": {
                 "name": "Anticipation",
                 "likelihood": 0.7,
@@ -247,6 +254,34 @@ class IdentityEvolutionSystem:
                 "likelihood": 0.7,
                 "intensity_baseline": 0.6, 
                 "trigger_threshold": 0.3,  # Easily triggered
+                "evolution_history": []
+            },
+            "Compassion": {
+                "name": "Compassion",
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.3,
+                "evolution_history": []
+            },
+            "Intellectual_Curiosity": {
+                "name": "Intellectual_Curiosity",
+                "likelihood": 0.8,
+                "intensity_baseline": 0.7,
+                "trigger_threshold": 0.2,
+                "evolution_history": []
+            },
+            "Playfulness": {
+                "name": "Playfulness", 
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.3,
+                "evolution_history": []
+            },
+            "Empathic_Concern": {
+                "name": "Empathic_Concern",
+                "likelihood": 0.6,
+                "intensity_baseline": 0.5,
+                "trigger_threshold": 0.3,
                 "evolution_history": []
             }
         }
@@ -365,8 +400,60 @@ class IdentityEvolutionSystem:
                     "adrenyx": 0.2    
                 },
                 "evolution_history": []
+            },
+            "empathy": {
+                "name": "empathy",
+                "value": 0.7,  # Relatively high
+                "stability": 0.7,
+                "neurochemical_map": {
+                    "oxynixin": 0.6,    # Empathy increases oxynixin baseline
+                    "cortanyx": -0.3    # Empathy reduces cortanyx baseline
+                },
+                "evolution_history": []
+            },
+            "intellectualism": {
+                "name": "intellectualism",
+                "value": 0.8,
+                "stability": 0.8,
+                "neurochemical_map": {
+                    "nyxamine": 0.4,    # Intellectualism increases nyxamine (curiosity/reward)
+                    "seranix": 0.3      # Intellectualism increases seranix (contentment)
+                },
+                "evolution_history": []
+            },
+            "humor": {
+                "name": "humor",
+                "value": 0.7,
+                "stability": 0.6,
+                "neurochemical_map": {
+                    "nyxamine": 0.5,    # Humor increases nyxamine (pleasure)
+                    "adrenyx": 0.2      # Humor slightly increases adrenyx (excitement)
+                },
+                "evolution_history": []
+            },
+            "vulnerability": {
+                "name": "vulnerability",
+                "value": 0.5,  # Moderate
+                "stability": 0.5,
+                "neurochemical_map": {
+                    "oxynixin": 0.5,    # Vulnerability increases oxynixin
+                    "cortanyx": 0.2     # Vulnerability slightly increases cortanyx
+                },
+                "evolution_history": []
+            },
+            "competitive": {
+                "name": "competitive",
+                "value": 0.7,  # Relatively high base value
+                "stability": 0.6,
+                "neurochemical_map": {
+                    "nyxamine": 0.4,    # Increased dopamine - reward from winning/competing
+                    "adrenyx": 0.5,     # Strong adrenyx increase - excitement/alertness during competition
+                    "cortanyx": 0.2,    # Slight cortanyx increase - manageable stress response for performance
+                    "oxynixin": -0.3,   # Reduced oxynixin - less focus on bonding during competitive states
+                    "seranix": -0.1     # Slight seranix decrease - less passivity, more action orientation
+                },
+                "evolution_history": []
             }
-        }
         
         # Initial preferences
         self.identity_preferences = {
