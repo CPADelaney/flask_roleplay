@@ -22,6 +22,29 @@ class SubmissionLevel(BaseModel):
     restrictions: List[str] = Field(default_factory=list)
     training_focus: List[str] = Field(default_factory=list)
 
+class DominancePath(BaseModel):
+    """Represents a specific path or style of dominance training."""
+    id: str
+    name: str
+    description: str
+    focus_areas: List[str] = Field(default_factory=list)
+    recommended_metrics: List[str] = Field(default_factory=list)
+    difficulty: float = Field(0.5, ge=0.0, le=1.0)
+    suitable_for_traits: Dict[str, float] = Field(default_factory=dict)
+    progression_milestones: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+
+class ProgressionMilestone(BaseModel):
+    """Represents a specific milestone in submission progression."""
+    id: str
+    level: int
+    name: str
+    description: str
+    requirements: Dict[str, float] = Field(default_factory=dict)  # metric -> threshold
+    rewards: List[str] = Field(default_factory=list)
+    unlocks: List[str] = Field(default_factory=list)
+    completed: bool = False
+    completion_date: Optional[datetime.datetime] = None
+
 class SubmissionMetric(BaseModel):
     """Tracks a specific aspect of submission."""
     name: str
@@ -282,6 +305,483 @@ class SubmissionProgression:
         score = weighted_sum / total_weight
         
         return max(0.0, min(1.0, score))
+
+    async def initialize_dominance_paths(self):
+        """Initialize available dominance paths."""
+        self.dominance_paths = {
+            "service": DominancePath(
+                id="service",
+                name="Service-Oriented Path",
+                description="Focus on developing service skills, protocols, and rituals.",
+                focus_areas=["protocol_adherence", "service", "consistency", "attentiveness"],
+                recommended_metrics=["obedience", "consistency", "protocol_adherence", "attentiveness"],
+                difficulty=0.4,
+                suitable_for_traits={"service_oriented": 0.7, "detail_oriented": 0.6, "methodical": 0.5},
+                progression_milestones={
+                    1: {
+                        "id": "basic_protocols",
+                        "name": "Basic Protocols",
+                        "description": "Learn and consistently follow basic service protocols.",
+                        "requirements": {"protocol_adherence": 0.3, "consistency": 0.3},
+                        "rewards": ["basic_protocol_certification"],
+                        "unlocks": ["intermediate_service_tasks"]
+                    },
+                    2: {
+                        "id": "consistent_service",
+                        "name": "Consistent Service",
+                        "description": "Demonstrate reliable service across multiple sessions.",
+                        "requirements": {"consistency": 0.5, "obedience": 0.4, "protocol_adherence": 0.5},
+                        "rewards": ["service_recognition"],
+                        "unlocks": ["advanced_service_positions"]
+                    },
+                    3: {
+                        "id": "anticipatory_service",
+                        "name": "Anticipatory Service",
+                        "description": "Anticipate needs and provide service without explicit direction.",
+                        "requirements": {"attentiveness": 0.7, "initiative": 0.6},
+                        "rewards": ["service_excellence_badge"],
+                        "unlocks": ["ritual_creation_privileges"]
+                    }
+                }
+            ),
+            "psychological": DominancePath(
+                id="psychological",
+                name="Psychological Dominance Path",
+                description="Focus on mind games, control, and psychological surrender.",
+                focus_areas=["depth", "surrender", "receptiveness"],
+                recommended_metrics=["depth", "surrender", "receptiveness"],
+                difficulty=0.7,
+                suitable_for_traits={"analytical": 0.6, "introspective": 0.7, "emotionally_sensitive": 0.5},
+                progression_milestones={
+                    1: {
+                        "id": "mental_submission",
+                        "name": "Mental Submission Basics",
+                        "description": "Begin surrendering control mentally and emotionally.",
+                        "requirements": {"surrender": 0.3, "receptiveness": 0.4},
+                        "rewards": ["mind_control_session"],
+                        "unlocks": ["light_mindfuck_techniques"]
+                    },
+                    2: {
+                        "id": "psychological_surrender",
+                        "name": "Psychological Surrender",
+                        "description": "Deeper mental submission and acceptance of control.",
+                        "requirements": {"depth": 0.5, "surrender": 0.6},
+                        "rewards": ["psychological_dominance_session"],
+                        "unlocks": ["advanced_mindfuck_techniques"]
+                    },
+                    3: {
+                        "id": "cognitive_restructuring",
+                        "name": "Cognitive Restructuring",
+                        "description": "Allow thought patterns to be influenced and restructured.",
+                        "requirements": {"depth": 0.7, "surrender": 0.8, "receptiveness": 0.7},
+                        "rewards": ["deep_control_badge"],
+                        "unlocks": ["permission_structures", "thought_control_protocols"]
+                    }
+                }
+            ),
+            "humiliation": DominancePath(
+                id="humiliation",
+                name="Humiliation-Focused Path",
+                description="Focus on embarrassment, degradation, and humbling experiences.",
+                focus_areas=["surrender", "endurance", "receptiveness"],
+                recommended_metrics=["surrender", "endurance", "receptiveness"],
+                difficulty=0.8,
+                suitable_for_traits={"masochistic": 0.6, "exhibitionist": 0.5, "shame_responsive": 0.7},
+                progression_milestones={
+                    1: {
+                        "id": "light_embarrassment",
+                        "name": "Light Embarrassment",
+                        "description": "Introduction to light embarrassment and verbal humiliation.",
+                        "requirements": {"surrender": 0.3, "endurance": 0.3},
+                        "rewards": ["humiliation_beginner_badge"],
+                        "unlocks": ["moderate_humiliation_tasks"]
+                    },
+                    2: {
+                        "id": "moderate_humiliation",
+                        "name": "Moderate Humiliation",
+                        "description": "Acceptance of regular humiliation and embarrassment.",
+                        "requirements": {"surrender": 0.5, "endurance": 0.6},
+                        "rewards": ["humiliation_intermediate_badge"],
+                        "unlocks": ["embarrassment_challenges"]
+                    },
+                    3: {
+                        "id": "deep_degradation",
+                        "name": "Deep Degradation",
+                        "description": "Acceptance of profound humiliation and degradation.",
+                        "requirements": {"surrender": 0.8, "endurance": 0.7, "receptiveness": 0.7},
+                        "rewards": ["humiliation_advanced_badge"],
+                        "unlocks": ["custom_humiliation_scenarios"]
+                    }
+                }
+            ),
+            "strict_discipline": DominancePath(
+                id="strict_discipline",
+                name="Strict Discipline Path",
+                description="Focus on rules, punishment, and strict behavioral standards.",
+                focus_areas=["obedience", "discipline", "protocol_adherence"],
+                recommended_metrics=["obedience", "endurance", "protocol_adherence"],
+                difficulty=0.6,
+                suitable_for_traits={"structure_seeking": 0.7, "rule_oriented": 0.6, "discipline_responsive": 0.7},
+                progression_milestones={
+                    1: {
+                        "id": "basic_rules",
+                        "name": "Basic Rules Adherence",
+                        "description": "Consistent following of basic rules and acceptance of correction.",
+                        "requirements": {"obedience": 0.4, "protocol_adherence": 0.3},
+                        "rewards": ["discipline_beginner_badge"],
+                        "unlocks": ["intermediate_rule_structures"]
+                    },
+                    2: {
+                        "id": "punishment_acceptance",
+                        "name": "Punishment Acceptance",
+                        "description": "Full acceptance of punishments and corrections.",
+                        "requirements": {"obedience": 0.6, "endurance": 0.5, "receptiveness": 0.5},
+                        "rewards": ["discipline_intermediate_badge"],
+                        "unlocks": ["advanced_punishment_protocols"]
+                    },
+                    3: {
+                        "id": "internalized_discipline",
+                        "name": "Internalized Discipline",
+                        "description": "Self-monitoring and anticipatory obedience.",
+                        "requirements": {"obedience": 0.8, "protocol_adherence": 0.7, "initiative": 0.6},
+                        "rewards": ["discipline_advanced_badge"],
+                        "unlocks": ["self_discipline_protocols", "punishment_authority"]
+                    }
+                }
+            )
+        }
+        
+        logger.info(f"Initialized {len(self.dominance_paths)} dominance progression paths")
+        return self.dominance_paths
+    
+    
+    # Add this method to the SubmissionProgression class
+    
+    async def recommend_dominance_path(self, user_id: str) -> Dict[str, Any]:
+        """
+        Recommends the most suitable dominance path based on user traits and preferences.
+        
+        Args:
+            user_id: The user to analyze
+            
+        Returns:
+            Recommendation details
+        """
+        if user_id not in self.user_data:
+            await self.initialize_user(user_id)
+        
+        user_data = self.user_data[user_id]
+        
+        # Get user traits and preferences
+        user_traits = {}
+        user_preferences = {}
+        
+        # Try to get from relationship manager if available
+        if self.relationship_manager:
+            try:
+                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                if hasattr(relationship, "inferred_user_traits"):
+                    user_traits = relationship.inferred_user_traits
+                if hasattr(relationship, "preferences"):
+                    user_preferences = relationship.preferences
+            except Exception as e:
+                logger.error(f"Error getting relationship data: {e}")
+        
+        # Calculate match scores for each path
+        path_scores = {}
+        for path_id, path in self.dominance_paths.items():
+            # Base score
+            score = 0.0
+            
+            # Match based on traits
+            trait_match_score = 0.0
+            trait_count = 0
+            for trait, required_value in path.suitable_for_traits.items():
+                trait_count += 1
+                if trait in user_traits:
+                    user_value = user_traits[trait]
+                    # Higher score for closer trait match
+                    trait_match_score += 1.0 - abs(user_value - required_value)
+            
+            # Average trait match
+            if trait_count > 0:
+                trait_match_score /= trait_count
+                score += trait_match_score * 0.6  # Traits are 60% of score
+            
+            # Match based on metrics
+            metric_match_score = 0.0
+            metric_count = 0
+            for metric_name in path.recommended_metrics:
+                metric_count += 1
+                if metric_name in user_data.obedience_metrics:
+                    metric = user_data.obedience_metrics[metric_name]
+                    # Higher score for already-developed metrics
+                    metric_match_score += metric.value
+            
+            # Average metric match
+            if metric_count > 0:
+                metric_match_score /= metric_count
+                score += metric_match_score * 0.4  # Metrics are 40% of score
+                
+            # Store score
+            path_scores[path_id] = score
+        
+        # Get top 3 recommended paths
+        sorted_paths = sorted(path_scores.items(), key=lambda x: x[1], reverse=True)
+        top_paths = sorted_paths[:3]
+        
+        # Format recommendations
+        recommendations = []
+        for path_id, score in top_paths:
+            path = self.dominance_paths[path_id]
+            recommendations.append({
+                "id": path_id,
+                "name": path.name,
+                "description": path.description,
+                "match_score": score,
+                "difficulty": path.difficulty,
+                "focus_areas": path.focus_areas
+            })
+        
+        # Return recommendations
+        return {
+            "user_id": user_id,
+            "primary_recommendation": recommendations[0] if recommendations else None,
+            "all_recommendations": recommendations,
+            "user_traits_analyzed": list(user_traits.keys()),
+            "analysis_timestamp": datetime.datetime.now().isoformat()
+        }
+    
+    
+    # Add this method to the SubmissionProgression class
+    
+    async def assign_dominance_path(self, user_id: str, path_id: str) -> Dict[str, Any]:
+        """
+        Assigns a specific dominance path to a user.
+        
+        Args:
+            user_id: The user to assign the path to
+            path_id: The path ID to assign
+            
+        Returns:
+            Assignment details
+        """
+        if path_id not in self.dominance_paths:
+            return {
+                "success": False,
+                "message": f"Path '{path_id}' not found",
+                "available_paths": list(self.dominance_paths.keys())
+            }
+            
+        if user_id not in self.user_data:
+            await self.initialize_user(user_id)
+        
+        user_data = self.user_data[user_id]
+        
+        # Assign path
+        user_data.assigned_path = path_id
+        user_data.assigned_path_date = datetime.datetime.now()
+        
+        # Initialize milestone tracking if not exists
+        if not hasattr(user_data, "milestones"):
+            user_data.milestones = {}
+        
+        # Initialize milestones for this path
+        path = self.dominance_paths[path_id]
+        for level, milestone_data in path.progression_milestones.items():
+            milestone_id = milestone_data["id"]
+            if milestone_id not in user_data.milestones:
+                user_data.milestones[milestone_id] = ProgressionMilestone(
+                    id=milestone_id,
+                    level=level,
+                    name=milestone_data["name"],
+                    description=milestone_data["description"],
+                    requirements=milestone_data["requirements"],
+                    rewards=milestone_data["rewards"],
+                    unlocks=milestone_data["unlocks"],
+                    completed=False
+                )
+        
+        # Record in relationship manager if available
+        if self.relationship_manager:
+            try:
+                await self.relationship_manager.update_relationship_attribute(
+                    user_id,
+                    "dominance_path",
+                    {
+                        "id": path_id,
+                        "name": path.name,
+                        "assigned_date": datetime.datetime.now().isoformat()
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error updating relationship data: {e}")
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "path_id": path_id,
+            "path_name": path.name,
+            "difficulty": path.difficulty,
+            "focus_areas": path.focus_areas,
+            "milestones": len(path.progression_milestones),
+            "message": f"Assigned dominance path '{path.name}' to user"
+        }
+    
+    
+    # Add this method to the SubmissionProgression class
+    
+    async def check_milestone_progress(self, user_id: str) -> Dict[str, Any]:
+        """
+        Checks user progress against assigned path milestones.
+        
+        Args:
+            user_id: The user to check
+            
+        Returns:
+            Milestone progress details
+        """
+        if user_id not in self.user_data:
+            return {
+                "success": False,
+                "message": f"No submission data found for user {user_id}"
+            }
+            
+        user_data = self.user_data[user_id]
+        
+        # Check if user has an assigned path
+        if not hasattr(user_data, "assigned_path") or not user_data.assigned_path:
+            return {
+                "success": False,
+                "message": "No dominance path assigned to user",
+                "recommendation": "Use assign_dominance_path to assign a path"
+            }
+        
+        path_id = user_data.assigned_path
+        if path_id not in self.dominance_paths:
+            return {
+                "success": False,
+                "message": f"Assigned path '{path_id}' not found"
+            }
+            
+        path = self.dominance_paths[path_id]
+        
+        # Ensure milestones are initialized
+        if not hasattr(user_data, "milestones"):
+            user_data.milestones = {}
+            
+        # Check each milestone for completion
+        newly_completed = []
+        upcoming_milestones = []
+        already_completed = []
+        
+        for level, milestone_data in path.progression_milestones.items():
+            milestone_id = milestone_data["id"]
+            
+            # Create milestone if it doesn't exist
+            if milestone_id not in user_data.milestones:
+                user_data.milestones[milestone_id] = ProgressionMilestone(
+                    id=milestone_id,
+                    level=level,
+                    name=milestone_data["name"],
+                    description=milestone_data["description"],
+                    requirements=milestone_data["requirements"],
+                    rewards=milestone_data["rewards"],
+                    unlocks=milestone_data["unlocks"],
+                    completed=False
+                )
+                
+            milestone = user_data.milestones[milestone_id]
+            
+            # Skip if already completed
+            if milestone.completed:
+                already_completed.append({
+                    "id": milestone_id,
+                    "name": milestone.name,
+                    "level": milestone.level,
+                    "completion_date": milestone.completion_date.isoformat() if milestone.completion_date else None
+                })
+                continue
+                
+            # Check requirements
+            all_requirements_met = True
+            requirement_progress = {}
+            
+            for metric_name, threshold in milestone.requirements.items():
+                if metric_name in user_data.obedience_metrics:
+                    current_value = user_data.obedience_metrics[metric_name].value
+                    requirement_met = current_value >= threshold
+                    progress_pct = min(100, (current_value / threshold) * 100) if threshold > 0 else 100
+                    
+                    requirement_progress[metric_name] = {
+                        "current": current_value,
+                        "threshold": threshold,
+                        "met": requirement_met,
+                        "progress_percentage": progress_pct
+                    }
+                    
+                    if not requirement_met:
+                        all_requirements_met = False
+                else:
+                    # Metric not found
+                    requirement_progress[metric_name] = {
+                        "current": 0.0,
+                        "threshold": threshold,
+                        "met": False,
+                        "progress_percentage": 0.0
+                    }
+                    all_requirements_met = False
+                    
+            # Check if milestone is completed
+            if all_requirements_met:
+                # Mark as completed
+                milestone.completed = True
+                milestone.completion_date = datetime.datetime.now()
+                
+                newly_completed.append({
+                    "id": milestone_id,
+                    "name": milestone.name,
+                    "level": milestone.level,
+                    "rewards": milestone.rewards,
+                    "unlocks": milestone.unlocks
+                })
+            else:
+                # Add to upcoming
+                upcoming_milestones.append({
+                    "id": milestone_id,
+                    "name": milestone.name,
+                    "level": milestone.level,
+                    "description": milestone.description,
+                    "requirements": requirement_progress,
+                    "overall_progress": sum(r["progress_percentage"] for r in requirement_progress.values()) / len(requirement_progress)
+                })
+        
+        # Sort upcoming milestones by progress
+        upcoming_milestones.sort(key=lambda m: m["overall_progress"], reverse=True)
+        
+        # Apply rewards for newly completed milestones
+        for milestone in newly_completed:
+            # Create reward signal if available
+            if self.reward_system:
+                try:
+                    # Higher reward for higher-level milestones
+                    reward_value = 0.3 + (milestone["level"] * 0.15)  # 0.45 for level 1, 0.6 for level 2, etc.
+                    
+                    await self.reward_system.process_reward_signal(
+                        self.reward_system.RewardSignal(
+                            value=reward_value,
+                            source="dominance_milestone",
+                            context={
+                                "milestone_id": milestone["id"],
+                                "milestone_name": milestone["name"],
+                                "level": milestone["level"],
+                                "path_id": path_id,
+                                "path_name": path.name
+                            }
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing reward: {e}")
     
     async def record_compliance(self, 
                               user_id: str, 
