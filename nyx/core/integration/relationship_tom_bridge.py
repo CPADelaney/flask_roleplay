@@ -184,6 +184,35 @@ class RelationshipTomBridge:
         except Exception as e:
             logger.error(f"Error synchronizing user models: {e}")
             return {"status": "error", "message": str(e)}
+
+    @trace_method(level=TraceLevel.INFO, group_id="RelationshipTom")
+    async def generate_relationship_reflection(self, 
+                                          user_id: str) -> Dict[str, Any]:
+        """
+        Generate a reflection on the relationship with a user.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Generated reflection
+        """
+        # Get the relationship reflection system from the brain
+        reflection_system = None
+        if hasattr(self.brain, "relationship_reflection_system"):
+            reflection_system = self.brain.relationship_reflection_system
+        
+        if not reflection_system:
+            return {"status": "error", "message": "Relationship reflection system not available"}
+        
+        # Generate the reflection
+        reflection_result = await reflection_system.generate_relationship_reflection(user_id)
+        
+        # If successful, trigger synchronization to make sure all systems are updated
+        if reflection_result.get("status") == "success":
+            await self.synchronize_user_models(user_id, force_sync=True)
+        
+        return reflection_result
     
     @trace_method(level=TraceLevel.INFO, group_id="RelationshipTom")
     async def process_user_memory(self, 
