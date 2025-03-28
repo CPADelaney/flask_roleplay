@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional, Set
 from nyx.core.integration.event_bus import Event, get_event_bus
 from nyx.core.integration.system_context import get_system_context
 from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel, trace_method
+from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,12 @@ def _setup_bridges(self):
                            ["action_selector", "reward_learning"])
         self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
                            ["action_selector", "need_goal_action", "prediction_imagination"])
+
+        self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
+                     ["event_bus", "memory_integration", "dynamic_attention"])
         
         logger.info(f"Set up {len(self.bridges)} integration bridges")
+        
     except Exception as e:
         logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
     
