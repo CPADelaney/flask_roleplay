@@ -124,7 +124,9 @@ class MoodManager:
                         "melatonyx": {"valence": 0.0, "arousal": -0.5, "control": -0.2}, # Melatonin -> very calming
                         "cortanyx": {"valence": -0.3, "arousal": 0.3, "control": -0.2},  # Cortisol -> negative, energizing, less control
                         "nyxamine": {"valence": 0.3, "arousal": 0.2, "control": 0.3},    # Dopamine -> positive, energizing, control
-                        "seranix": {"valence": 0.2, "arousal": -0.1, "control": 0.1}     # Serotonin -> positive, slightly calming
+                        "seranix": {"valence": 0.2, "arousal": -0.1, "control": 0.1},    # Serotonin -> positive, slightly calming
+                        "libidyx": {"valence": 0.1, "arousal": 0.5, "control": 0.2},     # Libido -> energizing, slight dominance
+                        "serenity_boost": {"valence": 0.3, "arousal": -0.6, "control": -0.1} # Post-gratification -> positive, very calming
                     }
                     
                     # Calculate hormone influence
