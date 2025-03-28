@@ -196,6 +196,13 @@ async def initialize(self):
         from nyx.core.mood_manager import MoodManager
         from nyx.core.theory_of_mind import TheoryOfMind
         from nyx.core.imagination_simulator import ImaginationSimulator
+        
+        # Import conditioning systems
+        from nyx.core.conditioning_config import ConditioningConfiguration
+        from nyx.core.conditioning_system import ConditioningSystem
+        from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
+        from nyx.core.input_processor import ConditionedInputProcessor  # Import input processor
+        
 
         from nyx.dev_log.storage import get_dev_log_storage
         self.dev_log_storage = get_dev_log_storage()
@@ -222,6 +229,7 @@ async def initialize(self):
                 logger.warning("RelationshipManager module not found. Relationship features will be limited.")
                 RelationshipManager = None
                 has_relationship_manager = False
+                
         
         # 1. Initialize integration foundation components first
         # These should be initialized early as other components may depend on them
@@ -235,6 +243,32 @@ async def initialize(self):
         # 2. Initialize support systems
         self.module_optimizer = ModuleOptimizer(self)
         self.system_health_checker = SystemHealthChecker(self)
+
+        self.conditioning_config = ConditioningConfiguration()
+        logger.debug("Conditioning configuration initialized")
+        
+        self.conditioning_system = ConditioningSystem(
+            reward_system=self.reward_system,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core,
+            somatosensory_system=self.digital_somatosensory_system
+        )
+        logger.debug("Conditioning system initialized")
+        
+        self.conditioning_maintenance = ConditioningMaintenanceSystem(
+            conditioning_system=self.conditioning_system,
+            reward_system=self.reward_system
+        )
+        await self.conditioning_maintenance.start_maintenance_scheduler()
+        logger.debug("Conditioning maintenance system initialized")
+        
+        # Initialize input processor after other conditioning systems
+        self.conditioned_input_processor = ConditionedInputProcessor(
+            conditioning_system=self.conditioning_system,
+            emotional_core=self.emotional_core,
+            somatosensory_system=self.digital_somatosensory_system
+        )
+        logger.debug("Conditioned input processor initialized")
         
         # 3. Initialize foundational systems without dependencies
         self.hormone_system = HormoneSystem()
@@ -304,6 +338,12 @@ async def initialize(self):
         )
         await self.digital_somatosensory_system.initialize()
         logger.debug("Digital somatosensory system initialized")
+
+        await ConditioningSystem.initialize_baseline_personality(
+            conditioning_system=self.conditioning_system,
+            personality_profile=self.conditioning_config.get_personality_profile().dict()
+        )
+        logger.debug("Baseline personality conditioning initialized")        
 
         # Initialize relationship manager if available
         self.relationship_manager = None
@@ -1229,25 +1269,98 @@ async def _register_processing_modules(self):
         Args:
             user_input: User's input text
             context: Additional context information
-            
+                
         Returns:
             Processing results
         """
         if not self.initialized:
             await self.initialize()
-
+    
         context = context or {}
         
         # Add current somatic state to context for processing
         if self.digital_somatosensory_system:
             context['somatic_state'] = await self.digital_somatosensory_system.get_body_state()
         
+        # Process input through conditioning system if available
+        conditioning_results = None
+        if self.conditioned_input_processor:
+            try:
+                conditioning_results = await self.process_conditioned_input(
+                    text=user_input,
+                    context=context
+                )
+                
+                # Add conditioning results to context
+                context['conditioning_results'] = conditioning_results
+            except Exception as e:
+                logger.error(f"Error in conditioned input processing: {e}")
+        
         # Use processing manager if available
         if self.processing_manager:
-            return await self.processing_manager.process_input(user_input, context)
+            processing_result = await self.processing_manager.process_input(user_input, context)
+            # Add conditioning results to processing result
+            if conditioning_results:
+                processing_result['conditioning_results'] = conditioning_results
+            return processing_result
         
         # Fallback to direct serial processing
-        return await self._process_input_serial(user_input, context)
+        result = await self._process_input_serial(user_input, context)
+        # Add conditioning results to processing result
+        if conditioning_results:
+            result['conditioning_results'] = conditioning_results
+        return result
+        async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+            """
+            Process input through conditioning system
+            
+            Args:
+                text: Input text
+                user_id: User ID for personalization (defaults to self.user_id if None)
+                context: Additional context information
+                
+            Returns:
+                Processing results
+            """
+            if not self.initialized:
+                await self.initialize()
+            
+            if not self.conditioned_input_processor:
+                return {"error": "Conditioned input processor not initialized"}
+            
+            # Convert user_id to string if needed
+            if user_id is None:
+                user_id = str(self.user_id)
+            elif isinstance(user_id, int):
+                user_id = str(user_id)
+            
+            return await self.conditioned_input_processor.process_input(
+                text=text,
+                user_id=user_id,
+                context=context
+            )
+
+    async def modify_response_with_conditioning(self, response_text: str, processing_results: Dict[str, Any]) -> str:
+        """
+        Modify response based on conditioning results
+        
+        Args:
+            response_text: Original response text
+            processing_results: Results from process_conditioned_input
+            
+        Returns:
+            Modified response text
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        if not self.conditioned_input_processor:
+            return response_text
+        
+        return await self.conditioned_input_processor.modify_response(
+            response_text=response_text,
+            input_processing_results=processing_results
+        )
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -1256,13 +1369,13 @@ async def _register_processing_modules(self):
         Args:
             user_input: User's input text
             context: Additional context information
-            
+                
         Returns:
             Response data
         """
         if not self.initialized:
             await self.initialize()
-
+    
         context = context or {}
         
         # Add current somatic/emotional state to context for response generation
@@ -1271,24 +1384,39 @@ async def _register_processing_modules(self):
         if self.emotional_core and hasattr(self.emotional_core, 'get_emotional_state'):
             context['emotional_state'] = self.emotional_core.get_emotional_state()
         
+        # Process the input first (includes conditioning processing)
+        processing_result = await self.process_input(user_input, context)
+        
         # Use processing manager if available
         if self.processing_manager:
-            # Process the input first
-            processing_result = await self.processing_manager.process_input(user_input, context)
-            
             # Generate response from the processing result
-            return await self.processing_manager.generate_response(user_input, processing_result, context)
+            response = await self.processing_manager.generate_response(user_input, processing_result, context)
+        else:
+            # Simple response generation fallback
+            response = {
+                "message": f"I've processed your input: {user_input[:30]}...",
+                "response_type": "basic",
+                "emotional_state": processing_result.get("emotional_state", {})
+            }
         
-        # Fallback - process input and generate simple response
-        processing_result = await self._process_input_serial(user_input, context)
+        # Apply conditioning modifications if available
+        if (self.conditioned_input_processor and 
+            'conditioning_results' in processing_result and 
+            'message' in response):
+            try:
+                modified_message = await self.modify_response_with_conditioning(
+                    response_text=response["message"],
+                    processing_results=processing_result["conditioning_results"]
+                )
+                
+                # Update response with modified message
+                response["message"] = modified_message
+                response["conditioning_applied"] = True
+            except Exception as e:
+                logger.error(f"Error applying conditioning to response: {e}")
         
-        # Simple response generation
-        return {
-            "message": f"I've processed your input: {user_input[:30]}...",
-            "response_type": "basic",
-            "emotional_state": processing_result.get("emotional_state", {})
-        }
-    
+        return response
+        
     async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Basic input processing fallback if no processing manager is available.
