@@ -9,6 +9,7 @@ from nyx.core.integration.event_bus import Event, get_event_bus
 from nyx.core.integration.system_context import get_system_context
 from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel, trace_method
 from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
+from nyx.core.relationship_reflection import RelationshipReflectionSystem
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,14 @@ def _setup_bridges(self):
 
         self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
                      ["event_bus", "memory_integration", "dynamic_attention"])
+
+        self.brain.relationship_reflection_system = RelationshipReflectionSystem(
+            relationship_manager=self.brain.relationship_manager,
+            theory_of_mind=self.brain.theory_of_mind,
+            memory_core=self.brain.memory_core,
+            identity_evolution=self.brain.identity_evolution,
+            hormone_system=self.brain.hormone_system if hasattr(self.brain, "hormone_system") else None
+        )
         
         logger.info(f"Set up {len(self.bridges)} integration bridges")
         
