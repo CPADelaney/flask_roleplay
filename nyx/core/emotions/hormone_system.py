@@ -1151,6 +1151,12 @@ class HormoneSystem:
             # This combination supports a contemplative melancholy
             await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
             await self.update_hormone(ctx, "cortanyx", 0.05, source="hormone_interaction")
+
+        if self.emotional_core and 'testoryx' in self.hormones:
+            testoryx_level = self.hormones['testoryx']['value']
+            if testoryx_level > 0.6:
+                nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
+                influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
         
         # Support for Nostalgia (temporal awareness + emotional memory)
         if (self.hormones["melatonyx"]["value"] > 0.4 and 
