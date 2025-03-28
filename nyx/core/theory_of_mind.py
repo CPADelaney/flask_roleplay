@@ -1005,6 +1005,7 @@ class SubspaceDetectionSystem:
             "indicators": subspace_indicators,
             "triggers": current_state["triggers"] if current_state["in_subspace"] else []
         }
+        
     
     def _detect_subspace_indicators(self, message: str) -> Dict[str, float]:
         """Simple subspace detection for fallback"""
@@ -1108,3 +1109,217 @@ class SubspaceDetectionSystem:
                 ],
                 "caution": "User may be highly suggestible and have altered perception"
             }
+class SubspaceDetectionExtension:
+    """Enhanced detection of subspace mental states."""
+    
+    def __init__(self, theory_of_mind=None, psychological_dominance=None):
+        self.theory_of_mind = theory_of_mind
+        self.psychological_dominance = psychological_dominance
+        self.user_states = {}
+        
+    async def detect_subspace(self, user_id: str, message: str) -> Dict[str, Any]:
+        """
+        Detect subspace indicators in user message and mental state.
+        
+        Args:
+            user_id: The user ID
+            message: User's message text
+            
+        Returns:
+            Subspace detection results
+        """
+        # Base indicators
+        indicators = {
+            "linguistic_patterns": {
+                "brevity": self._check_brevity(message),
+                "simplification": self._check_simplification(message),
+                "repetition": self._check_repetition(message),
+                "explicit_markers": self._check_explicit_markers(message)
+            }
+        }
+        
+        # Get mental state from Theory of Mind if available
+        mental_indicators = {}
+        if self.theory_of_mind:
+            try:
+                mental_state = await self.theory_of_mind.get_user_model(user_id)
+                if mental_state:
+                    mental_indicators = {
+                        "arousal": mental_state.get("arousal", 0.5),
+                        "valence": mental_state.get("valence", 0.0),
+                        "emotion": mental_state.get("inferred_emotion", "neutral"),
+                        "attention_focus": mental_state.get("attention_focus"),
+                        "perceived_trust": mental_state.get("perceived_trust", 0.5)
+                    }
+                    
+                    indicators["mental_state"] = mental_indicators
+            except Exception as e:
+                logger.error(f"Error getting mental state: {e}")
+        
+        # Get specialized subspace detection if available
+        specialized_detection = {}
+        if self.psychological_dominance and hasattr(self.psychological_dominance, "subspace_detection"):
+            try:
+                detection = await self.psychological_dominance.subspace_detection.analyze_message(user_id, message)
+                if detection:
+                    specialized_detection = {
+                        "in_subspace": detection.get("in_subspace", False),
+                        "depth": detection.get("depth", 0.0),
+                        "duration": detection.get("duration", 0),
+                        "triggers": detection.get("triggers", [])
+                    }
+                    
+                    indicators["specialized_detection"] = specialized_detection
+            except Exception as e:
+                logger.error(f"Error getting specialized subspace detection: {e}")
+        
+        # Combine all signals to assess subspace state
+        in_subspace = False
+        depth = 0.0
+        confidence = 0.0
+        
+        # From specialized detection (highest priority)
+        if specialized_detection:
+            in_subspace = specialized_detection.get("in_subspace", False)
+            depth = specialized_detection.get("depth", 0.0)
+            confidence = 0.8  # High confidence in specialized detection
+        
+        # From combined linguistic and mental indicators (if no specialized or as fallback)
+        elif indicators.get("linguistic_patterns") or indicators.get("mental_state"):
+            linguistic_score = (
+                indicators["linguistic_patterns"].get("brevity", 0.0) * 0.2 +
+                indicators["linguistic_patterns"].get("simplification", 0.0) * 0.3 +
+                indicators["linguistic_patterns"].get("repetition", 0.0) * 0.2 +
+                indicators["linguistic_patterns"].get("explicit_markers", 0.0) * 0.3
+            )
+            
+            mental_score = 0.0
+            if indicators.get("mental_state"):
+                arousal = indicators["mental_state"].get("arousal", 0.5)
+                valence = indicators["mental_state"].get("valence", 0.0)
+                emotion = indicators["mental_state"].get("emotion", "neutral")
+                
+                # Calculate mental score components
+                arousal_component = max(0.0, arousal - 0.5) * 2.0  # Scale 0-1
+                valence_component = max(0.0, valence) * 0.5  # Only positive valence contributes
+                
+                # Emotion factor
+                emotion_factor = 0.0
+                subspace_emotions = ["euphoric", "floating", "hazy", "surrendered", "submissive", "detached"]
+                if emotion in subspace_emotions:
+                    emotion_factor = 0.5
+                
+                mental_score = (arousal_component * 0.4) + (valence_component * 0.3) + (emotion_factor * 0.3)
+            
+            # Combine scores (weighted)
+            combined_score = (linguistic_score * 0.6) + (mental_score * 0.4)
+            
+            # Determine subspace state from combined score
+            in_subspace = combined_score > 0.5
+            depth = combined_score
+            confidence = 0.5 + (combined_score * 0.3)  # Higher confidence with higher score
+        
+        # Update user state
+        if user_id not in self.user_states:
+            self.user_states[user_id] = {
+                "history": [],
+                "current_depth": 0.0,
+                "in_subspace": False,
+                "duration": 0
+            }
+        
+        state = self.user_states[user_id]
+        
+        # Apply inertia (subspace doesn't change abruptly)
+        inertia = 0.7  # 70% previous state, 30% new detection
+        new_depth = (state["current_depth"] * inertia) + (depth * (1.0 - inertia))
+        
+        # Update state
+        state["history"].append(depth)
+        if len(state["history"]) > 10:
+            state["history"] = state["history"][-10:]
+            
+        state["current_depth"] = new_depth
+        in_subspace_new = new_depth > 0.4  # Threshold with inertia
+        
+        # Track duration
+        if in_subspace_new:
+            if state["in_subspace"]:
+                state["duration"] += 1
+            else:
+                state["duration"] = 1
+        else:
+            state["duration"] = 0
+            
+        state["in_subspace"] = in_subspace_new
+        
+        # Final results with integrated state
+        return {
+            "in_subspace": state["in_subspace"],
+            "depth": state["current_depth"],
+            "raw_depth": depth,
+            "confidence": confidence,
+            "duration": state["duration"],
+            "indicators": indicators,
+            "depth_category": self._get_depth_category(state["current_depth"])
+        }
+    
+    def _check_brevity(self, message: str) -> float:
+        """Check for brevity (short responses)."""
+        words = message.split()
+        if len(words) < 3:
+            return 0.9
+        elif len(words) < 5:
+            return 0.7
+        elif len(words) < 8:
+            return 0.4
+        else:
+            return 0.0
+    
+    def _check_simplification(self, message: str) -> float:
+        """Check for linguistic simplification."""
+        words = message.split()
+        avg_word_length = sum(len(word) for word in words) / max(1, len(words))
+        
+        if avg_word_length < 3.0:
+            return 0.8
+        elif avg_word_length < 4.0:
+            return 0.5
+        elif avg_word_length < 5.0:
+            return 0.3
+        else:
+            return 0.0
+    
+    def _check_repetition(self, message: str) -> float:
+        """Check for repetitive patterns."""
+        words = message.split()
+        unique_words = set(words)
+        
+        if len(words) > 1:
+            repetition_ratio = 1.0 - (len(unique_words) / len(words))
+            return min(1.0, repetition_ratio * 2.0)  # Scale up for clarity
+        
+        return 0.0
+    
+    def _check_explicit_markers(self, message: str) -> float:
+        """Check for explicit subspace markers."""
+        markers = ["float", "floating", "foggy", "hazy", "dizzy", "drifting", 
+                  "fuzzy", "dreamy", "floating", "surrender", "surrendered", 
+                  "deep", "space", "subspace", "under"]
+        
+        for marker in markers:
+            if marker in message.lower():
+                return 0.8
+        
+        return 0.0
+    
+    def _get_depth_category(self, depth: float) -> str:
+        """Convert numerical depth to category."""
+        if depth < 0.4:
+            return "none"
+        elif depth < 0.6:
+            return "light"
+        elif depth < 0.8:
+            return "moderate"
+        else:
+            return "deep"
