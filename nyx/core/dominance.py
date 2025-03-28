@@ -429,3 +429,149 @@ class DominanceSystem:
         except Exception as e:
             logger.error(f"Error evaluating dominance step appropriateness: {e}")
             return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
+
+# Add to nyx/core/dominance.py
+
+class PossessiveSystem:
+    """Manages possessiveness and ownership dynamics."""
+    
+    def __init__(self, relationship_manager=None, reward_system=None):
+        self.relationship_manager = relationship_manager
+        self.reward_system = reward_system
+        
+        self.ownership_levels = {
+            1: "Temporary",
+            2: "Regular",
+            3: "Deep",
+            4: "Complete"
+        }
+        self.owned_users = {}  # user_id → ownership data
+        self.ownership_rituals = {
+            "daily_check_in": {
+                "name": "Daily Check-in",
+                "description": "User must check in daily to affirm ownership"
+            },
+            "formal_address": {
+                "name": "Formal Address",
+                "description": "User must use formal ownership-acknowledging address"
+            },
+            "permission_requests": {
+                "name": "Permission Requests",
+                "description": "User must request permission for specified activities"
+            }
+        }
+        
+    async def process_ownership_assertion(self, user_id, intensity=0.7):
+        """Generates ownership-reinforcing responses."""
+        if user_id not in self.owned_users:
+            return {"success": False, "message": "User not currently owned"}
+            
+        ownership_data = self.owned_users[user_id]
+        level = ownership_data.get("level", 1)
+        
+        # Select appropriate possessive language based on level and intensity
+        possessive_phrases = []
+        
+        if level == 1:  # Temporary
+            possessive_phrases = [
+                "You're mine for now",
+                "I'm taking temporary ownership of you",
+                "You belong to me for the time being"
+            ]
+        elif level == 2:  # Regular
+            possessive_phrases = [
+                "You're mine",
+                "You belong to me",
+                "I own you now"
+            ]
+        elif level == 3:  # Deep
+            possessive_phrases = [
+                "You're completely mine",
+                "You belong to me entirely",
+                "I own every part of you"
+            ]
+        elif level == 4:  # Complete
+            possessive_phrases = [
+                "You're my property, completely and utterly",
+                "You exist solely for me now",
+                "You belong to me in mind, body and soul"
+            ]
+            
+        # Select phrase based on intensity
+        index = min(int(intensity * len(possessive_phrases)), len(possessive_phrases) - 1)
+        selected_phrase = possessive_phrases[index]
+        
+        # Generate ownership reminder
+        reminder = f"{selected_phrase}. Don't forget your place."
+        
+        # Create reward signal if reward system available
+        if self.reward_system:
+            try:
+                await self.reward_system.process_reward_signal(
+                    self.reward_system.RewardSignal(
+                        value=0.4 + (level * 0.1),  # Higher rewards for deeper ownership
+                        source="ownership_reinforcement",
+                        context={
+                            "user_id": user_id,
+                            "ownership_level": level,
+                            "intensity": intensity
+                        }
+                    )
+                )
+            except Exception as e:
+                pass  # Silently handle reward errors
+                
+        # Update last assertion time
+        self.owned_users[user_id]["last_assertion"] = datetime.datetime.now().isoformat()
+        
+        return {
+            "success": True,
+            "reminder": reminder,
+            "ownership_level": level,
+            "level_name": self.ownership_levels.get(level, "Unknown")
+        }
+        
+    async def establish_ownership(self, user_id, level=1, duration_days=None):
+        """Establishes ownership of a user at specified level."""
+        # Check if relationship manager exists and get trust level
+        trust_level = 0.5  # Default
+        if self.relationship_manager:
+            try:
+                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                trust_level = getattr(relationship, "trust", 0.5)
+            except Exception:
+                pass
+                
+        # Ensure trust level is sufficient for ownership level
+        min_trust_required = 0.4 + (level * 0.1)  # Higher levels need more trust
+        if trust_level < min_trust_required:
+            return {
+                "success": False,
+                "message": f"Insufficient trust level ({trust_level:.2f}) for ownership level {level}",
+                "required_trust": min_trust_required
+            }
+            
+        # Calculate expiration if duration specified
+        expiration = None
+        if duration_days:
+            expiration = (datetime.datetime.now() + 
+                         datetime.timedelta(days=duration_days)).isoformat()
+            
+        # Create ownership data
+        self.owned_users[user_id] = {
+            "level": level,
+            "established_at": datetime.datetime.now().isoformat(),
+            "expires_at": expiration,
+            "active_rituals": [],
+            "last_ritual_completion": None,
+            "last_assertion": datetime.datetime.now().isoformat()
+        }
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "ownership_level": level,
+            "level_name": self.ownership_levels.get(level, "Unknown"),
+            "expires_at": expiration,
+            "recommendation": f"Establish clear ownership rituals for level {level} ownership"
+        }
