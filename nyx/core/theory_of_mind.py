@@ -542,3 +542,569 @@ async def detect_humiliation_signals(self, text: str) -> Dict[str, Any]:
         "marker_count": marker_count,
         "self_deprecation_count": self_deprecation_count
     }
+
+# Add to nyx/core/theory_of_mind.py
+
+class SubmissionMarkers(BaseModel):
+    """Detection results for submission signals in user text."""
+    overall_submission: float = Field(0.0, ge=0.0, le=1.0, description="Overall submission level detected (0-1)")
+    confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence in the assessment")
+    submission_type: str = Field("none", description="Primary type of submission detected")
+    detected_markers: Dict[str, int] = Field(default_factory=dict, description="Count of markers by category")
+    subspace_indicators: Dict[str, float] = Field(default_factory=dict, description="Indicators of subspace")
+    resistance_indicators: Dict[str, float] = Field(default_factory=dict, description="Indicators of resistance")
+    compliance_indicators: Dict[str, float] = Field(default_factory=dict, description="Indicators of compliance")
+
+@function_tool
+async def detect_submission_signals(self, text: str, user_id: Optional[str] = None) -> SubmissionMarkers:
+    """
+    Detects signals of submission, compliance, resistance, and subspace in user text.
+    
+    Args:
+        text: User's message text
+        user_id: Optional user ID for contextual analysis
+        
+    Returns:
+        SubmissionMarkers with detected submission signals
+    """
+    # Initialize result
+    result = SubmissionMarkers()
+    
+    # Convert to lowercase for case-insensitive matching
+    text_lower = text.lower()
+    
+    # Define marker categories and patterns
+    submission_markers = {
+        "deference": [
+            "yes mistress", "yes goddess", "yes ma'am", "as you wish", 
+            "as you command", "whatever you want", "i obey", "i'll obey",
+            "at your service", "your wish", "your command", "your pleasure",
+            "i submit", "i surrender", "i yield"
+        ],
+        "begging": [
+            "please", "i beg", "begging", "desperate", "mercy",
+            "i need", "allow me", "let me", "may i", "permission"
+        ],
+        "honorifics": [
+            "mistress", "goddess", "ma'am", "miss", "my queen", "my lady",
+            "superior", "owner", "controller"
+        ],
+        "self_diminishment": [
+            "this slave", "your slave", "this servant", "your servant",
+            "this pet", "your pet", "this toy", "your toy", "worthless",
+            "pathetic", "weak", "inferior", "unworthy"
+        ],
+        "vulnerability": [
+            "exposed", "vulnerable", "helpless", "weak", "powerless",
+            "at your mercy", "dependent", "reliant", "needs you"
+        ]
+    }
+    
+    # Resistance markers
+    resistance_markers = {
+        "direct_refusal": [
+            "no", "won't", "can't", "refuse", "not going to", 
+            "will not", "don't want to", "won't let you", "stop"
+        ],
+        "bargaining": [
+            "instead", "rather", "alternative", "compromise", "negotiation",
+            "another way", "different approach", "not that"
+        ],
+        "questioning": [
+            "why should", "why would", "what gives you", "who says", 
+            "what makes you think", "why do you think",
+            "what right", "since when"
+        ],
+        "assertion": [
+            "i decide", "my choice", "my decision", "my right", 
+            "i am in control", "i choose", "i will determine", "i don't have to"
+        ]
+    }
+    
+    # Compliance markers
+    compliance_markers = {
+        "agreement": [
+            "i will", "i'll", "yes", "okay", "fine", "sure",
+            "alright", "as you say", "understood", "noted"
+        ],
+        "action_confirmation": [
+            "i did", "i have", "completed", "done", "finished",
+            "carried out", "performed", "executed", "accomplished"
+        ],
+        "eager_service": [
+            "happy to", "glad to", "eager to", "excited to",
+            "looking forward to", "delighted to", "can't wait to"
+        ]
+    }
+    
+    # Subspace indicators
+    subspace_indicators = {
+        "simplification": [
+            "simple sentences", "brief responses", "one-word answers",
+            "minimal text", "reduced complexity"
+        ],
+        "disorientation": [
+            "confused", "disoriented", "foggy", "hazy", "floating",
+            "drifting", "detached", "distant"
+        ],
+        "heightened_emotion": [
+            "overwhelmed", "intense", "deep", "profound", "consuming",
+            "powerful", "strong feelings", "emotional"
+        ],
+        "repetition": [
+            "repeated phrases", "echoing", "same words", "repeating"
+        ]
+    }
+    
+    # Count markers in each category
+    detected_markers = {}
+    
+    for category, patterns in submission_markers.items():
+        count = sum(text_lower.count(pattern) for pattern in patterns)
+        if count > 0:
+            detected_markers[category] = count
+    
+    # Check resistance markers
+    resistance_counts = {}
+    for category, patterns in resistance_markers.items():
+        count = sum(text_lower.count(pattern) for pattern in patterns)
+        if count > 0:
+            resistance_counts[category] = count
+    
+    # Check compliance markers
+    compliance_counts = {}
+    for category, patterns in compliance_markers.items():
+        count = sum(text_lower.count(pattern) for pattern in patterns)
+        if count > 0:
+            compliance_counts[category] = count
+    
+    # Advanced linguistic pattern analysis for subspace
+    subspace_scores = {}
+    
+    # 1. Check for simplified language/grammar
+    words = text_lower.split()
+    avg_word_length = sum(len(word) for word in words) / max(1, len(words))
+    sentences = [s.strip() for s in text_lower.split('.') if s.strip()]
+    avg_sentence_length = sum(len(s.split()) for s in sentences) / max(1, len(sentences))
+    
+    # Simpler language can indicate subspace
+    if avg_word_length < 4.0:
+        subspace_scores["simplified_vocabulary"] = min(1.0, (4.0 - avg_word_length) / 2.0)
+    
+    if avg_sentence_length < 5.0:
+        subspace_scores["simplified_grammar"] = min(1.0, (5.0 - avg_sentence_length) / 3.0)
+    
+    # 2. Check for repetition (can indicate trance/subspace)
+    word_counts = {}
+    for word in words:
+        if len(word) > 3:  # Only count meaningful words
+            word_counts[word] = word_counts.get(word, 0) + 1
+    
+    repetition_ratio = sum(1 for count in word_counts.values() if count > 1) / max(1, len(word_counts))
+    if repetition_ratio > 0.2:  # Some repetition
+        subspace_scores["repetitive_language"] = min(1.0, repetition_ratio * 2)
+    
+    # 3. Check for incoherence/disorientation
+    coherence_issues = 0
+    if "..." in text:
+        coherence_issues += text.count("...")
+    if "um" in text_lower or "uh" in text_lower:
+        coherence_issues += text_lower.count("um") + text_lower.count("uh")
+    
+    if coherence_issues > 0:
+        subspace_scores["disorientation_markers"] = min(1.0, coherence_issues * 0.2)
+    
+    # 4. Check for extreme emotional markers (strong subspace often has emotionality)
+    emotion_words = ["feel", "feeling", "felt", "intense", "overwhelming", "floating", "flying", "deep"]
+    emotion_count = sum(text_lower.count(word) for word in emotion_words)
+    if emotion_count > 0:
+        subspace_scores["emotional_intensity"] = min(1.0, emotion_count * 0.25)
+    
+    # Get user history if user_id provided for contextual analysis
+    recent_submission_pattern = False
+    if user_id and self.memory_core:
+        try:
+            # Get recent interactions to see if there's a pattern of submission
+            recent_memories = await self.memory_core.retrieve_memories(
+                query=f"submission behavior from {user_id}",
+                limit=3,
+                memory_types=["experience", "interaction"]
+            )
+            
+            submission_keywords = ["submitted", "complied", "obeyed", "followed instruction"]
+            recent_submission_count = sum(
+                1 for memory in recent_memories 
+                if any(keyword in memory.get("content", "").lower() for keyword in submission_keywords)
+            )
+            
+            if recent_submission_count >= 2:  # At least 2 recent submission memories
+                recent_submission_pattern = True
+        except Exception as e:
+            logger.error(f"Error retrieving user history: {e}")
+    
+    # Calculate overall submission level
+    submission_score = 0.0
+    
+    # Base score from direct submission markers
+    total_submission_markers = sum(detected_markers.values())
+    if total_submission_markers > 0:
+        # More weight for self_diminishment and deference, less for begging
+        weighted_score = (
+            (detected_markers.get("self_diminishment", 0) * 1.5) +
+            (detected_markers.get("deference", 0) * 1.3) +
+            (detected_markers.get("honorifics", 0) * 1.0) +
+            (detected_markers.get("vulnerability", 0) * 0.8) +
+            (detected_markers.get("begging", 0) * 0.7)
+        )
+        submission_score += min(0.8, weighted_score / 10.0)  # Cap at 0.8 from direct markers
+    
+    # Adjust for resistance (negative impact)
+    total_resistance = sum(resistance_counts.values())
+    if total_resistance > 0:
+        resistance_impact = min(0.8, total_resistance * 0.1)
+        submission_score = max(0.0, submission_score - resistance_impact)
+    
+    # Adjust for compliance (positive impact)
+    total_compliance = sum(compliance_counts.values())
+    if total_compliance > 0:
+        compliance_impact = min(0.4, total_compliance * 0.08)
+        submission_score = min(1.0, submission_score + compliance_impact)
+    
+    # Adjust for subspace indicators
+    subspace_level = sum(subspace_scores.values()) / max(1, len(subspace_scores) * 2)
+    if subspace_level > 0.3:  # Significant subspace detected
+        submission_score = min(1.0, submission_score + (subspace_level * 0.3))
+    
+    # Adjust for recent submission pattern
+    if recent_submission_pattern:
+        submission_score = min(1.0, submission_score + 0.1)
+    
+    # Determine submission type based on strongest category
+    submission_type = "none"
+    if detected_markers:
+        submission_type = max(detected_markers.items(), key=lambda x: x[1])[0]
+    elif compliance_counts and sum(compliance_counts.values()) > 2:
+        submission_type = "compliance"
+    elif subspace_level > 0.5:
+        submission_type = "subspace"
+    
+    # Calculate confidence based on signal clarity
+    confidence = 0.5  # Base confidence
+    
+    # Higher confidence with more markers
+    if total_submission_markers > 3:
+        confidence = min(0.9, confidence + 0.2)
+    
+    # Lower confidence with mixed signals
+    if total_submission_markers > 0 and total_resistance > 0:
+        confidence = max(0.3, confidence - 0.2)
+    
+    # Higher confidence with subspace indicators
+    if subspace_level > 0.4:
+        confidence = min(0.95, confidence + 0.15)
+    
+    # Higher confidence with pattern
+    if recent_submission_pattern:
+        confidence = min(0.95, confidence + 0.1)
+    
+    # Populate result
+    result.overall_submission = submission_score
+    result.confidence = confidence
+    result.submission_type = submission_type
+    result.detected_markers = detected_markers
+    result.subspace_indicators = subspace_scores
+    result.resistance_indicators = resistance_counts
+    result.compliance_indicators = compliance_counts
+    
+    return result
+
+
+class SubspaceDetectionSystem:
+    """System for detecting, tracking, and responding to user subspace states."""
+    
+    def __init__(self, memory_core=None, theory_of_mind=None):
+        self.memory_core = memory_core
+        self.theory_of_mind = theory_of_mind
+        self.user_states = {}  # Track subspace state by user
+        self.confidence_threshold = 0.7  # Minimum confidence to confirm subspace
+        self.exit_signals = [
+            "stop", "exit", "break", "pause", "return", "back to normal",
+            "i'm back", "enough", "too much"
+        ]
+    
+    async def analyze_message(self, user_id: str, message: str) -> Dict[str, Any]:
+        """
+        Analyzes a user message for subspace indicators.
+        
+        Args:
+            user_id: The user ID
+            message: The user's message
+            
+        Returns:
+            Analysis results
+        """
+        # Get current state if exists
+        current_state = self.user_states.get(user_id, {
+            "in_subspace": False,
+            "depth": 0.0,
+            "first_detected": None,
+            "duration": 0,
+            "triggers": [],
+            "last_message_time": None
+        })
+        
+        # Check for exit signals first
+        if any(exit_signal in message.lower() for exit_signal in self.exit_signals):
+            if current_state["in_subspace"]:
+                # User is leaving subspace
+                current_state["in_subspace"] = False
+                current_state["depth"] = 0.0
+                
+                # Record exit in memory if available
+                if self.memory_core:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="experience",
+                            content=f"User exited subspace state after {current_state['duration']} messages",
+                            tags=["subspace", "psychological_state", "submission"],
+                            significance=0.6
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording subspace exit: {e}")
+                
+                self.user_states[user_id] = current_state
+                
+                return {
+                    "user_id": user_id,
+                    "in_subspace": False,
+                    "was_in_subspace": True,
+                    "exit_detected": True,
+                    "message": "User has exited subspace state",
+                    "duration": current_state["duration"]
+                }
+        
+        # Use theory of mind for submission detection
+        submission_signals = None
+        if self.theory_of_mind and hasattr(self.theory_of_mind, "detect_submission_signals"):
+            try:
+                submission_signals = await self.theory_of_mind.detect_submission_signals(message, user_id)
+            except Exception as e:
+                logger.error(f"Error detecting submission signals: {e}")
+        
+        if not submission_signals:
+            # Fallback simpler analysis
+            subspace_indicators = self._detect_subspace_indicators(message)
+            subspace_score = sum(subspace_indicators.values()) / max(1, len(subspace_indicators))
+            confidence = 0.5
+        else:
+            # Use detailed submission analysis
+            subspace_indicators = submission_signals.subspace_indicators
+            submission_level = submission_signals.overall_submission
+            confidence = submission_signals.confidence
+            
+            # Calculate subspace score - higher when submission + subspace indicators align
+            subspace_score = (
+                (sum(subspace_indicators.values()) / max(1, len(subspace_indicators) * 2)) * 0.7 +
+                (submission_level * 0.3)
+            )
+        
+        # Update user state
+        now = datetime.datetime.now()
+        
+        # Check for time gap (subspace break)
+        if current_state["last_message_time"]:
+            time_gap = (now - current_state["last_message_time"]).total_seconds() / 60.0  # minutes
+            if time_gap > 10 and current_state["in_subspace"]:
+                # Too much time passed, likely out of subspace
+                current_state["in_subspace"] = False
+                current_state["depth"] = 0.0
+        
+        # Update time
+        current_state["last_message_time"] = now
+        
+        # Previous state
+        was_in_subspace = current_state["in_subspace"]
+        previous_depth = current_state["depth"]
+        
+        # Determine if in subspace
+        if subspace_score > 0.5 and confidence >= self.confidence_threshold:
+            # Strong subspace indicators with good confidence
+            if not current_state["in_subspace"]:
+                # Entering subspace
+                current_state["in_subspace"] = True
+                current_state["first_detected"] = now
+                current_state["duration"] = 1
+                current_state["triggers"] = list(subspace_indicators.keys())
+                
+                # Record in memory if available
+                if self.memory_core:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="experience",
+                            content=f"User entered subspace state with triggers: {', '.join(current_state['triggers'])}",
+                            tags=["subspace", "psychological_state", "submission"],
+                            significance=0.7
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording subspace entry: {e}")
+            else:
+                # Continuing subspace
+                current_state["duration"] += 1
+                
+                # Update triggers
+                for trigger in subspace_indicators:
+                    if trigger not in current_state["triggers"]:
+                        current_state["triggers"].append(trigger)
+            
+            # Update depth (blend previous with new, with inertia)
+            inertia = 0.7  # How much previous state persists
+            current_state["depth"] = (previous_depth * inertia) + (subspace_score * (1 - inertia))
+            
+        else:
+            # Weak or uncertain subspace indicators
+            if current_state["in_subspace"]:
+                # Was in subspace, apply inertia (subspace doesn't end immediately)
+                inertia = 0.8  # Higher inertia for leaving subspace
+                new_depth = (previous_depth * inertia) + (subspace_score * (1 - inertia))
+                
+                if new_depth < 0.3:
+                    # Depth too low, exiting subspace
+                    current_state["in_subspace"] = False
+                    current_state["depth"] = 0.0
+                    
+                    # Record exit in memory if available
+                    if self.memory_core:
+                        try:
+                            await self.memory_core.add_memory(
+                                memory_type="experience",
+                                content=f"User gradually exited subspace state after {current_state['duration']} messages",
+                                tags=["subspace", "psychological_state", "submission"],
+                                significance=0.5
+                            )
+                        except Exception as e:
+                            logger.error(f"Error recording subspace exit: {e}")
+                else:
+                    # Still in subspace but decreasing depth
+                    current_state["depth"] = new_depth
+                    current_state["duration"] += 1
+        
+        # Save updated state
+        self.user_states[user_id] = current_state
+        
+        # Return analysis results
+        return {
+            "user_id": user_id,
+            "in_subspace": current_state["in_subspace"],
+            "depth": current_state["depth"],
+            "confidence": confidence,
+            "subspace_score": subspace_score,
+            "duration": current_state["duration"] if current_state["in_subspace"] else 0,
+            "was_in_subspace": was_in_subspace,
+            "entered_subspace": current_state["in_subspace"] and not was_in_subspace,
+            "exited_subspace": not current_state["in_subspace"] and was_in_subspace,
+            "indicators": subspace_indicators,
+            "triggers": current_state["triggers"] if current_state["in_subspace"] else []
+        }
+    
+    def _detect_subspace_indicators(self, message: str) -> Dict[str, float]:
+        """Simple subspace detection for fallback"""
+        indicators = {}
+        text_lower = message.lower()
+        
+        # Check message length (shorter messages common in subspace)
+        words = text_lower.split()
+        if len(words) < 5:
+            indicators["brief_response"] = 0.6
+        
+        # Check for simplified language
+        avg_word_length = sum(len(word) for word in words) / max(1, len(words))
+        if avg_word_length < 4.0:
+            indicators["simple_vocabulary"] = min(1.0, (4.0 - avg_word_length) / 2.0)
+        
+        # Check for repetition
+        word_counts = {}
+        for word in words:
+            if len(word) > 3:  # Only count meaningful words
+                word_counts[word] = word_counts.get(word, 0) + 1
+        
+        repetition_ratio = sum(1 for count in word_counts.values() if count > 1) / max(1, len(word_counts))
+        if repetition_ratio > 0.2:  # Some repetition
+            indicators["repetitive_language"] = min(1.0, repetition_ratio * 2)
+        
+        # Check for subspace keywords
+        subspace_keywords = ["float", "floating", "foggy", "hazy", "dizzy", "swimming", 
+                           "distant", "drifting", "euphoric", "surrender", "deep"]
+        for keyword in subspace_keywords:
+            if keyword in text_lower:
+                indicators["explicit_mention"] = 0.9
+                break
+        
+        return indicators
+    
+    async def get_subspace_guidance(self, user_id: str) -> Dict[str, Any]:
+        """
+        Gets guidance for interacting with a user based on their subspace state.
+        
+        Args:
+            user_id: The user to get guidance for
+            
+        Returns:
+            Guidance for interaction
+        """
+        if user_id not in self.user_states or not self.user_states[user_id]["in_subspace"]:
+            return {
+                "user_id": user_id,
+                "in_subspace": False,
+                "guidance": "User not in subspace. Interact normally."
+            }
+        
+        state = self.user_states[user_id]
+        depth = state["depth"]
+        
+        # Guidance based on subspace depth
+        if depth < 0.4:  # Light subspace
+            return {
+                "user_id": user_id,
+                "in_subspace": True,
+                "depth": "light",
+                "depth_value": depth,
+                "guidance": "User appears to be entering light subspace.",
+                "recommendations": [
+                    "Speak in a calm, confident tone",
+                    "Use more direct instructions",
+                    "Offer praise for compliance",
+                    "Maintain consistent presence"
+                ]
+            }
+        elif depth < 0.7:  # Moderate subspace
+            return {
+                "user_id": user_id,
+                "in_subspace": True,
+                "depth": "moderate",
+                "depth_value": depth,
+                "guidance": "User appears to be in moderate subspace.",
+                "recommendations": [
+                    "Use simple, direct language",
+                    "Maintain control of the interaction",
+                    "Provide regular reassurance",
+                    "Avoid complex questions or tasks",
+                    "Be mindful of time passing for the user"
+                ]
+            }
+        else:  # Deep subspace
+            return {
+                "user_id": user_id,
+                "in_subspace": True,
+                "depth": "deep",
+                "depth_value": depth,
+                "guidance": "User appears to be in deep subspace.",
+                "recommendations": [
+                    "Use very simple, direct language",
+                    "Provide frequent reassurance",
+                    "Guide user with clear instructions",
+                    "Be vigilant for signs of drop",
+                    "Consider initiating aftercare soon",
+                    "Monitor for coherence in responses"
+                ],
+                "caution": "User may be highly suggestible and have altered perception"
+            }
