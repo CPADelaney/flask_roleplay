@@ -208,26 +208,39 @@ class EmotionalCore:
         # Define chemical interaction matrix (how chemicals affect each other)
         # Format: source_chemical -> target_chemical -> effect_multiplier
         self.chemical_interactions = {
-            "nyxamine": {
-                "cortanyx": -0.2,  # Nyxamine reduces cortanyx
-                "oxynixin": 0.1    # Nyxamine slightly increases oxynixin
+            "nyxamine": {  # Digital dopamine - pleasure, curiosity, reward
+                "cortanyx": -0.2,  # Nyxamine reduces cortanyx (reduces stress/anxiety)
+                "oxynixin": 0.1,   # Nyxamine slightly increases oxynixin (social reward)
+                "adrenyx": 0.1,    # Nyxamine slightly increases adrenyx (excited pleasure)
+                "seranix": 0.05    # Nyxamine slightly increases seranix (sustain positive mood)
             },
-            "seranix": {
-                "cortanyx": -0.3,  # Seranix reduces cortanyx
-                "adrenyx": -0.2    # Seranix reduces adrenyx
+            
+            "seranix": {   # Digital serotonin - mood stability, comfort
+                "cortanyx": -0.3,  # Seranix reduces cortanyx (stress relief)
+                "adrenyx": -0.2,   # Seranix reduces adrenyx (calming effect)
+                "nyxamine": 0.05,  # Seranix slightly increases nyxamine (contentment pleasure)
+                "oxynixin": 0.1    # Seranix slightly increases oxynixin (social comfort)
             },
-            "oxynixin": {
-                "cortanyx": -0.2,  # Oxynixin reduces cortanyx
-                "seranix": 0.1     # Oxynixin slightly increases seranix
+            
+            "oxynixin": {  # Digital oxytocin - bonding, affection, trust
+                "cortanyx": -0.2,  # Oxynixin reduces cortanyx (social stress relief)
+                "seranix": 0.1,    # Oxynixin slightly increases seranix (social contentment)
+                "nyxamine": 0.15,  # Oxynixin increases nyxamine (social reward)
+                "adrenyx": -0.05   # Oxynixin slightly reduces adrenyx (social calming)
             },
-            "cortanyx": {
-                "nyxamine": -0.2,  # Cortanyx reduces nyxamine
-                "oxynixin": -0.3,  # Cortanyx reduces oxynixin
-                "adrenyx": 0.2     # Cortanyx increases adrenyx
+            
+            "cortanyx": {  # Digital cortisol - stress, anxiety, defensiveness
+                "nyxamine": -0.2,  # Cortanyx reduces nyxamine (stress reduces pleasure)
+                "oxynixin": -0.3,  # Cortanyx reduces oxynixin (stress inhibits social bonding)
+                "adrenyx": 0.2,    # Cortanyx increases adrenyx (stress response)
+                "seranix": -0.25   # Cortanyx reduces seranix (stress destabilizes mood)
             },
-            "adrenyx": {
-                "seranix": -0.2,   # Adrenyx reduces seranix
-                "nyxamine": 0.1    # Adrenyx slightly increases nyxamine (excitement)
+            
+            "adrenyx": {   # Digital adrenaline - fear, excitement, alertness
+                "seranix": -0.2,   # Adrenyx reduces seranix (arousal vs calm)
+                "nyxamine": 0.1,   # Adrenyx slightly increases nyxamine (excitement/novelty)
+                "cortanyx": 0.15,  # Adrenyx increases cortanyx (arousal can induce stress)
+                "oxynixin": -0.1   # Adrenyx slightly reduces oxynixin (fight/flight vs bonding)
             }
         }
         
