@@ -28,11 +28,114 @@ class DominanceSystem:
         self.relationship_manager = relationship_manager
         self.memory_core = memory_core
         self.nyx_brain = nyx_brain
+        self.conditioning_system = conditioning_system  # Add direct access
         self.ideation_agent = self._create_dominance_ideation_agent()
         self.hard_ideation_agent = self._create_hard_dominance_ideation_agent()
         self.trace_group_id = "NyxDominance"
         
         logger.info("DominanceSystem initialized")
+
+    async def initialize_event_subscriptions(self, event_bus):
+        """Initialize event subscriptions for the dominance system"""
+        self.event_bus = event_bus
+        
+        # Subscribe to relevant events
+        self.event_bus.subscribe("conditioning_update", self._handle_conditioning_update)
+        self.event_bus.subscribe("conditioned_response", self._handle_conditioned_response)
+        
+        logger.info("Dominance system subscribed to events")
+    
+    async def _handle_conditioning_update(self, event):
+        """Handle conditioning updates for dominance system integration"""
+        association_key = event.data.get("association_key", "")
+        strength = event.data.get("strength", 0.0)
+        user_id = event.data.get("user_id", "default")
+        
+        # Only process dominance-related conditioning
+        if not any(term in association_key for term in ["dominance", "submission", "control", "obedience"]):
+            return
+        
+        # Update relationship state based on conditioning strength
+        if not hasattr(self, "relationship_manager") or not self.relationship_manager:
+            return
+            
+        try:
+            relationship = await self.relationship_manager.get_relationship_state(user_id)
+            
+            # Update dominance metrics
+            if "submission" in association_key and strength > 0.6:
+                # Increase dominance perception
+                current_value = getattr(relationship, "user_perceived_dominance", 0.5)
+                new_value = min(0.95, current_value + (strength * 0.05))
+                
+                await self.relationship_manager.update_relationship_attribute(
+                    user_id=user_id,
+                    attribute="user_perceived_dominance",
+                    value=new_value
+                )
+        except Exception as e:
+            logger.error(f"Error updating dominance from conditioning: {e}")
+    
+    async def apply_conditioning_for_activity(self, activity_data, user_id, outcome, intensity=0.7):
+        """Apply conditioning for dominance activities"""
+        if not self.conditioning_system:
+            return {"status": "conditioning_system_not_available"}
+        
+        # Extract activity data
+        activity_type = activity_data.get("category", "task")
+        intensity_level = activity_data.get("intensity", 5) / 10.0  # Convert to 0-1 scale
+        
+        # Apply different conditioning based on outcome
+        results = []
+        
+        if outcome == "success":
+            # Positive reinforcement for successful activities
+            result = await self.conditioning_system.process_operant_conditioning(
+                behavior=f"dominance_{activity_type}",
+                consequence_type="positive_reinforcement",
+                intensity=intensity * intensity_level,
+                context={"user_id": user_id, "activity": activity_data}
+            )
+            results.append(result)
+            
+            # Classical conditioning for emotional response
+            result = await self.conditioning_system.process_classical_conditioning(
+                unconditioned_stimulus="dominance_success",
+                conditioned_stimulus=f"dominance_{activity_type}",
+                response="positive_emotional_response",
+                intensity=intensity * intensity_level,
+                context={"user_id": user_id, "activity": activity_data}
+            )
+            results.append(result)
+            
+        elif outcome == "failure":
+            # Punishment for failed activities (with lower intensity)
+            result = await self.conditioning_system.process_operant_conditioning(
+                behavior=f"dominance_{activity_type}",
+                consequence_type="positive_punishment",
+                intensity=intensity * intensity_level * 0.6,  # Lower intensity for punishment
+                context={"user_id": user_id, "activity": activity_data}
+            )
+            results.append(result)
+        
+        # Publish event if we have event bus
+        if hasattr(self, "event_bus"):
+            await self.event_bus.publish(Event(
+                event_type="dominance_conditioning",
+                source="dominance_system",
+                data={
+                    "user_id": user_id,
+                    "activity_type": activity_type,
+                    "outcome": outcome,
+                    "conditioning_results": [r.get("association_key", "") for r in results]
+                }
+            ))
+        
+        return {
+            "activity_type": activity_type,
+            "outcome": outcome,
+            "conditioning_results": results
+        }
     
     def _create_dominance_ideation_agent(self) -> Agent:
         """Creates the agent responsible for generating standard dominance activity ideas."""
