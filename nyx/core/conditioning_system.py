@@ -551,3 +551,236 @@ class ConditioningSystem:
                 "generalization_factor": self.generalization_factor
             }
         }
+    
+    async def condition_preference(self, 
+                                 stimulus: str, 
+                                 preference_type: str,
+                                 value: float,
+                                 context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Condition a preference for or against a stimulus
+        
+        Args:
+            stimulus: The stimulus to condition
+            preference_type: Type of preference (like, dislike, want, avoid, etc.)
+            value: Value of preference (-1.0 to 1.0, negative for aversion)
+            context: Additional contextual information
+            
+        Returns:
+            Conditioning results
+        """
+        context = context or {}
+        
+        # Determine if this is a positive or negative preference
+        is_positive = value > 0
+        
+        # Choose appropriate response based on preference type and value
+        if preference_type == "like" or preference_type == "dislike":
+            response = "emotional_response"
+        elif preference_type == "want" or preference_type == "avoid":
+            response = "behavioral_response"
+        else:
+            response = "general_response"
+        
+        # Condition the appropriate association
+        if is_positive:
+            # For positive preferences, use positive reinforcement
+            result = await self.process_operant_conditioning(
+                behavior=f"encounter_{stimulus}",
+                consequence_type="positive_reinforcement",
+                intensity=abs(value),
+                context={
+                    "preference_type": preference_type,
+                    "valence": value,
+                    "context_keys": context.get("context_keys", [])
+                }
+            )
+        else:
+            # For negative preferences, use positive punishment
+            result = await self.process_operant_conditioning(
+                behavior=f"encounter_{stimulus}",
+                consequence_type="positive_punishment",
+                intensity=abs(value),
+                context={
+                    "preference_type": preference_type,
+                    "valence": value,
+                    "context_keys": context.get("context_keys", [])
+                }
+            )
+        
+        # Also create a classical association
+        classical_result = await self.process_classical_conditioning(
+            unconditioned_stimulus=preference_type,
+            conditioned_stimulus=stimulus,
+            response=response,
+            intensity=abs(value),
+            context={
+                "valence": value,
+                "context_keys": context.get("context_keys", [])
+            }
+        )
+        
+        # If identity evolution is available, update identity
+        if self.identity_evolution and abs(value) > 0.7:
+            try:
+                # Update preference in identity
+                await self.identity_evolution.update_preference(
+                    category="stimuli",
+                    preference=stimulus,
+                    impact=value * 0.3  # Scale down the impact
+                )
+                
+                # Update related trait if value is strong enough
+                if abs(value) > 0.8:
+                    trait = "openness" if is_positive else "caution"
+                    await self.identity_evolution.update_trait(
+                        trait=trait,
+                        impact=value * 0.1  # Small trait impact
+                    )
+            except Exception as e:
+                logger.error(f"Error updating identity from preference: {e}")
+        
+        return {
+            "stimulus": stimulus,
+            "preference_type": preference_type,
+            "value": value,
+            "operant_result": result,
+            "classical_result": classical_result
+        }
+    
+    async def condition_personality_trait(self,
+                                       trait: str,
+                                       value: float,
+                                       behaviors: List[str] = None,
+                                       context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Condition a personality trait through reinforcement of related behaviors
+        
+        Args:
+            trait: The personality trait to condition
+            value: The target value for the trait (-1.0 to 1.0)
+            behaviors: List of behaviors associated with this trait
+            context: Additional contextual information
+            
+        Returns:
+            Conditioning results
+        """
+        context = context or {}
+        
+        # Default behaviors if none provided
+        if not behaviors:
+            behaviors = [f"{trait}_behavior"]
+        
+        results = []
+        
+        # Process each behavior
+        for behavior in behaviors:
+            # Determine reinforcement type based on desired trait value
+            if value > 0:
+                # Positive trait value - reinforce related behaviors
+                result = await self.process_operant_conditioning(
+                    behavior=behavior,
+                    consequence_type="positive_reinforcement",
+                    intensity=abs(value),
+                    context={
+                        "trait": trait,
+                        "valence": value,
+                        "context_keys": context.get("context_keys", [])
+                    }
+                )
+            else:
+                # Negative trait value - punish related behaviors
+                result = await self.process_operant_conditioning(
+                    behavior=behavior,
+                    consequence_type="positive_punishment",
+                    intensity=abs(value),
+                    context={
+                        "trait": trait,
+                        "valence": value,
+                        "context_keys": context.get("context_keys", [])
+                    }
+                )
+            
+            results.append(result)
+        
+        # If identity evolution is available, update the trait directly
+        if self.identity_evolution and abs(value) > 0.6:
+            try:
+                await self.identity_evolution.update_trait(
+                    trait=trait,
+                    impact=value * 0.5  # Stronger direct impact
+                )
+            except Exception as e:
+                logger.error(f"Error updating identity trait: {e}")
+        
+        return {
+            "trait": trait,
+            "value": value,
+            "behaviors": behaviors,
+            "results": results
+        }
+    
+    async def create_emotion_trigger(self,
+                                   trigger: str,
+                                   emotion: str,
+                                   intensity: float = 0.5,
+                                   context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Create a trigger for an emotional response
+        
+        Args:
+            trigger: The stimulus that will trigger the emotion
+            emotion: The emotion to be triggered
+            intensity: The intensity of the emotion (0.0-1.0)
+            context: Additional contextual information
+            
+        Returns:
+            Results of creating the emotion trigger
+        """
+        context = context or {}
+        
+        # Use classical conditioning to associate trigger with emotion
+        result = await self.process_classical_conditioning(
+            unconditioned_stimulus="emotional_stimulus",
+            conditioned_stimulus=trigger,
+            response=f"emotion_{emotion}",
+            intensity=intensity,
+            context={
+                "emotion": emotion,
+                "valence": context.get("valence", 0.0),
+                "context_keys": context.get("context_keys", [])
+            }
+        )
+        
+        # If emotional core is available, create a test activation
+        if self.emotional_core:
+            try:
+                # Map emotion to neurochemicals
+                chemical_map = {
+                    "joy": "nyxamine",
+                    "contentment": "seranix",
+                    "trust": "oxynixin",
+                    "fear": "adrenyx",
+                    "anger": "cortanyx",
+                    "sadness": "cortanyx"
+                }
+                
+                # Update appropriate neurochemical if emotion is mapped
+                emotion_lower = emotion.lower()
+                if emotion_lower in chemical_map:
+                    chemical = chemical_map[emotion_lower]
+                    test_intensity = intensity * 0.1  # Very mild test activation
+                    
+                    await self.emotional_core.update_neurochemical(
+                        chemical=chemical,
+                        value=test_intensity
+                    )
+            except Exception as e:
+                logger.error(f"Error creating test emotion activation: {e}")
+        
+        return {
+            "trigger": trigger,
+            "emotion": emotion,
+            "intensity": intensity,
+            "association_result": result
+        }
