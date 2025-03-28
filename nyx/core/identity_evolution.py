@@ -866,6 +866,36 @@ class IdentityEvolutionSystem:
                 function_tool(self._update_neurochemical_baseline)
             ]
         )
+
+    async def process_relationship_reflection(self, reflection_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Process relationship reflection impact on identity."""
+        # Extract reflection data
+        user_id = reflection_data.get("user_id")
+        reflection_text = reflection_data.get("reflection_text", "")
+        reflection_type = reflection_data.get("reflection_type", "general")
+        identity_impacts = reflection_data.get("identity_impacts", {})
+        
+        # Create experience data
+        experience = {
+            "id": f"refl_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "type": "relationship_reflection",
+            "significance": reflection_data.get("confidence", 0.5) * 10,  # Scale to 0-10
+            "metadata": {
+                "user_id": user_id,
+                "reflection_type": reflection_type,
+                "emotional_context": reflection_data.get("emotional_response", {})
+            }
+        }
+        
+        # Update identity based on reflection
+        result = await self.update_identity_from_experience(experience, impact=identity_impacts)
+        
+        # Return result
+        return {
+            "status": "success",
+            "identity_updates": result,
+            "identity_impacts": identity_impacts
+        }
     
     def _create_emotional_tendency_agent(self) -> Agent:
         """Create agent for managing emotional tendencies"""
