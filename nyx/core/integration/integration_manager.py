@@ -2,116 +2,8 @@
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional
-
-logger = logging.getLogger(__name__)
-
-class IntegrationManager:
-    """
-    Master integration manager for Nyx.
-    
-    This class coordinates all integration bridges and provides a
-    unified interface for initializing and monitoring the integration layer.
-    """
-    
-    def __init__(self, nyx_brain):
-        self.brain = nyx_brain
-        
-        # Initialize integration bridges
-        self.bridges = {}
-        
-        # Setup core integration bridges
-        self._setup_bridges()
-        
-        logger.info("IntegrationManager initialized")
-    
-    def _setup_bridges(self):
-        """Set up all integration bridges."""
-        try:
-            # Import bridge creation functions
-            from nyx.core.integration.mood_emotional_bridge import create_mood_emotional_bridge
-            from nyx.core.integration.multimodal_attention_bridge import create_multimodal_attention_bridge
-            from nyx.core.integration.prediction_imagination_bridge import create_prediction_imagination_bridge
-            from nyx.core.integration.relationship_tom_bridge import create_relationship_tom_bridge
-            from nyx.core.integration.reward_learning_bridge import create_reward_learning_bridge
-            from nyx.core.integration.dominance_integration_manager import create_dominance_integration_manager
-            from nyx.core.integration.tom_integration import create_tom_integrator
-            from nyx.core.integration.need_goal_action_pipeline import create_need_goal_action_pipeline
-            from nyx.core.integration.narrative_memory_identity_nexus import create_narrative_memory_identity_nexus
-            
-            # Create bridges
-            self.bridges["mood_emotional"] = create_mood_emotional_bridge(self.brain)
-            self.bridges["multimodal_attention"] = create_multimodal_attention_bridge(self.brain)
-            self.bridges["prediction_imagination"] = create_prediction_imagination_bridge(self.brain)
-            self.bridges["relationship_tom"] = create_relationship_tom_bridge(self.brain)
-            self.bridges["reward_learning"] = create_reward_learning_bridge(self.brain)
-            self.bridges["dominance"] = create_dominance_integration_manager(self.brain)
-            self.bridges["tom"] = create_tom_integrator(self.brain)
-            self.bridges["need_goal_action"] = create_need_goal_action_pipeline(self.brain)
-            self.bridges["narrative_memory_identity"] = create_narrative_memory_identity_nexus(self.brain)
-            
-            logger.info(f"Set up {len(self.bridges)} integration bridges")
-        except Exception as e:
-            logger.error(f"Error setting up integration bridges: {e}")
-    
-    async def initialize_all(self) -> Dict[str, Any]:
-        """Initialize all integration bridges."""
-        results = {}
-        
-        for name, bridge in self.bridges.items():
-            try:
-                logger.info(f"Initializing {name} bridge...")
-                success = await bridge.initialize()
-                results[name] = success
-                logger.info(f"Initialized {name} bridge: {'success' if success else 'failed'}")
-            except Exception as e:
-                logger.error(f"Error initializing {name} bridge: {e}")
-                results[name] = False
-        
-        return {
-            "status": "completed",
-            "results": results,
-            "success_count": sum(1 for status in results.values() if status),
-            "failed_count": sum(1 for status in results.values() if not status)
-        }
-    
-    async def get_integration_status(self) -> Dict[str, Any]:
-        """Get status of all integration bridges."""
-        status = {}
-        
-        for name, bridge in self.bridges.items():
-            try:
-                # Check if bridge has get_status method
-                if hasattr(bridge, "get_status"):
-                    bridge_status = await bridge.get_status()
-                elif hasattr(bridge, "get_bridge_state"):
-                    bridge_status = await bridge.get_bridge_state()
-                elif hasattr(bridge, "get_queue_status"):
-                    bridge_status = await bridge.get_queue_status()
-                else:
-                    bridge_status = {"available": True}
-                
-                status[name] = bridge_status
-            except Exception as e:
-                logger.error(f"Error getting status for {name} bridge: {e}")
-                status[name] = {"error": str(e)}
-        
-        return {
-            "status": "success",
-            "bridges": status,
-            "bridge_count": len(self.bridges)
-        }
-
-# Function to create the integration manager
-def create_integration_manager(nyx_brain):
-    """Create an integration manager for the given brain."""
-    return IntegrationManager(nyx_brain)
-
-# nyx/core/integration/integration_manager.py
-
-import logging
-import asyncio
-from typing import Dict, List, Any, Optional
+import datetime
+from typing import Dict, List, Any, Optional, Set
 
 from nyx.core.integration.event_bus import Event, get_event_bus
 from nyx.core.integration.system_context import get_system_context
@@ -146,42 +38,96 @@ class IntegrationManager:
         self.initialization_sequence = []
         self.initialized = False
         
+        # Register all bridges
+        self._setup_bridges()
+        
         logger.info("IntegrationManager initialized")
     
-    async def initialize(self) -> bool:
-        """Initialize all integration bridges in correct order."""
+    def _setup_bridges(self):
+        """Set up all integration bridges with appropriate dependencies."""
         try:
-            # Build dependency graph
-            self._build_dependency_graph()
+            # Import bridge creation functions
+            from nyx.core.integration.action_selector import create_action_selector
+            from nyx.core.integration.adaptation_goal_bridge import create_core_systems_integration_bridge
+            from nyx.core.integration.decision_action_coordinator import create_decision_action_coordinator
+            from nyx.core.integration.dynamic_attention_system import create_dynamic_attention_system
+            from nyx.core.integration.emotional_cognitive_bridge import create_emotional_cognitive_bridge
+            from nyx.core.integration.identity_imagination_emotional_bridge import create_identity_imagination_emotional_bridge
+            from nyx.core.integration.knowledge_curiosity_exploration_bridge import create_knowledge_curiosity_exploration_bridge
+            from nyx.core.integration.knowledge_memory_reasoning_bridge import create_knowledge_memory_reasoning_bridge
+            from nyx.core.integration.memory_integration_bridge import create_memory_integration_bridge
+            from nyx.core.integration.mood_emotional_bridge import create_mood_emotional_bridge
+            from nyx.core.integration.multimodal_attention_bridge import create_multimodal_attention_bridge
+            from nyx.core.integration.need_goal_action_pipeline import create_need_goal_action_pipeline
+            from nyx.core.integration.perceptual_integration_layer import create_perceptual_integration_layer
+            from nyx.core.integration.prediction_imagination_bridge import create_prediction_imagination_bridge
+            from nyx.core.integration.reasoning_cognitive_bridge import create_reasoning_cognitive_bridge
+            from nyx.core.integration.relationship_tom_bridge import create_relationship_tom_bridge
+            from nyx.core.integration.reward_learning_bridge import create_reward_learning_bridge
+            from nyx.core.integration.tom_integration import create_tom_integrator
             
-            # Determine initialization sequence
-            self._determine_initialization_sequence()
+            # Dominance-related bridges
+            from nyx.core.integration.dominance_integration_manager import create_dominance_integration_manager
+            from nyx.core.integration.dominance_imagination_decision_bridge import create_dominance_imagination_decision_bridge
+            from nyx.core.integration.dominance_memory_reflection_bridge import create_dominance_memory_reflection_bridge
+            from nyx.core.integration.dominance_reward_identity_bridge import create_dominance_reward_identity_bridge
             
-            # Initialize bridges in sequence
-            for bridge_name in self.initialization_sequence:
-                if bridge_name in self.bridges:
-                    bridge = self.bridges[bridge_name]
-                    success = await bridge.initialize()
-                    self.bridge_statuses[bridge_name] = success
-                    
-                    if not success:
-                        logger.warning(f"Bridge {bridge_name} initialization failed")
+            # Register core system bridges first (no dependencies)
+            self.register_bridge("action_selector", create_action_selector(self.brain), [])
+            self.register_bridge("dynamic_attention", create_dynamic_attention_system(self.brain), [])
+            self.register_bridge("perceptual_integration", create_perceptual_integration_layer(self.brain), [])
             
-            # Check overall initialization status
-            failed_bridges = [name for name, status in self.bridge_statuses.items() if not status]
+            # Register secondary bridges with dependencies on core bridges
+            self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
+                               ["dynamic_attention"])
+            self.register_bridge("mood_emotional", create_mood_emotional_bridge(self.brain), 
+                               ["emotional_cognitive"])
+            self.register_bridge("multimodal_attention", create_multimodal_attention_bridge(self.brain), 
+                               ["dynamic_attention", "perceptual_integration"])
+            self.register_bridge("memory_integration", create_memory_integration_bridge(self.brain), 
+                               ["dynamic_attention"])
+            self.register_bridge("prediction_imagination", create_prediction_imagination_bridge(self.brain), 
+                               [])
+            self.register_bridge("identity_imagination_emotional", create_identity_imagination_emotional_bridge(self.brain), 
+                               ["emotional_cognitive"])
             
-            if failed_bridges:
-                logger.error(f"Failed to initialize bridges: {failed_bridges}")
-                self.initialized = False
-                return False
+            # Register bridges that depend on secondary bridges
+            self.register_bridge("knowledge_memory_reasoning", create_knowledge_memory_reasoning_bridge(self.brain), 
+                               ["memory_integration"])
+            self.register_bridge("knowledge_curiosity", create_knowledge_curiosity_exploration_bridge(self.brain), 
+                               ["knowledge_memory_reasoning"])
+            self.register_bridge("reasoning_cognitive", create_reasoning_cognitive_bridge(self.brain), 
+                               ["emotional_cognitive", "memory_integration"])
+            self.register_bridge("tom_integrator", create_tom_integrator(self.brain), 
+                               ["emotional_cognitive"])
+            self.register_bridge("relationship_tom", create_relationship_tom_bridge(self.brain), 
+                               ["tom_integrator", "memory_integration"])
+            self.register_bridge("reward_learning", create_reward_learning_bridge(self.brain), 
+                               ["action_selector", "memory_integration"])
+            self.register_bridge("core_systems_integration", create_core_systems_integration_bridge(self.brain), 
+                               ["action_selector"])
             
-            self.initialized = True
-            logger.info("IntegrationManager successfully initialized all bridges")
-            return True
+            # Register dominance-related bridges
+            self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
+                               ["reward_learning", "identity_imagination_emotional"])
+            self.register_bridge("dominance_memory_reflection", create_dominance_memory_reflection_bridge(self.brain), 
+                               ["memory_integration"])
+            self.register_bridge("dominance_imagination_decision", create_dominance_imagination_decision_bridge(self.brain), 
+                               ["prediction_imagination", "relationship_tom"])
+            
+            # Register main dominance integration manager
+            self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
+                               ["dominance_reward_identity", "dominance_memory_reflection", "dominance_imagination_decision"])
+            
+            # Register high-level pipeline bridges
+            self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
+                               ["action_selector", "reward_learning"])
+            self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
+                               ["action_selector", "need_goal_action", "prediction_imagination"])
+            
+            logger.info(f"Set up {len(self.bridges)} integration bridges")
         except Exception as e:
-            logger.error(f"Error initializing IntegrationManager: {e}")
-            self.initialized = False
-            return False
+            logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
     
     def register_bridge(self, name: str, bridge: Any, dependencies: List[str] = None) -> None:
         """
@@ -199,6 +145,107 @@ class IntegrationManager:
         logger.info(f"Registered bridge: {name}")
     
     @trace_method(level=TraceLevel.INFO, group_id="IntegrationManager")
+    async def initialize(self) -> bool:
+        """Initialize all integration bridges in correct order."""
+        try:
+            # Build dependency graph
+            self._build_dependency_graph()
+            
+            # Determine initialization sequence
+            self._determine_initialization_sequence()
+            
+            # Initialize bridges in sequence
+            for bridge_name in self.initialization_sequence:
+                if bridge_name in self.bridges:
+                    bridge = self.bridges[bridge_name]
+                    
+                    # Skip if bridge is None (not available)
+                    if bridge is None:
+                        logger.warning(f"Bridge {bridge_name} not available, skipping")
+                        continue
+                    
+                    logger.info(f"Initializing bridge: {bridge_name}")
+                    
+                    # Check if bridge has initialize method
+                    if hasattr(bridge, 'initialize') and callable(getattr(bridge, 'initialize')):
+                        success = await bridge.initialize()
+                        self.bridge_statuses[bridge_name] = success
+                        
+                        if not success:
+                            logger.warning(f"Bridge {bridge_name} initialization failed")
+                    else:
+                        logger.warning(f"Bridge {bridge_name} has no initialize method")
+                        self.bridge_statuses[bridge_name] = True  # Assume success if no method
+            
+            # Check overall initialization status
+            failed_bridges = [name for name, status in self.bridge_statuses.items() if not status]
+            
+            if failed_bridges:
+                logger.error(f"Failed to initialize bridges: {failed_bridges}")
+                self.initialized = False
+                return False
+            
+            self.initialized = True
+            logger.info("IntegrationManager successfully initialized all bridges")
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing IntegrationManager: {e}", exc_info=True)
+            self.initialized = False
+            return False
+    
+    def _build_dependency_graph(self) -> None:
+        """Build dependency graph for bridges."""
+        # This is a simple implementation to ensure all dependencies are registered
+        all_bridge_names = set(self.bridges.keys())
+        
+        # Check for unregistered dependencies
+        for bridge_name, dependencies in self.bridge_dependencies.items():
+            for dependency in dependencies:
+                if dependency not in all_bridge_names:
+                    logger.warning(f"Bridge {bridge_name} depends on unregistered bridge {dependency}")
+    
+    def _determine_initialization_sequence(self) -> None:
+        """Determine correct initialization sequence based on dependencies."""
+        # Simple topological sort implementation
+        # Initialize structures
+        remaining_bridges = set(self.bridges.keys())
+        visited = set()
+        temp_visited = set()
+        order = []
+        
+        # Recursive DFS function
+        def visit(bridge: str) -> None:
+            if bridge in temp_visited:
+                # Circular dependency detected
+                logger.warning(f"Circular dependency detected involving {bridge}")
+                return
+            
+            if bridge in visited:
+                return
+            
+            temp_visited.add(bridge)
+            
+            # Visit all dependencies first
+            for dependency in self.bridge_dependencies.get(bridge, []):
+                # Skip non-registered dependencies
+                if dependency in remaining_bridges:
+                    visit(dependency)
+            
+            temp_visited.remove(bridge)
+            visited.add(bridge)
+            order.append(bridge)
+        
+        # Visit all bridges
+        while remaining_bridges:
+            bridge = next(iter(remaining_bridges))
+            visit(bridge)
+            remaining_bridges -= visited
+        
+        # Reverse the order to get the initialization sequence
+        self.initialization_sequence = list(reversed(order))
+        logger.info(f"Initialization sequence: {self.initialization_sequence}")
+    
+    @trace_method(level=TraceLevel.INFO, group_id="IntegrationManager")
     async def get_integration_status(self) -> Dict[str, Any]:
         """
         Get the status of all integration components.
@@ -212,21 +259,41 @@ class IntegrationManager:
             "bridges_initialized": sum(1 for status in self.bridge_statuses.values() if status),
             "initialization_sequence": self.initialization_sequence,
             "bridge_statuses": self.bridge_statuses.copy(),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat()
         }
         
+        # Get detailed status for each bridge
+        bridge_details = {}
+        for name, bridge in self.bridges.items():
+            if bridge is None:
+                bridge_details[name] = {"available": False}
+                continue
+                
+            # Get bridge status if it has a status method
+            if hasattr(bridge, 'get_status'):
+                try:
+                    bridge_status = await bridge.get_status()
+                    bridge_details[name] = bridge_status
+                except Exception as e:
+                    bridge_details[name] = {"error": str(e)}
+            elif hasattr(bridge, 'get_bridge_state'):
+                try:
+                    bridge_status = await bridge.get_bridge_state()
+                    bridge_details[name] = bridge_status
+                except Exception as e:
+                    bridge_details[name] = {"error": str(e)}
+            elif hasattr(bridge, 'get_integration_status'):
+                try:
+                    bridge_status = await bridge.get_integration_status()
+                    bridge_details[name] = bridge_status
+                except Exception as e:
+                    bridge_details[name] = {"error": str(e)}
+            else:
+                bridge_details[name] = {"available": True}
+        
+        status["bridge_details"] = bridge_details
+        
         return status
-    
-    def _build_dependency_graph(self) -> None:
-        """Build dependency graph for bridges."""
-        # Implementation would build a graph of bridge dependencies
-        pass
-    
-    def _determine_initialization_sequence(self) -> None:
-        """Determine correct initialization sequence based on dependencies."""
-        # Implementation would use topological sort to determine sequence
-        # For bridges with no dependencies or circular dependencies
-        pass
 
 # Function to create the integration manager
 def create_integration_manager(nyx_brain):
