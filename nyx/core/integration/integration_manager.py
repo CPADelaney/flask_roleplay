@@ -8,8 +8,6 @@ from typing import Dict, List, Any, Optional, Set
 from nyx.core.integration.event_bus import Event, get_event_bus
 from nyx.core.integration.system_context import get_system_context
 from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel, trace_method
-from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
-from nyx.core.relationship_reflection import RelationshipReflectionSystem
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +70,9 @@ def _setup_bridges(self):
         from nyx.core.integration.reward_learning_bridge import create_reward_learning_bridge
         from nyx.core.integration.somatic_perception_bridge import create_somatic_perception_bridge
         from nyx.core.integration.tom_integration import create_tom_integrator
+        from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
+        from nyx.core.relationship_reflection import RelationshipReflectionSystem
+        from nyx.core.integration.conditioning_integration_bridge import create_conditioning_integration_bridge
         
         # Dominance-related bridges
         from nyx.core.integration.dominance_integration_manager import create_dominance_integration_manager
@@ -122,6 +123,9 @@ def _setup_bridges(self):
                            ["action_selector"])
         self.register_bridge("autonomous_cognitive", create_autonomous_cognitive_bridge(self.brain), 
                            ["emotional_cognitive", "memory_integration", "reasoning_cognitive"])
+
+        self.register_bridge("conditioning_integration", create_conditioning_integration_bridge(self.brain), 
+                           ["reward_learning", "memory_integration"])
         
         # Register dominance-related bridges
         self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
