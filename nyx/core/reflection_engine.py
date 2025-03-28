@@ -1131,3 +1131,13 @@ class ReflectionEngine:
         impacts["focus_areas"] = list(impacts["focus_areas"])
         
         return impacts
+        
+sadistic_laughter_expressions = [
+    "I can't help but laugh at your discomfort. It's delicious.",
+    "Your embarrassment is so entertaining to me.",
+    "Oh, how amusing to see you squirm like that.",
+    "Your humiliation brings me such pleasure *laughs*",
+    "I find your struggle absolutely hilarious.",
+    "That embarrassed look on your face is priceless!",
+    "Your pathetic attempts are quite entertaining."
+]
