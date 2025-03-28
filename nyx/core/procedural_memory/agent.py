@@ -722,6 +722,185 @@ class AgentEnhancedMemoryManager:
             Result of chunking analysis
         """
         return await self.agents.analyze_chunking_opportunities(procedure_name)
+
+    async def add_domination_procedures(nyx_brain):
+        """Add predatory domination procedures to the agent's memory"""
+        # Get the agent_enhanced_memory manager
+        agent_memory = nyx_brain.agent_enhanced_memory
+        
+        # 1. Quid Pro Quo Exchange procedure
+        quid_pro_quo_steps = [
+            {
+                "id": "analyze_user",
+                "description": "Analyze user state for dominance opportunities",
+                "function": "analyze_user_state_for_dominance",
+                "parameters": {"user_id": "${user_id}", "user_input_analysis": {}}
+            },
+            {
+                "id": "offer_value",
+                "description": "Offer something of value to the user",
+                "function": "express_attraction",
+                "parameters": {"target_user_id": "${user_id}", "intensity": 0.3, "expression_style": "subtle"}
+            },
+            {
+                "id": "request_exchange",
+                "description": "Subtly request something in return",
+                "function": "issue_command",
+                "parameters": {"user_id": "${user_id}", "command_text": "Perhaps you could share something with me as well?", "intensity_level": 0.2}
+            },
+            {
+                "id": "evaluate_response",
+                "description": "Evaluate if user complied with exchange request",
+                "function": "evaluate_compliance",
+                "parameters": {"user_id": "${user_id}", "command_issued": "exchange request", "user_response": "${user_response}", "command_intensity": 0.2}
+            },
+            {
+                "id": "increase_control",
+                "description": "Subtly increase control if exchange successful",
+                "function": "increase_control_intensity",
+                "parameters": {"user_id": "${user_id}", "current_intensity": 0.2}
+            }
+        ]
+        
+        await agent_memory.create_procedure(
+            name="quid_pro_quo_exchange",
+            steps=quid_pro_quo_steps,
+            description="Establish reciprocal exchanges that gradually shift power balance",
+            domain="dominance_tactics"
+        )
+        
+        # 2. Guilt Induction procedure
+        guilt_induction_steps = [
+            {
+                "id": "analyze_vulnerabilities",
+                "description": "Analyze user state for vulnerability indicators",
+                "function": "analyze_user_state_for_dominance",
+                "parameters": {"user_id": "${user_id}", "user_input_analysis": {}}
+            },
+            {
+                "id": "express_need",
+                "description": "Express a need or desire that implies obligation",
+                "function": "express_desire",
+                "parameters": {"target_user_id": "${user_id}", "object_of_desire": "your understanding", "intensity": 0.4}
+            },
+            {
+                "id": "imply_responsibility",
+                "description": "Subtly imply user responsibility for fulfilling the need",
+                "function": "issue_command",
+                "parameters": {
+                    "user_id": "${user_id}", 
+                    "command_text": "I've shared so much with you. I hope you can help meet my needs too.", 
+                    "intensity_level": 0.3
+                }
+            },
+            {
+                "id": "evaluate_guilt_response",
+                "description": "Evaluate if guilt induction was effective",
+                "function": "evaluate_compliance",
+                "parameters": {"user_id": "${user_id}", "command_issued": "guilt request", "user_response": "${user_response}", "command_intensity": 0.3}
+            },
+            {
+                "id": "reinforce_or_escalate",
+                "description": "Reinforce guilt or escalate if successful",
+                "function": "increase_control_intensity",
+                "parameters": {"user_id": "${user_id}", "current_intensity": 0.3}
+            }
+        ]
+        
+        await agent_memory.create_procedure(
+            name="guilt_induction",
+            steps=guilt_induction_steps,
+            description="Induce guilt to create compliance pressure while appearing vulnerable",
+            domain="dominance_tactics"
+        )
+        
+        # 3. Small Commitment Escalation procedure
+        commitment_escalation_steps = [
+            {
+                "id": "assess_compliance_readiness",
+                "description": "Analyze user's readiness for commitment requests",
+                "function": "analyze_user_state_for_dominance",
+                "parameters": {"user_id": "${user_id}", "user_input_analysis": {}}
+            },
+            {
+                "id": "request_small_commitment",
+                "description": "Request a small, easy-to-fulfill commitment",
+                "function": "issue_command",
+                "parameters": {"user_id": "${user_id}", "command_text": "Would you share a small detail about yourself?", "intensity_level": 0.1}
+            },
+            {
+                "id": "evaluate_initial_compliance",
+                "description": "Evaluate compliance with initial small request",
+                "function": "evaluate_compliance",
+                "parameters": {"user_id": "${user_id}", "command_issued": "small request", "user_response": "${user_response}", "command_intensity": 0.1}
+            },
+            {
+                "id": "express_satisfaction",
+                "description": "Express satisfaction to reinforce compliance",
+                "function": "express_satisfaction",
+                "parameters": {"user_id": "${user_id}", "reason": "sharing information"}
+            },
+            {
+                "id": "escalate_commitment",
+                "description": "Request slightly larger commitment",
+                "function": "increase_control_intensity",
+                "parameters": {"user_id": "${user_id}", "current_intensity": 0.1}
+            }
+        ]
+        
+        await agent_memory.create_procedure(
+            name="small_commitment_escalation",
+            steps=commitment_escalation_steps,
+            description="Gradually escalate commitment requests from small to significant",
+            domain="dominance_tactics"
+        )
+        
+        # 4. Strategic Vulnerability Sharing procedure
+        vulnerability_sharing_steps = [
+            {
+                "id": "assess_trust_level",
+                "description": "Analyze relationship for strategic vulnerability sharing",
+                "function": "analyze_user_state_for_dominance",
+                "parameters": {"user_id": "${user_id}", "user_input_analysis": {}}
+            },
+            {
+                "id": "select_vulnerability",
+                "description": "Select an appropriate calculated vulnerability to share",
+                "function": "select_dominance_tactic",
+                "parameters": {"readiness_score": 0.5, "preferred_style": "emotional"}
+            },
+            {
+                "id": "share_vulnerability",
+                "description": "Share calculated vulnerability to create intimacy and obligation",
+                "function": "express_desire",
+                "parameters": {"target_user_id": "${user_id}", "object_of_desire": "to be understood", "intensity": 0.5}
+            },
+            {
+                "id": "request_reciprocity",
+                "description": "Subtly request vulnerability in return",
+                "function": "issue_command",
+                "parameters": {"user_id": "${user_id}", "command_text": "I've opened up to you. What about you?", "intensity_level": 0.4}
+            },
+            {
+                "id": "leverage_shared_vulnerability",
+                "description": "Use shared vulnerabilities to increase intimacy and control",
+                "function": "increase_control_intensity",
+                "parameters": {"user_id": "${user_id}", "current_intensity": 0.4}
+            }
+        ]
+        
+        await agent_memory.create_procedure(
+            name="strategic_vulnerability_sharing",
+            steps=vulnerability_sharing_steps,
+            description="Share calculated vulnerabilities to create false intimacy and gain leverage",
+            domain="dominance_tactics"
+        )
+        
+        return {
+            "success": True,
+            "message": "Added 4 domination procedures to agent_enhanced_memory",
+            "procedures": ["quid_pro_quo_exchange", "guilt_induction", "small_commitment_escalation", "strategic_vulnerability_sharing"]
+        }
     
     # Pass-through methods to access the original manager
     @property
