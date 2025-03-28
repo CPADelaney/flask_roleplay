@@ -118,6 +118,42 @@ class IntegrationStatusEvent(Event):
             "details": details or {}
         })
 
+# Add additional event types needed by new bridges
+class PredictionEvent(Event):
+    """Prediction event."""
+    def __init__(self, source: str, prediction_type: str, prediction: Any, confidence: float):
+        super().__init__("prediction_completed", source, {
+            "prediction_type": prediction_type,
+            "prediction": prediction,
+            "confidence": confidence
+        })
+
+class SimulationEvent(Event):
+    """Simulation event."""
+    def __init__(self, source: str, simulation_id: str, outcome: Any, confidence: float):
+        super().__init__("simulation_completed", source, {
+            "simulation_id": simulation_id,
+            "outcome": outcome,
+            "confidence": confidence
+        })
+
+class AttentionEvent(Event):
+    """Attention focus change event."""
+    def __init__(self, source: str, focus_target: str, focus_type: str, attention_level: float):
+        super().__init__("attention_focus_changed", source, {
+            "focus_target": focus_target,
+            "focus_type": focus_type,
+            "attention_level": attention_level
+        })
+
+class UserModelEvent(Event):
+    """User model update event."""
+    def __init__(self, source: str, user_id: str, updates: Dict[str, Any]):
+        super().__init__("user_model_updated", source, {
+            "user_id": user_id,
+            "updates": updates
+        })
+
 class EventBus:
     """
     Central event distribution system for inter-module communication.
