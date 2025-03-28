@@ -847,3 +847,54 @@ async def get_system_context(ctx) -> Dict[str, Any]:
         }
     
     return {"error": "System context not initialized"}
+@function_tool
+async def get_dev_logs(ctx, 
+                     log_type: Optional[str] = None,
+                     limit: int = 10,
+                     tags: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Get developer logs with optional filtering
+    
+    Args:
+        log_type: Type of logs to retrieve
+        limit: Maximum number of logs to return
+        tags: Filter by tags
+        
+    Returns:
+        Filtered logs
+    """
+    brain = ctx.context
+    
+    if not hasattr(brain, "dev_log_storage") or not brain.dev_log_storage:
+        from nyx.dev_log.storage import get_dev_log_storage
+        brain.dev_log_storage = get_dev_log_storage()
+        await brain.dev_log_storage.initialize()
+    
+    logs = await brain.dev_log_storage.get_logs(
+        log_type=log_type,
+        limit=limit,
+        tags=tags
+    )
+    
+    return {
+        "logs": logs,
+        "count": len(logs),
+        "has_more": len(logs) == limit
+    }
+
+@function_tool
+async def get_synergy_stats(ctx) -> Dict[str, Any]:
+    """
+    Get statistics about synergy recommendations
+    
+    Returns:
+        Synergy recommendation statistics
+    """
+    brain = ctx.context
+    
+    if not hasattr(brain, "dev_log_storage") or not brain.dev_log_storage:
+        from nyx.dev_log.storage import get_dev_log_storage
+        brain.dev_log_storage = get_dev_log_storage()
+        await brain.dev_log_storage.initialize()
+    
+    return await brain.dev_log_storage.get_recommendation_stats()
