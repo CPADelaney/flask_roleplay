@@ -1,19 +1,30 @@
 import os
 import logging
 import time
+import json
+import asyncio
+from typing import Dict, Any, Optional
+
+# Flask and related imports
 from flask import Flask, render_template, session, request, jsonify, redirect
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
-import bcrypt  # Import bcrypt for password hashing
-import secrets  # For generating secure keys
-import atexit  # For cleanup functions
-from datetime import timedelta
-from flasgger import Swagger
 from flask_talisman import Talisman
 from flask_wtf.csrf import CSRFProtect
 from prometheus_flask_exporter import PrometheusMetrics
-from mcp_orchestrator import MCPOrchestrator
+from flasgger import Swagger
+from datetime import timedelta
+
+# Security
+import bcrypt
+import secrets
+import atexit
+
+# External services
+import asyncpg
+from redis import Redis
+from celery import Celery
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -27,16 +38,28 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
-from logic.chatgpt_integration import build_message_history
-from routes.ai_image_generator import init_app as init_image_routes
-from routes.chatgpt_routes import init_app as init_chat_routes
-from logic.gpt_image_decision import should_generate_image_for_response
-from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
-from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from logic.nyx_enhancements_integration import initialize_nyx_memory_system, enhanced_background_chat_task
 from routes.nyx_agent_routes import nyx_agent_bp
 from routes.conflict_routes import conflict_bp
 from routes.npc_learning_routes import npc_learning_bp
+
+# MCP Orchestrator
+from mcp_orchestrator import MCPOrchestrator
+
+# NPC creation / learning
+from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
+from npcs.npc_learning_adaptation import NPCLearningManager
+
+# OpenAI and image generation
+from logic.chatgpt_integration import build_message_history
+from routes.ai_image_generator import init_app as init_image_routes, generate_roleplay_image_from_gpt
+from routes.chatgpt_routes import init_app as init_chat_routes
+from logic.gpt_image_decision import should_generate_image_for_response
+from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+
+# Nyx integration
+from logic.nyx_enhancements_integration import initialize_nyx_memory_system, enhanced_background_chat_task
+from nyx.integrate import get_central_governance
+from logic.conflict_system.conflict_integration import register_enhanced_integration
 
 # DB connection helper
 from db.connection import (
@@ -46,29 +69,11 @@ from db.connection import (
     get_db_connection_context
 )
 
-# Import rate limiting
+# Middleware
 from middleware.rate_limiting import rate_limit, ip_block_list
-
-# Import validation
 from middleware.validation import validate_request
 
-# Additional modules
-import asyncpg  # <-- ensure explicit import if not done globally
-
-# NPC creation / learning
-from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
-from npcs.npc_learning_adaptation import NPCLearningManager
-
-# Governance & conflict integration
-from nyx.integrate import get_central_governance
-from logic.conflict_system.conflict_integration import register_enhanced_integration
-
-import asyncio
-from typing import Dict, Any, Optional
-from redis import Redis
-from celery import Celery
-
-# Adjust as appropriate for your project’s config
+# Config and utilities
 from .config.settings import config
 from .utils.health_check import HealthCheck
 
@@ -330,6 +335,7 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
     except Exception as e:
         logger.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
         emit('error', {'error': str(e)}, room=conversation_id)
+
 ###############################################################################
 # FLASK APP CREATION
 ###############################################################################
@@ -420,7 +426,6 @@ def create_flask_app():
     init_image_routes(app)
     init_chat_routes(app)
 
-
     async def initialize_openai_integration():
         """Initialize the OpenAI integration system."""
         try:
@@ -440,51 +445,79 @@ def create_flask_app():
             return False
     
     @app.before_first_request
-async def initialize_systems():
-    """Initialize all required systems on application startup."""
-    try:
-        from db.schema_and_seed import create_all_tables, seed_initial_data
-        from db.schema_migrations import ensure_schema_version
-        
-        ensure_schema_version()
-        logger.info("Database migrations completed successfully")
-        
-        create_all_tables()
-        seed_initial_data()
-        logger.info("Database tables initialized successfully")
-        
-        await initialize_nyx_memory_system()
-        logger.info("Nyx memory system initialized successfully")
-        
-        # Add this line to initialize OpenAI integration
-        await initialize_openai_integration()
-        logger.info("OpenAI integration initialized successfully")
-        
-        # Add these lines to initialize the MCP orchestrator
-        from mcp_orchestrator import MCPOrchestrator
-        app.mcp_orchestrator = MCPOrchestrator()
-        await app.mcp_orchestrator.initialize()
-        logger.info("MCP orchestrator initialized successfully")
-
-        # Initialize a global NyxBrain instance
-        from nyx.core.brain.base import NyxBrain
-        system_user_id = 0  # Use a system user ID
-        system_conversation_id = 0  # Use a system conversation ID
-        app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-        logger.info("Global NyxBrain instance initialized successfully")
-        
-        await register_conflict_system()
-        logger.info("Conflict system initialized successfully")
-        
-        await NPCLearningManager.initialize_system()
-        logger.info("NPC learning system initialized successfully")
-        
-        from logic.universal_updater import initialize_universal_updater
-        await initialize_universal_updater()
-        logger.info("Universal updater initialized successfully")
-        
-    except Exception as e:
-        logger.error(f"Error initializing systems: {str(e)}", exc_info=True)
+    async def initialize_systems():
+        """Initialize all required systems on application startup."""
+        try:
+            from db.schema_and_seed import create_all_tables, seed_initial_data
+            from db.schema_migrations import ensure_schema_version
+            
+            ensure_schema_version()
+            logger.info("Database migrations completed successfully")
+            
+            create_all_tables()
+            seed_initial_data()
+            logger.info("Database tables initialized successfully")
+            
+            await initialize_nyx_memory_system()
+            logger.info("Nyx memory system initialized successfully")
+            
+            # Initialize OpenAI integration
+            await initialize_openai_integration()
+            logger.info("OpenAI integration initialized successfully")
+            
+            # Initialize a global NyxBrain instance
+            from nyx.core.brain.base import NyxBrain
+            system_user_id = 0  # Use a system user ID
+            system_conversation_id = 0  # Use a system conversation ID
+            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+            logger.info("Global NyxBrain instance initialized successfully")
+            
+            # Register response processors with NyxBrain
+            from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+            app.nyx_brain.response_processors = {
+                "default": enhanced_background_chat_task,
+                "openai": process_user_input_with_openai,
+                "base": process_user_input
+            }
+            logger.info("Response processors registered with NyxBrain")
+            
+            # Initialize MCP orchestrator AFTER NyxBrain so it can discover it
+            app.mcp_orchestrator = MCPOrchestrator()
+            await app.mcp_orchestrator.initialize()
+            logger.info("MCP orchestrator initialized successfully")
+            
+            # Register conflict system
+            await register_conflict_system()
+            logger.info("Conflict system initialized successfully")
+            
+            # Initialize NPC learning
+            await NPCLearningManager.initialize_system()
+            logger.info("NPC learning system initialized successfully")
+            
+            # Initialize universal updater
+            from logic.universal_updater import initialize_universal_updater
+            await initialize_universal_updater()
+            logger.info("Universal updater initialized successfully")
+            
+            # Configure admin access
+            app.config['ADMIN_USER_IDS'] = [1]  # Your user ID(s)
+            
+        except Exception as e:
+            logger.error(f"Error initializing systems: {str(e)}", exc_info=True)
+    
+    @app.before_first_request
+    async def register_conflict_system():
+        """Register the conflict system with Nyx on startup."""
+        try:
+            user_id = 1
+            conversation_id = 1
+            res = await register_enhanced_integration(user_id, conversation_id)
+            if res["success"]:
+                app.logger.info("Conflict system successfully registered with Nyx governance")
+            else:
+                app.logger.error(f"Failed to register conflict system: {res['message']}")
+        except Exception as e:
+            app.logger.error(f"Error during conflict system registration: {str(e)}", exc_info=True)
     
     ###########################################################################
     # ROUTES
@@ -820,19 +853,64 @@ async def initialize_systems():
             logger.error(f"Error starting new game: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
-    @app.before_first_request
-    async def register_conflict_system():
-        """Register the conflict system with Nyx on startup."""
-        try:
-            user_id = 1
-            conversation_id = 1
-            res = await register_enhanced_integration(user_id, conversation_id)
-            if res["success"]:
-                app.logger.info("Conflict system successfully registered with Nyx governance")
-            else:
-                app.logger.error(f"Failed to register conflict system: {res['message']}")
-        except Exception as e:
-            app.logger.error(f"Error during conflict system registration: {str(e)}", exc_info=True)
+    @app.route("/admin/nyx_direct", methods=["POST"])
+    def admin_nyx_direct():
+        """Direct access to NyxBrain for admin users only"""
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+            
+        # Check if user is admin
+        if session.get("user_id") not in app.config['ADMIN_USER_IDS']:
+            return jsonify({"error": "Access denied"}), 403
+        
+        data = request.get_json()
+        user_input = data.get("user_input")
+        
+        # Process directly with NyxBrain instead of agent SDK
+        async def process_with_brain():
+            # Direct processing with the brain
+            result = await app.nyx_brain.process_input_with_thinking(
+                user_input=user_input,
+                context={"admin_mode": True}
+            )
+            
+            # Generate response
+            response = await app.nyx_brain.generate_response_with_thinking(
+                user_input=user_input,
+                context={"admin_mode": True}
+            )
+            
+            return {
+                "brain_processing": result,
+                "brain_response": response,
+                "admin_mode": True
+            }
+        
+        # Run the async function
+        result = asyncio.run(process_with_brain())
+        return jsonify(result)
+
+    @app.route("/nyx_response", methods=["POST"])
+    def get_nyx_response():
+        """Regular user access via nyx_agent_sdk"""
+        data = request.get_json()
+        user_input = data.get("user_input")
+        conversation_id = data.get("conversation_id")
+        
+        # Use the distilled agent SDK
+        from nyx.nyx_agent_sdk import process_user_input
+        
+        # Run the async function
+        async def process_with_sdk():
+            return await process_user_input(
+                session.get("user_id"), 
+                conversation_id, 
+                user_input,
+                {}
+            )
+        
+        result = asyncio.run(process_with_sdk())
+        return jsonify(result)
     
     ###########################################################################
     # HEALTH ENDPOINTS
