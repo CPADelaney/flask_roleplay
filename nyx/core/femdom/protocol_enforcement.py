@@ -646,3 +646,65 @@ class ProtocolEnforcement:
     def get_available_rituals(self) -> List[Dict[str, Any]]:
         """Get all available rituals in the library."""
         return [ritual.dict() for ritual in self.ritual_library.values()]
+        
+class HonorificsEnforcement:
+    """Ensures proper forms of address and language protocol."""
+    
+    def __init__(self, protocol_enforcement=None):
+        self.protocol_enforcement = protocol_enforcement
+        self.required_honorifics = {
+            "default": ["Mistress", "Goddess", "Ma'am"],
+            "custom": {}  # user_id → custom required honorifics
+        }
+        self.address_violations = {}  # tracking violations
+        
+    async def check_proper_address(self, user_id, message):
+        """Checks if message contains required honorifics."""
+        # Get user-specific honorifics or default
+        user_honorifics = self.required_honorifics["custom"].get(user_id, self.required_honorifics["default"])
+        
+        # Check for presence of required terms
+        has_honorific = any(honorific.lower() in message.lower() for honorific in user_honorifics)
+        
+        # Don't check very short messages or status updates
+        if len(message.split()) < 4 or message.startswith("/"):
+            return {"compliant": True, "violation": None}
+            
+        if not has_honorific:
+            # Track violation
+            if user_id not in self.address_violations:
+                self.address_violations[user_id] = []
+                
+            violation = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "message": message,
+                "missing_honorifics": user_honorifics
+            }
+            self.address_violations[user_id].append(violation)
+            
+            # Record protocol violation if protocol system exists
+            if self.protocol_enforcement:
+                await self.protocol_enforcement.record_protocol_violation(
+                    user_id=user_id,
+                    protocol_id="address_protocol",
+                    description=f"Failed to use proper honorifics ({', '.join(user_honorifics)})",
+                    severity=0.5
+                )
+                
+            return {
+                "compliant": False,
+                "violation": "missing_honorific",
+                "required": user_honorifics,
+                "correction": f"Address me properly as {user_honorifics[0]} or another appropriate honorific."
+            }
+            
+        return {"compliant": True, "violation": None}
+        
+    async def set_custom_honorifics(self, user_id, honorifics):
+        """Sets custom honorifics for a specific user."""
+        self.required_honorifics["custom"][user_id] = honorifics
+        return {
+            "success": True,
+            "user_id": user_id,
+            "honorifics": honorifics
+        }
