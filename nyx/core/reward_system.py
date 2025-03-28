@@ -272,6 +272,11 @@ class RewardSignalProcessor:
             "difficult_compliance_achieved", "resistance_overcome_sim", "hard_dominance_gratification"
         ]
         hard_dominance_reward_value = reward.value if is_hard_dominance_reward else 0.0
+
+        is_sadistic_reward = reward.source in [
+            "sadistic_domination", "pain_simulation", "degradation_success"
+        ]
+        sadistic_reward_value = reward.value if is_sadistic_reward else 0.0
         
         # 1. Apply Emotional Effects
         if self.emotional_core:
@@ -305,6 +310,18 @@ class RewardSignalProcessor:
                     
                     effects["emotional"] = True
                     logger.debug(f"Applied strong emotional effect for dominance reward: +{nyx_change:.2f} Nyxamine")
+
+                # Sadistic rewards
+                elif is_sadistic_reward and sadistic_reward_value > 0:
+                    # Very strong Nyxamine boost from sadistic success
+                    nyx_change = sadistic_reward_value * 0.8
+                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    
+                    # Minimal OxyNixin change (representing reduced empathy)
+                    await self.emotional_core.update_neurochemical("oxynixin", -sadistic_reward_value * 0.2)
+                    
+                    effects["emotional"] = True
+                    logger.debug(f"Applied sadistic emotional effect: +{nyx_change:.2f} Nyxamine")
                 
                 # Handle general positive rewards
                 elif reward.value > 0:  
