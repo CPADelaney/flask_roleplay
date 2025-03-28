@@ -778,3 +778,72 @@ async def get_component_docs(ctx, component_name: str) -> Dict[str, Any]:
         brain.system_health_checker = SystemHealthChecker(brain)
     
     return brain.system_health_checker.get_component_docs(component_name)
+@function_tool
+async def get_integration_status(ctx) -> Dict[str, Any]:
+    """
+    Get the status of integration components
+    
+    Returns:
+        Integration system status
+    """
+    brain = ctx.context
+    
+    if hasattr(brain, "integration_manager") and brain.integration_manager:
+        return await brain.integration_manager.get_integration_status()
+    
+    return {"error": "Integration manager not initialized"}
+
+@function_tool
+async def publish_event(ctx, event_type: str, data: Dict[str, Any], source: str = "brain_agent") -> Dict[str, Any]:
+    """
+    Publish an event to the event bus
+    
+    Args:
+        event_type: Type of event
+        data: Event data
+        source: Event source
+        
+    Returns:
+        Publication result
+    """
+    brain = ctx.context
+    
+    if hasattr(brain, "event_bus") and brain.event_bus:
+        from nyx.core.integration.event_bus import Event
+        event = Event(event_type=event_type, source=source, data=data)
+        await brain.event_bus.publish(event)
+        return {"success": True, "event_type": event_type}
+    
+    return {"success": False, "error": "Event bus not initialized"}
+
+@function_tool
+async def get_system_context(ctx) -> Dict[str, Any]:
+    """
+    Get the current system context state
+    
+    Returns:
+        System context state
+    """
+    brain = ctx.context
+    
+    if hasattr(brain, "system_context") and brain.system_context:
+        # Return a simplified view of the system context
+        context = brain.system_context
+        return {
+            "cycle_count": context.cycle_count,
+            "active_goals_count": len(context.active_goals),
+            "user_models_count": len(context.user_models),
+            "affective_state": {
+                "primary_emotion": context.affective_state.primary_emotion,
+                "valence": context.affective_state.valence,
+                "arousal": context.affective_state.arousal
+            },
+            "body_state": {
+                "has_visual_form": context.body_state.has_visual_form,
+                "form_description": context.body_state.form_description,
+                "dominant_sensation": context.body_state.dominant_sensation,
+                "dominant_region": context.body_state.dominant_region
+            }
+        }
+    
+    return {"error": "System context not initialized"}
