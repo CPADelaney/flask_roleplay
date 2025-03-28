@@ -35,7 +35,7 @@ class RelationshipState(BaseModel):
     successful_dominance_tactics: List[str] = Field(default_factory=list)
     failed_dominance_tactics: List[str] = Field(default_factory=list)
     preferred_dominance_style: Optional[str] = None
-    optimal_escalation_rate: float = Field(0.1, description="Learned optimal step size for intensity increase")
+    optimal_escalation_rate: float = Field(0.05, description="Learned optimal step size for intensity increase")
     user_stated_intensity_preference: Optional[Union[int, str]] = None
     hard_limits_confirmed: bool = Field(False)
     hard_limits: List[str] = Field(default_factory=list)
