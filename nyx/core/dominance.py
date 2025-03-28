@@ -520,7 +520,13 @@ class PossessiveSystem:
                 )
             except Exception as e:
                 pass  # Silently handle reward errors
-                
+
+        if self.emotional_core and 'testoryx' in self.hormones:
+            testoryx_level = self.hormones['testoryx']['value']
+            if testoryx_level > 0.6:
+                nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
+                influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
+                        
         # Update last assertion time
         self.owned_users[user_id]["last_assertion"] = datetime.datetime.now().isoformat()
         
