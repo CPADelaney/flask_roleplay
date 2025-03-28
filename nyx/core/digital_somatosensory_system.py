@@ -645,6 +645,41 @@ class DigitalSomatosensorySystem:
             "tension": tension,
             "fatigue": fatigue
         }
+
+    async def simulate_gratification_sensation(self, intensity: float = 1.0) -> Dict[str, Any]:
+        """Simulate gratification sensations."""
+        logger.info(f"Simulating gratification (Intensity: {intensity:.2f})")
+        results = {}
+        pleasure_intensity = 0.8 + intensity * 0.2
+        regions = ["genitals", "inner_thighs", "skin", "chest"]
+        tasks = [self.process_stimulus("pleasure", r, min(1.0, pleasure_intensity * (1.0 + self.body_regions[r].erogenous_level) * random.uniform(0.8, 1.2)),
+                                      "gratification_event", 2.0 + intensity * 3.0)
+                 for r in regions if r in self.body_regions]
+        results["pleasure_simulation"] = await asyncio.gather(*tasks)
+        self.body_state["tension"] = max(0.0, self.body_state["tension"] - (0.5 + intensity * 0.4))
+        results["tension_reduction"] = 0.5 + intensity * 0.4
+        
+        if self.hormone_system:
+            await self.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
+            results["hormone_response_triggered"] = True
+        
+        if self.reward_system:
+            reward_value = 0.85 + intensity * 0.15
+            reward_signal = RewardSignal(reward_value, "gratification_event", {"intensity": intensity},
+                                        datetime.datetime.now().isoformat())
+            await self.reward_system.process_reward_signal(reward_signal)
+            results["reward_generated"] = reward_value
+        
+        if self.needs_system:
+            await asyncio.gather(
+                self.needs_system.satisfy_need("physical_closeness", 0.6 * intensity),
+                self.needs_system.satisfy_need("drive_expression", 0.8 * intensity),
+                self.needs_system.satisfy_need("intimacy", 0.3 * intensity)
+            )
+            results["needs_satisfied"] = ["physical_closeness", "drive_expression", "intimacy"]
+        
+        logger.info("Gratification simulation complete")
+        return results
     
     @function_tool
     async def _get_ambient_temperature(self, ctx: RunContextWrapper) -> float:
