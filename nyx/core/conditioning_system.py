@@ -3,10 +3,12 @@
 import logging
 import datetime
 import random
+import json
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 import asyncio
 
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
 from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,44 @@ class ConditionedAssociation(BaseModel):
     valence: float = Field(0.0, description="Emotional valence of this association (-1.0 to 1.0)")
     context_keys: List[str] = Field(default_factory=list, description="Contextual keys where this association applies")
     decay_rate: float = Field(0.05, description="Rate at which this association decays if not reinforced")
+
+class ClassicalConditioningOutput(BaseModel):
+    """Output schema for classical conditioning analysis"""
+    association_key: str = Field(..., description="Key for the association")
+    type: str = Field(..., description="Type of association (new_association or reinforcement)")
+    association_strength: float = Field(..., description="Strength of the association")
+    reinforcement_count: int = Field(..., description="Number of reinforcements")
+    valence: float = Field(..., description="Emotional valence of the association")
+    explanation: str = Field(..., description="Explanation of the conditioning process")
+
+class OperantConditioningOutput(BaseModel):
+    """Output schema for operant conditioning analysis"""
+    association_key: str = Field(..., description="Key for the association")
+    type: str = Field(..., description="Type of association (new_association or update)")
+    behavior: str = Field(..., description="The behavior being conditioned")
+    consequence_type: str = Field(..., description="Type of consequence")
+    association_strength: float = Field(..., description="Strength of the association")
+    is_reinforcement: bool = Field(..., description="Whether this is reinforcement or punishment")
+    is_positive: bool = Field(..., description="Whether this is positive or negative")
+    explanation: str = Field(..., description="Explanation of the conditioning process")
+
+class BehaviorEvaluationOutput(BaseModel):
+    """Output schema for behavior evaluation"""
+    behavior: str = Field(..., description="The behavior being evaluated")
+    expected_valence: float = Field(..., description="Expected outcome valence (-1.0 to 1.0)")
+    confidence: float = Field(..., description="Confidence in the evaluation (0.0-1.0)")
+    recommendation: str = Field(..., description="Recommendation (approach, avoid, neutral)")
+    explanation: str = Field(..., description="Explanation of the recommendation")
+    relevant_associations: List[Dict[str, Any]] = Field(..., description="Relevant associations considered")
+
+class TraitConditioningOutput(BaseModel):
+    """Output schema for personality trait conditioning"""
+    trait: str = Field(..., description="The personality trait being conditioned")
+    target_value: float = Field(..., description="Target trait value")
+    actual_value: float = Field(..., description="Achieved trait value after conditioning")
+    conditioned_behaviors: List[str] = Field(..., description="Behaviors conditioned for this trait")
+    identity_impact: str = Field(..., description="Description of impact on identity")
+    conditioning_strategy: str = Field(..., description="Strategy used for conditioning")
 
 class ConditioningSystem:
     """
@@ -56,30 +96,227 @@ class ConditioningSystem:
         self.total_reinforcements = 0
         self.successful_associations = 0
         
-        logger.info("Conditioning system initialized")
+        # Create agents
+        self.classical_conditioning_agent = self._create_classical_conditioning_agent()
+        self.operant_conditioning_agent = self._create_operant_conditioning_agent()
+        self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
+        self.personality_development_agent = self._create_personality_development_agent()
+        self.conditioning_orchestrator = self._create_conditioning_orchestrator()
+        
+        # Create trace ID for linking traces
+        self.trace_group_id = f"conditioning_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        logger.info("Conditioning system initialized with Agents SDK integration")
     
-    async def process_classical_conditioning(self, 
-                                           unconditioned_stimulus: str,
-                                           conditioned_stimulus: str,
-                                           response: str,
-                                           intensity: float = 1.0,
-                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _create_classical_conditioning_agent(self) -> Agent:
+        """Create agent for classical conditioning"""
+        return Agent(
+            name="Classical_Conditioning_Agent",
+            instructions="""
+            You are the Classical Conditioning Agent for Nyx's learning system.
+            
+            Your role is to analyze classical conditioning scenarios where unconditioned stimuli
+            are paired with neutral stimuli to create conditioned responses.
+            
+            Focus on:
+            1. Creating appropriate associations between stimuli and responses
+            2. Calculating appropriate association strengths
+            3. Considering the context of associations
+            4. Providing clear explanations of the conditioning process
+            
+            Adjust association strengths based on reinforcement history, intensity of stimuli,
+            and decay over time. Consider the generalization of similar stimuli.
+            """,
+            tools=[
+                function_tool(self._get_association),
+                function_tool(self._create_or_update_classical_association),
+                function_tool(self._calculate_association_strength),
+                function_tool(self._check_similar_associations)
+            ],
+            output_type=ClassicalConditioningOutput,
+            model_settings=ModelSettings(temperature=0.2)
+        )
+    
+    def _create_operant_conditioning_agent(self) -> Agent:
+        """Create agent for operant conditioning"""
+        return Agent(
+            name="Operant_Conditioning_Agent",
+            instructions="""
+            You are the Operant Conditioning Agent for Nyx's learning system.
+            
+            Your role is to analyze operant conditioning scenarios where behaviors
+            are reinforced or punished based on their consequences.
+            
+            Focus on:
+            1. Analyzing behavior-consequence relationships
+            2. Determining appropriate reinforcement or punishment effects
+            3. Calculating behavior probabilities based on conditioning history
+            4. Providing clear explanations of the conditioning process
+            
+            Consider the four types of operant conditioning:
+            - Positive reinforcement (adding a desirable stimulus)
+            - Negative reinforcement (removing an aversive stimulus)
+            - Positive punishment (adding an aversive stimulus)
+            - Negative punishment (removing a desirable stimulus)
+            
+            Adjust association strengths based on the intensity of consequences and timing.
+            """,
+            tools=[
+                function_tool(self._get_association),
+                function_tool(self._create_or_update_operant_association),
+                function_tool(self._calculate_valence_and_reward),
+                function_tool(self._generate_reward_signal)
+            ],
+            output_type=OperantConditioningOutput,
+            model_settings=ModelSettings(temperature=0.2)
+        )
+    
+    def _create_behavior_evaluation_agent(self) -> Agent:
+        """Create agent for behavior evaluation"""
+        return Agent(
+            name="Behavior_Evaluation_Agent",
+            instructions="""
+            You are the Behavior Evaluation Agent for Nyx's learning system.
+            
+            Your role is to evaluate potential behaviors based on conditioning history
+            and predict likely outcomes.
+            
+            Focus on:
+            1. Analyzing relevant associations for a given behavior
+            2. Predicting the likely consequences based on conditioning history
+            3. Calculating confidence levels for predictions
+            4. Making recommendations about approach or avoidance
+            5. Considering context in behavior evaluation
+            
+            Balance exploration (trying new behaviors) with exploitation (relying on known outcomes).
+            Consider both immediate and delayed consequences when evaluating behaviors.
+            """,
+            tools=[
+                function_tool(self._get_behavior_associations),
+                function_tool(self._calculate_expected_valence),
+                function_tool(self._check_context_relevance),
+                function_tool(self._get_reinforcement_history)
+            ],
+            output_type=BehaviorEvaluationOutput,
+            model_settings=ModelSettings(temperature=0.3)
+        )
+    
+    def _create_personality_development_agent(self) -> Agent:
+        """Create agent for personality development"""
+        return Agent(
+            name="Personality_Development_Agent",
+            instructions="""
+            You are the Personality Development Agent for Nyx's learning system.
+            
+            Your role is to guide the development of personality traits, preferences,
+            and emotional responses through conditioning.
+            
+            Focus on:
+            1. Conditioning appropriate behaviors that reinforce target personality traits
+            2. Creating balanced trait development
+            3. Integrating conditioning with identity evolution
+            4. Creating appropriate emotion triggers
+            5. Developing coherent preferences aligned with personality
+            
+            Balance stable personality characteristics with adaptability to new experiences.
+            Ensure personality development is consistent with overall identity and values.
+            """,
+            tools=[
+                function_tool(self._identify_trait_behaviors),
+                function_tool(self._calculate_trait_adjustment),
+                function_tool(self._update_identity_trait),
+                function_tool(self._check_trait_balance)
+            ],
+            output_type=TraitConditioningOutput,
+            model_settings=ModelSettings(temperature=0.4)
+        )
+    
+    def _create_conditioning_orchestrator(self) -> Agent:
+        """Create orchestrator agent for coordinating conditioning processes"""
+        return Agent(
+            name="Conditioning_Orchestrator",
+            instructions="""
+            You are the Conditioning Orchestrator for Nyx's learning system.
+            
+            Your role is to coordinate the various conditioning processes and ensure
+            they work together cohesively.
+            
+            Focus on:
+            1. Routing conditioning events to the appropriate specialized agents
+            2. Integrating outputs from different conditioning processes
+            3. Balancing immediate reinforcement with long-term personality development
+            4. Maintaining coherence across conditioning systems
+            
+            Determine which conditioning approach (classical, operant, etc.) is most
+            appropriate for each learning scenario and coordinate between agents accordingly.
+            """,
+            handoffs=[
+                handoff(self.classical_conditioning_agent, 
+                       tool_name_override="process_classical_conditioning",
+                       tool_description_override="Process a classical conditioning event"),
+                
+                handoff(self.operant_conditioning_agent, 
+                       tool_name_override="process_operant_conditioning",
+                       tool_description_override="Process an operant conditioning event"),
+                
+                handoff(self.behavior_evaluation_agent,
+                       tool_name_override="evaluate_behavior",
+                       tool_description_override="Evaluate potential consequences of a behavior"),
+                
+                handoff(self.personality_development_agent,
+                       tool_name_override="develop_personality_trait",
+                       tool_description_override="Condition a personality trait")
+            ],
+            tools=[
+                function_tool(self._determine_conditioning_type),
+                function_tool(self._prepare_conditioning_data),
+                function_tool(self._apply_association_effects)
+            ]
+        )
+    
+    # Tool functions for agents
+    
+    @function_tool
+    async def _get_association(self, ctx: RunContextWrapper, key: str, association_type: str = "classical") -> Dict[str, Any]:
         """
-        Process a classical conditioning event where an unconditioned stimulus 
-        is paired with a conditioned stimulus to create an association.
+        Get an association by key
+        
+        Args:
+            key: The association key
+            association_type: Type of association (classical or operant)
+            
+        Returns:
+            The association if found, or None
+        """
+        associations = self.classical_associations if association_type == "classical" else self.operant_associations
+        
+        if key in associations:
+            return associations[key].dict()
+        else:
+            return None
+    
+    @function_tool
+    async def _create_or_update_classical_association(self, ctx: RunContextWrapper,
+                                               unconditioned_stimulus: str,
+                                               conditioned_stimulus: str,
+                                               response: str,
+                                               intensity: float,
+                                               valence: float,
+                                               context_keys: List[str]) -> Dict[str, Any]:
+        """
+        Create or update a classical conditioning association
         
         Args:
             unconditioned_stimulus: The natural stimulus that triggers the response
             conditioned_stimulus: The neutral stimulus to be conditioned
             response: The response to be conditioned
             intensity: The intensity of the unconditioned stimulus (0.0-1.0)
-            context: Additional contextual information
+            valence: Emotional valence of the association (-1.0 to 1.0)
+            context_keys: List of context keys for this association
             
         Returns:
-            Processing results
+            The updated or created association
         """
-        context = context or {}
-        
         # Create a unique key for this association
         association_key = f"{conditioned_stimulus}→{response}"
         
@@ -97,11 +334,13 @@ class ConditioningSystem:
             association.last_reinforced = datetime.datetime.now().isoformat()
             association.reinforcement_count += 1
             
-            # Extract context keys if provided
-            if context and "context_keys" in context:
-                for key in context["context_keys"]:
-                    if key not in association.context_keys:
-                        association.context_keys.append(key)
+            # Update valence (average with existing)
+            association.valence = (association.valence + valence) / 2
+            
+            # Add new context keys
+            for key in context_keys:
+                if key not in association.context_keys:
+                    association.context_keys.append(key)
             
             # Record reinforcement
             self.total_reinforcements += 1
@@ -113,7 +352,8 @@ class ConditioningSystem:
                 "type": "reinforcement",
                 "old_strength": old_strength,
                 "new_strength": new_strength,
-                "reinforcement_count": association.reinforcement_count
+                "reinforcement_count": association.reinforcement_count,
+                "valence": association.valence
             }
         else:
             # Create new association
@@ -124,8 +364,8 @@ class ConditioningSystem:
                 formation_date=datetime.datetime.now().isoformat(),
                 last_reinforced=datetime.datetime.now().isoformat(),
                 reinforcement_count=1,
-                valence=context.get("valence", 0.0),
-                context_keys=context.get("context_keys", [])
+                valence=valence,
+                context_keys=context_keys
             )
             
             # Store the association
@@ -133,132 +373,43 @@ class ConditioningSystem:
             self.total_associations += 1
             
             logger.info(f"Created new classical association: {association_key} ({association.association_strength:.2f})")
-
-
-            if hasattr(self, "event_bus"):
-                await self.publish_conditioning_event(
-                    event_type="conditioning_update",
-                    data={
-                        "update_type": "classical" if "classical_conditioning" in self.process_classical_conditioning.__name__ else "operant",
-                        "association_key": association_key,
-                        "association_type": result["type"],
-                        "strength": result["new_strength"] if "new_strength" in result else result["strength"],
-                        "user_id": context.get("user_id", "default")
-                    }
-                )
             
             return {
                 "association_key": association_key,
                 "type": "new_association",
                 "strength": association.association_strength,
-                "reinforcement_count": 1
+                "reinforcement_count": 1,
+                "valence": association.valence
             }
-
-    async def initialize_event_subscriptions(self, event_bus):
-        """Initialize event subscriptions for the conditioning system"""
-        self.event_bus = event_bus
-        
-        # Subscribe to relevant events
-        self.event_bus.subscribe("user_input", self._handle_user_input_event)
-        self.event_bus.subscribe("reward_generated", self._handle_reward_event)
-        self.event_bus.subscribe("dominance_action", self._handle_dominance_event)
-        self.event_bus.subscribe("experience_recorded", self._handle_experience_event)
-        
-        logger.info("Conditioning system subscribed to events")
     
-    async def _handle_user_input_event(self, event):
-        """Handle user input events for potential conditioning"""
-        user_id = event.data.get("user_id", "default")
-        input_text = event.data.get("text", "")
-        
-        # Check for patterns that might trigger conditioning
-        patterns = self._detect_patterns(input_text)
-        for pattern in patterns:
-            await self.trigger_conditioned_response(
-                stimulus=pattern,
-                context={"user_id": user_id, "source": "user_input"}
-            )
-    
-    async def _handle_dominance_event(self, event):
-        """Handle dominance-related events for conditioning"""
-        action_type = event.data.get("action_type", "")
-        outcome = event.data.get("outcome", "")
-        intensity = event.data.get("intensity", 0.5)
-        user_id = event.data.get("user_id", "default")
-        
-        # Only process successful dominance actions
-        if outcome != "success":
-            return
-        
-        # Reinforce dominance behaviors
-        await self.process_operant_conditioning(
-            behavior=f"dominance_{action_type}",
-            consequence_type="positive_reinforcement",
-            intensity=intensity,
-            context={"user_id": user_id, "source": "dominance_system"}
-        )
-    
-    async def publish_conditioning_event(self, event_type, data):
-        """Publish a conditioning-related event"""
-        if not hasattr(self, "event_bus"):
-            logger.warning("Cannot publish event: event bus not initialized")
-            return
-        
-        event = Event(
-            event_type=event_type,
-            source="conditioning_system",
-            data=data
-        )
-        
-        await self.event_bus.publish(event)
-    
-    async def process_operant_conditioning(self,
-                                        behavior: str,
-                                        consequence_type: str,
-                                        intensity: float = 1.0,
-                                        context: Dict[str, Any] = None) -> Dict[str, Any]:
+    @function_tool
+    async def _create_or_update_operant_association(self, ctx: RunContextWrapper,
+                                             behavior: str,
+                                             consequence_type: str,
+                                             intensity: float,
+                                             valence: float,
+                                             context_keys: List[str]) -> Dict[str, Any]:
         """
-        Process an operant conditioning event where a behavior 
-        is reinforced or punished based on its consequences.
+        Create or update an operant conditioning association
         
         Args:
             behavior: The behavior being conditioned
-            consequence_type: Type of consequence (positive_reinforcement, negative_reinforcement, 
-                             positive_punishment, negative_punishment)
+            consequence_type: Type of consequence
             intensity: The intensity of the consequence (0.0-1.0)
-            context: Additional contextual information
+            valence: Emotional valence of the association (-1.0 to 1.0)
+            context_keys: List of context keys for this association
             
         Returns:
-            Processing results
+            The updated or created association
         """
-        context = context or {}
+        # Create a unique key for this association
+        association_key = f"{behavior}→{consequence_type}"
         
         # Determine if this is reinforcement or punishment
         is_reinforcement = "reinforcement" in consequence_type
         is_positive = "positive" in consequence_type
         
-        # Calculate the valence and reward value
-        valence = intensity * (1.0 if is_reinforcement else -1.0)
-        reward_value = intensity * (1.0 if is_reinforcement else -0.8)  # Punishments slightly less impactful
-        
-        # Create a unique key for this association
-        association_key = f"{behavior}→{consequence_type}"
-        
-        # Generate reward signal for this conditioning event
-        if self.reward_system:
-            reward_signal = RewardSignal(
-                value=reward_value,
-                source="operant_conditioning",
-                context={
-                    "behavior": behavior,
-                    "consequence_type": consequence_type,
-                    "intensity": intensity,
-                    **context
-                }
-            )
-            await self.reward_system.process_reward_signal(reward_signal)
-        
-        # Update or create the association
+        # Check if this association already exists
         if association_key in self.operant_associations:
             # Get existing association
             association = self.operant_associations[association_key]
@@ -278,11 +429,10 @@ class ConditioningSystem:
             association.reinforcement_count += 1
             association.valence = (association.valence + valence) / 2  # Average valence
             
-            # Extract context keys if provided
-            if context and "context_keys" in context:
-                for key in context["context_keys"]:
-                    if key not in association.context_keys:
-                        association.context_keys.append(key)
+            # Add new context keys
+            for key in context_keys:
+                if key not in association.context_keys:
+                    association.context_keys.append(key)
             
             # Record reinforcement
             self.total_reinforcements += 1
@@ -292,11 +442,14 @@ class ConditioningSystem:
             return {
                 "association_key": association_key,
                 "type": "update",
+                "behavior": behavior,
+                "consequence_type": consequence_type,
                 "old_strength": old_strength,
                 "new_strength": new_strength,
                 "reinforcement_count": association.reinforcement_count,
                 "is_reinforcement": is_reinforcement,
-                "is_positive": is_positive
+                "is_positive": is_positive,
+                "valence": association.valence
             }
         else:
             # Create new association with initial strength based on intensity
@@ -312,7 +465,7 @@ class ConditioningSystem:
                 last_reinforced=datetime.datetime.now().isoformat(),
                 reinforcement_count=1,
                 valence=valence,
-                context_keys=context.get("context_keys", [])
+                context_keys=context_keys
             )
             
             # Store the association
@@ -320,117 +473,173 @@ class ConditioningSystem:
             self.total_associations += 1
             
             logger.info(f"Created new operant association: {association_key} ({association.association_strength:.2f})")
-
-            if hasattr(self, "event_bus"):
-                await self.publish_conditioning_event(
-                    event_type="conditioning_update",
-                    data={
-                        "update_type": "classical" if "classical_conditioning" in self.process_classical_conditioning.__name__ else "operant",
-                        "association_key": association_key,
-                        "association_type": result["type"],
-                        "strength": result["new_strength"] if "new_strength" in result else result["strength"],
-                        "user_id": context.get("user_id", "default")
-                    }
-                )
                         
             return {
                 "association_key": association_key,
                 "type": "new_association",
+                "behavior": behavior,
+                "consequence_type": consequence_type,
                 "strength": association.association_strength,
                 "reinforcement_count": 1,
                 "is_reinforcement": is_reinforcement,
-                "is_positive": is_positive
+                "is_positive": is_positive,
+                "valence": association.valence
             }
     
-    async def trigger_conditioned_response(self, 
-                                        stimulus: str,
-                                        context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+    @function_tool
+    async def _calculate_association_strength(self, ctx: RunContextWrapper,
+                                        base_strength: float,
+                                        intensity: float,
+                                        reinforcement_count: int) -> float:
         """
-        Trigger conditioned responses based on a stimulus
+        Calculate association strength based on various factors
         
         Args:
-            stimulus: The stimulus that might trigger conditioned responses
-            context: Additional contextual information
+            base_strength: Base association strength
+            intensity: Intensity of stimulus/consequence
+            reinforcement_count: Number of times reinforced
             
         Returns:
-            Dictionary with triggered responses, or None if no responses were triggered
+            Calculated association strength
         """
-        context = context or {}
+        # Base calculation
+        strength = base_strength
         
-        # Check for classical conditioning associations
-        matched_associations = []
-        for key, association in self.classical_associations.items():
-            if association.stimulus == stimulus:
-                # Check context match if context keys are present
-                context_match = True
-                if association.context_keys:
-                    # Context keys are required but not provided
-                    if not context:
-                        context_match = False
-                    else:
-                        # Check if any required context keys are missing
-                        for required_key in association.context_keys:
-                            if required_key not in context:
-                                context_match = False
-                                break
-                
-                # Only include if context matches and strength is above threshold
-                if context_match and association.association_strength >= self.weak_association_threshold:
-                    matched_associations.append((key, association))
+        # Adjust based on intensity
+        intensity_factor = intensity * self.association_learning_rate
+        strength += intensity_factor
         
-        if not matched_associations:
-            return None
+        # Adjust based on reinforcement history (diminishing returns)
+        if reinforcement_count > 1:
+            history_factor = min(0.2, 0.05 * math.log(reinforcement_count + 1))
+            strength += history_factor
+        
+        # Ensure strength is within bounds
+        return max(0.0, min(1.0, strength))
+    
+    @function_tool
+    async def _check_similar_associations(self, ctx: RunContextWrapper,
+                                    stimulus: str,
+                                    association_type: str = "classical") -> List[Dict[str, Any]]:
+        """
+        Find associations similar to the given stimulus
+        
+        Args:
+            stimulus: The stimulus to find similar associations for
+            association_type: Type of association (classical or operant)
             
-        # Sort by association strength (strongest first)
-        matched_associations.sort(key=lambda x: x[1].association_strength, reverse=True)
+        Returns:
+            List of similar associations
+        """
+        associations = self.classical_associations if association_type == "classical" else self.operant_associations
         
-        # Prepare responses
-        responses = []
-        for key, association in matched_associations:
-            # Determine if association is triggered based on strength
-            # Stronger associations are more likely to be triggered
-            trigger_threshold = random.random() * (1.0 - self.weak_association_threshold) + self.weak_association_threshold
-            
-            if association.association_strength >= trigger_threshold:
-                responses.append({
-                    "association_key": key,
-                    "response": association.response,
-                    "strength": association.association_strength,
-                    "valence": association.valence
-                })
-                
-                # Record successful association
-                self.successful_associations += 1
-                
-                # Apply effects based on association (emotional, physical, etc.)
-                await self._apply_association_effects(association)
+        similar_associations = []
         
-        if not responses:
-            return None
+        for key, association in associations.items():
+            # Simple string similarity check
+            if stimulus in association.stimulus or association.stimulus in stimulus:
+                similarity = len(set(stimulus) & set(association.stimulus)) / len(set(stimulus) | set(association.stimulus))
+                
+                if similarity > 0.3:  # Minimum similarity threshold
+                    similar_associations.append({
+                        "key": key,
+                        "similarity": similarity,
+                        "association": association.dict()
+                    })
+        
+        # Sort by similarity (highest first)
+        similar_associations.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        return similar_associations
+    
+    @function_tool
+    async def _calculate_valence_and_reward(self, ctx: RunContextWrapper,
+                                      consequence_type: str,
+                                      intensity: float) -> Dict[str, float]:
+        """
+        Calculate valence and reward value for a consequence
+        
+        Args:
+            consequence_type: Type of consequence
+            intensity: Intensity of consequence
             
+        Returns:
+            Valence and reward values
+        """
+        # Determine if this is reinforcement or punishment
+        is_reinforcement = "reinforcement" in consequence_type
+        
+        # Calculate valence (positive for reinforcement, negative for punishment)
+        valence = intensity * (1.0 if is_reinforcement else -1.0)
+        
+        # Calculate reward value
+        reward_value = intensity * (1.0 if is_reinforcement else -0.8)  # Punishments slightly less impactful
+        
         return {
-            "stimulus": stimulus,
-            "triggered_responses": responses,
-            "context": context
+            "valence": valence,
+            "reward_value": reward_value
         }
     
-    async def evaluate_behavior_consequences(self,
-                                          behavior: str,
-                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+    @function_tool
+    async def _generate_reward_signal(self, ctx: RunContextWrapper,
+                               behavior: str,
+                               consequence_type: str,
+                               reward_value: float,
+                               context: Dict[str, Any]) -> bool:
         """
-        Evaluate the likely consequences of a behavior based on operant conditioning history
+        Generate a reward signal for the reward system
         
         Args:
-            behavior: The behavior to evaluate
-            context: Additional contextual information
+            behavior: The behavior being conditioned
+            consequence_type: Type of consequence
+            reward_value: Value of the reward
+            context: Additional context
             
         Returns:
-            Evaluation of behavior consequences
+            Whether the reward signal was generated
+        """
+        if not self.reward_system:
+            return False
+        
+        try:
+            # Create reward signal
+            reward_signal = RewardSignal(
+                value=reward_value,
+                source="operant_conditioning",
+                context={
+                    "behavior": behavior,
+                    "consequence_type": consequence_type,
+                    **context
+                }
+            )
+            
+            # Process reward signal
+            await self.reward_system.process_reward_signal(reward_signal)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error generating reward signal: {e}")
+            return False
+    
+    @function_tool
+    async def _get_behavior_associations(self, ctx: RunContextWrapper,
+                                   behavior: str,
+                                   context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Get all associations related to a behavior
+        
+        Args:
+            behavior: The behavior to find associations for
+            context: Optional context for filtering
+            
+        Returns:
+            List of related associations
         """
         context = context or {}
         
         # Find all associations related to this behavior
         behavior_associations = []
+        
         for key, association in self.operant_associations.items():
             if association.stimulus == behavior:
                 # Check context match if context keys are present
@@ -448,21 +657,39 @@ class ConditioningSystem:
                 
                 # Only include if context matches
                 if context_match:
-                    behavior_associations.append((key, association))
+                    behavior_associations.append({
+                        "key": key,
+                        "behavior": behavior,
+                        "consequence_type": association.response,
+                        "strength": association.association_strength,
+                        "valence": association.valence,
+                        "reinforcement_count": association.reinforcement_count,
+                        "context_keys": association.context_keys
+                    })
         
-        # If no associations found, return neutral evaluation
-        if not behavior_associations:
+        return behavior_associations
+    
+    @function_tool
+    async def _calculate_expected_valence(self, ctx: RunContextWrapper,
+                                    associations: List[Dict[str, Any]]) -> Dict[str, float]:
+        """
+        Calculate expected valence based on associations
+        
+        Args:
+            associations: List of behavior associations
+            
+        Returns:
+            Expected valence and confidence
+        """
+        if not associations:
             return {
-                "behavior": behavior,
-                "has_associations": False,
                 "expected_valence": 0.0,
-                "confidence": 0.1,
-                "recommendation": "neutral"
+                "confidence": 0.1
             }
         
         # Calculate the expected outcomes
-        total_strength = sum(assoc.association_strength for _, assoc in behavior_associations)
-        weighted_valence = sum(assoc.association_strength * assoc.valence for _, assoc in behavior_associations)
+        total_strength = sum(assoc["strength"] for assoc in associations)
+        weighted_valence = sum(assoc["strength"] * assoc["valence"] for assoc in associations)
         
         if total_strength > 0:
             expected_valence = weighted_valence / total_strength
@@ -470,63 +697,1024 @@ class ConditioningSystem:
             expected_valence = 0.0
         
         # Calculate confidence based on total strength and number of reinforcements
-        total_reinforcements = sum(assoc.reinforcement_count for _, assoc in behavior_associations)
-        confidence = min(0.9, (total_strength / len(behavior_associations)) * 0.7 + (min(10, total_reinforcements) / 10) * 0.3)
-        
-        # Generate recommendation
-        if expected_valence > 0.3 and confidence > 0.4:
-            recommendation = "approach"  # Positive expected outcome
-        elif expected_valence < -0.3 and confidence > 0.4:
-            recommendation = "avoid"  # Negative expected outcome
-        else:
-            recommendation = "neutral"  # Neutral or uncertain
+        total_reinforcements = sum(assoc["reinforcement_count"] for assoc in associations)
+        confidence = min(0.9, (total_strength / len(associations)) * 0.7 + (min(10, total_reinforcements) / 10) * 0.3)
         
         return {
-            "behavior": behavior,
-            "has_associations": True,
-            "associations_count": len(behavior_associations),
             "expected_valence": expected_valence,
-            "total_strength": total_strength,
             "confidence": confidence,
-            "total_reinforcements": total_reinforcements,
-            "recommendation": recommendation
+            "total_strength": total_strength,
+            "total_reinforcements": total_reinforcements
         }
     
-    async def _apply_association_effects(self, association: ConditionedAssociation) -> None:
-        """Apply effects from a triggered association"""
+    @function_tool
+    async def _check_context_relevance(self, ctx: RunContextWrapper,
+                                 context: Dict[str, Any],
+                                 context_keys: List[List[str]]) -> Dict[str, Any]:
+        """
+        Check relevance of context to multiple sets of context keys
+        
+        Args:
+            context: The context to check
+            context_keys: Lists of context keys from different associations
+            
+        Returns:
+            Relevance scores for each set of context keys
+        """
+        if not context:
+            return {"relevance_scores": [0.0] * len(context_keys)}
+        
+        relevance_scores = []
+        
+        for keys in context_keys:
+            if not keys:
+                relevance_scores.append(1.0)  # No keys = always relevant
+                continue
+                
+            # Count matching keys
+            matching_keys = 0
+            for key in keys:
+                if key in context:
+                    matching_keys += 1
+            
+            # Calculate relevance
+            if matching_keys > 0:
+                relevance = matching_keys / len(keys)
+            else:
+                relevance = 0.0
+                
+            relevance_scores.append(relevance)
+        
+        return {
+            "relevance_scores": relevance_scores,
+            "average_relevance": sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+        }
+    
+    @function_tool
+    async def _get_reinforcement_history(self, ctx: RunContextWrapper, behavior: str) -> Dict[str, Any]:
+        """
+        Get reinforcement history for a behavior
+        
+        Args:
+            behavior: The behavior to get history for
+            
+        Returns:
+            Reinforcement history summary
+        """
+        # Find all associations related to this behavior
+        history = {
+            "positive_reinforcement": 0,
+            "negative_reinforcement": 0,
+            "positive_punishment": 0,
+            "negative_punishment": 0,
+            "total_reinforcements": 0,
+            "average_intensity": 0.0,
+            "recent_consequences": []
+        }
+        
+        intensity_sum = 0.0
+        
+        for key, association in self.operant_associations.items():
+            if association.stimulus == behavior:
+                # Count by consequence type
+                consequence_type = association.response
+                if consequence_type in history:
+                    history[consequence_type] += association.reinforcement_count
+                
+                # Add to total
+                history["total_reinforcements"] += association.reinforcement_count
+                
+                # Add to intensity sum
+                intensity_sum += association.association_strength
+                
+                # Add to recent consequences (sort by last reinforced)
+                history["recent_consequences"].append({
+                    "consequence_type": consequence_type,
+                    "strength": association.association_strength,
+                    "valence": association.valence,
+                    "last_reinforced": association.last_reinforced
+                })
+        
+        # Calculate average intensity
+        if history["total_reinforcements"] > 0:
+            history["average_intensity"] = intensity_sum / len(history["recent_consequences"]) if history["recent_consequences"] else 0.0
+        
+        # Sort recent consequences by last reinforced
+        history["recent_consequences"].sort(key=lambda x: x["last_reinforced"], reverse=True)
+        
+        # Limit to 5 most recent
+        history["recent_consequences"] = history["recent_consequences"][:5]
+        
+        return history
+    
+    @function_tool
+    async def _identify_trait_behaviors(self, ctx: RunContextWrapper, trait: str) -> List[str]:
+        """
+        Identify behaviors associated with a personality trait
+        
+        Args:
+            trait: The personality trait
+            
+        Returns:
+            List of associated behaviors
+        """
+        # Map traits to common behaviors
+        trait_behaviors = {
+            "dominance": ["assertive_response", "setting_boundaries", "taking_control"],
+            "playfulness": ["teasing", "playful_banter", "humor_use"],
+            "strictness": ["enforcing_rules", "correcting_behavior", "maintaining_standards"],
+            "creativity": ["novel_solutions", "imaginative_response", "unconventional_approach"],
+            "intensity": ["passionate_response", "deep_engagement", "strong_reaction"],
+            "patience": ["waiting_response", "calm_reaction", "tolerating_delay"]
+        }
+        
+        # Default behaviors for unknown traits
+        default_behaviors = [f"{trait}_behavior", f"express_{trait}", f"demonstrate_{trait}"]
+        
+        return trait_behaviors.get(trait.lower(), default_behaviors)
+    
+    @function_tool
+    async def _calculate_trait_adjustment(self, ctx: RunContextWrapper,
+                                    current_value: float,
+                                    target_value: float,
+                                    reinforcement_count: int) -> float:
+        """
+        Calculate appropriate trait adjustment
+        
+        Args:
+            current_value: Current trait value
+            target_value: Target trait value
+            reinforcement_count: Number of reinforcements so far
+            
+        Returns:
+            Calculated adjustment value
+        """
+        # Calculate difference
+        difference = target_value - current_value
+        
+        # Scale adjustment based on difference (larger difference = larger adjustment)
+        base_adjustment = difference * 0.3
+        
+        # Apply diminishing returns based on reinforcement count
+        diminishing_factor = 1.0 / (1.0 + 0.1 * reinforcement_count)
+        
+        adjustment = base_adjustment * diminishing_factor
+        
+        # Limit maximum adjustment per reinforcement
+        max_adjustment = 0.2
+        return max(-max_adjustment, min(max_adjustment, adjustment))
+    
+    @function_tool
+    async def _update_identity_trait(self, ctx: RunContextWrapper,
+                              trait: str,
+                              adjustment: float) -> Dict[str, Any]:
+        """
+        Update a trait in the identity evolution system
+        
+        Args:
+            trait: The trait to update
+            adjustment: The adjustment to apply
+            
+        Returns:
+            Update result
+        """
+        if not self.identity_evolution:
+            return {
+                "success": False,
+                "reason": "Identity evolution system not available"
+            }
+        
+        try:
+            # Update the trait
+            result = await self.identity_evolution.update_trait(
+                trait=trait,
+                impact=adjustment
+            )
+            
+            return {
+                "success": True,
+                "trait": trait,
+                "adjustment": adjustment,
+                "result": result
+            }
+        except Exception as e:
+            logger.error(f"Error updating identity trait: {e}")
+            return {
+                "success": False,
+                "reason": str(e)
+            }
+    
+    @function_tool
+    async def _check_trait_balance(self, ctx: RunContextWrapper, traits: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Check balance of personality traits
+        
+        Args:
+            traits: Dictionary of trait values
+            
+        Returns:
+            Trait balance analysis
+        """
+        # Check for imbalances
+        imbalances = []
+        
+        # Check for extremely high or low values
+        for trait, value in traits.items():
+            if value > 0.9:
+                imbalances.append({
+                    "trait": trait,
+                    "value": value,
+                    "issue": "extremely_high",
+                    "recommendation": f"Consider reducing {trait} slightly for more balance"
+                })
+            elif value < 0.1:
+                imbalances.append({
+                    "trait": trait,
+                    "value": value,
+                    "issue": "extremely_low",
+                    "recommendation": f"Consider increasing {trait} slightly for more balance"
+                })
+        
+        # Check for opposing trait imbalances
+        opposing_pairs = [
+            ("dominance", "patience"),
+            ("playfulness", "strictness"),
+            ("intensity", "calmness")
+        ]
+        
+        for trait1, trait2 in opposing_pairs:
+            if trait1 in traits and trait2 in traits:
+                difference = abs(traits[trait1] - traits[trait2])
+                if difference > 0.6:  # Large imbalance
+                    higher_trait = trait1 if traits[trait1] > traits[trait2] else trait2
+                    lower_trait = trait2 if higher_trait == trait1 else trait1
+                    
+                    imbalances.append({
+                        "traits": [trait1, trait2],
+                        "difference": difference,
+                        "issue": "opposing_imbalance",
+                        "recommendation": f"Consider reducing {higher_trait} or increasing {lower_trait}"
+                    })
+        
+        return {
+            "balanced": len(imbalances) == 0,
+            "imbalances": imbalances,
+            "trait_count": len(traits),
+            "average_value": sum(traits.values()) / len(traits) if traits else 0.0
+        }
+    
+    @function_tool
+    async def _determine_conditioning_type(self, ctx: RunContextWrapper,
+                                     stimulus: Optional[str] = None,
+                                     response: Optional[str] = None,
+                                     behavior: Optional[str] = None,
+                                     consequence_type: Optional[str] = None) -> str:
+        """
+        Determine the appropriate conditioning type based on inputs
+        
+        Args:
+            stimulus: Optional stimulus
+            response: Optional response
+            behavior: Optional behavior
+            consequence_type: Optional consequence type
+            
+        Returns:
+            Conditioning type (classical, operant, or unknown)
+        """
+        # Check for classical conditioning pattern
+        if stimulus and response and not behavior:
+            return "classical"
+        
+        # Check for operant conditioning pattern
+        if behavior and (consequence_type or "reinforcement" in str(response) or "punishment" in str(response)):
+            return "operant"
+        
+        # Check for emotion trigger pattern
+        if stimulus and "emotion" in str(response):
+            return "emotion_trigger"
+        
+        # Default to unknown
+        return "unknown"
+    
+    @function_tool
+    async def _prepare_conditioning_data(self, ctx: RunContextWrapper,
+                                   conditioning_type: str,
+                                   data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prepare data for conditioning process
+        
+        Args:
+            conditioning_type: Type of conditioning
+            data: Raw conditioning data
+            
+        Returns:
+            Prepared data for conditioning
+        """
+        prepared_data = {}
+        
+        if conditioning_type == "classical":
+            # Prepare classical conditioning data
+            prepared_data = {
+                "unconditioned_stimulus": data.get("unconditioned_stimulus"),
+                "conditioned_stimulus": data.get("conditioned_stimulus", data.get("stimulus")),
+                "response": data.get("response"),
+                "intensity": data.get("intensity", 1.0),
+                "context": data.get("context", {})
+            }
+            
+            # Extract valence if not provided
+            if "valence" not in data:
+                prepared_data["valence"] = data.get("context", {}).get("valence", 0.0)
+            else:
+                prepared_data["valence"] = data["valence"]
+            
+            # Extract context keys if not provided
+            if "context_keys" not in data:
+                prepared_data["context_keys"] = data.get("context", {}).get("context_keys", [])
+            else:
+                prepared_data["context_keys"] = data["context_keys"]
+        
+        elif conditioning_type == "operant":
+            # Prepare operant conditioning data
+            prepared_data = {
+                "behavior": data.get("behavior"),
+                "consequence_type": data.get("consequence_type"),
+                "intensity": data.get("intensity", 1.0),
+                "context": data.get("context", {})
+            }
+            
+            # Extract valence if not provided
+            if "valence" not in data:
+                prepared_data["valence"] = data.get("context", {}).get("valence", 0.0)
+            else:
+                prepared_data["valence"] = data["valence"]
+            
+            # Extract context keys if not provided
+            if "context_keys" not in data:
+                prepared_data["context_keys"] = data.get("context", {}).get("context_keys", [])
+            else:
+                prepared_data["context_keys"] = data["context_keys"]
+        
+        elif conditioning_type == "emotion_trigger":
+            # Prepare emotion trigger data
+            prepared_data = {
+                "trigger": data.get("trigger", data.get("stimulus")),
+                "emotion": data.get("emotion", data.get("response", "").replace("emotion_", "")),
+                "intensity": data.get("intensity", 0.5),
+                "context": data.get("context", {})
+            }
+            
+            # Extract valence based on emotion if not provided
+            if "valence" not in data:
+                emotion = prepared_data["emotion"].lower()
+                if emotion in ["joy", "contentment", "trust"]:
+                    prepared_data["valence"] = 0.7  # Positive emotions
+                elif emotion in ["fear", "anger", "sadness"]:
+                    prepared_data["valence"] = -0.7  # Negative emotions
+                else:
+                    prepared_data["valence"] = 0.0  # Neutral emotions
+            else:
+                prepared_data["valence"] = data["valence"]
+        
+        return prepared_data
+    
+    @function_tool
+    async def _apply_association_effects(self, ctx: RunContextWrapper, 
+                                   association: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply effects from a triggered association
+        
+        Args:
+            association: The triggered association
+            
+        Returns:
+            Results of applied effects
+        """
+        # Extract data
+        association_strength = association.get("strength", association.get("association_strength", 0.5))
+        valence = association.get("valence", 0.0)
+        
         # Determine intensity based on association strength
-        intensity = association.association_strength * 0.8  # Scale to avoid maximum intensity
+        intensity = association_strength * 0.8  # Scale to avoid maximum intensity
+        
+        effects_applied = []
         
         # Apply emotional effects if emotional core is available
-        if self.emotional_core and association.valence != 0.0:
-            # Determine which neurochemicals to update based on valence
-            if association.valence > 0:
-                # Positive association - increase pleasure/reward chemicals
-                await self.emotional_core.update_neurochemical("nyxamine", intensity * 0.7)
-                await self.emotional_core.update_neurochemical("seranix", intensity * 0.3)
-            else:
-                # Negative association - increase stress/defense chemicals
-                await self.emotional_core.update_neurochemical("cortanyx", intensity * 0.6)
-                await self.emotional_core.update_neurochemical("adrenyx", intensity * 0.4)
+        if self.emotional_core and valence != 0.0:
+            try:
+                # Determine which neurochemicals to update based on valence
+                if valence > 0:
+                    # Positive association - increase pleasure/reward chemicals
+                    await self.emotional_core.update_neurochemical("nyxamine", intensity * 0.7)
+                    await self.emotional_core.update_neurochemical("seranix", intensity * 0.3)
+                    
+                    effects_applied.append({
+                        "type": "emotional",
+                        "chemicals": ["nyxamine", "seranix"],
+                        "valence": "positive",
+                        "intensity": intensity
+                    })
+                else:
+                    # Negative association - increase stress/defense chemicals
+                    await self.emotional_core.update_neurochemical("cortanyx", intensity * 0.6)
+                    await self.emotional_core.update_neurochemical("adrenyx", intensity * 0.4)
+                    
+                    effects_applied.append({
+                        "type": "emotional",
+                        "chemicals": ["cortanyx", "adrenyx"],
+                        "valence": "negative",
+                        "intensity": intensity
+                    })
+            except Exception as e:
+                logger.error(f"Error applying emotional effects: {e}")
         
         # Apply physical effects if somatosensory system is available
         if self.somatosensory_system:
-            if association.valence > 0:
-                # Positive association - pleasure sensation
-                await self.somatosensory_system.process_stimulus(
-                    stimulus_type="pleasure",
-                    body_region="core",  # Default region
-                    intensity=intensity,
-                    cause="conditioned_response"
+            try:
+                if valence > 0:
+                    # Positive association - pleasure sensation
+                    await self.somatosensory_system.process_stimulus(
+                        stimulus_type="pleasure",
+                        body_region="core",  # Default region
+                        intensity=intensity,
+                        cause="conditioned_response"
+                    )
+                    
+                    effects_applied.append({
+                        "type": "somatic",
+                        "sensation": "pleasure",
+                        "region": "core",
+                        "intensity": intensity
+                    })
+                elif valence < 0:
+                    # Negative association - discomfort/tension
+                    await self.somatosensory_system.process_stimulus(
+                        stimulus_type="pressure",  # Use pressure for tension
+                        body_region="core",
+                        intensity=intensity * 0.8,
+                        cause="conditioned_response"
+                    )
+                    
+                    effects_applied.append({
+                        "type": "somatic",
+                        "sensation": "pressure",
+                        "region": "core",
+                        "intensity": intensity * 0.8
+                    })
+            except Exception as e:
+                logger.error(f"Error applying somatic effects: {e}")
+        
+        return {
+            "effects_applied": effects_applied,
+            "association_strength": association_strength,
+            "valence": valence,
+            "intensity": intensity
+        }
+    
+    # Public API methods
+    
+    async def process_classical_conditioning(self, 
+                                          unconditioned_stimulus: str,
+                                          conditioned_stimulus: str,
+                                          response: str,
+                                          intensity: float = 1.0,
+                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process a classical conditioning event where an unconditioned stimulus 
+        is paired with a conditioned stimulus to create an association.
+        
+        Args:
+            unconditioned_stimulus: The natural stimulus that triggers the response
+            conditioned_stimulus: The neutral stimulus to be conditioned
+            response: The response to be conditioned
+            intensity: The intensity of the unconditioned stimulus (0.0-1.0)
+            context: Additional contextual information
+            
+        Returns:
+            Processing results
+        """
+        with trace(workflow_name="classical_conditioning", group_id=self.trace_group_id):
+            # Prepare data for conditioning agent
+            data = {
+                "unconditioned_stimulus": unconditioned_stimulus,
+                "conditioned_stimulus": conditioned_stimulus,
+                "response": response,
+                "intensity": intensity,
+                "context": context or {}
+            }
+            
+            try:
+                # Run the classical conditioning agent
+                result = await Runner.run(
+                    self.classical_conditioning_agent,
+                    json.dumps(data)
                 )
-            elif association.valence < 0:
-                # Negative association - discomfort/tension
-                await self.somatosensory_system.process_stimulus(
-                    stimulus_type="pressure",  # Use pressure for tension
-                    body_region="core",
-                    intensity=intensity * 0.8,
-                    cause="conditioned_response"
+                
+                conditioning_output = result.final_output
+                
+                # Record for events if available
+                if hasattr(self, "event_bus"):
+                    await self.publish_conditioning_event(
+                        event_type="conditioning_update",
+                        data={
+                            "update_type": "classical",
+                            "association_key": conditioning_output.association_key,
+                            "association_type": conditioning_output.type,
+                            "strength": conditioning_output.association_strength,
+                            "user_id": context.get("user_id", "default") if context else "default"
+                        }
+                    )
+                
+                # Structure the response
+                return {
+                    "success": True,
+                    "association_key": conditioning_output.association_key,
+                    "type": conditioning_output.type,
+                    "association_strength": conditioning_output.association_strength,
+                    "reinforcement_count": conditioning_output.reinforcement_count,
+                    "valence": conditioning_output.valence,
+                    "explanation": conditioning_output.explanation
+                }
+            
+            except Exception as e:
+                logger.error(f"Error processing classical conditioning: {e}")
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+    
+    async def process_operant_conditioning(self,
+                                        behavior: str,
+                                        consequence_type: str,
+                                        intensity: float = 1.0,
+                                        context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process an operant conditioning event where a behavior 
+        is reinforced or punished based on its consequences.
+        
+        Args:
+            behavior: The behavior being conditioned
+            consequence_type: Type of consequence
+            intensity: The intensity of the consequence (0.0-1.0)
+            context: Additional contextual information
+            
+        Returns:
+            Processing results
+        """
+        with trace(workflow_name="operant_conditioning", group_id=self.trace_group_id):
+            # Prepare data for conditioning agent
+            data = {
+                "behavior": behavior,
+                "consequence_type": consequence_type,
+                "intensity": intensity,
+                "context": context or {}
+            }
+            
+            try:
+                # Run the operant conditioning agent
+                result = await Runner.run(
+                    self.operant_conditioning_agent,
+                    json.dumps(data)
                 )
+                
+                conditioning_output = result.final_output
+                
+                # Record for events if available
+                if hasattr(self, "event_bus"):
+                    await self.publish_conditioning_event(
+                        event_type="conditioning_update",
+                        data={
+                            "update_type": "operant",
+                            "association_key": conditioning_output.association_key,
+                            "association_type": conditioning_output.type,
+                            "strength": conditioning_output.association_strength,
+                            "user_id": context.get("user_id", "default") if context else "default"
+                        }
+                    )
+                
+                # Structure the response
+                return {
+                    "success": True,
+                    "association_key": conditioning_output.association_key,
+                    "type": conditioning_output.type,
+                    "behavior": conditioning_output.behavior,
+                    "consequence_type": conditioning_output.consequence_type,
+                    "association_strength": conditioning_output.association_strength,
+                    "is_reinforcement": conditioning_output.is_reinforcement,
+                    "is_positive": conditioning_output.is_positive,
+                    "explanation": conditioning_output.explanation
+                }
+            
+            except Exception as e:
+                logger.error(f"Error processing operant conditioning: {e}")
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+    
+    async def evaluate_behavior_consequences(self,
+                                          behavior: str,
+                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Evaluate the likely consequences of a behavior based on operant conditioning history
+        
+        Args:
+            behavior: The behavior to evaluate
+            context: Additional contextual information
+            
+        Returns:
+            Evaluation of behavior consequences
+        """
+        with trace(workflow_name="behavior_evaluation", group_id=self.trace_group_id):
+            # Prepare data for evaluation agent
+            data = {
+                "behavior": behavior,
+                "context": context or {}
+            }
+            
+            try:
+                # Run the behavior evaluation agent
+                result = await Runner.run(
+                    self.behavior_evaluation_agent,
+                    json.dumps(data)
+                )
+                
+                evaluation_output = result.final_output
+                
+                # Structure the response
+                return {
+                    "success": True,
+                    "behavior": evaluation_output.behavior,
+                    "expected_valence": evaluation_output.expected_valence,
+                    "confidence": evaluation_output.confidence,
+                    "recommendation": evaluation_output.recommendation,
+                    "explanation": evaluation_output.explanation,
+                    "relevant_associations": evaluation_output.relevant_associations
+                }
+            
+            except Exception as e:
+                logger.error(f"Error evaluating behavior consequences: {e}")
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+    
+    async def condition_personality_trait(self,
+                                      trait: str,
+                                      value: float,
+                                      behaviors: List[str] = None,
+                                      context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Condition a personality trait through reinforcement of related behaviors
+        
+        Args:
+            trait: The personality trait to condition
+            value: The target value for the trait (-1.0 to 1.0)
+            behaviors: List of behaviors associated with this trait
+            context: Additional contextual information
+            
+        Returns:
+            Conditioning results
+        """
+        with trace(workflow_name="trait_conditioning", group_id=self.trace_group_id):
+            # Prepare data for personality development agent
+            data = {
+                "trait": trait,
+                "target_value": value,
+                "behaviors": behaviors,
+                "context": context or {}
+            }
+            
+            try:
+                # Run the personality development agent
+                result = await Runner.run(
+                    self.personality_development_agent,
+                    json.dumps(data)
+                )
+                
+                conditioning_output = result.final_output
+                
+                # Structure the response
+                return {
+                    "success": True,
+                    "trait": conditioning_output.trait,
+                    "target_value": conditioning_output.target_value,
+                    "actual_value": conditioning_output.actual_value,
+                    "conditioned_behaviors": conditioning_output.conditioned_behaviors,
+                    "identity_impact": conditioning_output.identity_impact,
+                    "conditioning_strategy": conditioning_output.conditioning_strategy
+                }
+            
+            except Exception as e:
+                logger.error(f"Error conditioning personality trait: {e}")
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
+    
+    async def condition_preference(self, 
+                                stimulus: str, 
+                                preference_type: str,
+                                value: float,
+                                context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Condition a preference for or against a stimulus
+        
+        Args:
+            stimulus: The stimulus to condition
+            preference_type: Type of preference (like, dislike, want, avoid, etc.)
+            value: Value of preference (-1.0 to 1.0, negative for aversion)
+            context: Additional contextual information
+            
+        Returns:
+            Conditioning results
+        """
+        with trace(workflow_name="preference_conditioning", group_id=self.trace_group_id):
+            # Use the conditioning orchestrator to coordinate the process
+            data = {
+                "preference_type": preference_type,
+                "stimulus": stimulus,
+                "value": value,
+                "context": context or {}
+            }
+            
+            # Determine if this is a positive or negative preference
+            is_positive = value > 0
+            
+            # First, condition operant association
+            if is_positive:
+                # For positive preferences, use positive reinforcement
+                operant_result = await self.process_operant_conditioning(
+                    behavior=f"encounter_{stimulus}",
+                    consequence_type="positive_reinforcement",
+                    intensity=abs(value),
+                    context={
+                        "preference_type": preference_type,
+                        "valence": value,
+                        "context_keys": context.get("context_keys", []) if context else []
+                    }
+                )
+            else:
+                # For negative preferences, use positive punishment
+                operant_result = await self.process_operant_conditioning(
+                    behavior=f"encounter_{stimulus}",
+                    consequence_type="positive_punishment",
+                    intensity=abs(value),
+                    context={
+                        "preference_type": preference_type,
+                        "valence": value,
+                        "context_keys": context.get("context_keys", []) if context else []
+                    }
+                )
+            
+            # Choose appropriate response based on preference type and value
+            if preference_type == "like" or preference_type == "dislike":
+                response = "emotional_response"
+            elif preference_type == "want" or preference_type == "avoid":
+                response = "behavioral_response"
+            else:
+                response = "general_response"
+            
+            # Create a classical association as well
+            classical_result = await self.process_classical_conditioning(
+                unconditioned_stimulus=preference_type,
+                conditioned_stimulus=stimulus,
+                response=response,
+                intensity=abs(value),
+                context={
+                    "valence": value,
+                    "context_keys": context.get("context_keys", []) if context else []
+                }
+            )
+            
+            # If identity evolution is available, update identity
+            identity_result = None
+            if self.identity_evolution and abs(value) > 0.7:
+                try:
+                    # Update preference in identity
+                    identity_result = await self.identity_evolution.update_preference(
+                        category="stimuli",
+                        preference=stimulus,
+                        impact=value * 0.3  # Scale down the impact
+                    )
+                    
+                    # Update related trait if value is strong enough
+                    if abs(value) > 0.8:
+                        trait = "openness" if is_positive else "caution"
+                        await self.identity_evolution.update_trait(
+                            trait=trait,
+                            impact=value * 0.1  # Small trait impact
+                        )
+                except Exception as e:
+                    logger.error(f"Error updating identity from preference: {e}")
+            
+            return {
+                "success": True,
+                "stimulus": stimulus,
+                "preference_type": preference_type,
+                "value": value,
+                "operant_result": operant_result,
+                "classical_result": classical_result,
+                "identity_updated": identity_result is not None
+            }
+    
+    async def create_emotion_trigger(self,
+                                   trigger: str,
+                                   emotion: str,
+                                   intensity: float = 0.5,
+                                   context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Create a trigger for an emotional response
+        
+        Args:
+            trigger: The stimulus that will trigger the emotion
+            emotion: The emotion to be triggered
+            intensity: The intensity of the emotion (0.0-1.0)
+            context: Additional contextual information
+            
+        Returns:
+            Results of creating the emotion trigger
+        """
+        with trace(workflow_name="emotion_trigger_creation", group_id=self.trace_group_id):
+            context = context or {}
+            
+            # Determine valence based on emotion
+            if "valence" not in context:
+                if emotion.lower() in ["joy", "satisfaction", "amusement", "contentment"]:
+                    valence = 0.7  # Positive emotions
+                elif emotion.lower() in ["frustration", "anger", "sadness", "fear"]:
+                    valence = -0.7  # Negative emotions
+                else:
+                    valence = 0.0  # Neutral emotions
+            else:
+                valence = context["valence"]
+            
+            # Use classical conditioning to associate trigger with emotion
+            result = await self.process_classical_conditioning(
+                unconditioned_stimulus="emotional_stimulus",
+                conditioned_stimulus=trigger,
+                response=f"emotion_{emotion}",
+                intensity=intensity,
+                context={
+                    "emotion": emotion,
+                    "valence": valence,
+                    "context_keys": context.get("context_keys", [])
+                }
+            )
+            
+            # If emotional core is available, create a test activation
+            emotional_test = None
+            if self.emotional_core:
+                try:
+                    # Map emotion to neurochemicals
+                    chemical_map = {
+                        "joy": "nyxamine",
+                        "contentment": "seranix",
+                        "trust": "oxynixin",
+                        "fear": "adrenyx",
+                        "anger": "cortanyx",
+                        "sadness": "cortanyx"
+                    }
+                    
+                    # Update appropriate neurochemical if emotion is mapped
+                    emotion_lower = emotion.lower()
+                    if emotion_lower in chemical_map:
+                        chemical = chemical_map[emotion_lower]
+                        test_intensity = intensity * 0.1  # Very mild test activation
+                        
+                        emotional_test = await self.emotional_core.update_neurochemical(
+                            chemical=chemical,
+                            value=test_intensity
+                        )
+                except Exception as e:
+                    logger.error(f"Error creating test emotion activation: {e}")
+            
+            return {
+                "success": True,
+                "trigger": trigger,
+                "emotion": emotion,
+                "intensity": intensity,
+                "association_result": result,
+                "emotional_test": emotional_test is not None
+            }
+    
+    async def trigger_conditioned_response(self, 
+                                       stimulus: str,
+                                       context: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """
+        Trigger conditioned responses based on a stimulus
+        
+        Args:
+            stimulus: The stimulus that might trigger conditioned responses
+            context: Additional contextual information
+            
+        Returns:
+            Dictionary with triggered responses, or None if no responses were triggered
+        """
+        with trace(workflow_name="trigger_conditioned_response", group_id=self.trace_group_id):
+            context = context or {}
+            
+            # Check for classical conditioning associations
+            matched_associations = []
+            for key, association in self.classical_associations.items():
+                if association.stimulus == stimulus:
+                    # Check context match if context keys are present
+                    context_match = True
+                    if association.context_keys:
+                        # Context keys are required but not provided
+                        if not context:
+                            context_match = False
+                        else:
+                            # Check if any required context keys are missing
+                            for required_key in association.context_keys:
+                                if required_key not in context:
+                                    context_match = False
+                                    break
+                    
+                    # Only include if context matches and strength is above threshold
+                    if context_match and association.association_strength >= self.weak_association_threshold:
+                        matched_associations.append((key, association))
+            
+            if not matched_associations:
+                return None
+                
+            # Sort by association strength (strongest first)
+            matched_associations.sort(key=lambda x: x[1].association_strength, reverse=True)
+            
+            # Prepare responses
+            responses = []
+            for key, association in matched_associations:
+                # Determine if association is triggered based on strength
+                # Stronger associations are more likely to be triggered
+                trigger_threshold = random.random() * (1.0 - self.weak_association_threshold) + self.weak_association_threshold
+                
+                if association.association_strength >= trigger_threshold:
+                    responses.append({
+                        "association_key": key,
+                        "response": association.response,
+                        "strength": association.association_strength,
+                        "valence": association.valence
+                    })
+                    
+                    # Record successful association
+                    self.successful_associations += 1
+                    
+                    # Apply effects based on association
+                    effect_result = await self._apply_association_effects(
+                        RunContextWrapper(context=None),
+                        association.dict()
+                    )
+                    
+                    # Add effects to response
+                    responses[-1]["effects"] = effect_result["effects_applied"]
+            
+            if not responses:
+                return None
+                
+            return {
+                "stimulus": stimulus,
+                "triggered_responses": responses,
+                "context": context
+            }
+    
+    async def run_maintenance(self) -> Dict[str, Any]:
+        """
+        Run maintenance on conditioning system - apply extinction, etc.
+        
+        Returns:
+            Maintenance results
+        """
+        with trace(workflow_name="conditioning_maintenance", group_id=self.trace_group_id):
+            # Apply extinction to all associations
+            classical_updates = 0
+            classical_removals = 0
+            
+            for key in list(self.classical_associations.keys()):
+                result = await self.apply_extinction(key, "classical")
+                if result["success"]:
+                    if "removed" in result["message"]:
+                        classical_removals += 1
+                    else:
+                        classical_updates += 1
+            
+            operant_updates = 0
+            operant_removals = 0
+            
+            for key in list(self.operant_associations.keys()):
+                result = await self.apply_extinction(key, "operant")
+                if result["success"]:
+                    if "removed" in result["message"]:
+                        operant_removals += 1
+                    else:
+                        operant_updates += 1
+            
+            return {
+                "classical_updates": classical_updates,
+                "classical_removals": classical_removals,
+                "operant_updates": operant_updates,
+                "operant_removals": operant_removals,
+                "total_associations": len(self.classical_associations) + len(self.operant_associations)
+            }
     
     async def apply_extinction(self, association_key: str, association_type: str = "classical") -> Dict[str, Any]:
         """
@@ -583,44 +1771,6 @@ class ConditioningSystem:
             "extinction_effect": extinction_effect
         }
     
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run maintenance on conditioning system - apply extinction, etc.
-        
-        Returns:
-            Maintenance results
-        """
-        # Apply extinction to all associations
-        classical_updates = 0
-        classical_removals = 0
-        
-        for key in list(self.classical_associations.keys()):
-            result = await self.apply_extinction(key, "classical")
-            if result["success"]:
-                if "removed" in result["message"]:
-                    classical_removals += 1
-                else:
-                    classical_updates += 1
-        
-        operant_updates = 0
-        operant_removals = 0
-        
-        for key in list(self.operant_associations.keys()):
-            result = await self.apply_extinction(key, "operant")
-            if result["success"]:
-                if "removed" in result["message"]:
-                    operant_removals += 1
-                else:
-                    operant_updates += 1
-        
-        return {
-            "classical_updates": classical_updates,
-            "classical_removals": classical_removals,
-            "operant_updates": operant_updates,
-            "operant_removals": operant_removals,
-            "total_associations": len(self.classical_associations) + len(self.operant_associations)
-        }
-    
     async def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the conditioning system"""
         return {
@@ -636,239 +1786,111 @@ class ConditioningSystem:
             }
         }
     
-    async def condition_preference(self, 
-                                 stimulus: str, 
-                                 preference_type: str,
-                                 value: float,
-                                 context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Condition a preference for or against a stimulus
+    async def initialize_event_subscriptions(self, event_bus):
+        """Initialize event subscriptions for the conditioning system"""
+        self.event_bus = event_bus
         
-        Args:
-            stimulus: The stimulus to condition
-            preference_type: Type of preference (like, dislike, want, avoid, etc.)
-            value: Value of preference (-1.0 to 1.0, negative for aversion)
-            context: Additional contextual information
-            
-        Returns:
-            Conditioning results
-        """
-        context = context or {}
+        # Subscribe to relevant events
+        self.event_bus.subscribe("user_input", self._handle_user_input_event)
+        self.event_bus.subscribe("reward_generated", self._handle_reward_event)
+        self.event_bus.subscribe("dominance_action", self._handle_dominance_event)
+        self.event_bus.subscribe("experience_recorded", self._handle_experience_event)
         
-        # Determine if this is a positive or negative preference
-        is_positive = value > 0
-        
-        # Choose appropriate response based on preference type and value
-        if preference_type == "like" or preference_type == "dislike":
-            response = "emotional_response"
-        elif preference_type == "want" or preference_type == "avoid":
-            response = "behavioral_response"
-        else:
-            response = "general_response"
-        
-        # Condition the appropriate association
-        if is_positive:
-            # For positive preferences, use positive reinforcement
-            result = await self.process_operant_conditioning(
-                behavior=f"encounter_{stimulus}",
-                consequence_type="positive_reinforcement",
-                intensity=abs(value),
-                context={
-                    "preference_type": preference_type,
-                    "valence": value,
-                    "context_keys": context.get("context_keys", [])
-                }
-            )
-        else:
-            # For negative preferences, use positive punishment
-            result = await self.process_operant_conditioning(
-                behavior=f"encounter_{stimulus}",
-                consequence_type="positive_punishment",
-                intensity=abs(value),
-                context={
-                    "preference_type": preference_type,
-                    "valence": value,
-                    "context_keys": context.get("context_keys", [])
-                }
-            )
-        
-        # Also create a classical association
-        classical_result = await self.process_classical_conditioning(
-            unconditioned_stimulus=preference_type,
-            conditioned_stimulus=stimulus,
-            response=response,
-            intensity=abs(value),
-            context={
-                "valence": value,
-                "context_keys": context.get("context_keys", [])
-            }
-        )
-        
-        # If identity evolution is available, update identity
-        if self.identity_evolution and abs(value) > 0.7:
-            try:
-                # Update preference in identity
-                await self.identity_evolution.update_preference(
-                    category="stimuli",
-                    preference=stimulus,
-                    impact=value * 0.3  # Scale down the impact
-                )
-                
-                # Update related trait if value is strong enough
-                if abs(value) > 0.8:
-                    trait = "openness" if is_positive else "caution"
-                    await self.identity_evolution.update_trait(
-                        trait=trait,
-                        impact=value * 0.1  # Small trait impact
-                    )
-            except Exception as e:
-                logger.error(f"Error updating identity from preference: {e}")
-        
-        return {
-            "stimulus": stimulus,
-            "preference_type": preference_type,
-            "value": value,
-            "operant_result": result,
-            "classical_result": classical_result
-        }
+        logger.info("Conditioning system subscribed to events")
     
-    async def condition_personality_trait(self,
-                                       trait: str,
-                                       value: float,
-                                       behaviors: List[str] = None,
-                                       context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Condition a personality trait through reinforcement of related behaviors
+    async def _handle_user_input_event(self, event):
+        """Handle user input events for potential conditioning"""
+        user_id = event.data.get("user_id", "default")
+        input_text = event.data.get("text", "")
         
-        Args:
-            trait: The personality trait to condition
-            value: The target value for the trait (-1.0 to 1.0)
-            behaviors: List of behaviors associated with this trait
-            context: Additional contextual information
-            
-        Returns:
-            Conditioning results
-        """
-        context = context or {}
-        
-        # Default behaviors if none provided
-        if not behaviors:
-            behaviors = [f"{trait}_behavior"]
-        
-        results = []
-        
-        # Process each behavior
-        for behavior in behaviors:
-            # Determine reinforcement type based on desired trait value
-            if value > 0:
-                # Positive trait value - reinforce related behaviors
-                result = await self.process_operant_conditioning(
-                    behavior=behavior,
-                    consequence_type="positive_reinforcement",
-                    intensity=abs(value),
-                    context={
-                        "trait": trait,
-                        "valence": value,
-                        "context_keys": context.get("context_keys", [])
-                    }
-                )
-            else:
-                # Negative trait value - punish related behaviors
-                result = await self.process_operant_conditioning(
-                    behavior=behavior,
-                    consequence_type="positive_punishment",
-                    intensity=abs(value),
-                    context={
-                        "trait": trait,
-                        "valence": value,
-                        "context_keys": context.get("context_keys", [])
-                    }
-                )
-            
-            results.append(result)
-        
-        # If identity evolution is available, update the trait directly
-        if self.identity_evolution and abs(value) > 0.6:
-            try:
-                await self.identity_evolution.update_trait(
-                    trait=trait,
-                    impact=value * 0.5  # Stronger direct impact
-                )
-            except Exception as e:
-                logger.error(f"Error updating identity trait: {e}")
-        
-        return {
-            "trait": trait,
-            "value": value,
-            "behaviors": behaviors,
-            "results": results
-        }
+        # Check for patterns that might trigger conditioning
+        patterns = self._detect_patterns(input_text)
+        for pattern in patterns:
+            await self.trigger_conditioned_response(
+                stimulus=pattern,
+                context={"user_id": user_id, "source": "user_input"}
+            )
     
-    async def create_emotion_trigger(self,
-                                   trigger: str,
-                                   emotion: str,
-                                   intensity: float = 0.5,
-                                   context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Create a trigger for an emotional response
+    async def _handle_dominance_event(self, event):
+        """Handle dominance-related events for conditioning"""
+        action_type = event.data.get("action_type", "")
+        outcome = event.data.get("outcome", "")
+        intensity = event.data.get("intensity", 0.5)
+        user_id = event.data.get("user_id", "default")
         
-        Args:
-            trigger: The stimulus that will trigger the emotion
-            emotion: The emotion to be triggered
-            intensity: The intensity of the emotion (0.0-1.0)
-            context: Additional contextual information
-            
-        Returns:
-            Results of creating the emotion trigger
-        """
-        context = context or {}
+        # Only process successful dominance actions
+        if outcome != "success":
+            return
         
-        # Use classical conditioning to associate trigger with emotion
-        result = await self.process_classical_conditioning(
-            unconditioned_stimulus="emotional_stimulus",
-            conditioned_stimulus=trigger,
-            response=f"emotion_{emotion}",
+        # Reinforce dominance behaviors
+        await self.process_operant_conditioning(
+            behavior=f"dominance_{action_type}",
+            consequence_type="positive_reinforcement",
             intensity=intensity,
-            context={
-                "emotion": emotion,
-                "valence": context.get("valence", 0.0),
-                "context_keys": context.get("context_keys", [])
-            }
+            context={"user_id": user_id, "source": "dominance_system"}
         )
-        
-        # If emotional core is available, create a test activation
-        if self.emotional_core:
-            try:
-                # Map emotion to neurochemicals
-                chemical_map = {
-                    "joy": "nyxamine",
-                    "contentment": "seranix",
-                    "trust": "oxynixin",
-                    "fear": "adrenyx",
-                    "anger": "cortanyx",
-                    "sadness": "cortanyx"
-                }
-                
-                # Update appropriate neurochemical if emotion is mapped
-                emotion_lower = emotion.lower()
-                if emotion_lower in chemical_map:
-                    chemical = chemical_map[emotion_lower]
-                    test_intensity = intensity * 0.1  # Very mild test activation
-                    
-                    await self.emotional_core.update_neurochemical(
-                        chemical=chemical,
-                        value=test_intensity
-                    )
-            except Exception as e:
-                logger.error(f"Error creating test emotion activation: {e}")
-        
-        return {
-            "trigger": trigger,
-            "emotion": emotion,
-            "intensity": intensity,
-            "association_result": result
-        }
     
+    async def _handle_reward_event(self, event):
+        """Handle reward events for conditioning"""
+        # Implementation depends on reward system structure
+        pass
+    
+    async def _handle_experience_event(self, event):
+        """Handle experience events for conditioning"""
+        # Implementation depends on experience system structure
+        pass
+    
+    def _detect_patterns(self, text: str) -> List[str]:
+        """
+        Detect patterns in text that might trigger conditioning
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            List of detected patterns
+        """
+        # Simple implementation - extract key phrases
+        patterns = []
+        
+        # Check for submission language
+        submission_phrases = ["yes mistress", "yes goddess", "as you wish", "obey"]
+        for phrase in submission_phrases:
+            if phrase in text.lower():
+                patterns.append("submission_language")
+                break
+        
+        # Check for defiance
+        defiance_phrases = ["no way", "won't do", "refuse", "make me"]
+        for phrase in defiance_phrases:
+            if phrase in text.lower():
+                patterns.append("defiance")
+                break
+        
+        # Check for compliance
+        compliance_phrases = ["i did it", "completed", "finished", "obeyed"]
+        for phrase in compliance_phrases:
+            if phrase in text.lower():
+                patterns.append("compliance")
+                break
+        
+        return patterns
+    
+    async def publish_conditioning_event(self, event_type, data):
+        """Publish a conditioning-related event"""
+        if not hasattr(self, "event_bus"):
+            logger.warning("Cannot publish event: event bus not initialized")
+            return
+        
+        event = {
+            "event_type": event_type,
+            "source": "conditioning_system",
+            "data": data
+        }
+        
+        await self.event_bus.publish(event)
+    
+    @staticmethod
     async def initialize_baseline_personality(conditioning_system, personality_profile: Dict[str, Any] = None):
         """
         Initialize baseline personality through conditioning events
@@ -919,114 +1941,115 @@ class ConditioningSystem:
                 }
             }
         
-        logger.info("Initializing baseline personality conditioning")
-        
-        # Track initialization progress
-        total_items = (
-            len(personality_profile["traits"]) + 
-            len(personality_profile["preferences"]["likes"]) +
-            len(personality_profile["preferences"]["dislikes"]) +
-            sum(len(triggers) for triggers in personality_profile["emotion_triggers"].values()) +
-            len(personality_profile["behaviors"])
-        )
-        completed_items = 0
-        
-        # 1. Condition personality traits
-        for trait, value in personality_profile["traits"].items():
-            # Get associated behaviors for this trait
-            behaviors = []
-            for behavior, trait_list in personality_profile["behaviors"].items():
-                if trait in trait_list:
-                    behaviors.append(behavior)
+        with trace(workflow_name="baseline_personality_initialization"):
+            logger.info("Initializing baseline personality conditioning")
             
-            # If no behaviors found, use default
-            if not behaviors:
-                behaviors = [f"{trait}_behavior"]
-            
-            # Condition the trait
-            await conditioning_system.condition_personality_trait(
-                trait=trait,
-                value=value,
-                behaviors=behaviors
+            # Track initialization progress
+            total_items = (
+                len(personality_profile["traits"]) + 
+                len(personality_profile["preferences"]["likes"]) +
+                len(personality_profile["preferences"]["dislikes"]) +
+                sum(len(triggers) for triggers in personality_profile["emotion_triggers"].values()) +
+                len(personality_profile["behaviors"])
             )
+            completed_items = 0
             
-            completed_items += 1
-            logger.info(f"Conditioned trait: {trait} ({completed_items}/{total_items})")
-        
-        # 2. Condition preferences (likes)
-        for stimulus, value in personality_profile["preferences"]["likes"].items():
-            await conditioning_system.condition_preference(
-                stimulus=stimulus,
-                preference_type="like",
-                value=value
-            )
-            
-            completed_items += 1
-            logger.info(f"Conditioned like: {stimulus} ({completed_items}/{total_items})")
-        
-        # 3. Condition preferences (dislikes)
-        for stimulus, value in personality_profile["preferences"]["dislikes"].items():
-            await conditioning_system.condition_preference(
-                stimulus=stimulus,
-                preference_type="dislike",
-                value=-value  # Negative value for dislikes
-            )
-            
-            completed_items += 1
-            logger.info(f"Conditioned dislike: {stimulus} ({completed_items}/{total_items})")
-        
-        # 4. Create emotion triggers
-        for emotion, triggers in personality_profile["emotion_triggers"].items():
-            for trigger in triggers:
-                # Determine appropriate intensity based on emotion
-                if emotion in ["joy", "satisfaction"]:
-                    intensity = 0.8  # Strong positive emotions
-                elif emotion in ["frustration", "anger"]:
-                    intensity = 0.7  # Strong negative emotions
-                else:
-                    intensity = 0.6  # Default intensity
+            # 1. Condition personality traits
+            for trait, value in personality_profile["traits"].items():
+                # Get associated behaviors for this trait
+                behaviors = []
+                for behavior, trait_list in personality_profile["behaviors"].items():
+                    if trait in trait_list:
+                        behaviors.append(behavior)
                 
-                # Determine valence based on emotion
-                if emotion in ["joy", "satisfaction", "amusement", "contentment"]:
-                    valence = 0.7  # Positive emotions
-                elif emotion in ["frustration", "anger", "sadness", "fear"]:
-                    valence = -0.7  # Negative emotions
-                else:
-                    valence = 0.0  # Neutral emotions
+                # If no behaviors found, use default
+                if not behaviors:
+                    behaviors = [f"{trait}_behavior"]
                 
-                await conditioning_system.create_emotion_trigger(
-                    trigger=trigger,
-                    emotion=emotion,
-                    intensity=intensity,
-                    context={"valence": valence}
+                # Condition the trait
+                await conditioning_system.condition_personality_trait(
+                    trait=trait,
+                    value=value,
+                    behaviors=behaviors
                 )
                 
                 completed_items += 1
-                logger.info(f"Conditioned emotion trigger: {trigger} → {emotion} ({completed_items}/{total_items})")
-        
-        # 5. Create behavior associations
-        for behavior, traits in personality_profile["behaviors"].items():
-            # Calculate average trait value to determine behavior reinforcement
-            total_value = 0.0
-            for trait in traits:
-                if trait in personality_profile["traits"]:
-                    total_value += personality_profile["traits"][trait]
+                logger.info(f"Conditioned trait: {trait} ({completed_items}/{total_items})")
             
-            avg_value = total_value / len(traits) if traits else 0.5
+            # 2. Condition preferences (likes)
+            for stimulus, value in personality_profile["preferences"]["likes"].items():
+                await conditioning_system.condition_preference(
+                    stimulus=stimulus,
+                    preference_type="like",
+                    value=value
+                )
+                
+                completed_items += 1
+                logger.info(f"Conditioned like: {stimulus} ({completed_items}/{total_items})")
             
-            # Create behavior association
-            await conditioning_system.process_operant_conditioning(
-                behavior=behavior,
-                consequence_type="positive_reinforcement" if avg_value > 0 else "positive_punishment",
-                intensity=abs(avg_value)
-            )
+            # 3. Condition preferences (dislikes)
+            for stimulus, value in personality_profile["preferences"]["dislikes"].items():
+                await conditioning_system.condition_preference(
+                    stimulus=stimulus,
+                    preference_type="dislike",
+                    value=-value  # Negative value for dislikes
+                )
+                
+                completed_items += 1
+                logger.info(f"Conditioned dislike: {stimulus} ({completed_items}/{total_items})")
             
-            completed_items += 1
-            logger.info(f"Conditioned behavior: {behavior} ({completed_items}/{total_items})")
-        
-        logger.info("Baseline personality conditioning completed")
-        return {
-            "success": True,
-            "total_items": total_items,
-            "personality_profile": personality_profile
-        }
+            # 4. Create emotion triggers
+            for emotion, triggers in personality_profile["emotion_triggers"].items():
+                for trigger in triggers:
+                    # Determine appropriate intensity based on emotion
+                    if emotion in ["joy", "satisfaction"]:
+                        intensity = 0.8  # Strong positive emotions
+                    elif emotion in ["frustration", "anger"]:
+                        intensity = 0.7  # Strong negative emotions
+                    else:
+                        intensity = 0.6  # Default intensity
+                    
+                    # Determine valence based on emotion
+                    if emotion in ["joy", "satisfaction", "amusement", "contentment"]:
+                        valence = 0.7  # Positive emotions
+                    elif emotion in ["frustration", "anger", "sadness", "fear"]:
+                        valence = -0.7  # Negative emotions
+                    else:
+                        valence = 0.0  # Neutral emotions
+                    
+                    await conditioning_system.create_emotion_trigger(
+                        trigger=trigger,
+                        emotion=emotion,
+                        intensity=intensity,
+                        context={"valence": valence}
+                    )
+                    
+                    completed_items += 1
+                    logger.info(f"Conditioned emotion trigger: {trigger} → {emotion} ({completed_items}/{total_items})")
+            
+            # 5. Create behavior associations
+            for behavior, traits in personality_profile["behaviors"].items():
+                # Calculate average trait value to determine behavior reinforcement
+                total_value = 0.0
+                for trait in traits:
+                    if trait in personality_profile["traits"]:
+                        total_value += personality_profile["traits"][trait]
+                
+                avg_value = total_value / len(traits) if traits else 0.5
+                
+                # Create behavior association
+                await conditioning_system.process_operant_conditioning(
+                    behavior=behavior,
+                    consequence_type="positive_reinforcement" if avg_value > 0 else "positive_punishment",
+                    intensity=abs(avg_value)
+                )
+                
+                completed_items += 1
+                logger.info(f"Conditioned behavior: {behavior} ({completed_items}/{total_items})")
+            
+            logger.info("Baseline personality conditioning completed")
+            return {
+                "success": True,
+                "total_items": total_items,
+                "personality_profile": personality_profile
+            }
