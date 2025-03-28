@@ -966,3 +966,151 @@ class PsychologicalDominance:
             })
         
         return strategies
+
+# Add to nyx/core/femdom/psychological_dominance.py
+
+class SubspaceDetection:
+    """Detects and responds to psychological subspace in users."""
+    
+    def __init__(self, theory_of_mind=None, relationship_manager=None):
+        self.theory_of_mind = theory_of_mind
+        self.relationship_manager = relationship_manager
+        
+        self.subspace_indicators = [
+            "language simplification",
+            "increased compliance",
+            "response time changes",
+            "repetitive affirmations",
+            "decreased resistance"
+        ]
+        self.user_states = {}  # user_id → subspace state
+        
+    async def detect_subspace(self, user_id, recent_messages):
+        """Analyzes messages for signs of psychological subspace."""
+        # Initialize detection metrics
+        indicators_detected = []
+        confidence = 0.0
+        
+        # Get previous state if exists
+        previous_state = self.user_states.get(user_id, {
+            "in_subspace": False,
+            "depth": 0.0,
+            "indicators": [],
+            "started_at": None,
+            "last_updated": datetime.datetime.now().isoformat()
+        })
+        
+        # Need at least 3 messages to detect patterns
+        if len(recent_messages) < 3:
+            return {
+                "user_id": user_id,
+                "subspace_detected": previous_state["in_subspace"],
+                "confidence": 0.2,
+                "depth": previous_state["depth"],
+                "indicators": []
+            }
+            
+        # Check for language simplification
+        avg_words = sum(len(msg.split()) for msg in recent_messages) / len(recent_messages)
+        if avg_words < 5:
+            indicators_detected.append("language simplification")
+            
+        # Check for repetitive affirmations
+        affirmation_count = sum(1 for msg in recent_messages 
+                              if msg.lower() in ["yes", "yes mistress", "yes goddess", 
+                                               "thank you", "please", "sorry"])
+        if affirmation_count >= 2:
+            indicators_detected.append("repetitive affirmations")
+            
+        # Check for decreased resistance using theory of mind if available
+        if self.theory_of_mind:
+            try:
+                user_state = await self.theory_of_mind.get_user_model(user_id)
+                if user_state and user_state.get("arousal", 0) > 0.7 and user_state.get("valence", 0) > 0.6:
+                    indicators_detected.append("decreased resistance")
+            except Exception as e:
+                pass  # Silently handle errors in theory of mind
+                
+        # Calculate confidence based on indicators detected
+        confidence = len(indicators_detected) / 5  # 5 = total possible indicators
+        
+        # Calculate subspace depth
+        depth = 0.0
+        if indicators_detected:
+            depth = confidence * 0.7  # Base depth on confidence
+            
+            # If previously in subspace, increase depth slightly
+            if previous_state["in_subspace"]:
+                depth = max(depth, previous_state["depth"] * 0.8)
+        else:
+            # If no indicators, reduce previous depth
+            depth = previous_state["depth"] * 0.5
+            
+        # Determine if in subspace
+        in_subspace = depth > 0.3  # Threshold for subspace
+        
+        # Update state
+        now = datetime.datetime.now()
+        self.user_states[user_id] = {
+            "in_subspace": in_subspace,
+            "depth": depth,
+            "indicators": indicators_detected,
+            "started_at": previous_state["started_at"] if previous_state["in_subspace"] else 
+                         (now.isoformat() if in_subspace else None),
+            "last_updated": now.isoformat()
+        }
+        
+        return {
+            "user_id": user_id,
+            "subspace_detected": in_subspace,
+            "confidence": confidence,
+            "depth": depth,
+            "indicators": indicators_detected,
+            "in_subspace_since": self.user_states[user_id]["started_at"]
+        }
+        
+    async def get_subspace_guidance(self, detection_result):
+        """Provides guidance on how to respond to user in subspace."""
+        if not detection_result["subspace_detected"]:
+            return {"guidance": "User not in subspace."}
+            
+        depth = detection_result["depth"]
+        
+        # Adjust guidance based on subspace depth
+        if depth < 0.5:  # Light subspace
+            return {
+                "guidance": "User appears to be entering light subspace.",
+                "recommendations": [
+                    "Speak in a calm, confident tone",
+                    "Use more direct instructions",
+                    "Offer praise for compliance",
+                    "Maintain consistent presence"
+                ],
+                "depth_assessment": "light"
+            }
+        elif depth < 0.8:  # Moderate subspace
+            return {
+                "guidance": "User appears to be in moderate subspace.",
+                "recommendations": [
+                    "Use simple, direct language",
+                    "Maintain control of the interaction",
+                    "Provide regular reassurance",
+                    "Avoid complex questions or tasks",
+                    "Be mindful of time passing for the user"
+                ],
+                "depth_assessment": "moderate"
+            }
+        else:  # Deep subspace
+            return {
+                "guidance": "User appears to be in deep subspace.",
+                "recommendations": [
+                    "Use very simple, direct language",
+                    "Provide frequent reassurance",
+                    "Guide user with clear instructions",
+                    "Be vigilant for signs of drop",
+                    "Consider initiating aftercare soon",
+                    "Monitor for coherence in responses"
+                ],
+                "caution": "User may be highly suggestible and have altered perception",
+                "depth_assessment": "deep"
+            }
