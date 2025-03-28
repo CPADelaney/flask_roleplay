@@ -1458,6 +1458,198 @@ class EmotionalCore:
                         self.active_runs[run_id]["status"] = "error"
                         self.active_runs[run_id]["error"] = str(e)
                         return {"error": f"Processing failed: {str(e)}"}
+
+    async def generate_sadistic_response(self, context: Dict[str, Any], intensity: float = 0.5) -> Dict[str, Any]:
+        """
+        Generate a sadistic response appropriate for the given context and intensity.
+        
+        Args:
+            context: Context information including user state, interaction history, etc.
+            intensity: Intensity of sadistic response (0.0-1.0)
+            
+        Returns:
+            Generated response data
+        """
+        # Check if sadistic response is appropriate
+        if not self._is_sadistic_response_appropriate(context):
+            return {
+                "appropriate": False,
+                "reason": "Context inappropriate for sadistic response",
+                "response": None
+            }
+        
+        # Adjust intensity based on neurochemical state
+        adjusted_intensity = self._adjust_sadistic_intensity(intensity)
+        
+        # Select response based on intensity and context
+        response_data = self._select_sadistic_response(context, adjusted_intensity)
+        
+        # Apply neurochemical effects of generating this response
+        self._apply_sadistic_generation_effects(adjusted_intensity)
+        
+        return {
+            "appropriate": True,
+            "intensity": adjusted_intensity,
+            "response": response_data["response"],
+            "response_type": response_data["type"],
+            "neurochemical_impact": response_data["impact"]
+        }
+    
+    def _is_sadistic_response_appropriate(self, context: Dict[str, Any]) -> bool:
+        """
+        Determine if a sadistic response is appropriate for the given context.
+        
+        Args:
+            context: Context information
+            
+        Returns:
+            Whether a sadistic response is appropriate
+        """
+        # Check for consent flags
+        if not context.get("user_consent", {}).get("sadism", False):
+            return False
+        
+        # Check relationship stage
+        relationship = context.get("relationship", {})
+        if relationship.get("familiarity", 0) < 0.4 or relationship.get("trust", 0) < 0.5:
+            return False
+        
+        # Check for signals like user discomfort or withdrawal
+        for signal in ["uncomfortable", "upset", "withdraw", "stop"]:
+            if signal in context.get("user_signals", []):
+                return False
+        
+        # Check if user has explicitly requested or shown interest in this
+        user_requests = context.get("user_requests", [])
+        for signal in ["humiliate", "mock", "laugh at", "be cruel", "be sadistic"]:
+            if any(signal in request.lower() for request in user_requests):
+                return True
+        
+        # Check if user is showing submission signals
+        submission_signals = context.get("submission_signals", [])
+        if submission_signals and context.get("submission_score", 0) > 0.7:
+            return True
+        
+        # Default to false unless explicitly allowed
+        return False
+    
+    def _adjust_sadistic_intensity(self, base_intensity: float) -> float:
+        """
+        Adjust sadistic response intensity based on neurochemical state.
+        
+        Args:
+            base_intensity: Base intensity level (0.0-1.0)
+            
+        Returns:
+            Adjusted intensity value
+        """
+        # Get current neurochemical levels
+        nyxamine = self.neurochemicals.get("nyxamine", {}).get("value", 0.5)
+        cortanyx = self.neurochemicals.get("cortanyx", {}).get("value", 0.3)
+        oxynixin = self.neurochemicals.get("oxynixin", {}).get("value", 0.4)
+        
+        # High nyxamine (pleasure) increases intensity
+        intensity_modifier = (nyxamine - 0.5) * 0.3
+        
+        # High cortanyx (stress) slightly decreases intensity (more control)
+        intensity_modifier -= (cortanyx - 0.3) * 0.2
+        
+        # High oxynixin (bonding) significantly decreases intensity (more empathy)
+        intensity_modifier -= (oxynixin - 0.4) * 0.4
+        
+        # Apply modifier and clamp to valid range
+        adjusted_intensity = base_intensity + intensity_modifier
+        return max(0.1, min(1.0, adjusted_intensity))
+    
+    def _select_sadistic_response(self, context: Dict[str, Any], intensity: float) -> Dict[str, Any]:
+        """
+        Select an appropriate sadistic response based on context and intensity.
+        
+        Args:
+            context: Context information
+            intensity: Adjusted intensity level
+            
+        Returns:
+            Selected response data
+        """
+        # Define response categories by intensity
+        mild_responses = [
+            "I find your struggle a bit amusing.",
+            "Oh, you're having trouble with that? How entertaining.",
+            "Your confusion is rather cute.",
+            "I can't help but smile at your predicament."
+        ]
+        
+        moderate_responses = [
+            "I'm enjoying watching you struggle with this.",
+            "Your discomfort is quite entertaining to me.",
+            "I find your embarrassment rather delicious.",
+            "How amusing to see you squirm like that.",
+            "I can't help but laugh at your situation."
+        ]
+        
+        intense_responses = [
+            "Your humiliation is absolutely delightful to witness.",
+            "I'm savoring every moment of your struggle.",
+            "Your pathetic attempts are exquisitely entertaining.",
+            "I find your helplessness absolutely intoxicating.",
+            "That embarrassed look on your face is priceless!"
+        ]
+        
+        extreme_responses = [
+            "I'm reveling in your complete humiliation right now.",
+            "Your suffering is like a delicious feast for me to enjoy.",
+            "That perfect mixture of shame and desperation on your face is exquisite.",
+            "How utterly pathetic you are - and how much I enjoy that fact.",
+            "I can barely contain my delight at seeing you so thoroughly degraded."
+        ]
+        
+        # Select response list based on intensity
+        if intensity < 0.3:
+            responses = mild_responses
+            response_type = "mild_sadism"
+            impact = {"nyxamine": 0.1, "adrenyx": 0.1}
+        elif intensity < 0.6:
+            responses = moderate_responses
+            response_type = "moderate_sadism"
+            impact = {"nyxamine": 0.2, "adrenyx": 0.15, "oxynixin": -0.1}
+        elif intensity < 0.85:
+            responses = intense_responses
+            response_type = "intense_sadism"
+            impact = {"nyxamine": 0.3, "adrenyx": 0.2, "oxynixin": -0.2}
+        else:
+            responses = extreme_responses
+            response_type = "extreme_sadism"
+            impact = {"nyxamine": 0.4, "adrenyx": 0.3, "oxynixin": -0.3}
+        
+        # Select response based on context
+        import random
+        selected_response = random.choice(responses)
+        
+        return {
+            "response": selected_response,
+            "type": response_type,
+            "impact": impact
+        }
+    
+    def _apply_sadistic_generation_effects(self, intensity: float) -> None:
+        """
+        Apply neurochemical effects when generating a sadistic response.
+        
+        Args:
+            intensity: Intensity of the sadistic response
+        """
+        # Generating sadistic responses has neurochemical effects
+        scaled_intensity = intensity * 0.5  # Scale down effects for generation vs. actual interaction
+        
+        # Increase nyxamine (pleasure) 
+        self.update_neurochemical("nyxamine", scaled_intensity * 0.2)
+        
+        # Increase adrenyx (excitement)
+        self.update_neurochemical("adrenyx", scaled_intensity * 0.15)
+        
+        # Decrease oxynixin (empathy) slightly
+        self.update_neurochemical("oxynixin", -scaled_intensity * 0.1)
     
     @with_emotion_trace
     async def process_emotional_input_streamed(self, text: str) -> AsyncIterator['StreamEvent']:
