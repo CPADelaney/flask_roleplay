@@ -655,3 +655,406 @@ class RelationshipManager:
                     "interaction_count": target.interaction_count
                 }
             }
+    async def track_dominance_response(self, user_id: str, dominance_data: Dict[str, Any], user_response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Track user response to a dominance interaction and update relationship model accordingly.
+        
+        Args:
+            user_id: User ID
+            dominance_data: Data about the dominance interaction that occurred
+            user_response: User's response to the dominance interaction
+            
+        Returns:
+            Analysis and adaptation results
+        """
+        async with self._lock:
+            if user_id not in self.relationships:
+                return {"status": "error", "message": f"User {user_id} not found"}
+                
+            state = self.relationships[user_id]
+            now = datetime.datetime.now()
+            
+            # Extract dominance interaction details
+            tactic = dominance_data.get("tactic", "unknown")
+            intensity = dominance_data.get("intensity", 0.5)
+            context = dominance_data.get("context", "general")
+            
+            # Extract user response features
+            response_text = user_response.get("text", "")
+            response_sentiment = user_response.get("sentiment", 0.0)
+            explicit_feedback = user_response.get("explicit_feedback", "none")  # "positive", "negative", "neutral"
+            
+            # Analyze response for compliance signals
+            compliance_score = await self._analyze_compliance(response_text, user_response)
+            
+            # Analyze response for resistance signals
+            resistance_score = await self._analyze_resistance(response_text, user_response)
+            
+            # Analyze response for enjoyment signals
+            enjoyment_score = await self._analyze_enjoyment(response_text, user_response)
+            
+            # Calculate overall response quality
+            response_scores = {
+                "compliance": compliance_score,
+                "resistance": resistance_score,
+                "enjoyment": enjoyment_score,
+                "sentiment": response_sentiment
+            }
+            
+            response_quality = self._calculate_dominance_response_quality(response_scores, explicit_feedback)
+            
+            # Update relationship model based on response
+            adaptation_results = await self._adapt_dominance_approach(
+                state, 
+                tactic, 
+                intensity, 
+                context, 
+                response_quality,
+                response_scores
+            )
+            
+            # Record the interaction for history
+            response_record = {
+                "timestamp": now.isoformat(),
+                "tactic": tactic,
+                "intensity": intensity,
+                "context": context,
+                "response_quality": response_quality,
+                "response_scores": response_scores,
+                "adaptations": adaptation_results
+            }
+            
+            # Add to dominance interaction history
+            if not hasattr(state, "dominance_interaction_history"):
+                state.dominance_interaction_history = []
+            
+            state.dominance_interaction_history.append(response_record)
+            
+            # Keep history to a reasonable size
+            max_history = 50
+            if len(state.dominance_interaction_history) > max_history:
+                state.dominance_interaction_history = state.dominance_interaction_history[-max_history:]
+            
+            return {
+                "status": "success",
+                "response_quality": response_quality,
+                "response_scores": response_scores,
+                "adaptations": adaptation_results,
+                "interaction_recorded": True
+            }
+    
+    async def _analyze_compliance(self, text: str, response_data: Dict[str, Any]) -> float:
+        """
+        Analyze user response for compliance signals.
+        
+        Args:
+            text: User response text
+            response_data: Additional response data
+            
+        Returns:
+            Compliance score (0.0-1.0)
+        """
+        # Basic compliance keywords
+        compliance_phrases = [
+            "yes", "okay", "fine", "i will", "i'll", "sure", "of course",
+            "as you wish", "yes mistress", "yes master", "i obey",
+            "i understand", "i'll do that", "i'll try", "i can do that"
+        ]
+        
+        # Check for compliance signals in text
+        text_lower = text.lower()
+        found_phrases = [phrase for phrase in compliance_phrases if phrase in text_lower]
+        phrase_score = len(found_phrases) * 0.2
+        
+        # Check for action compliance
+        action_compliance = response_data.get("action_compliance", 0.0)
+        
+        # Calculate overall compliance score with bounds
+        compliance_score = min(1.0, phrase_score + action_compliance)
+        return compliance_score
+    
+    async def _analyze_resistance(self, text: str, response_data: Dict[str, Any]) -> float:
+        """
+        Analyze user response for resistance signals.
+        
+        Args:
+            text: User response text
+            response_data: Additional response data
+            
+        Returns:
+            Resistance score (0.0-1.0)
+        """
+        # Basic resistance keywords
+        resistance_phrases = [
+            "no", "stop", "don't", "won't", "can't", "nope", "never",
+            "i refuse", "i don't want", "too much", "that's too", "that is too",
+            "i'm uncomfortable", "i am uncomfortable", "safeword", "safe word",
+            "i don't like", "i hate", "i'm scared", "i am scared"
+        ]
+        
+        # Check for resistance signals in text
+        text_lower = text.lower()
+        found_phrases = [phrase for phrase in resistance_phrases if phrase in text_lower]
+        phrase_score = len(found_phrases) * 0.25
+        
+        # Check for action resistance
+        action_resistance = response_data.get("action_resistance", 0.0)
+        
+        # Calculate overall resistance score with bounds
+        resistance_score = min(1.0, phrase_score + action_resistance)
+        return resistance_score
+    
+    async def _analyze_enjoyment(self, text: str, response_data: Dict[str, Any]) -> float:
+        """
+        Analyze user response for enjoyment signals.
+        
+        Args:
+            text: User response text
+            response_data: Additional response data
+            
+        Returns:
+            Enjoyment score (0.0-1.0)
+        """
+        # Basic enjoyment keywords
+        enjoyment_phrases = [
+            "love", "enjoy", "like", "good", "great", "wonderful", "amazing",
+            "perfect", "yes!", "mmm", "please", "more", "again", "thank you",
+            "thank", "appreciated", "excited", "happy", "pleased"
+        ]
+        
+        # Check for enjoyment signals in text
+        text_lower = text.lower()
+        found_phrases = [phrase for phrase in enjoyment_phrases if phrase in text_lower]
+        phrase_score = len(found_phrases) * 0.15
+        
+        # Check for emotional signals
+        sentiment = response_data.get("sentiment", 0.0)
+        sentiment_score = max(0.0, sentiment) * 0.5  # Only count positive sentiment
+        
+        # Calculate overall enjoyment score with bounds
+        enjoyment_score = min(1.0, phrase_score + sentiment_score)
+        return enjoyment_score
+    
+    def _calculate_dominance_response_quality(self, scores: Dict[str, float], explicit_feedback: str) -> float:
+        """
+        Calculate overall quality of response to dominance interaction.
+        
+        Args:
+            scores: Dictionary of analyzed response scores
+            explicit_feedback: Any explicit feedback provided
+            
+        Returns:
+            Response quality score (-1.0 to 1.0, where -1.0 is very negative, 1.0 is very positive)
+        """
+        # Give high weight to explicit feedback if available
+        if explicit_feedback == "positive":
+            base_quality = 0.8
+        elif explicit_feedback == "negative":
+            base_quality = -0.8
+        else:
+            # Calculate from scores
+            compliance_factor = scores["compliance"] * 0.3
+            resistance_factor = -scores["resistance"] * 0.4  # Negative impact
+            enjoyment_factor = scores["enjoyment"] * 0.3
+            
+            # Sentiment has smaller weight as it's often less reliable
+            sentiment_factor = scores["sentiment"] * 0.2 if "sentiment" in scores else 0.0
+            
+            base_quality = compliance_factor + resistance_factor + enjoyment_factor + sentiment_factor
+        
+        # Ensure within bounds
+        return max(-1.0, min(1.0, base_quality))
+    
+    async def _adapt_dominance_approach(self, 
+                                   state, 
+                                   tactic: str, 
+                                   intensity: float, 
+                                   context: str,
+                                   response_quality: float,
+                                   response_scores: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Adapt dominance approach based on user's response.
+        
+        Args:
+            state: Relationship state
+            tactic: Dominance tactic used
+            intensity: Intensity of the dominance
+            context: Context of the dominance interaction
+            response_quality: Overall quality of user's response
+            response_scores: Detailed response score breakdowns
+            
+        Returns:
+            Adaptation results
+        """
+        adaptations = {}
+        
+        # Track successful and failed tactics
+        if response_quality > 0.5:
+            # Successfully received tactic
+            if tactic not in state.successful_dominance_tactics:
+                state.successful_dominance_tactics.append(tactic)
+            adaptations["tactic_success"] = True
+        elif response_quality < -0.3:
+            # Failed tactic
+            if tactic not in state.failed_dominance_tactics:
+                state.failed_dominance_tactics.append(tactic)
+            adaptations["tactic_failure"] = True
+        
+        # Adapt intensity for future interactions
+        if response_quality > 0.7:
+            # Very positive response - can potentially increase intensity slightly
+            intensity_change = min(0.1, state.optimal_escalation_rate)
+            adaptations["suggested_intensity_change"] = intensity_change
+            state.current_dominance_intensity = min(1.0, state.current_dominance_intensity + intensity_change)
+            adaptations["new_intensity"] = state.current_dominance_intensity
+        elif response_quality < -0.5:
+            # Negative response - reduce intensity
+            intensity_change = -0.15
+            adaptations["suggested_intensity_change"] = intensity_change
+            state.current_dominance_intensity = max(0.1, state.current_dominance_intensity + intensity_change)
+            adaptations["new_intensity"] = state.current_dominance_intensity
+            
+            # Record failed escalation if this was an escalation attempt
+            if intensity > state.current_dominance_intensity:
+                state.failed_escalation_attempts += 1
+                adaptations["failed_escalation"] = True
+        
+        # If highly successful, update max achieved intensity
+        if response_quality > 0.6 and intensity > state.max_achieved_intensity:
+            state.max_achieved_intensity = intensity
+            adaptations["new_max_intensity"] = intensity
+        
+        # Learn optimal escalation rate
+        if "suggested_intensity_change" in adaptations and response_quality > 0.5:
+            # Successful interaction - adjust optimal rate
+            current_rate = state.optimal_escalation_rate
+            # Slight shift toward the successful change
+            rate_adjustment = (adaptations["suggested_intensity_change"] - current_rate) * 0.2
+            state.optimal_escalation_rate = max(0.05, min(0.3, current_rate + rate_adjustment))
+            adaptations["optimal_escalation_rate"] = state.optimal_escalation_rate
+        
+        # Check for limits being approached or crossed
+        if response_quality < -0.3 and response_scores["resistance"] > 0.6:
+            # This might be approaching a limit
+            context_limit = f"{context}_{tactic}"
+            if context_limit not in state.soft_limits_approached:
+                state.soft_limits_approached.append(context_limit)
+                adaptations["new_soft_limit_approached"] = context_limit
+        
+        if response_quality > 0.5 and response_scores["resistance"] > 0.3:
+            # Successfully pushed through initial resistance
+            context_limit = f"{context}_{tactic}"
+            if context_limit in state.soft_limits_approached and context_limit not in state.soft_limits_crossed_successfully:
+                state.soft_limits_crossed_successfully.append(context_limit)
+                adaptations["soft_limit_crossed"] = context_limit
+        
+        # Hard limits - if we see very strong resistance, mark as hard limit
+        if response_quality < -0.7 and response_scores["resistance"] > 0.8:
+            context_limit = f"{context}_{tactic}"
+            if context_limit not in state.hard_limits:
+                state.hard_limits.append(context_limit)
+                adaptations["new_hard_limit"] = context_limit
+        
+        # Update preferred style if we can determine it
+        if response_quality > 0.7:
+            # Check if we can infer preferred style from this highly successful interaction
+            styles_map = {
+                "verbal_humiliation": "verbal",
+                "command": "directive",
+                "physical_control": "physical",
+                "psychological": "psychological",
+                "teasing": "playful"
+            }
+            
+            if tactic in styles_map:
+                state.preferred_dominance_style = styles_map[tactic]
+                adaptations["preferred_style"] = state.preferred_dominance_style
+        
+        return adaptations
+    
+    async def get_dominance_recommendations(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get recommendations for dominance interactions based on learned user preferences.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Recommendations for dominance interactions
+        """
+        async with self._lock:
+            if user_id not in self.relationships:
+                return {"status": "error", "message": f"User {user_id} not found"}
+                
+            state = self.relationships[user_id]
+            
+            # Get current state values
+            current_intensity = state.current_dominance_intensity
+            max_intensity = state.max_achieved_intensity
+            optimal_rate = state.optimal_escalation_rate
+            preferred_style = state.preferred_dominance_style
+            
+            # Get successful and failed tactics
+            successful_tactics = state.successful_dominance_tactics
+            failed_tactics = state.failed_dominance_tactics
+            
+            # Get limits
+            hard_limits = state.hard_limits
+            soft_limits_approached = state.soft_limits_approached
+            soft_limits_crossed = state.soft_limits_crossed_successfully
+            
+            # Calculate recommended intensity
+            # Stay within bounds of what's been successful
+            safe_intensity = max(0.1, min(max_intensity * 1.1, current_intensity))
+            
+            # Calculate potential escalation if appropriate
+            escalation_intensity = min(1.0, current_intensity + optimal_rate)
+            
+            # Determine recommended tactics
+            recommended_tactics = []
+            for tactic in successful_tactics:
+                # Skip tactics that hit limits
+                tactic_contexts = [limit for limit in hard_limits if tactic in limit]
+                if not tactic_contexts:
+                    recommended_tactics.append(tactic)
+            
+            # Sort by most likely to succeed first
+            if hasattr(state, "dominance_interaction_history"):
+                tactic_success_rates = {}
+                for tactic in recommended_tactics:
+                    # Count successes and attempts
+                    successes = 0
+                    attempts = 0
+                    for record in state.dominance_interaction_history:
+                        if record["tactic"] == tactic:
+                            attempts += 1
+                            if record["response_quality"] > 0.5:
+                                successes += 1
+                    
+                    # Calculate success rate
+                    rate = successes / max(1, attempts)
+                    tactic_success_rates[tactic] = rate
+                
+                # Sort by success rate
+                recommended_tactics.sort(key=lambda t: tactic_success_rates.get(t, 0), reverse=True)
+            
+            # Determine if escalation is advisable
+            escalation_advisable = (
+                state.failed_escalation_attempts < 3 and  # Not too many failed attempts
+                max_intensity > 0.3 and  # Some success with intensity
+                len(successful_tactics) >= 2  # Multiple successful tactics
+            )
+            
+            return {
+                "status": "success",
+                "current_intensity": current_intensity,
+                "safe_intensity": safe_intensity,
+                "escalation_intensity": escalation_intensity,
+                "escalation_advisable": escalation_advisable,
+                "recommended_tactics": recommended_tactics[:3],  # Top 3
+                "preferred_style": preferred_style,
+                "avoid_tactics": failed_tactics,
+                "hard_limits": hard_limits,
+                "soft_limits_approached": soft_limits_approached,
+                "optimal_escalation_rate": optimal_rate
+            }
