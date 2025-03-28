@@ -125,6 +125,15 @@ class NyxBrain:
             }
         }
 
+        self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
+        self.mode_manager = InteractionModeManager(
+            context_system=self.context_system,
+            emotional_core=self.emotional_core,
+            reward_system=self.reward_system,
+            goal_manager=self.goal_manager
+        )
+        self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+
         self.event_bus = None
         self.system_context = None
         self.integrated_tracer = None
@@ -196,7 +205,11 @@ async def initialize(self):
         from nyx.core.mood_manager import MoodManager
         from nyx.core.theory_of_mind import TheoryOfMind
         from nyx.core.imagination_simulator import ImaginationSimulator
-        
+
+        from nyx.core.context_awareness import ContextAwarenessSystem
+        from nyx.core.interaction_mode_manager import InteractionModeManager
+        from nyx.core.mode_integration import ModeIntegrationManager
+                
         # Import conditioning systems
         from nyx.core.conditioning_config import ConditioningConfiguration
         from nyx.core.conditioning_system import ConditioningSystem
@@ -1273,6 +1286,11 @@ async def _register_processing_modules(self):
         Returns:
             Processing results
         """
+        mode_results = await self.mode_integration.process_input(user_input)
+
+        response_guidance = self.mode_integration.get_response_guidance()
+
+
         if not self.initialized:
             await self.initialize()
     
@@ -1333,12 +1351,27 @@ async def _register_processing_modules(self):
                 user_id = str(self.user_id)
             elif isinstance(user_id, int):
                 user_id = str(user_id)
+
+            response = await self.mode_integration.modify_response_for_mode(response)
+            
+            # Optionally record feedback
+            await self.mode_integration.record_mode_feedback(True)  # Assuming success
+            
             
             return await self.conditioned_input_processor.process_input(
                 text=text,
                 user_id=user_id,
                 context=context
             )
+            return response
+
+    async def _scheduled_identity_update(self):
+        # Run every 24 hours or after significant interactions
+        while True:
+            await asyncio.sleep(86400)  # 24 hours
+            if self.mode_integration:
+                result = await self.mode_integration.update_identity_from_mode_usage()
+                logger.info(f"Scheduled identity update from mode usage: {result}")
 
     async def modify_response_with_conditioning(self, response_text: str, processing_results: Dict[str, Any]) -> str:
         """
