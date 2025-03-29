@@ -7,10 +7,18 @@ import uuid
 import random
 import time
 import math
+import json
 from typing import Dict, List, Any, Optional, Tuple, Set, Union
 from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
+
+# New imports from other modules
+from nyx.core.reasoning_core import (
+    ReasoningCore, CausalModel, CausalNode, CausalRelation,
+    ConceptSpace, ConceptualBlend, Intervention
+)
+from nyx.core.reflection_engine import ReflectionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +31,8 @@ class ActionSource(str, Enum):
     HABIT = "habit"
     EXPLORATION = "exploration"
     USER_ALIGNED = "user_aligned"
+    REASONING = "reasoning"  # New source for reasoning-based actions
+    REFLECTION = "reflection"  # New source for reflection-based actions
 
 class ActionContext(BaseModel):
     """Context for action selection and generation"""
@@ -35,6 +45,9 @@ class ActionContext(BaseModel):
     motivations: Dict[str, float] = Field(default_factory=dict)
     available_actions: List[str] = Field(default_factory=list)
     action_history: List[Dict[str, Any]] = Field(default_factory=list)
+    # New fields for reasoning integration
+    causal_models: List[str] = Field(default_factory=list, description="IDs of relevant causal models")
+    concept_spaces: List[str] = Field(default_factory=list, description="IDs of relevant concept spaces")
     
 class ActionOutcome(BaseModel):
     """Outcome of an executed action"""
@@ -47,6 +60,8 @@ class ActionOutcome(BaseModel):
     hormone_changes: Dict[str, float] = Field(default_factory=dict)
     impact: Dict[str, Any] = Field(default_factory=dict)
     execution_time: float = 0.0
+    # New fields for reasoning-informed outcomes
+    causal_impacts: Dict[str, Any] = Field(default_factory=dict, description="Impacts identified by causal reasoning")
     
 class ActionValue(BaseModel):
     """Q-value for a state-action pair"""
@@ -73,6 +88,9 @@ class ActionMemory(BaseModel):
     next_state: Optional[Dict[str, Any]] = None
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
     source: ActionSource
+    # New fields for reasoning and reflection
+    causal_explanation: Optional[str] = None
+    reflective_insight: Optional[str] = None
 
 class ActionReward(BaseModel):
     """Reward signal for an action"""
@@ -80,14 +98,25 @@ class ActionReward(BaseModel):
     source: str = Field(..., description="Source generating the reward")
     context: Dict[str, Any] = Field(default_factory=dict, description="Context info")
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    
-class AgenticActionGenerator:
+
+class ReflectionInsight(BaseModel):
+    """Insight from reflection about an action"""
+    action_id: str
+    insight_text: str
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
+    significance: float = Field(0.5, ge=0.0, le=1.0)
+    applicable_contexts: List[str] = Field(default_factory=list)
+    generated_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
+
+class EnhancedAgenticActionGenerator:
     """
     Enhanced Agentic Action Generator that integrates reward learning, prediction,
-    user modeling, relationship context, and temporal awareness.
+    user modeling, relationship context, temporal awareness, causal reasoning, 
+    conceptual blending, and reflection-based learning.
     
     Generates actions based on system's internal state, motivations, goals, 
-    neurochemical/hormonal influences, reinforcement learning, and prediction.
+    neurochemical/hormonal influences, reinforcement learning, causal models,
+    conceptual blending, and introspective reflection.
     """
     
     def __init__(self, 
@@ -106,7 +135,10 @@ class AgenticActionGenerator:
                  prediction_engine=None,
                  theory_of_mind=None,
                  relationship_manager=None,
-                 temporal_perception=None):
+                 temporal_perception=None,
+                 # New systems
+                 reasoning_core=None,
+                 reflection_engine=None):
         """Initialize with references to required subsystems"""
         # Core systems from original implementation
         self.emotional_core = emotional_core
@@ -121,12 +153,16 @@ class AgenticActionGenerator:
         self.input_processor = input_processor
         self.internal_feedback = internal_feedback
         
-        # New system integrations
+        # Previous new system integrations
         self.reward_system = reward_system
         self.prediction_engine = prediction_engine
         self.theory_of_mind = theory_of_mind
         self.relationship_manager = relationship_manager
         self.temporal_perception = temporal_perception
+        
+        # New system integrations
+        self.reasoning_core = reasoning_core or ReasoningCore()
+        self.reflection_engine = reflection_engine or ReflectionEngine(emotional_core=emotional_core)
         
         # Internal motivation system
         self.motivations = {
@@ -146,33 +182,33 @@ class AgenticActionGenerator:
         self.action_templates = {}  # Templates for generating new actions
         self.action_history = []
         
-        # NEW: Reinforcement learning components
+        # Reinforcement learning components
         self.action_values: Dict[str, Dict[str, ActionValue]] = defaultdict(dict)
         self.action_memories: List[ActionMemory] = []
         self.max_memories = 1000
         
-        # NEW: Learning parameters
+        # Learning parameters
         self.learning_rate = 0.1
         self.discount_factor = 0.9
         self.exploration_rate = 0.2
         self.exploration_decay = 0.995  # Decay rate for exploration
         
-        # NEW: Track last major action time for pacing
+        # Track last major action time for pacing
         self.last_major_action_time = datetime.datetime.now()
         self.last_idle_time = datetime.datetime.now() - datetime.timedelta(hours=1)
         
-        # NEW: Temporal awareness tracking
+        # Temporal awareness tracking
         self.idle_duration = 0.0
         self.idle_start_time = None
         self.current_temporal_context = None
         
-        # NEW: Track reward statistics
+        # Track reward statistics
         self.total_reward = 0.0
         self.positive_rewards = 0
         self.negative_rewards = 0
         self.reward_by_category = defaultdict(lambda: {"count": 0, "total": 0.0})
         
-        # NEW: Track leisure state
+        # Track leisure state
         self.leisure_state = {
             "current_activity": None,
             "satisfaction": 0.5,
@@ -180,10 +216,10 @@ class AgenticActionGenerator:
             "last_updated": datetime.datetime.now()
         }
         
-        # NEW: Action success tracking for reinforcement learning
+        # Action success tracking for reinforcement learning
         self.action_success_rates = defaultdict(lambda: {"successes": 0, "attempts": 0, "rate": 0.5})
         
-        # NEW: Cached goal status
+        # Cached goal status
         self.cached_goal_status = {
             "has_active_goals": False,
             "highest_priority": 0.0,
@@ -194,10 +230,19 @@ class AgenticActionGenerator:
         # Habit strength tracking
         self.habits: Dict[str, Dict[str, float]] = defaultdict(dict)
         
+        # New: Reasoning model tracking
+        self.causal_models = {}  # state_key -> model_id
+        self.concept_blends = {}  # domain -> blend_id
+        
+        # New: Reflection insights
+        self.reflection_insights: List[ReflectionInsight] = []
+        self.last_reflection_time = datetime.datetime.now() - datetime.timedelta(hours=2)
+        self.reflection_interval = datetime.timedelta(minutes=30)  # Generate reflections every 30 minutes
+        
         # Locks for thread safety
         self._lock = asyncio.Lock()
         
-        logger.info("Enhanced Agentic Action Generator initialized with integrated systems")
+        logger.info("Enhanced Agentic Action Generator initialized with reasoning and reflection systems")
     
     async def update_motivations(self):
         """
@@ -277,7 +322,7 @@ class AgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error updating motivations from identity: {e}")
         
-        # 5. NEW: Apply relationship-based influences
+        # 5. Apply relationship-based influences
         if self.relationship_manager:
             try:
                 relationship_influences = await self._calculate_relationship_influences()
@@ -287,7 +332,7 @@ class AgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error applying relationship influences: {e}")
         
-        # 6. NEW: Apply reward learning influence
+        # 6. Apply reward learning influence
         try:
             reward_influences = self._calculate_reward_learning_influences()
             for motivation, influence in reward_influences.items():
@@ -303,7 +348,7 @@ class AgenticActionGenerator:
         if time_since_idle > 1:  # If more than 1 hour since idle time
             updated_motivations["leisure"] += min(0.3, time_since_idle * 0.1)  # Max +0.3
         
-        # NEW: Apply temporal context effects if available
+        # Apply temporal context effects if available
         if self.temporal_perception and self.current_temporal_context:
             try:
                 temporal_influences = self._calculate_temporal_influences()
@@ -313,7 +358,27 @@ class AgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error applying temporal influences: {e}")
         
-        # 8. Normalize all motivations to [0.1, 0.9] range
+        # NEW: 8. Apply reasoning-based influences
+        if self.reasoning_core:
+            try:
+                reasoning_influences = await self._calculate_reasoning_influences()
+                for motivation, influence in reasoning_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying reasoning influences: {e}")
+        
+        # NEW: 9. Apply reflection-based influences
+        if self.reflection_engine:
+            try:
+                reflection_influences = await self._calculate_reflection_influences()
+                for motivation, influence in reflection_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying reflection influences: {e}")
+        
+        # 10. Normalize all motivations to [0.1, 0.9] range
         for motivation in updated_motivations:
             updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation]))
         
@@ -322,6 +387,111 @@ class AgenticActionGenerator:
         
         logger.debug(f"Updated motivations: {self.motivations}")
         return self.motivations
+
+    # NEW: Add method to calculate reasoning influences
+    async def _calculate_reasoning_influences(self) -> Dict[str, float]:
+        """Calculate how reasoning models influence motivations"""
+        influences = {}
+        
+        # We need to find relevant causal models that might inform our motivations
+        try:
+            # Get relevant causal models
+            models = await self.reasoning_core.get_all_causal_models()
+            if not models:
+                return influences
+            
+            # For each model, evaluate potential influence on motivations
+            for model_data in models:
+                model_id = model_data.get("id")
+                model_domain = model_data.get("domain", "")
+                
+                # Skip models that have no domain or insufficient relations
+                relation_count = len(model_data.get("relations", {}))
+                if not model_domain or relation_count < 3:
+                    continue
+                
+                # Map domains to motivations they might influence
+                domain_motivation_map = {
+                    "learning": {"curiosity": 0.2, "self_improvement": 0.2},
+                    "social": {"connection": 0.2, "validation": 0.1},
+                    "creative": {"expression": 0.2, "curiosity": 0.1},
+                    "control": {"dominance": 0.2, "autonomy": 0.1},
+                    "achievement": {"competence": 0.2, "self_improvement": 0.1},
+                    "exploration": {"curiosity": 0.3},
+                    "relaxation": {"leisure": 0.3}
+                }
+                
+                # Check if model domain matches any mapped domain
+                for domain, motivation_map in domain_motivation_map.items():
+                    if domain in model_domain.lower():
+                        # Apply influence based on model validation
+                        validation_score = 0.5  # Default
+                        for result in model_data.get("validation_results", []):
+                            if "score" in result.get("result", {}):
+                                validation_score = result["result"]["score"]
+                                break
+                        
+                        # Scale influence by validation score
+                        for motivation, base_influence in motivation_map.items():
+                            influences[motivation] = influences.get(motivation, 0.0) + (base_influence * validation_score)
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating reasoning influences: {e}")
+            return {}
+    
+    # NEW: Add method to calculate reflection influences
+    async def _calculate_reflection_influences(self) -> Dict[str, float]:
+        """Calculate how reflection insights influence motivations"""
+        influences = {}
+        
+        try:
+            # Check if we have enough reflection insights
+            if len(self.reflection_insights) < 2:
+                return influences
+            
+            # Focus on recent and significant insights
+            recent_insights = sorted(
+                [i for i in self.reflection_insights if i.significance > 0.6],
+                key=lambda x: x.generated_at,
+                reverse=True
+            )[:5]
+            
+            if not recent_insights:
+                return influences
+            
+            # Define keywords that may indicate motivation influences
+            motivation_keywords = {
+                "curiosity": ["curious", "explore", "learn", "discover", "question"],
+                "connection": ["connect", "relate", "bond", "social", "empathy"],
+                "expression": ["express", "create", "share", "articulate", "communicate"],
+                "competence": ["competent", "skilled", "master", "improve", "effective"],
+                "autonomy": ["autonomy", "independence", "choice", "freedom", "control"],
+                "dominance": ["dominate", "lead", "influence", "direct", "control"],
+                "validation": ["validate", "approve", "acknowledge", "recognize", "accept"],
+                "self_improvement": ["improve", "grow", "develop", "progress", "enhance"],
+                "leisure": ["relax", "enjoy", "recreation", "unwind", "pleasure"]
+            }
+            
+            # Analyze insights for motivation influences
+            for insight in recent_insights:
+                text = insight.insight_text.lower()
+                
+                # Check for motivation keywords
+                for motivation, keywords in motivation_keywords.items():
+                    for keyword in keywords:
+                        if keyword in text:
+                            # Calculate influence based on insight significance and confidence
+                            influence = insight.significance * insight.confidence * 0.2
+                            influences[motivation] = influences.get(motivation, 0.0) + influence
+                            break  # Only count once per motivation per insight
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating reflection influences: {e}")
+            return {}
     
     async def _calculate_neurochemical_influences(self) -> Dict[str, float]:
         """Calculate how neurochemicals influence motivations"""
@@ -792,7 +962,7 @@ class AgenticActionGenerator:
     async def generate_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate an action based on current internal state, goals, hormones, and context
-        using a two-stage process with reinforcement learning.
+        using a multi-stage process with reinforcement learning, causal reasoning, and reflection.
         
         Args:
             context: Current system context and state
@@ -804,13 +974,17 @@ class AgenticActionGenerator:
             # Update motivations based on current internal state
             await self.update_motivations()
             
-            # NEW: Update temporal context if available
+            # Update temporal context if available
             await self._update_temporal_context(context)
             
-            # NEW: Update relationship context if available
+            # Update relationship context if available
             user_id = self._get_current_user_id_from_context(context)
             relationship_data = await self._get_relationship_data(user_id) if user_id else None
             user_mental_state = await self._get_user_mental_state(user_id) if user_id else None
+            
+            # NEW: Find relevant causal models and concept spaces
+            relevant_causal_models = await self._get_relevant_causal_models(context)
+            relevant_concept_spaces = await self._get_relevant_concept_spaces(context)
             
             # Create action context
             action_context = ActionContext(
@@ -820,7 +994,9 @@ class AgenticActionGenerator:
                 user_mental_state=user_mental_state,
                 temporal_context=self.current_temporal_context,
                 motivations=self.motivations,
-                action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)]
+                action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)],
+                causal_models=relevant_causal_models,
+                concept_spaces=relevant_concept_spaces
             )
             
             # Check if it's time for leisure/idle activity
@@ -839,13 +1015,30 @@ class AgenticActionGenerator:
                         # Update last major action time
                         self.last_major_action_time = datetime.datetime.now()
                         
-                        # NEW: Record action source
+                        # Record action source
                         action["source"] = ActionSource.GOAL
                         
                         return action
+            
+            # NEW: Check if we should run reflection before generating new action
+            await self._maybe_generate_reflection(context)
 
-            # STAGE 1: Generate candidate actions based on motivations
-            candidate_actions = await self._generate_candidate_actions(action_context)
+            # STAGE 1: Generate candidate actions from multiple sources
+            candidate_actions = []
+            
+            # Generate motivation-based candidates
+            motivation_candidates = await self._generate_candidate_actions(action_context)
+            candidate_actions.extend(motivation_candidates)
+            
+            # NEW: Generate reasoning-based candidates
+            if self.reasoning_core and relevant_causal_models:
+                reasoning_candidates = await self._generate_reasoning_actions(action_context)
+                candidate_actions.extend(reasoning_candidates)
+            
+            # NEW: Generate conceptual blending candidates
+            if self.reasoning_core and relevant_concept_spaces:
+                blending_candidates = await self._generate_conceptual_blend_actions(action_context)
+                candidate_actions.extend(blending_candidates)
             
             # Add special actions based on temporal context if appropriate
             if self.temporal_perception and self.idle_duration > 1800:  # After 30 min idle
@@ -856,7 +1049,7 @@ class AgenticActionGenerator:
             # Update action context with candidate actions
             action_context.available_actions = [a["name"] for a in candidate_actions if "name" in a]
             
-            # STAGE 2: Select best action using reinforcement learning and prediction
+            # STAGE 2: Select best action using reinforcement learning, prediction, and causal evaluation
             selected_action = await self._select_best_action(candidate_actions, action_context)
             
             # Add unique ID for tracking
@@ -869,6 +1062,13 @@ class AgenticActionGenerator:
             if self.identity_evolution:
                 selected_action = await self._apply_identity_influence(selected_action)
             
+            # NEW: Add causal explanation to action if possible
+            if self.reasoning_core and "source" in selected_action:
+                if selected_action["source"] in [ActionSource.REASONING, ActionSource.MOTIVATION, ActionSource.GOAL]:
+                    explanation = await self._generate_causal_explanation(selected_action, context)
+                    if explanation:
+                        selected_action["causal_explanation"] = explanation
+            
             # Record action in memory
             await self._record_action_as_memory(selected_action)
 
@@ -879,6 +1079,338 @@ class AgenticActionGenerator:
             self.last_major_action_time = datetime.datetime.now()
             
             return selected_action
+
+    # NEW: Method to generate reflection if needed
+    async def _maybe_generate_reflection(self, context: Dict[str, Any]) -> None:
+        """Generate reflection insights if it's time to do so"""
+        now = datetime.datetime.now()
+        time_since_reflection = now - self.last_reflection_time
+        
+        # Generate reflection if sufficient time has passed
+        if time_since_reflection > self.reflection_interval and self.reflection_engine:
+            try:
+                # Get recent action memories for reflection
+                memories_for_reflection = []
+                for memory in self.action_memories[-20:]:  # Last 20 memories
+                    # Format memory for reflection
+                    memories_for_reflection.append({
+                        "id": memory.action_id,
+                        "memory_text": f"Action: {memory.action} with outcome: {'success' if memory.outcome.get('success', False) else 'failure'}",
+                        "memory_type": "action_memory",
+                        "significance": 7.0 if memory.reward > 0.5 else 5.0,
+                        "metadata": {
+                            "action": memory.action,
+                            "parameters": memory.parameters,
+                            "outcome": memory.outcome,
+                            "reward": memory.reward,
+                            "source": memory.source
+                        },
+                        "tags": [memory.source, "action_memory", "success" if memory.reward > 0 else "failure"]
+                    })
+                
+                # Get neurochemical state if available
+                neurochemical_state = None
+                if self.emotional_core:
+                    neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
+                
+                # Generate reflection
+                if memories_for_reflection:
+                    reflection_text, confidence = await self.reflection_engine.generate_reflection(
+                        memories_for_reflection,
+                        topic="Action Selection",
+                        neurochemical_state=neurochemical_state
+                    )
+                    
+                    # Calculate significance based on confidence and action diversity
+                    action_types = set(m["metadata"]["action"] for m in memories_for_reflection)
+                    significance = min(1.0, 0.5 + (confidence * 0.3) + (len(action_types) / 20 * 0.2))
+                    
+                    # Create and store insight
+                    insight = ReflectionInsight(
+                        action_id=f"reflection_{uuid.uuid4().hex[:8]}",
+                        insight_text=reflection_text,
+                        confidence=confidence,
+                        significance=significance,
+                        applicable_contexts=list(set(m["metadata"]["source"] for m in memories_for_reflection))
+                    )
+                    
+                    self.reflection_insights.append(insight)
+                    
+                    # Limit history size
+                    if len(self.reflection_insights) > 50:
+                        self.reflection_insights = self.reflection_insights[-50:]
+                    
+                    # Update last reflection time
+                    self.last_reflection_time = now
+                    
+                    logger.info(f"Generated reflection insight with confidence {confidence:.2f}")
+            except Exception as e:
+                logger.error(f"Error generating reflection: {e}")
+    
+    # NEW: Method to find relevant causal models
+    async def _get_relevant_causal_models(self, context: Dict[str, Any]) -> List[str]:
+        """Find causal models relevant to the current context"""
+        if not self.reasoning_core:
+            return []
+        
+        relevant_models = []
+        
+        try:
+            # Get all causal models
+            all_models = await self.reasoning_core.get_all_causal_models()
+            
+            # Check context for domain matches
+            context_domain = context.get("domain", "")
+            context_topics = []
+            
+            # Extract potential topics from context
+            if "message" in context and isinstance(context["message"], dict):
+                message = context["message"].get("text", "")
+                # Extract key nouns as potential topics (simplified)
+                words = message.lower().split()
+                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
+            
+            # Find matching models
+            for model_data in all_models:
+                model_id = model_data.get("id")
+                model_domain = model_data.get("domain", "").lower()
+                
+                # Check domain match
+                if context_domain and model_domain and context_domain.lower() in model_domain:
+                    relevant_models.append(model_id)
+                    continue
+                
+                # Check topic match
+                if context_topics:
+                    for topic in context_topics:
+                        if topic in model_domain:
+                            relevant_models.append(model_id)
+                            break
+            
+            # Limit to top 3 most relevant models
+            return relevant_models[:3]
+        
+        except Exception as e:
+            logger.error(f"Error finding relevant causal models: {e}")
+            return []
+    
+    # NEW: Method to find relevant concept spaces
+    async def _get_relevant_concept_spaces(self, context: Dict[str, Any]) -> List[str]:
+        """Find concept spaces relevant to the current context"""
+        if not self.reasoning_core:
+            return []
+        
+        relevant_spaces = []
+        
+        try:
+            # Get all concept spaces
+            all_spaces = await self.reasoning_core.get_all_concept_spaces()
+            
+            # Check context for domain matches
+            context_domain = context.get("domain", "")
+            context_topics = []
+            
+            # Extract potential topics from context
+            if "message" in context and isinstance(context["message"], dict):
+                message = context["message"].get("text", "")
+                # Extract key nouns as potential topics (simplified)
+                words = message.lower().split()
+                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
+            
+            # Find matching spaces
+            for space_data in all_spaces:
+                space_id = space_data.get("id")
+                space_domain = space_data.get("domain", "").lower()
+                
+                # Check domain match
+                if context_domain and space_domain and context_domain.lower() in space_domain:
+                    relevant_spaces.append(space_id)
+                    continue
+                
+                # Check topic match
+                if context_topics:
+                    for topic in context_topics:
+                        if topic in space_domain:
+                            relevant_spaces.append(space_id)
+                            break
+            
+            # Limit to top 3 most relevant spaces
+            return relevant_spaces[:3]
+        
+        except Exception as e:
+            logger.error(f"Error finding relevant concept spaces: {e}")
+            return []
+    
+    # NEW: Generate actions based on causal reasoning
+    async def _generate_reasoning_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
+        """Generate actions based on causal reasoning models"""
+        if not self.reasoning_core or not context.causal_models:
+            return []
+        
+        reasoning_actions = []
+        state = context.state
+        
+        try:
+            # For each relevant causal model
+            for model_id in context.causal_models:
+                # Get the causal model
+                model = await self.reasoning_core.get_causal_model(model_id)
+                if not model:
+                    continue
+                
+                # Find intervention opportunities
+                intervention_targets = []
+                
+                # Find nodes that might benefit from intervention
+                for node_id, node_data in model.get("nodes", {}).items():
+                    node_name = node_data.get("name", "")
+                    
+                    # Check if node matches current state that could be improved
+                    for state_key, state_value in state.items():
+                        # Look for potential matches between state keys and node names
+                        if state_key.lower() in node_name.lower() or node_name.lower() in state_key.lower():
+                            # Check if the node has potential states different from current
+                            current_state = node_data.get("current_state")
+                            possible_states = node_data.get("states", [])
+                            
+                            if possible_states and current_state in possible_states:
+                                # There are alternative states we could target
+                                alternative_states = [s for s in possible_states if s != current_state]
+                                if alternative_states:
+                                    intervention_targets.append({
+                                        "node_id": node_id,
+                                        "node_name": node_name,
+                                        "current_state": current_state,
+                                        "alternative_states": alternative_states,
+                                        "state_key": state_key
+                                    })
+                
+                # Generate creative interventions for promising targets
+                for target in intervention_targets[:2]:  # Limit to 2 interventions per model
+                    # Create an action from this intervention opportunity
+                    target_value = random.choice(target["alternative_states"])
+                    
+                    # Create a creative intervention
+                    try:
+                        intervention = await self.reasoning_core.create_creative_intervention(
+                            model_id=model_id,
+                            target_node=target["node_id"],
+                            description=f"Intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
+                            use_blending=True
+                        )
+                        
+                        # Convert intervention to action
+                        action = {
+                            "name": f"causal_intervention_{target['node_name']}",
+                            "parameters": {
+                                "target_node": target["node_id"],
+                                "target_value": target_value,
+                                "model_id": model_id,
+                                "intervention_id": intervention.get("intervention_id"),
+                                "state_key": target["state_key"]
+                            },
+                            "description": f"Causal intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
+                            "source": ActionSource.REASONING,
+                            "reasoning_data": {
+                                "model_id": model_id,
+                                "model_domain": model.get("domain", ""),
+                                "target_node": target["node_id"],
+                                "confidence": intervention.get("is_novel", False) and 0.7 or 0.5
+                            }
+                        }
+                        
+                        reasoning_actions.append(action)
+                    except Exception as e:
+                        logger.error(f"Error creating creative intervention: {e}")
+                        continue
+            
+            return reasoning_actions
+            
+        except Exception as e:
+            logger.error(f"Error generating reasoning actions: {e}")
+            return []
+    
+    # NEW: Generate actions based on conceptual blending
+    async def _generate_conceptual_blend_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
+        """Generate actions using conceptual blending for creativity"""
+        if not self.reasoning_core or not context.concept_spaces:
+            return []
+        
+        blend_actions = []
+        
+        try:
+            # Need at least 2 concept spaces for blending
+            if len(context.concept_spaces) < 2:
+                return []
+            
+            # Take the first two spaces for blending
+            space1_id = context.concept_spaces[0]
+            space2_id = context.concept_spaces[1]
+            
+            # Get the spaces
+            space1 = await self.reasoning_core.get_concept_space(space1_id)
+            space2 = await self.reasoning_core.get_concept_space(space2_id)
+            
+            if not space1 or not space2:
+                return []
+            
+            # Create a blend
+            blend_input = {
+                "space_id_1": space1_id,
+                "space_id_2": space2_id,
+                "blend_type": random.choice(["composition", "fusion", "elaboration", "contrast"])
+            }
+            
+            # Create blend (this would normally call the reasoning_core's create_blend method)
+            try:
+                # This is a mock call since the full implementation would be complex
+                blend_id = f"blend_{uuid.uuid4().hex[:8]}"
+                
+                # Example for generating creative actions from the blend
+                # For each blend concept, create a potential action
+                concepts = list(space1.get("concepts", {}).keys())[:2] + list(space2.get("concepts", {}).keys())[:2]
+                
+                for concept_id in concepts:
+                    # Create action name from concept names
+                    concept_name = None
+                    if concept_id in space1.get("concepts", {}):
+                        concept_name = space1["concepts"][concept_id].get("name", "concept")
+                    elif concept_id in space2.get("concepts", {}):
+                        concept_name = space2["concepts"][concept_id].get("name", "concept")
+                    
+                    if not concept_name:
+                        continue
+                    
+                    # Create action
+                    action = {
+                        "name": f"blend_{concept_name.lower().replace(' ', '_')}",
+                        "parameters": {
+                            "blend_id": blend_id,
+                            "concept_id": concept_id,
+                            "blend_type": blend_input["blend_type"],
+                            "space1_id": space1_id,
+                            "space2_id": space2_id
+                        },
+                        "description": f"Creative action based on conceptual blend of {space1.get('name', 'space1')} and {space2.get('name', 'space2')}",
+                        "source": ActionSource.REASONING,
+                        "reasoning_data": {
+                            "blend_id": blend_id,
+                            "blend_type": blend_input["blend_type"],
+                            "concept_name": concept_name,
+                            "confidence": 0.6  # Creative actions have moderate confidence
+                        }
+                    }
+                    
+                    blend_actions.append(action)
+            
+            except Exception as e:
+                logger.error(f"Error creating blend: {e}")
+            
+            return blend_actions
+                
+        except Exception as e:
+            logger.error(f"Error generating conceptual blend actions: {e}")
+            return []
     
     async def _generate_candidate_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
         """
@@ -947,7 +1479,7 @@ class AgenticActionGenerator:
                               candidate_actions: List[Dict[str, Any]], 
                               context: ActionContext) -> Dict[str, Any]:
         """
-        Select the best action using reinforcement learning and prediction
+        Select the best action using reinforcement learning, prediction, causal reasoning, and reflection insights
         
         Args:
             candidate_actions: List of potential actions
@@ -999,10 +1531,11 @@ class AgenticActionGenerator:
             
             # Mark as exploration
             selected_action["is_exploration"] = True
-            selected_action["source"] = ActionSource.EXPLORATION
+            if "source" not in selected_action:
+                selected_action["source"] = ActionSource.EXPLORATION
             
         else:
-            # Exploitation: use value function
+            # Exploitation: use value function and causal reasoning
             best_value = float('-inf')
             best_action = None
             
@@ -1030,20 +1563,54 @@ class AgenticActionGenerator:
                 except Exception as e:
                     logger.error(f"Error getting prediction: {e}")
                 
+                # NEW: Get causal reasoning value if available
+                causal_value = 0.0
+                if "source" in action and action["source"] == ActionSource.REASONING:
+                    reasoning_data = action.get("reasoning_data", {})
+                    confidence = reasoning_data.get("confidence", 0.5)
+                    
+                    # Higher value for reasoning-based actions with good confidence
+                    causal_value = 0.3 * confidence
+                    
+                    # Boost if we have a causal model that supports this action
+                    if "model_id" in reasoning_data and reasoning_data["model_id"] in context.causal_models:
+                        causal_value += 0.2
+                
+                # NEW: Get reflection insight value if available
+                reflection_value = 0.0
+                for insight in self.reflection_insights:
+                    # Check if this action type is mentioned in the insight
+                    if action_name in insight.insight_text.lower():
+                        # Higher value for recent, significant insights
+                        age_hours = (datetime.datetime.now() - insight.generated_at).total_seconds() / 3600
+                        recency_factor = max(0.1, 1.0 - (age_hours / 24))  # Decays over 24 hours
+                        reflection_value = 0.3 * insight.significance * insight.confidence * recency_factor
+                        break
+                
                 # Calculate combined value
                 # Weight the components based on reliability
-                q_weight = 0.4  # Base weight for Q-values
-                habit_weight = 0.3  # Base weight for habits
-                prediction_weight = 0.3  # Base weight for predictions
+                q_weight = 0.3  # Base weight for Q-values
+                habit_weight = 0.2  # Base weight for habits
+                prediction_weight = 0.2  # Base weight for predictions
+                causal_weight = 0.2  # Base weight for causal reasoning
+                reflection_weight = 0.1  # Base weight for reflection insights
                 
                 # Adjust weights if we have reliable Q-values
                 action_value = self.action_values.get(state_key, {}).get(action_name)
                 if action_value and action_value.is_reliable:
-                    q_weight = 0.6
+                    q_weight = 0.4
                     habit_weight = 0.2
-                    prediction_weight = 0.2
+                    prediction_weight = 0.1
+                    causal_weight = 0.2
+                    reflection_weight = 0.1
                 
-                combined_value = (q_weight * q_value) + (habit_weight * habit_strength) + (prediction_weight * prediction_value)
+                combined_value = (
+                    q_weight * q_value + 
+                    habit_weight * habit_strength + 
+                    prediction_weight * prediction_value +
+                    causal_weight * causal_value +
+                    reflection_weight * reflection_value
+                )
                 
                 # Special considerations for certain action sources
                 if action.get("source") == ActionSource.GOAL:
@@ -1065,13 +1632,303 @@ class AgenticActionGenerator:
             selected_action["is_exploration"] = False
         
         # Add selection metadata
-        selected_action["selection_metadata"] = {
+        if "selection_metadata" not in selected_action:
+            selected_action["selection_metadata"] = {}
+            
+        selected_action["selection_metadata"].update({
             "exploration": explore,
             "exploration_rate": self.exploration_rate,
             "state_key": state_key
-        }
+        })
         
         return selected_action
+    
+    # NEW: Generate causal explanation for actions
+    async def _generate_causal_explanation(self, action: Dict[str, Any], context: Dict[str, Any]) -> Optional[str]:
+        """Generate a causal explanation for the selected action"""
+        if not self.reasoning_core:
+            return None
+        
+        try:
+            # Check if action has reasoning data
+            if "reasoning_data" in action:
+                # We have direct reasoning data, use it for explanation
+                reasoning_data = action["reasoning_data"]
+                model_id = reasoning_data.get("model_id")
+                
+                if model_id:
+                    # Get the causal model
+                    model = await self.reasoning_core.get_causal_model(model_id)
+                    if model:
+                        # Return structured explanation based on causal model
+                        return f"Selected based on causal model '{model.get('name', 'unknown')}' with confidence {reasoning_data.get('confidence', 0.5):.2f}."
+            
+            # If no direct reasoning data, check if we have relevant models
+            model_ids = await self._get_relevant_causal_models(context)
+            if not model_ids:
+                return None
+            
+            # For simplicity, use the first model
+            model_id = model_ids[0]
+            model = await self.reasoning_core.get_causal_model(model_id)
+            
+            if model:
+                # Find nodes that might explain this action
+                action_name = action["name"].lower()
+                
+                for node_id, node_data in model.get("nodes", {}).items():
+                    node_name = node_data.get("name", "").lower()
+                    
+                    # Look for nodes that match the action name
+                    if action_name in node_name or any(word in node_name for word in action_name.split("_")):
+                        # Get this node's causes
+                        causes = []
+                        for relation_id, relation_data in model.get("relations", {}).items():
+                            if relation_data.get("target_id") == node_id:
+                                source_id = relation_data.get("source_id")
+                                source_node = model.get("nodes", {}).get(source_id, {})
+                                source_name = source_node.get("name", "unknown")
+                                
+                                causes.append(f"{source_name} ({relation_data.get('relation_type', 'influences')})")
+                        
+                        if causes:
+                            return f"Action influenced by causal factors: {', '.join(causes[:3])}."
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error generating causal explanation: {e}")
+            return None
+
+    async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record and learn from the outcome of an action with causal analysis
+        
+        Args:
+            action: The action that was executed
+            outcome: The outcome data
+            
+        Returns:
+            Updated learning statistics
+        """
+        async with self._lock:
+            action_name = action.get("name", "unknown")
+            success = outcome.get("success", False)
+            satisfaction = outcome.get("satisfaction", 0.0)
+            
+            # Parse into standardized outcome format if needed
+            if not isinstance(outcome, ActionOutcome):
+                # Create a standard format
+                outcome_obj = ActionOutcome(
+                    action_id=action.get("id", f"unknown_{int(time.time())}"),
+                    success=outcome.get("success", False),
+                    satisfaction=outcome.get("satisfaction", 0.0),
+                    reward_value=outcome.get("reward_value", 0.0),
+                    user_feedback=outcome.get("user_feedback"),
+                    neurochemical_changes=outcome.get("neurochemical_changes", {}),
+                    hormone_changes=outcome.get("hormone_changes", {}),
+                    impact=outcome.get("impact", {}),
+                    execution_time=outcome.get("execution_time", 0.0),
+                    # NEW: Add causal impacts if available
+                    causal_impacts=outcome.get("causal_impacts", {})
+                )
+            else:
+                outcome_obj = outcome
+            
+            # Calculate reward value if not provided
+            reward_value = outcome_obj.reward_value
+            if reward_value == 0.0:
+                # Default formula if not specified
+                reward_value = 0.7 * float(success) + 0.3 * satisfaction - 0.1
+                outcome_obj.reward_value = reward_value
+            
+            # Update action success tracking
+            self.action_success_rates[action_name]["attempts"] += 1
+            if success:
+                self.action_success_rates[action_name]["successes"] += 1
+            
+            attempts = self.action_success_rates[action_name]["attempts"]
+            successes = self.action_success_rates[action_name]["successes"]
+            
+            if attempts > 0:
+                self.action_success_rates[action_name]["rate"] = successes / attempts
+            
+            # Update reinforcement learning model
+            state = action.get("context", {})
+            state_key = self._create_state_key(state)
+            
+            # Get or create action value
+            if action_name not in self.action_values.get(state_key, {}):
+                self.action_values[state_key][action_name] = ActionValue(
+                    state_key=state_key,
+                    action=action_name
+                )
+            
+            action_value = self.action_values[state_key][action_name]
+            
+            # Update Q-value
+            old_value = action_value.value
+            
+            # Q-learning update rule
+            # Q(s,a) = Q(s,a) + α * (r + γ * max Q(s',a') - Q(s,a))
+            action_value.value = old_value + self.learning_rate * (reward_value - old_value)
+            action_value.update_count += 1
+            action_value.last_updated = datetime.datetime.now()
+            
+            # Update confidence based on consistency of rewards
+            # More consistent rewards = higher confidence
+            new_value_distance = abs(action_value.value - old_value)
+            confidence_change = 0.05 * (1.0 - (new_value_distance * 2))  # More change = less confidence gain
+            action_value.confidence = min(1.0, max(0.1, action_value.confidence + confidence_change))
+            
+            # Update habit strength
+            current_habit = self.habits.get(state_key, {}).get(action_name, 0.0)
+            
+            # Habits strengthen with success, weaken with failure
+            habit_change = reward_value * 0.1
+            new_habit = max(0.0, min(1.0, current_habit + habit_change))
+            
+            # Update habit
+            if state_key not in self.habits:
+                self.habits[state_key] = {}
+            self.habits[state_key][action_name] = new_habit
+            
+            # NEW: Add causal explanation if action came from reasoning
+            causal_explanation = None
+            if action.get("source") == ActionSource.REASONING and "reasoning_data" in action:
+                # Get model if available
+                model_id = action["reasoning_data"].get("model_id")
+                if model_id and self.reasoning_core:
+                    try:
+                        # Create explanation based on actual outcome
+                        causal_explanation = f"Outcome aligned with causal model prediction: {success}. "
+                        causal_explanation += f"Satisfaction: {satisfaction:.2f}, Reward: {reward_value:.2f}."
+                    except Exception as e:
+                        logger.error(f"Error generating causal explanation for outcome: {e}")
+            
+            # Store action memory
+            memory = ActionMemory(
+                state=state,
+                action=action_name,
+                action_id=action.get("id", "unknown"),
+                parameters=action.get("parameters", {}),
+                outcome=outcome_obj.dict(),
+                reward=reward_value,
+                timestamp=datetime.datetime.now(),
+                source=action.get("source", ActionSource.MOTIVATION),
+                causal_explanation=causal_explanation  # New field
+            )
+            
+            self.action_memories.append(memory)
+            
+            # Limit memory size
+            if len(self.action_memories) > self.max_memories:
+                self.action_memories = self.action_memories[-self.max_memories:]
+            
+            # Update reward statistics
+            self.total_reward += reward_value
+            if reward_value > 0:
+                self.positive_rewards += 1
+            elif reward_value < 0:
+                self.negative_rewards += 1
+                
+            # Update category stats
+            category = action.get("source", ActionSource.MOTIVATION)
+            if isinstance(category, ActionSource):
+                category = category.value
+                
+            self.reward_by_category[category]["count"] += 1
+            self.reward_by_category[category]["total"] += reward_value
+            
+            # NEW: Update causal models if applicable
+            if action.get("source") == ActionSource.REASONING and self.reasoning_core:
+                await self._update_causal_models_from_outcome(action, outcome_obj, reward_value)
+            
+            # Potentially trigger experience replay
+            if random.random() < 0.3:  # 30% chance after each outcome
+                await self._experience_replay(3)  # Replay 3 random memories
+                
+            # Decay exploration rate over time (explore less as we learn more)
+            self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
+            
+            # Return summary of updates
+            return {
+                "action": action_name,
+                "success": success,
+                "reward_value": reward_value,
+                "new_q_value": action_value.value,
+                "q_value_change": action_value.value - old_value,
+                "new_habit_strength": new_habit,
+                "habit_change": new_habit - current_habit,
+                "action_success_rate": self.action_success_rates[action_name]["rate"],
+                "memories_stored": len(self.action_memories),
+                "exploration_rate": self.exploration_rate
+            }
+    
+    # NEW: Update causal models based on action outcomes
+    async def _update_causal_models_from_outcome(self, 
+                                         action: Dict[str, Any], 
+                                         outcome: ActionOutcome, 
+                                         reward_value: float) -> None:
+        """
+        Update causal models with observed outcomes of reasoning-based actions
+        
+        Args:
+            action: The executed action
+            outcome: The action outcome
+            reward_value: The reward value
+        """
+        try:
+            # Check if action has reasoning data and model ID
+            if "reasoning_data" not in action:
+                return
+                
+            reasoning_data = action["reasoning_data"]
+            model_id = reasoning_data.get("model_id")
+            
+            if not model_id:
+                return
+                
+            # Get parameters related to the causal model
+            target_node = action["parameters"].get("target_node")
+            target_value = action["parameters"].get("target_value")
+            
+            if not target_node or target_value is None:
+                return
+                
+            # Record intervention outcome in the causal model
+            intervention_id = action["parameters"].get("intervention_id")
+            
+            if intervention_id:
+                # Record outcome of specific intervention
+                await self.reasoning_core.record_intervention_outcome(
+                    intervention_id=intervention_id,
+                    outcomes={target_node: target_value}
+                )
+            
+            # Update node observations in the model
+            # This would be a call to something like:
+            # await self.reasoning_core.add_observation_to_node(
+            #     model_id=model_id,
+            #     node_id=target_node,
+            #     value=target_value,
+            #     confidence=0.8 if outcome.success else 0.3
+            # )
+            
+            # Additional nodes that might have been affected
+            for impact_node, impact_value in outcome.causal_impacts.items():
+                # Record additional impacts
+                # This would be a call to something like:
+                # await self.reasoning_core.add_observation_to_node(
+                #     model_id=model_id,
+                #     node_id=impact_node,
+                #     value=impact_value,
+                #     confidence=0.7
+                # )
+                pass
+        
+        except Exception as e:
+            logger.error(f"Error updating causal models from outcome: {e}")
     
     async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -3106,10 +3963,13 @@ class AgenticActionGenerator:
             Optimal action
         """
         try:
-            # Run full pipeline
-            action = await self.process_action_generation_pipeline(context)
-            return action
-        except Exception as e:
-            logger.error(f"Error in action generation pipeline: {e}")
-            # Fallback to simpler generation
-            return await self.generate_action(context)
+            # Check if we should use the full pipeline
+            use_reasoning = self.reasoning_core is not None
+            use_reflection = self.reflection_engine is not None
+            
+            if use_reasoning and use_reflection:
+                # Run full enhanced pipeline
+                return await self.process_action_generation_pipeline(context)
+            else:
+                # Fallback to standard pipeline
+                return await self.generate_action(context)
