@@ -485,6 +485,38 @@ class AgenticActionGenerator:
                     self.last_major_action_time = datetime.datetime.now()
                     
                     return action
+
+        # Add creativity motivation
+        if hasattr(self, "creative_system"):
+            # Check if it's time for creative expression
+            creativity_drive = self.get_motivation_level("creativity")  # Your method to get motivation
+            
+            if creativity_drive > 0.7:  # High creativity drive
+                # Select a creative action type based on current state
+                creative_actions = ["write_story", "write_poem", "write_lyrics", "code"]
+                action_weights = [0.3, 0.3, 0.2, 0.2]  # Example weights
+                
+                import random
+                action_type = random.choices(creative_actions, weights=action_weights)[0]
+                
+                if action_type == "code":
+                    return {
+                        "name": "write_and_execute_code",
+                        "parameters": {
+                            "title": "Experimental Code",
+                            "code": "# Generated code would go here\nprint('Hello world!')",
+                            "language": "python"
+                        }
+                    }
+                else:
+                    return {
+                        "name": f"write_{action_type}",
+                        "parameters": {
+                            "title": f"My {action_type.capitalize()}",
+                            "content": "Content would be generated here",
+                            "metadata": {"mood": self.current_emotional_state}
+                        }
+                    }
         
         # Determine dominant motivation
         dominant_motivation = max(self.motivations.items(), key=lambda x: x[1])
