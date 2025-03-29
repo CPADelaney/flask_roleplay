@@ -209,6 +209,8 @@ async def initialize(self):
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mode_integration import ModeIntegrationManager
+
+        from nyx.creative.agentic_system import AgenticCreativitySystem, integrate_with_existing_system
                 
         # Import conditioning systems
         from nyx.core.conditioning_config import ConditioningConfiguration
@@ -532,6 +534,16 @@ async def initialize(self):
         
         # Integrate procedural memory with action generator
         await self.integrate_procedural_memory_with_actions()
+
+        self.creative_system = await integrate_with_existing_system(self)
+
+        self._start_creative_review_task()
+        
+        logger.info(f"Creative system initialized at: {self.creative_system.content_system.base_directory}")
+        
+        # Register creative actions with action generator
+        if hasattr(self, "agentic_action_generator"):
+            self._register_creative_actions()    
         
         self.integration_manager = create_integration_manager(self)
         await self.integration_manager.initialize()
@@ -961,6 +973,48 @@ async def initialize(self):
 
             logger.debug(f"--- Finished Cognitive Cycle {self.cognitive_cycles_executed} ---")
         return cycle_results
+
+    def _register_creative_actions(self):
+        """Register creative actions with the action generator."""
+        # Map action names to creative system methods
+        action_mappings = {
+            "write_story": self.creative_system.write_story,
+            "write_poem": self.creative_system.write_poem,
+            "write_lyrics": self.creative_system.write_lyrics,
+            "write_journal": self.creative_system.write_journal,
+            "write_and_execute_code": self.creative_system.write_and_execute_code,
+            "analyze_module": self.creative_system.analyze_module,
+            "review_code": self.creative_system.review_code,
+            "assess_capabilities": self.creative_system.assess_capabilities
+        }
+        
+        # Register each action
+        for action_name, handler in action_mappings.items():
+            self.agentic_action_generator.register_action(action_name, handler)
+            
+        logger.info(f"Registered {len(action_mappings)} creative actions with action generator")
+
+    def _start_creative_review_task(self):
+        """Start a background task for periodic creative content review."""
+        import asyncio
+        
+        async def review_task():
+            while True:
+                # Wait for the review interval (e.g., 7 days)
+                await asyncio.sleep(self.creative_system.review_interval_days * 24 * 60 * 60)
+                
+                try:
+                    # Generate review
+                    review_summary = await self.creative_system.generate_review_summary()
+                    logger.info(f"Generated periodic creative content review: {review_summary['summary_id']}")
+                    
+                    # Could also add notification mechanism here
+                except Exception as e:
+                    logger.error(f"Error in creative content review: {e}")
+        
+        # Create the background task
+        asyncio.create_task(review_task())
+        logger.info(f"Started creative content review task (interval: {self.creative_system.review_interval_days} days)")
     
     async def integrate_procedural_memory_with_actions(self):
         """
