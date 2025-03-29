@@ -65,10 +65,9 @@ from logic.conflict_system.conflict_integration import register_enhanced_integra
 
 # DB connection helper - CRITICAL: Ensure these work with asyncpg pool
 from db.connection import (
-    # get_db_connection, # REMOVE sync connection getter if possible
-    initialize_connection_pool, # Should init asyncpg pool
-    close_connection_pool, # Should close asyncpg pool
-    get_db_connection_context # Use this async context manager
+    initialize_connection_pool, # Async function
+    close_connection_pool, # Async function
+    get_db_connection_context # Async context manager
 )
 
 # Middleware
@@ -103,12 +102,15 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
     Uses asyncpg for database operations.
     """
     global socketio # Need access to socketio instance to emit
+    if not socketio:
+        logger.error("SocketIO instance not available in background_chat_task")
+        return
 
+    logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
     try:
-        logger.info(f"Starting background_chat_task for conv_id={conversation_id}, user_id={user_id}")
-
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
-        from logic.aggregator import get_aggregated_roleplay_context # Assuming sync for now
+        # If sync and hits DB, consider running in an executor or making it async
+        from logic.aggregator import get_aggregated_roleplay_context
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase") # Adjust player name if needed
 
         context = {
@@ -121,53 +123,60 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 
         # Apply universal update if provided (ensure this uses asyncpg)
         if universal_update:
-            context["universal_update"] = universal_update
+            logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
             try:
                 from logic.universal_updater import apply_universal_updates_async # Needs to be async
-                async with get_db_connection_context() as conn:
+                async with get_db_connection_context() as conn: # Use async context manager
                     await apply_universal_updates_async(
                         user_id,
                         conversation_id,
                         universal_update,
                         conn # Pass the connection
                     )
-                logger.info(f"Applied universal updates for conv_id={conversation_id}")
+                logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
                 # Refresh aggregator data post-update
                 aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
                 context["aggregator_data"] = aggregator_data
+            except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
+                 logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
+                 # Decide if to continue or emit error and stop
+                 socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 return
             except Exception as update_err:
-                 logger.error(f"Error applying universal updates in background task: {update_err}", exc_info=True)
-                 # Decide if to continue or emit error
+                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                 socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
         # Ensure this function is async
         from nyx.nyx_agent_sdk import process_user_input_with_openai
+        logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
         response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+        logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
 
         if not response or not response.get("success", False):
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
-            logger.error(f"Nyx agent failed for conv_id={conversation_id}: {error_msg}")
-            if socketio:
-                 socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
+            socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
             return
 
         # Extract the message content
         message_content = response.get("message", "")
         if not message_content and "function_args" in response:
             message_content = response["function_args"].get("narrative", "")
-        logger.debug(f"Nyx response for conv_id={conversation_id}: {message_content[:100]}...")
+        logger.debug(f"[BG Task {conversation_id}] Nyx response: {message_content[:100]}...")
 
         # Store the Nyx response in DB using asyncpg
         try:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
+            async with get_db_connection_context() as conn: # Use async context manager
+                await conn.execute( # Use await and $n params
                     """INSERT INTO messages (conversation_id, sender, content, created_at)
                        VALUES ($1, $2, $3, NOW())""",
                     conversation_id, "Nyx", message_content
                 )
-            logger.info(f"Stored Nyx response for conv_id={conversation_id}")
-        except Exception as db_err:
-            logger.error(f"DB Error storing Nyx response for conv_id={conversation_id}: {db_err}", exc_info=True)
+            logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
             # Continue but log the error
 
         # Check if we should generate an image
@@ -176,63 +185,52 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             img_settings = response["function_args"]["image_generation"]
             should_generate = should_generate or img_settings.get("generate", False)
 
-        # Generate image if needed (ensure this is async)
+        # Generate image if needed (ensure generate_roleplay_image_from_gpt is async)
         if should_generate:
-            logger.info(f"Image generation triggered for conv_id={conversation_id}")
+            logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
             try:
-                img_data = {
+                img_data = { # Prepare data structure
                     "narrative": message_content,
-                    "image_generation": {
-                        "generate": True,
-                        "priority": "medium",
-                        "focus": "balanced",
-                        "framing": "medium_shot",
-                        "reason": "Narrative moment" # Default reason
-                    }
+                    "image_generation": response.get("function_args", {}).get("image_generation", {
+                        "generate": True, "priority": "medium", "focus": "balanced",
+                        "framing": "medium_shot", "reason": "Narrative moment"
+                    })
                 }
-                # Update with specific settings if provided
-                if "function_args" in response and "image_generation" in response["function_args"]:
-                    img_data["image_generation"].update(response["function_args"]["image_generation"])
-
                 # Ensure generate_roleplay_image_from_gpt is async
                 res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
+
                 if res and "image_urls" in res and res["image_urls"]:
                     image_url = res["image_urls"][0]
                     prompt_used = res.get('prompt_used', '')
                     reason = img_data["image_generation"].get("reason", "Narrative moment")
-                    logger.info(f"Image generated successfully for conv_id={conversation_id}: {image_url}")
-                    if socketio:
-                        socketio.emit('image', {
-                            'image_url': image_url,
-                            'prompt_used': prompt_used,
-                            'reason': reason
-                        }, room=str(conversation_id))
+                    logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
+                    socketio.emit('image', {
+                        'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
+                    }, room=str(conversation_id))
                 else:
-                    logger.warning(f"Image generation task ran but produced no valid URLs for conv_id={conversation_id}. Response: {res}")
+                    logger.warning(f"[BG Task {conversation_id}] Image generation task ran but produced no valid URLs. Response: {res}")
             except Exception as img_err:
-                logger.error(f"Error generating image for conv_id={conversation_id}: {img_err}", exc_info=True)
+                logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
 
         # Stream the text tokens
-        if message_content and socketio:
-            logger.debug(f"Streaming tokens for conv_id={conversation_id}")
-            # Ensure streaming doesn't block the event loop for too long
-            # Consider using socketio.sleep(0) occasionally if message_content is huge
-            for i in range(0, len(message_content), 5): # Send slightly larger chunks
-                token = message_content[i:i+5]
+        if message_content:
+            logger.debug(f"[BG Task {conversation_id}] Streaming tokens...")
+            chunk_size = 5
+            delay = 0.01 # Small delay between chunks
+            for i in range(0, len(message_content), chunk_size):
+                token = message_content[i:i+chunk_size]
                 socketio.emit('new_token', {'token': token}, room=str(conversation_id))
-                await asyncio.sleep(0.01) # Use asyncio.sleep in async task
+                await asyncio.sleep(delay) # Use asyncio.sleep in async task
 
             socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
-            logger.info(f"Finished streaming response for conv_id={conversation_id}")
-        elif not message_content:
-             logger.warning(f"No message content to stream for conv_id={conversation_id}")
-             if socketio: # Emit done even if no content to signal completion
-                  socketio.emit('done', {'full_text': ''}, room=str(conversation_id))
+            logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
+        else:
+             logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
+             socketio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
 
     except Exception as e:
-        logger.error(f"Critical Error in background_chat_task for conv_id={conversation_id}: {str(e)}", exc_info=True)
-        if socketio:
-             socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+        logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
+        socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
 
 async def initialize_systems(app):
@@ -256,14 +254,27 @@ async def initialize_systems(app):
 
         # --- Initialize DB Pool ---
         # This *should* be done here or early in create_flask_app
-        if not initialize_connection_pool(): # Ensure this initializes asyncpg pool
-            logger.critical("Failed to initialize database connection pool! Exiting.")
-            # Handle failure appropriately, maybe raise exception
+        if not await initialize_connection_pool():
             raise RuntimeError("Database pool initialization failed")
         else:
             logger.info("Database connection pool initialized successfully.")
-        # Register pool cleanup
-        atexit.register(close_connection_pool) # Ensure this closes asyncpg pool
+
+        # Register pool cleanup (atexit might be unreliable for async)
+        # Consider a more robust shutdown handler in production
+        async def cleanup_pool_on_exit():
+            logger.info("Running async pool cleanup...")
+            await close_connection_pool()
+
+        # Wrap the async cleanup for atexit (use with caution)
+        def run_async_cleanup():
+            try:
+                asyncio.run(cleanup_pool_on_exit())
+            except RuntimeError as e:
+                # Handle cases where event loop might already be closed
+                logger.warning(f"Could not run async cleanup in atexit: {e}")
+
+        atexit.register(run_async_cleanup)
+        logger.info("Registered async pool cleanup with atexit (best effort).")
 
         # --- Initialize Nyx Memory System ---
         # Pass DSN or ensure it's configured globally for initialize_nyx_memory_system
@@ -299,85 +310,79 @@ async def initialize_systems(app):
             from nyx.core.brain.base import NyxBrain
             system_user_id = 0
             system_conversation_id = 0
-            # Pass DSN or ensure NyxBrain uses the configured pool
-            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-            logger.info("Global NyxBrain instance initialized successfully")
-
-            # Register response processors (ensure these handlers are async)
+            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id) # Assuming async
+            logger.info("Global NyxBrain instance initialized.")
+            # Register processors (ensure handlers are async)
             from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-            # Assuming enhanced_background_chat_task is defined elsewhere and is async
-            # from logic.nyx_enhancements_integration import enhanced_background_chat_task # Moved definition earlier
-
             app.nyx_brain.response_processors = {
-                "default": enhanced_background_chat_task, # Needs to be async
-                "openai": process_user_input_with_openai, # Needs to be async
-                "base": process_user_input # Needs to be async
+                "default": background_chat_task, # Use the main background task
+                "openai": process_user_input_with_openai, # Assuming async
+                "base": process_user_input # Assuming async
             }
-            logger.info("Response processors registered with NyxBrain")
+            logger.info("Response processors registered with NyxBrain.")
         except ImportError as e:
-             logger.error(f"Could not import NyxBrain or its dependencies: {e}. Skipping NyxBrain init.")
+             logger.error(f"Could not import NyxBrain: {e}. Skipping init.")
         except Exception as e:
              logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
 
-
-        # --- Initialize MCP Orchestrator ---
-        # Ensure initialize is async and uses asyncpg/pool if needed
+        # MCP orchestrator (assuming async)
         try:
             app.mcp_orchestrator = MCPOrchestrator()
-            await app.mcp_orchestrator.initialize()
-            logger.info("MCP orchestrator initialized successfully.")
+            await app.mcp_orchestrator.initialize() # Assuming async
+            logger.info("MCP orchestrator initialized.")
         except Exception as e:
              logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
-
-        # --- Register Conflict System ---
-        # Ensure register_enhanced_integration is async and uses asyncpg/pool
+        # Conflict system registration (assuming async)
         try:
-            # Use dummy IDs or configure appropriately for system-wide registration if needed
-            system_user_id = 1 # Or a dedicated system user ID
-            system_conversation_id = 1 # Or a dedicated system conversation ID
-            res = await register_enhanced_integration(system_user_id, system_conversation_id)
-            if res.get("success"):
-                logger.info("Conflict system successfully registered with Nyx governance")
-            else:
-                logger.error(f"Failed to register conflict system: {res.get('message', 'Unknown error')}")
-        except Exception as e:
-            logger.error(f"Error during conflict system registration: {str(e)}", exc_info=True)
+            system_user_id = 1
+            system_conversation_id = 1
+            res = await register_enhanced_integration(system_user_id, system_conversation_id) # Assuming async
+            if res.get("success"): logger.info("Conflict system registered.")
+            else: logger.error(f"Failed to register conflict system: {res.get('message')}")
+        except Exception as e: logger.error(f"Error registering conflict system: {e}", exc_info=True)
 
-
-        # --- Initialize NPC Learning ---
-        # Ensure initialize_system is async and uses asyncpg/pool
+        # NPC learning (assuming async)
         try:
-            await NPCLearningManager.initialize_system()
-            logger.info("NPC learning system initialized successfully.")
-        except Exception as e:
-            logger.error(f"Error initializing NPC Learning Manager: {e}", exc_info=True)
+            await NPCLearningManager.initialize_system() # Assuming async
+            logger.info("NPC learning system initialized.")
+        except Exception as e: logger.error(f"Error initializing NPC Learning: {e}", exc_info=True)
 
-        # --- Initialize Universal Updater ---
-        # Ensure initialize_universal_updater is async and uses asyncpg/pool
+        # Universal updater (assuming async)
         try:
             from logic.universal_updater import initialize_universal_updater
-            await initialize_universal_updater()
-            logger.info("Universal updater initialized successfully.")
-        except Exception as e:
-            logger.error(f"Error initializing Universal Updater: {e}", exc_info=True)
+            await initialize_universal_updater() # Assuming async
+            logger.info("Universal updater initialized.")
+        except Exception as e: logger.error(f"Error initializing Universal Updater: {e}", exc_info=True)
 
-        # Configure admin access (Consider moving to config file)
+        # Admin config
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
         try:
             app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
-            logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
         except ValueError:
-            logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1]. Should be comma-separated integers.")
+            logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1].")
             app.config['ADMIN_USER_IDS'] = [1]
+        logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
         logger.info("All asynchronous system initializations completed.")
 
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
-        # Depending on the severity, might want to exit or prevent app from serving requests
-        raise
+        raise # Prevent app from starting if critical systems fail
 
+async def initialize_openai_integration():
+    """Initialize the OpenAI integration system."""
+    try:
+        from nyx.eternal.openai_integration import initialize
+        from nyx.nyx_agent_sdk import process_user_input # Assuming this is the correct base processor
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key: logger.warning("OPENAI_API_KEY not set.")
+        initialize(api_key=api_key, original_processor=process_user_input) # Assuming sync call ok
+        logger.info("OpenAI integration system initialized.")
+        return True
+    except Exception as e:
+        logger.error(f"Error initializing OpenAI integration: {e}", exc_info=True)
+        return False
 
 ###############################################################################
 # FLASK APP CREATION
@@ -495,11 +500,14 @@ def create_flask_app():
     # Run the async setup tasks AFTER the main app config but before returning app
     # This uses asyncio.run, which is okay here as it's during initial setup phase.
     try:
+        # Use asyncio.run() to execute the async initializer function
+        # This is acceptable here during the synchronous app creation phase.
         asyncio.run(initialize_systems(app))
     except Exception as init_err:
-        logger.critical(f"Asynchronous initialization failed: {init_err}", exc_info=True)
-        # Decide whether to proceed or exit based on the error
-        raise RuntimeError("Failed to initialize critical systems.") from init_err
+        logger.critical(f"Application initialization failed: {init_err}", exc_info=True)
+        # Exit or raise prevents the app from being returned in a broken state
+        raise RuntimeError("Failed to initialize application systems.") from init_err
+    logger.info("Async initializations complete. Flask app creation finished.")
 
 
     ###########################################################################
@@ -540,39 +548,37 @@ def create_flask_app():
                     username
                 )
 
-            if not row:
-                # Mitigate timing attacks: Perform a fake hash check
-                # Use a known salt structure if possible, otherwise generate a fake hash
-                fake_hash = bcrypt.hashpw(b"dummyPassword", bcrypt.gensalt()).decode('utf-8')
-                bcrypt.checkpw(password.encode('utf-8'), fake_hash.encode('utf-8'))
-                logger.warning(f"Login attempt failed for non-existent user: {username}")
-                return jsonify({"error": "Invalid username or password"}), 401
+            if not row: # User not found
+                 # Mitigate timing attacks
+                 fake_hash = bcrypt.hashpw(b"dummy", bcrypt.gensalt())
+                 bcrypt.checkpw(password.encode('utf-8'), fake_hash)
+                 logger.warning(f"Login failed (no such user): {username}")
+                 return jsonify({"error": "Invalid username or password"}), 401
 
-            user_id, hashed_password = row['id'], row['password_hash']
+            user_id, hashed_password_bytes = row['id'], row['password_hash'].encode('utf-8')
 
-            # Check password using bcrypt
-            if bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8')):
-                session["user_id"] = user_id
-                session.permanent = True # Make session permanent based on lifetime config
-                logger.info(f"User {username} (ID: {user_id}) logged in successfully")
-                return jsonify({"message": "Logged in", "user_id": user_id})
+            if bcrypt.checkpw(password.encode('utf-8'), hashed_password_bytes):
+                 session["user_id"] = user_id
+                 session.permanent = True
+                 logger.info(f"Login successful: User {user_id}")
+                 return jsonify({"message": "Logged in", "user_id": user_id})
             else:
-                logger.warning(f"Login attempt failed for user: {username} (ID: {user_id}) - Invalid password")
-                return jsonify({"error": "Invalid username or password"}), 401
+                 logger.warning(f"Login failed (bad password): User {user_id}")
+                 return jsonify({"error": "Invalid username or password"}), 401
 
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"Database error during login for user {username}: {db_err}", exc_info=True)
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Login DB error for {username}: {db_err}", exc_info=True)
             return jsonify({"error": "Database error during login"}), 500
         except Exception as e:
-            logger.error(f"Unexpected error during login for user {username}: {e}", exc_info=True)
+            logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during login"}), 500
 
     @app.route("/register", methods=["POST"])
-    @rate_limit(limit=3, period=300) # Stricter rate limit for registration
-    @validate_request({
+    @rate_limit(limit=3, period=300)
+    @validate_request({ # Added patterns, made email optional
         'username': {'type': 'string', 'pattern': r'^[a-zA-Z0-9_.-]{3,30}$', 'required': True},
         'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
-        'email':    {'type': 'string', 'pattern': r'[^@]+@[^@]+\.[^@]+', 'max_length': 100, 'required': False} # Email optional? Add validation.
+        'email':    {'type': 'string', 'pattern': r'[^@]+@[^@]+\.[^@]+', 'max_length': 100, 'required': False}
     })
     async def register(): # Make async for asyncpg
         data = getattr(request, 'sanitized_data', request.get_json())
@@ -587,56 +593,54 @@ def create_flask_app():
 
         # Hash password
         try:
-             password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as hash_err:
-             logger.error(f"Error hashing password during registration: {hash_err}", exc_info=True)
-             return jsonify({"error": "Server error during registration setup"}), 500
+            logger.error(f"Password hashing error: {hash_err}", exc_info=True)
+            return jsonify({"error": "Registration error"}), 500
 
-        # Insert user using asyncpg within a transaction
         try:
-            async with get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn: # Use async context
+                # Use transaction for atomic check-and-insert
                 async with conn.transaction():
-                    # Check for existing username
+                    # Check existing username
                     existing_user = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
                     if existing_user:
-                        logger.warning(f"Registration attempt failed for existing username: {username}")
                         return jsonify({"error": "Username already exists"}), 409
 
-                    # Check for existing email if provided and required to be unique
+                    # Check existing email if provided and email column exists and is unique
                     if email:
                         existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
                         if existing_email:
-                            logger.warning(f"Registration attempt failed for existing email: {email}")
                             return jsonify({"error": "Email already exists"}), 409
 
                     # Insert new user
-                    # Add email to query if it's a column
-                    query = """
-                        INSERT INTO users (username, password_hash, email, created_at)
-                        VALUES ($1, $2, $3, NOW()) RETURNING id
-                    """
-                    user_id = await conn.fetchval(query, username, password_hash, email)
+                    user_id = await conn.fetchval( # Use await and $n params
+                        """INSERT INTO users (username, password_hash, email, created_at)
+                           VALUES ($1, $2, $3, NOW()) RETURNING id""",
+                        username, password_hash, email
+                    )
 
             if user_id:
-                logger.info(f"New user registered: {username} (ID: {user_id})")
                 session["user_id"] = user_id
                 session.permanent = True
-                return jsonify({"message": "User registered successfully", "user_id": user_id}), 201 # Use 201 Created status
+                logger.info(f"Registration successful: User {user_id} ({username})")
+                return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
             else:
-                # This case should ideally not happen if RETURNING id works and transaction succeeds
-                logger.error(f"Registration seemed successful but no user ID returned for username: {username}")
-                return jsonify({"error": "Server error during registration confirmation"}), 500
+                logger.error(f"Registration failed: No user ID returned for {username}")
+                return jsonify({"error": "Registration failed"}), 500
 
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"Database error during registration for {username}: {db_err}", exc_info=True)
-            # Check for unique constraint violation specifically if needed
-            if isinstance(db_err, asyncpg.exceptions.UniqueViolationError):
-                 # This might be redundant if checks above work, but good as a fallback
-                 # Determine which constraint failed if possible (check db_err details)
-                 return jsonify({"error": "Username or email already exists."}), 409
+        except asyncpg.exceptions.UniqueViolationError as uve:
+             # Catch specific unique constraint error
+             logger.warning(f"Registration conflict for {username}: {uve}")
+             # Determine if username or email caused it based on constraint name if possible
+             if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
+             if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
+             return jsonify({"error": "Username or email already exists"}), 409
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Registration DB error for {username}: {db_err}", exc_info=True)
             return jsonify({"error": "Database error during registration"}), 500
         except Exception as e:
-            logger.error(f"Unexpected error during registration for {username}: {e}", exc_info=True)
+            logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during registration"}), 500
 
 
@@ -677,27 +681,22 @@ def create_flask_app():
 
     @app.route("/start_new_game", methods=["POST"])
     # @validate_request({'user_id': {'type': 'integer','required': True}}) # Validation might be redundant if using session
-    async def start_new_game(): # Make async
-        """Starts a new game asynchronously, potentially using Celery for heavy lifting."""
+    async def start_new_game(): # Needs to be async
         user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not authenticated"}), 401
-
-        logger.info(f"User {user_id} requested a new game.")
+        if not user_id: return jsonify({"error": "Not authenticated"}), 401
+        logger.info(f"User {user_id} starting new game...")
 
         try:
-            # 1. Create conversation record synchronously first (or async if preferred)
-            # Using asyncpg here for consistency
-            async with get_db_connection_context() as conn:
-                 # Use a transaction
+            # Create initial conversation record
+            async with get_db_connection_context() as conn: # Use async context
                  async with conn.transaction():
-                    # Insert conversation with 'processing' status
-                    conv_row = await conn.fetchrow("""
-                        INSERT INTO conversations (user_id, conversation_name, status)
-                        VALUES ($1, $2, 'processing') RETURNING id
-                    """, user_id, "New Game - Initializing...")
+                    conv_row = await conn.fetchrow( # Use await and $n params
+                        """INSERT INTO conversations (user_id, conversation_name, status)
+                        VALUES ($1, $2, 'processing') RETURNING id""",
+                        user_id, "New Game - Initializing..."
+                    )
                     conversation_id = conv_row['id']
-                    logger.info(f"Created new conversation record {conversation_id} for user {user_id}.")
+                    logger.info(f"Created conversation {conversation_id} for user {user_id}")
 
                     # Optionally, insert default player stats immediately
                     # Assuming insert_default_player_stats_chase uses asyncpg or can be awaited
@@ -706,24 +705,23 @@ def create_flask_app():
 
             # 2. Trigger the heavy lifting asynchronously via Celery
             # Pass necessary data to the task
+            from tasks import process_new_game_task # Import task
             task_result = process_new_game_task.delay(user_id, {"conversation_id": conversation_id})
-            logger.info(f"Dispatched new game processing task {task_result.id} for conv {conversation_id}.")
+            logger.info(f"Dispatched Celery task {task_result.id} for new game {conversation_id}")
 
-            # 3. Return immediately to the user, indicating processing has started
             return jsonify({
                 "status": "processing",
-                "message": "New game creation started. Please wait for initialization.",
+                "message": "New game creation started.",
                 "conversation_id": conversation_id,
-                "task_id": task_result.id # Client can potentially poll this task ID
-            }), 202 # 202 Accepted status code
+                "task_id": task_result.id
+            }), 202
 
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"Database error starting new game for user {user_id}: {db_err}", exc_info=True)
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"New game DB error for user {user_id}: {db_err}", exc_info=True)
             return jsonify({"error": "Database error starting game"}), 500
         except Exception as e:
-            logger.error(f"Error dispatching new game task for user {user_id}: {e}", exc_info=True)
-            return jsonify({"error": "Server error starting game process"}), 500
-
+            logger.error(f"New game dispatch error for user {user_id}: {e}", exc_info=True)
+            return jsonify({"error": "Server error starting game"}), 500
 
     # --- Admin/Debug Routes ---
     @app.route("/admin/nyx_direct", methods=["POST"])
@@ -817,32 +815,22 @@ def create_flask_app():
         return jsonify({"status": "healthy", "timestamp": time.time()})
 
     @app.route("/readiness", methods=["GET"])
-    async def readiness_check(): # Make async for async DB check
-        """Readiness check endpoint for checking dependencies."""
+    async def readiness_check(): # Keep async
         status = {"status": "ready", "timestamp": time.time(), "checks": {}}
         is_ready = True
-
-        # --- DB check (Async) ---
+        # DB Check (Async)
         try:
-            async with get_db_connection_context(timeout=5) as conn: # Add timeout
-                # Perform a simple query
+            # Use short timeout
+            async with get_db_connection_context(timeout=5) as conn:
                 result = await conn.fetchval("SELECT 1")
-                if result == 1:
-                    status["checks"]["database"] = "connected"
-                else:
-                    status["checks"]["database"] = "error: unexpected query result"
-                    is_ready = False
-        except asyncio.TimeoutError:
-             status["checks"]["database"] = "error: connection timeout"
-             is_ready = False
-        except asyncpg.PostgresError as db_err:
-            status["checks"]["database"] = f"error: {type(db_err).__name__}"
-            is_ready = False
-            logger.warning(f"Readiness check DB error: {db_err}")
+                if result == 1: status["checks"]["database"] = "connected"
+                else: status["checks"]["database"] = "error: bad query result"; is_ready = False
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            status["checks"]["database"] = f"error: {type(db_err).__name__}"; is_ready = False
+            logger.warning(f"Readiness DB check failed: {db_err}")
         except Exception as e:
-            status["checks"]["database"] = f"error: {str(e)}"
-            is_ready = False
-            logger.warning(f"Readiness check unexpected DB error: {e}", exc_info=True)
+            status["checks"]["database"] = f"error: {type(e).__name__}"; is_ready = False
+            logger.warning(f"Readiness DB check unexpected error: {e}", exc_info=True)
 
 
         # --- Redis Check (Sync - consider async if heavily used) ---
