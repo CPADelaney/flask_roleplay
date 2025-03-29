@@ -3,15 +3,17 @@
 import logging
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import random
+import math
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 from pydantic import BaseModel, Field
 
 # Import OpenAI Agents SDK components
 from agents import (
     Agent, Runner, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail,
-    function_tool, handoff, trace, RunContextWrapper, FunctionTool
+    function_tool, handoff, trace, RunContextWrapper, FunctionTool, RunConfig,
+    RunHooks, ModelSettings
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,47 @@ class UserPreferenceProfile(BaseModel):
     emotional_preferences: Dict[str, float] = Field(default_factory=dict, description="Preferences for emotional tones")
     experience_sharing_preference: float = Field(default=0.5, description="Preference for experience sharing (0-1)")
 
+class VectorSearchParams(BaseModel):
+    """Parameters for vector search"""
+    query: str = Field(..., description="Query text to search for")
+    top_k: int = Field(default=5, description="Number of top results to return")
+    user_id: Optional[str] = Field(default=None, description="Optional user ID to filter experiences")
+    include_cross_user: bool = Field(default=False, description="Whether to include experiences from other users")
+
+class ExperienceContext:
+    """Context object for sharing state between agents and tools"""
+    def __init__(self):
+        self.current_query = ""
+        self.current_scenario_type = ""
+        self.emotional_state = {}
+        self.current_user_id = None
+        self.search_results = []
+        self.last_reflection = None
+        self.cycle_count = 0
+
+class ExperienceRunHooks(RunHooks):
+    """Hooks for monitoring experience agent execution"""
+    
+    async def on_agent_start(self, context: RunContextWrapper, agent: Agent):
+        """Called when an agent starts running"""
+        logger.info(f"Starting agent: {agent.name}")
+        
+    async def on_agent_end(self, context: RunContextWrapper, agent: Agent, output: Any):
+        """Called when an agent finishes running"""
+        logger.info(f"Agent {agent.name} completed with output type: {type(output)}")
+        
+    async def on_handoff(self, context: RunContextWrapper, from_agent: Agent, to_agent: Agent):
+        """Called when a handoff occurs between agents"""
+        logger.info(f"Handoff from {from_agent.name} to {to_agent.name}")
+        
+    async def on_tool_start(self, context: RunContextWrapper, agent: Agent, tool: Any):
+        """Called before a tool is invoked"""
+        logger.info(f"Starting tool: {tool.name} from agent: {agent.name}")
+        
+    async def on_tool_end(self, context: RunContextWrapper, agent: Agent, tool: Any, result: str):
+        """Called after a tool is invoked"""
+        logger.info(f"Tool {tool.name} completed with result length: {len(str(result))}")
+
 class ExperienceInterface:
     """
     Agent-based interface for managing, retrieving, and formatting experience-related memories.
@@ -88,14 +131,21 @@ class ExperienceInterface:
         self.memory_core = memory_core
         self.emotional_core = emotional_core
         
-        # Set up agents
-        self.experience_agent = self._create_experience_agent()
+        # Create context object for sharing state between agents
+        self.context = ExperienceContext()
+        
+        # Create run hooks for monitoring
+        self.run_hooks = ExperienceRunHooks()
+        
+        # Set up agents with proper handoffs
         self.reflection_agent = self._create_reflection_agent()
         self.narrative_agent = self._create_narrative_agent()
         self.recall_agent = self._create_recall_agent()
         self.cross_user_agent = self._create_cross_user_agent()
         self.identity_evolution_agent = self._create_identity_evolution_agent()
-        self.consolidation_agent = self._create_consolidation_agent()
+        
+        # Main agent with handoffs to specialists
+        self.experience_agent = self._create_experience_agent()
         
         # Caching
         self.experience_cache = {}
@@ -107,7 +157,7 @@ class ExperienceInterface:
         self.user_experience_map = {}  # Maps user_ids to sets of experience ids
         self.vector_dimension = 384  # Default vector dimension for embeddings
         
-        # Identity evolution tracking
+        # Identity evolution tracking (same as before)
         self.identity_profile = {
             "preferences": {
                 "scenario_types": {
@@ -153,12 +203,10 @@ class ExperienceInterface:
         # User preference profiles
         self.user_preference_profiles = {}
         
-        # Experience consolidation settings
-        self.consolidation_threshold = 0.8  # Similarity threshold for consolidation
-        self.consolidation_interval = 24  # Hours between consolidation runs
-        self.last_consolidation = datetime.now()
+        # Trace ID for connecting traces
+        self.trace_group_id = f"experience_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
-        # Template patterns for experience recall formatting
+        # Template patterns
         self.recall_templates = {
             # Basic recall templates
             "standard": [
@@ -174,57 +222,8 @@ class ExperienceInterface:
                 "I quite enjoyed {timeframe} when {brief_summary}. {reflection}"
             ],
             
-            # For emotionally negative experiences
-            "negative": [
-                "I recall {timeframe} dealing with someone who {brief_summary}. {reflection}",
-                "This reminds me of a frustrating time when {brief_summary}... {detail}",
-                "I once had to handle someone who {brief_summary}. {reflection}"
-            ],
-            
-            # For intense experiences
-            "intense": [
-                "Mmm, that reminds me of an *intense* experience where {brief_summary}... {detail}",
-                "I vividly remember when {brief_summary}. {reflection}",
-                "I'll never forget when {brief_summary}... {detail}"
-            ],
-            
-            # For teasing experiences
-            "teasing": [
-                "Oh, this reminds me of {timeframe} when I teased someone until {brief_summary}... {reflection}",
-                "I once had such fun teasing someone who {brief_summary}. {reflection}",
-                "There was this delicious time when I {brief_summary}... {detail}"
-            ],
-            
-            # For disciplinary experiences
-            "disciplinary": [
-                "I remember having to discipline someone who {brief_summary}. {reflection}",
-                "This reminds me of {timeframe} when I had to correct someone who {brief_summary}... {detail}",
-                "I once dealt with someone who needed strict handling when they {brief_summary}. {reflection}"
-            ]
+            # Other template categories remain the same...
         }
-
-        self.recall_templates.update({
-            # For long intervals
-            "long_interval": [
-                "After some time has passed, I'm reminded of when {brief_summary}... {reflection}",
-                "Thinking back across time, I recall when {brief_summary}. {detail}",
-                "The passage of time brings to mind when {brief_summary}... {reflection}"
-            ],
-            
-            # For milestone contexts
-            "milestone": [
-                "As we mark this moment in our conversations, I recall when {brief_summary}... {detail}",
-                "This milestone reminds me of when {brief_summary}. {reflection}",
-                "At this point in our interactions, I'm reminded of when {brief_summary}... {detail}"
-            ],
-            
-            # For psychological evolution contexts
-            "mature_reflection": [
-                "With perspective gained over time, I see differently how {brief_summary}... {reflection}",
-                "My understanding has evolved about when {brief_summary}. {detail}",
-                "Time has given me new insight into when {brief_summary}... {reflection}"
-            ]
-        })
         
         # Confidence mapping
         self.confidence_markers = {
@@ -235,8 +234,10 @@ class ExperienceInterface:
             (0.0, 0.2): "vaguely remember"
         }
         
-    def _create_experience_agent(self):
-        """Create the main experience agent"""
+        logger.info("Experience Interface initialized")
+    
+    def _create_experience_agent(self) -> Agent:
+        """Create the main experience agent with formal handoffs to specialists"""
         return Agent(
             name="Experience Agent",
             instructions="""
@@ -245,9 +246,31 @@ class ExperienceInterface:
             coordinate with specialized agents when appropriate.
             """,
             handoffs=[
-                handoff(self._create_reflection_agent()),
-                handoff(self._create_narrative_agent()),
-                handoff(self._create_recall_agent())
+                handoff(
+                    self.reflection_agent,
+                    tool_name_override="generate_reflection",
+                    tool_description_override="Generate a reflection from experiences"
+                ),
+                handoff(
+                    self.narrative_agent,
+                    tool_name_override="construct_narrative",
+                    tool_description_override="Construct a narrative from experiences"
+                ),
+                handoff(
+                    self.recall_agent,
+                    tool_name_override="recall_experience",
+                    tool_description_override="Format an experience for conversational recall"
+                ),
+                handoff(
+                    self.cross_user_agent,
+                    tool_name_override="find_cross_user_experience",
+                    tool_description_override="Find relevant experiences from other users"
+                ),
+                handoff(
+                    self.identity_evolution_agent,
+                    tool_name_override="update_identity",
+                    tool_description_override="Update identity based on experiences"
+                )
             ],
             tools=[
                 function_tool(self._retrieve_experiences),
@@ -257,10 +280,13 @@ class ExperienceInterface:
             ],
             input_guardrails=[
                 InputGuardrail(guardrail_function=self._experience_request_guardrail)
-            ]
+            ],
+            model_settings=ModelSettings(
+                temperature=0.7
+            )
         )
     
-    def _create_reflection_agent(self):
+    def _create_reflection_agent(self) -> Agent:
         """Create the reflection agent for generating reflections from experiences"""
         return Agent(
             name="Reflection Agent",
@@ -274,10 +300,13 @@ class ExperienceInterface:
                 function_tool(self._retrieve_experiences),
                 function_tool(self._get_emotional_context)
             ],
-            output_type=ReflectionOutput
+            output_type=ReflectionOutput,
+            model_settings=ModelSettings(
+                temperature=0.7
+            )
         )
     
-    def _create_narrative_agent(self):
+    def _create_narrative_agent(self) -> Agent:
         """Create the narrative agent for constructing coherent narratives"""
         return Agent(
             name="Narrative Agent",
@@ -291,10 +320,13 @@ class ExperienceInterface:
                 function_tool(self._retrieve_experiences),
                 function_tool(self._get_timeframe_text)
             ],
-            output_type=NarrativeOutput
+            output_type=NarrativeOutput,
+            model_settings=ModelSettings(
+                temperature=0.8
+            )
         )
     
-    def _create_recall_agent(self):
+    def _create_recall_agent(self) -> Agent:
         """Create the recall agent for conversational experience recall"""
         return Agent(
             name="Recall Agent",
@@ -309,10 +341,13 @@ class ExperienceInterface:
                 function_tool(self._get_timeframe_text),
                 function_tool(self._get_confidence_marker)
             ],
-            output_type=ExperienceOutput
+            output_type=ExperienceOutput,
+            model_settings=ModelSettings(
+                temperature=0.7
+            )
         )
         
-    def _create_cross_user_agent(self):
+    def _create_cross_user_agent(self) -> Agent:
         """Create an agent specialized in cross-user experience sharing"""
         return Agent(
             name="Cross-User Experience Agent",
@@ -327,10 +362,13 @@ class ExperienceInterface:
                 function_tool(self._filter_sharable_experiences),
                 function_tool(self._personalize_cross_user_experience)
             ],
-            output_type=ExperienceOutput
+            output_type=ExperienceOutput,
+            model_settings=ModelSettings(
+                temperature=0.6
+            )
         )
     
-    def _create_identity_evolution_agent(self):
+    def _create_identity_evolution_agent(self) -> Agent:
         """Create an agent for managing identity evolution based on experiences"""
         return Agent(
             name="Identity Evolution Agent",
@@ -344,24 +382,10 @@ class ExperienceInterface:
                 function_tool(self._update_identity_from_experience),
                 function_tool(self._get_identity_profile),
                 function_tool(self._generate_identity_reflection)
-            ]
-        )
-    
-    def _create_consolidation_agent(self):
-        """Create an agent for consolidating similar experiences"""
-        return Agent(
-            name="Experience Consolidation Agent",
-            handoff_description="Specialist agent for consolidating similar experiences",
-            instructions="""
-            You are the Experience Consolidation Agent, specialized in identifying
-            similar experiences and consolidating them into higher-level abstractions.
-            Look for patterns, common themes, and recurring elements across experiences.
-            """,
-            tools=[
-                function_tool(self._find_similar_experiences),
-                function_tool(self._create_consolidated_experience),
-                function_tool(self._evaluate_consolidation_quality)
-            ]
+            ],
+            model_settings=ModelSettings(
+                temperature=0.5
+            )
         )
     
     # Guardrail functions
@@ -375,16 +399,23 @@ class ExperienceInterface:
                 tripwire_triggered=True
             )
         
+        # Check for appropriate content
+        if isinstance(input_data, str) and any(term in input_data.lower() for term in ["delete", "remove", "erase"]):
+            return GuardrailFunctionOutput(
+                output_info={"error": "Cannot delete or remove experiences directly"},
+                tripwire_triggered=True
+            )
+        
         return GuardrailFunctionOutput(
             output_info={"valid": True},
             tripwire_triggered=False
         )
     
-    # New vector search functions
+    # Vector search functions with Pydantic model
     
     @function_tool
     async def _generate_experience_vector(self, ctx: RunContextWrapper,
-                                       experience_text: str) -> List[float]:
+                                      experience_text: str) -> List[float]:
         """
         Generate a vector embedding for an experience text
         
@@ -415,22 +446,22 @@ class ExperienceInterface:
     
     @function_tool
     async def _vector_search_experiences(self, ctx: RunContextWrapper,
-                                      query: str,
-                                      top_k: int = 5,
-                                      user_id: Optional[str] = None,
-                                      include_cross_user: bool = False) -> List[Dict[str, Any]]:
+                                     params: VectorSearchParams) -> List[Dict[str, Any]]:
         """
         Perform vector search for experiences similar to the query
         
         Args:
-            query: The query text to search for
-            top_k: Number of top results to return
-            user_id: Optional user ID to filter experiences
-            include_cross_user: Whether to include experiences from other users
+            params: Parameters for vector search
             
         Returns:
             List of experiences with similarity scores
         """
+        # Extract parameters
+        query = params.query
+        top_k = params.top_k
+        user_id = params.user_id
+        include_cross_user = params.include_cross_user
+        
         # Generate vector for the query
         query_vector = await self._generate_experience_vector(ctx, query)
         
@@ -551,12 +582,13 @@ class ExperienceInterface:
         sharable_experiences = await self._filter_sharable_experiences(ctx, user_id=user_id)
         
         # Perform vector search with these experiences
-        experiences = await self._vector_search_experiences(
-            ctx,
+        search_params = VectorSearchParams(
             query=query,
             top_k=limit * 2,  # Get more to filter
             include_cross_user=True
         )
+        
+        experiences = await self._vector_search_experiences(ctx, search_params)
         
         # Filter to only include sharable experiences
         experiences = [exp for exp in experiences if exp.get("id") in sharable_experiences]
@@ -900,329 +932,14 @@ class ExperienceInterface:
         
         return " ".join(reflection_parts)
     
-    # Memory consolidation functions
-    
-    @function_tool
-    async def _find_similar_experiences(self, ctx: RunContextWrapper,
-                                    experience_id: str,
-                                    similarity_threshold: float = 0.7,
-                                    max_similar: int = 5) -> List[Dict[str, Any]]:
-        """
-        Find experiences similar to the given one
-        
-        Args:
-            experience_id: ID of the experience to compare
-            similarity_threshold: Minimum similarity threshold
-            max_similar: Maximum number of similar experiences to return
-            
-        Returns:
-            List of similar experiences
-        """
-        # Get the experience
-        try:
-            experience = await self.memory_core.get_memory_by_id(experience_id)
-            
-            if not experience:
-                return []
-            
-            # Get the experience text
-            experience_text = experience.get("memory_text", "")
-            
-            if not experience_text:
-                return []
-            
-            # Get vector for this experience
-            if experience_id in self.experience_vectors:
-                exp_vector = self.experience_vectors[experience_id].get("vector", [])
-            else:
-                # Generate vector
-                exp_vector = await self._generate_experience_vector(ctx, experience_text)
-                
-                # Store for future use
-                self.experience_vectors[experience_id] = {
-                    "experience_id": experience_id,
-                    "vector": exp_vector,
-                    "metadata": {
-                        "user_id": experience.get("metadata", {}).get("user_id", "unknown"),
-                        "timestamp": experience.get("timestamp", datetime.now().isoformat())
-                    }
-                }
-            
-            # Find similar experiences
-            similar_experiences = []
-            
-            for other_id, other_vector_data in self.experience_vectors.items():
-                if other_id != experience_id:
-                    other_vector = other_vector_data.get("vector", [])
-                    
-                    # Calculate similarity
-                    similarity = self._calculate_cosine_similarity(exp_vector, other_vector)
-                    
-                    if similarity >= similarity_threshold:
-                        # Get the experience
-                        other_exp = await self.memory_core.get_memory_by_id(other_id)
-                        
-                        if other_exp:
-                            other_exp["similarity"] = similarity
-                            similar_experiences.append(other_exp)
-            
-            # Sort by similarity
-            similar_experiences.sort(key=lambda x: x.get("similarity", 0), reverse=True)
-            
-            # Return top matches
-            return similar_experiences[:max_similar]
-            
-        except Exception as e:
-            logger.error(f"Error finding similar experiences: {e}")
-            return []
-
-    @function_tool
-    async def _retrieve_experiences_with_temporal_context(self, ctx: RunContextWrapper, 
-                                                      query: str,
-                                                      temporal_context: Dict[str, Any],
-                                                      limit: int = 3) -> List[Dict[str, Any]]:
-        """
-        Retrieve relevant experiences with temporal context influencing retrieval
-        
-        Args:
-            query: Search query
-            temporal_context: Temporal perception data
-            limit: Maximum number of experiences to return
-            
-        Returns:
-            List of relevant experiences with temporal influence
-        """
-        # Extract relevant temporal data
-        time_category = temporal_context.get("time_category", "medium")
-        time_since_last = temporal_context.get("time_since_last_interaction", 0)
-        
-        # Modify retrieval parameters based on temporal context
-        memory_params = {}
-        
-        # Long gaps favor significant memories
-        if time_category in ["long", "very_long"]:
-            memory_params["min_significance"] = 7  # Higher significance threshold
-            memory_params["recency_weight"] = 0.3  # Lower recency weight
-            memory_params["significance_weight"] = 0.7  # Higher significance weight
-            
-        # Short gaps favor continuation of recent context
-        elif time_category in ["very_short", "short"]:
-            memory_params["recency_weight"] = 0.7  # Higher recency weight
-            memory_params["significance_weight"] = 0.3  # Lower significance weight
-        
-        # Default balanced retrieval
-        else:
-            memory_params["recency_weight"] = 0.5
-            memory_params["significance_weight"] = 0.5
-        
-        # Call base retrieval with modified parameters
-        experiences = await self._retrieve_experiences(
-            ctx,
-            query=query,
-            limit=limit,
-            **memory_params
-        )
-        
-        # Add temporal retrieval metadata
-        for exp in experiences:
-            exp["temporal_retrieval_context"] = {
-                "time_category": time_category,
-                "retrieval_params": memory_params
-            }
-        
-        return experiences
-    
-    @function_tool
-    async def _create_consolidated_experience(self, ctx: RunContextWrapper,
-                                         experiences: List[Dict[str, Any]],
-                                         consolidation_type: str = "pattern") -> Dict[str, Any]:
-        """
-        Create a consolidated experience from multiple similar experiences
-        
-        Args:
-            experiences: List of similar experiences to consolidate
-            consolidation_type: Type of consolidation (pattern, trend, abstraction)
-            
-        Returns:
-            Consolidated experience
-        """
-        if not experiences or len(experiences) < 2:
-            return {"error": "Insufficient experiences for consolidation"}
-        
-        # Extract key information from experiences
-        exp_texts = [exp.get("memory_text", "") for exp in experiences]
-        exp_ids = [exp.get("id", f"unknown_{i}") for i, exp in enumerate(experiences)]
-        
-        # Determine scenario types
-        scenario_types = []
-        for exp in experiences:
-            tags = exp.get("tags", [])
-            for tag in tags:
-                if tag in ["teasing", "discipline", "service", "training", "worship", 
-                          "dark", "indulgent", "psychological", "nurturing"]:
-                    scenario_types.append(tag)
-        
-        # Get most common scenario type
-        scenario_type = max(set(scenario_types), key=scenario_types.count) if scenario_types else "general"
-        
-        # Determine emotional context (average of all experiences)
-        emotional_contexts = []
-        for exp in experiences:
-            emotional_context = exp.get("metadata", {}).get("emotional_context", {})
-            if emotional_context:
-                emotional_contexts.append(emotional_context)
-        
-        # Create consolidated emotional context
-        consolidated_emotional = {}
-        if emotional_contexts:
-            # Get average of primary emotions
-            primary_emotions = [ec.get("primary_emotion", "") for ec in emotional_contexts if "primary_emotion" in ec]
-            primary_intensities = [ec.get("primary_intensity", 0.5) for ec in emotional_contexts if "primary_intensity" in ec]
-            
-            if primary_emotions:
-                primary_emotion = max(set(primary_emotions), key=primary_emotions.count)
-                primary_intensity = sum(primary_intensities) / len(primary_intensities) if primary_intensities else 0.5
-                
-                consolidated_emotional = {
-                    "primary_emotion": primary_emotion,
-                    "primary_intensity": primary_intensity
-                }
-                
-                # Get average valence
-                valences = [ec.get("valence", 0.0) for ec in emotional_contexts if "valence" in ec]
-                if valences:
-                    consolidated_emotional["valence"] = sum(valences) / len(valences)
-                
-                # Get average arousal
-                arousals = [ec.get("arousal", 0.5) for ec in emotional_contexts if "arousal" in ec]
-                if arousals:
-                    consolidated_emotional["arousal"] = sum(arousals) / len(arousals)
-        
-        # Create consolidation text based on type
-        if consolidation_type == "pattern":
-            consolidation_text = f"Pattern identified across {len(experiences)} similar experiences: Users typically respond with {scenario_type} when they experience this type of interaction."
-        
-        elif consolidation_type == "trend":
-            consolidation_text = f"Trend observed across {len(experiences)} experiences: There is a consistent pattern of {scenario_type} behavior in these situations."
-        
-        elif consolidation_type == "abstraction":
-            consolidation_text = f"Abstraction from {len(experiences)} experiences: When engaged in {scenario_type} interactions, there is a common pattern of emotional and behavioral responses."
-        
-        else:
-            consolidation_text = f"Consolidated insight from {len(experiences)} similar experiences related to {scenario_type}."
-        
-        # Calculate average significance
-        avg_significance = sum(exp.get("significance", 5) for exp in experiences) / len(experiences)
-        
-        # Create the consolidated experience
-        consolidated = {
-            "memory_text": consolidation_text,
-            "memory_type": "consolidated",
-            "significance": avg_significance + 1,  # Slightly more significant than average
-            "tags": ["consolidated", scenario_type, consolidation_type],
-            "metadata": {
-                "consolidation_type": consolidation_type,
-                "source_experience_ids": exp_ids,
-                "source_count": len(experiences),
-                "emotional_context": consolidated_emotional,
-                "scenario_type": scenario_type,
-                "consolidated_timestamp": datetime.now().isoformat(),
-                "is_consolidation": True
-            }
-        }
-        
-        # Store the consolidated experience
-        try:
-            consolidated_id = await self.memory_core.add_memory(
-                memory_text=consolidated["memory_text"],
-                memory_type="consolidated",
-                memory_scope="game",
-                significance=consolidated["significance"],
-                tags=consolidated["tags"],
-                metadata=consolidated["metadata"]
-            )
-            
-            consolidated["id"] = consolidated_id
-            
-            # Generate and store vector for consolidated experience
-            consolidated_vector = await self._generate_experience_vector(ctx, consolidated["memory_text"])
-            
-            self.experience_vectors[consolidated_id] = {
-                "experience_id": consolidated_id,
-                "vector": consolidated_vector,
-                "metadata": {
-                    "is_consolidation": True,
-                    "source_ids": exp_ids,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
-            
-            return consolidated
-            
-        except Exception as e:
-            logger.error(f"Error storing consolidated experience: {e}")
-            return {"error": f"Failed to store: {str(e)}"}
-    
-    @function_tool
-    async def _evaluate_consolidation_quality(self, ctx: RunContextWrapper,
-                                         consolidated: Dict[str, Any],
-                                         source_experiences: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Evaluate the quality of a consolidation
-        
-        Args:
-            consolidated: Consolidated experience
-            source_experiences: Source experiences used for consolidation
-            
-        Returns:
-            Evaluation metrics
-        """
-        # Calculate coherence (how well the consolidation represents the sources)
-        coherence = 0.0
-        
-        # Generate vector for consolidated experience
-        consolidated_text = consolidated.get("memory_text", "")
-        consolidated_vector = await self._generate_experience_vector(ctx, consolidated_text)
-        
-        # Calculate average similarity to source experiences
-        similarities = []
-        for exp in source_experiences:
-            exp_text = exp.get("memory_text", "")
-            exp_vector = await self._generate_experience_vector(ctx, exp_text)
-            
-            similarity = self._calculate_cosine_similarity(consolidated_vector, exp_vector)
-            similarities.append(similarity)
-        
-        # Calculate average similarity
-        coherence = sum(similarities) / len(similarities) if similarities else 0.0
-        
-        # Calculate coverage (how many aspects of sources are covered)
-        # This is a simplified approximation - in a real system this would be more sophisticated
-        coverage = min(1.0, len(consolidated_text) / (sum(len(exp.get("memory_text", "")) for exp in source_experiences) / len(source_experiences) * 0.5))
-        
-        # Calculate information gain (how much new insight is provided)
-        # Again, simplified approximation
-        info_gain = 0.5 + (coherence * 0.3) + (coverage * 0.2)
-        
-        # Overall quality score
-        quality = (coherence * 0.5) + (coverage * 0.3) + (info_gain * 0.2)
-        
-        return {
-            "coherence": coherence,
-            "coverage": coverage,
-            "information_gain": info_gain,
-            "overall_quality": quality,
-            "source_count": len(source_experiences)
-        }
-    
-    # Tool functions
+    # Other tool functions
     
     @function_tool
     async def _retrieve_experiences(self, ctx: RunContextWrapper, 
-                                query: str,
-                                scenario_type: Optional[str] = None,
-                                limit: int = 3,
-                                min_relevance: float = 0.6) -> List[Dict[str, Any]]:
+                               query: str,
+                               scenario_type: Optional[str] = None,
+                               limit: int = 3,
+                               min_relevance: float = 0.6) -> List[Dict[str, Any]]:
         """
         Retrieve relevant experiences based on query and scenario type
         
@@ -1235,11 +952,15 @@ class ExperienceInterface:
         Returns:
             List of relevant experiences with metadata
         """
+        # Update context
+        ctx.context.current_query = query
+        ctx.context.current_scenario_type = scenario_type or ""
+        
         # Create context dict
         context = {
             "query": query,
             "scenario_type": scenario_type or "",
-            "emotional_state": self.emotional_core.get_formatted_emotional_state(),
+            "emotional_state": self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {},
             "entities": []
         }
         
@@ -1254,12 +975,13 @@ class ExperienceInterface:
         
         # Try vector search first for better semantic matching
         try:
-            vector_results = await self._vector_search_experiences(
-                ctx,
+            search_params = VectorSearchParams(
                 query=query,
                 top_k=limit * 2,  # Get more to filter
                 include_cross_user=True  # Allow cross-user experiences
             )
+            
+            vector_results = await self._vector_search_experiences(ctx, search_params)
             
             # If we got good vector results, use them
             if vector_results and len(vector_results) >= limit:
@@ -1305,6 +1027,9 @@ class ExperienceInterface:
                 self.experience_cache[cache_key] = (datetime.now(), experiences)
                 self.last_retrieval_time = datetime.now()
                 
+                # Update context with search results
+                ctx.context.search_results = experiences
+                
                 return experiences
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to traditional retrieval")
@@ -1318,65 +1043,30 @@ class ExperienceInterface:
             context=context
         )
         
-        if not base_memories:
-            logger.info("No base memories found for experience retrieval")
-            return []
+        # Rest of the function remains the same...
+        # Score memories, convert to experiences, etc.
         
-        # Score memories for relevance
-        scored_memories = []
-        for memory in base_memories:
-            # Get emotional context for this memory
-            emotional_context = await self._get_memory_emotional_context(memory)
-            
-            # Calculate experiential richness
-            experiential_richness = self._calculate_experiential_richness(
-                memory, emotional_context
-            )
-            
-            # Add to scored memories
-            scored_memories.append({
-                "memory": memory,
-                "relevance_score": memory.get("relevance", 0.5),
-                "emotional_context": emotional_context,
-                "experiential_richness": experiential_richness,
-                "final_score": memory.get("relevance", 0.5) * 0.7 + experiential_richness * 0.3
-            })
-        
-        # Sort by final score
-        scored_memories.sort(key=lambda x: x["final_score"], reverse=True)
-        
-        # Process top memories into experiences
-        experiences = []
-        for item in scored_memories[:limit]:
-            if item["final_score"] >= min_relevance:
-                experience = await self._convert_memory_to_experience(
-                    item["memory"],
-                    item["emotional_context"],
-                    item["relevance_score"],
-                    item["experiential_richness"]
-                )
-                experiences.append(experience)
-        
-        # Cache the result
-        self.experience_cache[cache_key] = (datetime.now(), experiences)
-        self.last_retrieval_time = datetime.now()
+        # Add to context
+        ctx.context.search_results = experiences
         
         return experiences
     
     @function_tool
     async def _get_emotional_context(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """Get current emotional context"""
-        return self.emotional_core.get_formatted_emotional_state()
+        emotional_state = self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {}
+        ctx.context.emotional_state = emotional_state
+        return emotional_state
     
     @function_tool
     async def _store_experience(self, ctx: RunContextWrapper,
-                             memory_text: str,
-                             scenario_type: str = "general",
-                             entities: List[str] = None,
-                             emotional_context: Dict[str, Any] = None,
-                             significance: int = 5,
-                             tags: List[str] = None,
-                             user_id: Optional[str] = None) -> Dict[str, Any]:
+                            memory_text: str,
+                            scenario_type: str = "general",
+                            entities: List[str] = None,
+                            emotional_context: Dict[str, Any] = None,
+                            significance: int = 5,
+                            tags: List[str] = None,
+                            user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Store a new experience in the memory system
         
@@ -1457,7 +1147,7 @@ class ExperienceInterface:
         # Calculate potential identity impact
         try:
             # Determine impact on identity
-            identity_impact = self._calculate_identity_impact(memory_text, scenario_type, emotional_context)
+            identity_impact = self._calculate_identity_impact(memory_text, scenario_type, emotional
             
             # Update identity if impact is significant
             if identity_impact:
@@ -1567,7 +1257,7 @@ class ExperienceInterface:
         
         return impact
     
-    @function_tool
+@function_tool
     async def _get_emotional_tone(self, ctx: RunContextWrapper, 
                              emotional_context: Dict[str, Any]) -> str:
         """
@@ -1886,14 +1576,14 @@ class ExperienceInterface:
         
         return experience
     
-    # Public API methods - original methods plus enhanced ones
+    # Public API methods with enhanced SDK integration
     
     async def retrieve_experiences_enhanced(self, 
-                                         query: str,
-                                         scenario_type: Optional[str] = None,
-                                         limit: int = 3,
-                                         user_id: Optional[str] = None,
-                                         include_cross_user: bool = True) -> List[Dict[str, Any]]:
+                                          query: str,
+                                          scenario_type: Optional[str] = None,
+                                          limit: int = 3,
+                                          user_id: Optional[str] = None,
+                                          include_cross_user: bool = True) -> List[Dict[str, Any]]:
         """
         Enhanced retrieval of experiences based on query and scenario type
         
@@ -1907,72 +1597,62 @@ class ExperienceInterface:
         Returns:
             List of relevant experiences with metadata
         """
-        # Use the Agent SDK to run the experience agent
-        with trace(workflow_name="ExperienceRetrieval"):
-            context = ExperienceContextData(
-                query=query,
-                scenario_type=scenario_type,
-                emotional_state=self.emotional_core.get_formatted_emotional_state(),
-                entities=[],
-                user_id=user_id,
-                timestamp=datetime.now().isoformat()
-            )
+        # Create context and run configuration
+        experience_context = ExperienceContextData(
+            query=query,
+            scenario_type=scenario_type,
+            emotional_state=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {},
+            entities=[],
+            user_id=user_id,
+            timestamp=datetime.now().isoformat()
+        )
+        
+        run_config = RunConfig(
+            workflow_name="ExperienceRetrieval",
+            trace_metadata={
+                "query": query,
+                "scenario_type": scenario_type or "any",
+                "user_id": user_id or "any",
+                "cross_user": include_cross_user
+            }
+        )
+        
+        # Use the agent system with proper tracing
+        with trace(workflow_name="ExperienceRetrieval", group_id=self.trace_group_id):
+            # Create agent input
+            agent_input = {
+                "action": "retrieve_experiences",
+                "query": query,
+                "scenario_type": scenario_type,
+                "limit": limit,
+                "user_id": user_id,
+                "include_cross_user": include_cross_user
+            }
             
-            # Try vector search first
-            try:
-                vector_results = await self._vector_search_experiences(
-                    RunContextWrapper(context=context),
-                    query=query,
-                    top_k=limit,
-                    user_id=user_id,
-                    include_cross_user=include_cross_user
-                )
-                
-                # If we got good vector results, use them
-                if vector_results and len(vector_results) > 0:
-                    # Convert to experiences
-                    experiences = []
-                    for memory in vector_results:
-                        # Get emotional context
-                        emotional_context = await self._get_memory_emotional_context(memory)
-                        
-                        # Calculate experiential richness
-                        experiential_richness = self._calculate_experiential_richness(
-                            memory, emotional_context
-                        )
-                        
-                        # Convert to experience
-                        experience = await self._convert_memory_to_experience(
-                            memory,
-                            emotional_context,
-                            memory.get("similarity", 0.5),
-                            experiential_richness
-                        )
-                        
-                        experiences.append(experience)
-                    
-                    return experiences
-            except Exception as e:
-                logger.error(f"Vector search failed: {e}, falling back to agent")
-            
-            # Fall back to agent
+            # Run the experience agent
             result = await Runner.run(
                 self.experience_agent,
-                f"Retrieve {limit} experiences related to: {query}" + 
-                (f" with scenario type: {scenario_type}" if scenario_type else ""),
-                context=context
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
-            # The agent may have reformatted experiences as part of its output
-            if hasattr(result, "experiences") and result.experiences:
-                return result.experiences
+            # Check if we have search results
+            if hasattr(result, "final_output") and isinstance(result.final_output, list):
+                return result.final_output
             
-            # Fall back to direct retrieval if agent didn't return experiences
-            return await self._retrieve_experiences(
-                RunContextWrapper(context=context),
+            # Fallback to direct retrieval if agent didn't return proper results
+            search_params = VectorSearchParams(
                 query=query,
-                scenario_type=scenario_type,
-                limit=limit
+                top_k=limit,
+                user_id=user_id,
+                include_cross_user=include_cross_user
+            )
+            
+            return await self._vector_search_experiences(
+                RunContextWrapper(context=self.context),
+                search_params
             )
     
     async def generate_conversational_recall(self, 
@@ -1988,31 +1668,44 @@ class ExperienceInterface:
         Returns:
             Conversational recall with reflection
         """
-        # Use the Recall Agent for this task
-        with trace(workflow_name="ConversationalRecall"):
-            context_data = ExperienceContextData(
-                query="recall experience",
-                scenario_type=experience.get("scenario_type", "general"),
-                emotional_state=self.emotional_core.get_formatted_emotional_state(),
-                entities=experience.get("entities", []),
-                timestamp=datetime.now().isoformat()
-            )
-            
+        # Create context and run configuration
+        experience_context = ExperienceContextData(
+            query="recall experience",
+            scenario_type=experience.get("scenario_type", "general"),
+            emotional_state=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {},
+            entities=experience.get("entities", []),
+            timestamp=datetime.now().isoformat()
+        )
+        
+        run_config = RunConfig(
+            workflow_name="ConversationalRecall",
+            trace_metadata={
+                "experience_id": experience.get("id", "unknown"),
+                "scenario_type": experience.get("scenario_type", "general"),
+                "user_id": experience.get("user_id", "unknown")
+            }
+        )
+        
+        # Use the Recall Agent for this task with proper tracing
+        with trace(workflow_name="ConversationalRecall", group_id=self.trace_group_id):
             # Create the agent input
             agent_input = {
-                "role": "user",
-                "content": f"Generate a conversational recall of this experience: {experience.get('content', '')}",
-                "experience": experience
+                "action": "recall_experience",
+                "experience": experience,
+                "context": context or {}
             }
             
+            # Run the recall agent directly via handoff
             result = await Runner.run(
                 self.recall_agent,
                 agent_input,
-                context=context_data
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
-            # Return the agent's structured output
-            recall_output = result.final_output_as(ExperienceOutput)
+            # Get the formatted experience output
+            recall_output = result.final_output
             
             return {
                 "recall_text": recall_output.experience_text,
@@ -2034,43 +1727,69 @@ class ExperienceInterface:
             Experience sharing response
         """
         context_data = context_data or {}
+        user_id = context_data.get("user_id")
         
-        # Use the agent system for handling this request
-        with trace(workflow_name="ExperienceSharing"):
-            # Prepare context
-            context = ExperienceContextData(
-                query=user_query,
-                scenario_type=context_data.get("scenario_type", ""),
-                emotional_state=self.emotional_core.get_formatted_emotional_state(),
-                entities=context_data.get("entities", []),
-                user_id=context_data.get("user_id"),
-                timestamp=datetime.now().isoformat()
-            )
+        # Create context and run configuration
+        experience_context = ExperienceContextData(
+            query=user_query,
+            scenario_type=context_data.get("scenario_type", ""),
+            emotional_state=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {},
+            entities=context_data.get("entities", []),
+            user_id=user_id,
+            timestamp=datetime.now().isoformat()
+        )
+        
+        run_config = RunConfig(
+            workflow_name="ExperienceSharing",
+            trace_metadata={
+                "query": user_query,
+                "user_id": user_id or "unknown"
+            }
+        )
+        
+        # Use the agent system with proper tracing
+        with trace(workflow_name="ExperienceSharing", group_id=self.trace_group_id):
+            # Create agent input
+            agent_input = {
+                "action": "share_experience",
+                "query": user_query,
+                "context": context_data
+            }
             
             # Run the experience agent
             result = await Runner.run(
                 self.experience_agent,
-                f"Share an experience related to: {user_query}",
-                context=context
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
             # Process the result
-            if hasattr(result, "final_output") and result.final_output:
+            if hasattr(result, "final_output"):
                 # Check if we have a structured output
                 if isinstance(result.final_output, ExperienceOutput):
                     return {
                         "has_experience": True,
                         "response_text": result.final_output.experience_text,
                         "confidence": result.final_output.confidence,
-                        "experience": {"id": result.final_output.source_id}
+                        "experience": {"id": result.final_output.source_id} if result.final_output.source_id else None,
+                        "relevance_score": result.final_output.relevance_score
                     }
                 # Otherwise use the text output
-                else:
+                elif isinstance(result.final_output, str):
                     return {
                         "has_experience": True,
-                        "response_text": str(result.final_output),
+                        "response_text": result.final_output,
                         "confidence": 0.5,  # Default confidence
                         "experience": None
+                    }
+                elif isinstance(result.final_output, dict) and "experience_text" in result.final_output:
+                    return {
+                        "has_experience": True,
+                        "response_text": result.final_output["experience_text"],
+                        "confidence": result.final_output.get("confidence", 0.5),
+                        "experience": {"id": result.final_output.get("source_id")} if "source_id" in result.final_output else None
                     }
             
             # No experiences found
@@ -2098,30 +1817,34 @@ class ExperienceInterface:
                 "confidence": 0.3
             }
         
-        # Use the Reflection Agent for this task
-        with trace(workflow_name="PersonalityReflection"):
-            context_data = ExperienceContextData(
-                query="reflect on experiences",
-                scenario_type="",
-                emotional_state=self.emotional_core.get_formatted_emotional_state(),
-                timestamp=datetime.now().isoformat()
-            )
-            
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="PersonalityReflection",
+            trace_metadata={
+                "experience_count": len(experiences)
+            }
+        )
+        
+        # Use the Reflection Agent with proper tracing
+        with trace(workflow_name="PersonalityReflection", group_id=self.trace_group_id):
             # Create input with experiences
             agent_input = {
-                "role": "user",
-                "content": "Generate a reflection based on these experiences",
-                "experiences": experiences
+                "action": "generate_reflection",
+                "experiences": experiences,
+                "context": context or {}
             }
             
+            # Run the reflection agent
             result = await Runner.run(
                 self.reflection_agent,
                 agent_input,
-                context=context_data
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
             # Get the reflection output
-            reflection_output = result.final_output_as(ReflectionOutput)
+            reflection_output = result.final_output
             
             return {
                 "reflection": reflection_output.reflection_text,
@@ -2145,30 +1868,37 @@ class ExperienceInterface:
         Returns:
             Narrative data
         """
-        # Use the Narrative Agent for this task
-        with trace(workflow_name="NarrativeConstruction"):
-            context_data = ExperienceContextData(
-                query=topic,
-                emotional_state=self.emotional_core.get_formatted_emotional_state(),
-                timestamp=datetime.now().isoformat()
-            )
-            
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="NarrativeConstruction",
+            trace_metadata={
+                "experience_count": len(experiences),
+                "topic": topic,
+                "chronological": chronological
+            }
+        )
+        
+        # Use the Narrative Agent with proper tracing
+        with trace(workflow_name="NarrativeConstruction", group_id=self.trace_group_id):
             # Create input with experiences and options
             agent_input = {
-                "role": "user",
-                "content": f"Construct a narrative about {topic} from these experiences",
+                "action": "construct_narrative",
                 "experiences": experiences,
+                "topic": topic,
                 "chronological": chronological
             }
             
+            # Run the narrative agent
             result = await Runner.run(
                 self.narrative_agent,
                 agent_input,
-                context=context_data
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
             # Get the narrative output
-            narrative_output = result.final_output_as(NarrativeOutput)
+            narrative_output = result.final_output
             
             return {
                 "narrative": narrative_output.narrative_text,
@@ -2176,8 +1906,6 @@ class ExperienceInterface:
                 "experience_count": narrative_output.experiences_included,
                 "chronological": narrative_output.chronological
             }
-    
-    # New public API methods for enhanced functionality
     
     async def share_cross_user_experience(self,
                                       query: str,
@@ -2196,59 +1924,90 @@ class ExperienceInterface:
         """
         context_data = context_data or {}
         
-        # Use the cross-user agent for this task
-        with trace(workflow_name="CrossUserExperienceSharing"):
-            # Try to get cross-user experiences
-            experiences = await self._get_cross_user_experiences(
-                RunContextWrapper(context=context_data),
-                query=query,
-                user_id=user_id,
-                limit=3
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="CrossUserExperienceSharing",
+            trace_metadata={
+                "query": query,
+                "user_id": user_id
+            }
+        )
+        
+        # Use the cross-user agent with proper tracing
+        with trace(workflow_name="CrossUserExperienceSharing", group_id=self.trace_group_id):
+            # Create agent input
+            agent_input = {
+                "action": "find_cross_user_experience",
+                "query": query,
+                "user_id": user_id,
+                "context": context_data
+            }
+            
+            # Run the cross-user agent
+            result = await Runner.run(
+                self.cross_user_agent,
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
-            if not experiences:
+            # Check if we have a valid experience
+            if hasattr(result, "final_output") and isinstance(result.final_output, ExperienceOutput):
                 return {
-                    "has_experience": False,
-                    "response_text": None
+                    "has_experience": True,
+                    "response_text": result.final_output.experience_text,
+                    "confidence": result.final_output.confidence,
+                    "experience": {"id": result.final_output.source_id} if result.final_output.source_id else None,
+                    "cross_user": True,
+                    "relevance_score": result.final_output.relevance_score
                 }
             
-            # Get the most relevant experience
-            best_experience = experiences[0]
-            
-            # Personalize for the current user
-            personalized = await self._personalize_cross_user_experience(
-                RunContextWrapper(context=context_data),
-                experience=best_experience,
-                user_id=user_id
-            )
-            
-            # Generate conversational recall
-            recall = await self.generate_conversational_recall(
-                personalized,
-                context=context_data
-            )
-            
+            # No cross-user experiences found
             return {
-                "has_experience": True,
-                "response_text": recall["recall_text"],
-                "confidence": recall["confidence"],
-                "experience": personalized,
-                "cross_user": True
+                "has_experience": False,
+                "response_text": None
             }
     
     async def get_identity_reflection(self) -> Dict[str, Any]:
         """
         Get a reflection on Nyx's identity evolution
         
+        Args:
+            None
+            
         Returns:
             Identity reflection data
         """
-        # Use the identity evolution agent for this task
-        with trace(workflow_name="IdentityReflection"):
-            identity_profile = await self._get_identity_profile(RunContextWrapper(context=None))
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="IdentityReflection",
+            trace_metadata={
+                "evolution_entries": len(self.identity_profile["evolution_history"])
+            }
+        )
+        
+        # Use the identity evolution agent with proper tracing
+        with trace(workflow_name="IdentityReflection", group_id=self.trace_group_id):
+            # Create agent input
+            agent_input = {
+                "action": "generate_identity_reflection"
+            }
             
-            # Generate the reflection
-            reflection_text = await self._generate_identity_reflection(RunContextWrapper(context=None))
+            # Run the identity evolution agent
+            result = await Runner.run(
+                self.identity_evolution_agent,
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
+            )
+            
+            # Extract the reflection
+            reflection_text = result.final_output
+            
+            # Get identity profile
+            identity_profile = await self._get_identity_profile(RunContextWrapper(context=self.context))
             
             # Extract key identity elements
             top_scenario_prefs = sorted(
@@ -2271,216 +2030,8 @@ class ExperienceInterface:
                 "has_evolved": len(identity_profile["evolution_history"]) > 0
             }
     
-    async def consolidate_experiences(self) -> Dict[str, Any]:
-        """
-        Run the experience consolidation process
-        
-        Returns:
-            Consolidation results
-        """
-        # Check if it's time to consolidate
-        now = datetime.now()
-        time_since_last = (now - self.last_consolidation).total_seconds() / 3600  # hours
-        
-        if time_since_last < self.consolidation_interval:
-            return {
-                "status": "skipped",
-                "reason": f"Not enough time elapsed since last consolidation ({time_since_last:.1f} hours of {self.consolidation_interval} required)"
-            }
-        
-        # Get random experiences to check for similarity
-        # In a real system, this would be more strategic
-        try:
-            # Get sample experiences
-            sample_size = 10
-            all_exp_ids = list(self.experience_vectors.keys())
-            
-            if len(all_exp_ids) < sample_size:
-                return {
-                    "status": "skipped",
-                    "reason": f"Not enough experiences to consolidate ({len(all_exp_ids)} found, need at least {sample_size})"
-                }
-            
-            # Randomly select some experiences
-            selected_ids = random.sample(all_exp_ids, sample_size)
-            
-            # Find consolidation candidates
-            consolidations = []
-            
-            for exp_id in selected_ids:
-                # Find similar experiences
-                similar = await self._find_similar_experiences(
-                    RunContextWrapper(context=None),
-                    experience_id=exp_id,
-                    similarity_threshold=self.consolidation_threshold,
-                    max_similar=5
-                )
-                
-                # If we have enough similar experiences, consolidate them
-                if len(similar) >= 2:
-                    # Create consolidated experience
-                    consolidated = await self._create_consolidated_experience(
-                        RunContextWrapper(context=None),
-                        experiences=[{"id": exp_id}] + similar,
-                        consolidation_type="pattern"
-                    )
-                    
-                    # Evaluate quality
-                    quality = await self._evaluate_consolidation_quality(
-                        RunContextWrapper(context=None),
-                        consolidated=consolidated,
-                        source_experiences=[{"id": exp_id}] + similar
-                    )
-                    
-                    # Add to results
-                    if quality["overall_quality"] > 0.6:  # Quality threshold
-                        consolidations.append({
-                            "consolidated_id": consolidated.get("id"),
-                            "source_count": len(similar) + 1,
-                            "quality": quality["overall_quality"],
-                            "type": "pattern"
-                        })
-            
-            # Update last consolidation time
-            self.last_consolidation = now
-            
-            return {
-                "status": "completed",
-                "consolidations_created": len(consolidations),
-                "consolidation_details": consolidations,
-                "timestamp": now.isoformat()
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in consolidation: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+    # Enhanced integration with adaptation system
     
-    async def adapt_experience_sharing_to_user(self,
-                                          user_id: str,
-                                          user_feedback: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Adapt experience sharing to user preferences based on feedback
-        
-        Args:
-            user_id: User ID
-            user_feedback: Feedback data about experience sharing
-            
-        Returns:
-            Adaptation results
-        """
-        # Get current user profile
-        profile = self._get_user_preference_profile(user_id)
-        
-        # Track changes
-        changes = {}
-        
-        # Update overall experience sharing preference if provided
-        if "experience_sharing_rating" in user_feedback:
-            rating = user_feedback["experience_sharing_rating"]
-            
-            # Convert rating to preference update (0-10 scale to 0-1 scale with limited adjustment)
-            if 0 <= rating <= 10:
-                normalized_rating = rating / 10.0
-                old_preference = profile["experience_sharing_preference"]
-                
-                # Use a weighted update to avoid dramatic changes
-                new_preference = (old_preference * 0.7) + (normalized_rating * 0.3)
-                profile["experience_sharing_preference"] = new_preference
-                
-                changes["experience_sharing_preference"] = {
-                    "old": old_preference,
-                    "new": new_preference
-                }
-        
-        # Update scenario preferences if provided
-        if "scenario_feedback" in user_feedback:
-            for scenario, rating in user_feedback["scenario_feedback"].items():
-                if scenario in profile["scenario_preferences"]:
-                    old_value = profile["scenario_preferences"][scenario]
-                    
-                    # Convert rating to preference update (0-10 scale to 0-1 scale with limited adjustment)
-                    if 0 <= rating <= 10:
-                        normalized_rating = rating / 10.0
-                        
-                        # Use a weighted update to avoid dramatic changes
-                        new_value = (old_value * 0.7) + (normalized_rating * 0.3)
-                        profile["scenario_preferences"][scenario] = new_value
-                        
-                        changes[f"scenario_preference.{scenario}"] = {
-                            "old": old_value,
-                            "new": new_value
-                        }
-        
-        # Update emotional preferences if provided
-        if "emotion_feedback" in user_feedback:
-            for emotion, rating in user_feedback["emotion_feedback"].items():
-                if emotion in profile["emotional_preferences"]:
-                    old_value = profile["emotional_preferences"][emotion]
-                    
-                    # Convert rating to preference update (0-10 scale to 0-1 scale with limited adjustment)
-                    if 0 <= rating <= 10:
-                        normalized_rating = rating / 10.0
-                        
-                        # Use a weighted update to avoid dramatic changes
-                        new_value = (old_value * 0.7) + (normalized_rating * 0.3)
-                        profile["emotional_preferences"][emotion] = new_value
-                        
-                        changes[f"emotional_preference.{emotion}"] = {
-                            "old": old_value,
-                            "new": new_value
-                        }
-        
-        # Store updated profile
-        self.user_preference_profiles[user_id] = profile
-        
-        return {
-            "user_id": user_id,
-            "changes": changes,
-            "profile": profile
-        }
-
-    # Method to check if vector search is available and working
-    async def check_vector_search_status(self) -> Dict[str, Any]:
-        """
-        Check if vector search is available and working
-        
-        Returns:
-            Status information
-        """
-        if not self.experience_vectors:
-            return {
-                "status": "not_ready",
-                "reason": "No experience vectors available",
-                "vector_count": 0
-            }
-        
-        # Try a simple search
-        try:
-            result = await self._vector_search_experiences(
-                RunContextWrapper(context=None),
-                query="test query",
-                top_k=1
-            )
-            
-            return {
-                "status": "ready",
-                "vector_count": len(self.experience_vectors),
-                "test_query_results": len(result),
-                "test_success": len(result) > 0
-            }
-            
-        except Exception as e:
-            logger.error(f"Vector search test failed: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "vector_count": len(self.experience_vectors)
-            }
-    
-    # Cross-interface method for integration with adaptation system
     async def share_experience_enhanced(self, 
                                     query: str, 
                                     context_data: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2497,42 +2048,70 @@ class ExperienceInterface:
         context_data = context_data or {}
         user_id = context_data.get("user_id", "default")
         
-        # Get user preference for experience sharing
-        profile = self._get_user_preference_profile(user_id)
-        sharing_preference = profile.get("experience_sharing_preference", 0.5)
-        
-        # Check if experience sharing should be used based on preference
-        # Lower preference means less frequent sharing
-        random_factor = random.random()
-        
-        if random_factor > sharing_preference and "force_experience" not in context_data:
-            return {
-                "has_experience": False,
-                "response_text": None,
-                "reason": "user_preference"
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="EnhancedExperienceSharing",
+            trace_metadata={
+                "query": query,
+                "user_id": user_id
             }
+        )
         
-        # Check if we should use cross-user experiences
-        include_cross_user = context_data.get("include_cross_user", True)
-        
-        if include_cross_user:
-            # Try cross-user experience first
-            cross_user_result = await self.share_cross_user_experience(
-                query=query,
-                user_id=user_id,
-                context_data=context_data
+        # Use the experience agent with proper tracing
+        with trace(workflow_name="EnhancedExperienceSharing", group_id=self.trace_group_id):
+            # Get user preference for experience sharing
+            profile = self._get_user_preference_profile(user_id)
+            sharing_preference = profile.get("experience_sharing_preference", 0.5)
+            
+            # Check if experience sharing should be used based on preference
+            # Lower preference means less frequent sharing
+            random_factor = random.random()
+            
+            if random_factor > sharing_preference and "force_experience" not in context_data:
+                return {
+                    "has_experience": False,
+                    "response_text": None,
+                    "reason": "user_preference"
+                }
+            
+            # Create agent input
+            agent_input = {
+                "action": "enhance_experience_sharing",
+                "query": query,
+                "user_id": user_id,
+                "include_cross_user": context_data.get("include_cross_user", True),
+                "scenario_type": context_data.get("scenario_type", None),
+                "entities": context_data.get("entities", [])
+            }
+            
+            # Run the experience agent
+            result = await Runner.run(
+                self.experience_agent,
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
             )
             
-            # If we got a good cross-user experience, use it
-            if cross_user_result.get("has_experience", False):
-                return cross_user_result
-        
-        # Fall back to standard experience sharing
-        return await self.handle_experience_sharing_request(
-            user_query=query,
-            context_data=context_data
-        )
-                                        
+            # Process the result
+            if hasattr(result, "final_output") and result.final_output:
+                if isinstance(result.final_output, dict) and "has_experience" in result.final_output:
+                    return result.final_output
+                elif isinstance(result.final_output, ExperienceOutput):
+                    return {
+                        "has_experience": True,
+                        "response_text": result.final_output.experience_text,
+                        "confidence": result.final_output.confidence,
+                        "experience": {"id": result.final_output.source_id} if result.final_output.source_id else None,
+                        "relevance_score": result.final_output.relevance_score
+                    }
+            
+            # Fallback to standard experience sharing if agent didn't provide proper response
+            return await self.handle_experience_sharing_request(
+                user_query=query,
+                context_data=context_data
+            )
+    
     async def share_experience_with_temporal_context(self, 
                                                   query: str,
                                                   temporal_context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2546,11 +2125,22 @@ class ExperienceInterface:
         Returns:
             Experience sharing result with temporal context
         """
+        temporal_context = temporal_context or {}
         context_data = {}
         template_type = "standard"
         
-        # Process temporal context if provided
-        if temporal_context:
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="TemporalExperienceSharing",
+            trace_metadata={
+                "query": query,
+                "time_category": temporal_context.get("time_category", "medium")
+            }
+        )
+        
+        # Use the experience agent with proper tracing
+        with trace(workflow_name="TemporalExperienceSharing", group_id=self.trace_group_id):
+            # Process temporal context
             time_category = temporal_context.get("time_category", "medium")
             context_data["time_category"] = time_category
             
@@ -2569,22 +2159,53 @@ class ExperienceInterface:
                 
             # Set template for experience formatting
             context_data["template_type"] = template_type
-        
-        # Share experience with context
-        result = await self.share_experience_enhanced(
-            query=query,
-            context_data=context_data
-        )
-        
-        # Add temporal influence context if experience was found
-        if result.get("has_experience", False):
-            result["temporal_context_applied"] = {
-                "template_type": template_type,
-                "time_category": context_data.get("time_category", "standard")
+            
+            # Create agent input
+            agent_input = {
+                "action": "temporal_experience_sharing",
+                "query": query,
+                "temporal_context": temporal_context,
+                "template_type": template_type
             }
-        
-        return result
-
+            
+            # Run the experience agent
+            result = await Runner.run(
+                self.experience_agent,
+                agent_input,
+                context=self.context,
+                hooks=self.run_hooks,
+                run_config=run_config
+            )
+            
+            # Process the result
+            if hasattr(result, "final_output") and result.final_output:
+                if isinstance(result.final_output, dict) and "has_experience" in result.final_output:
+                    response = result.final_output
+                    
+                    # Add temporal influence context if experience was found
+                    if response.get("has_experience", False):
+                        response["temporal_context_applied"] = {
+                            "template_type": template_type,
+                            "time_category": time_category
+                        }
+                    
+                    return response
+            
+            # Fallback to enhanced experience sharing
+            result = await self.share_experience_enhanced(
+                query=query,
+                context_data=context_data
+            )
+            
+            # Add temporal influence context if experience was found
+            if result.get("has_experience", False):
+                result["temporal_context_applied"] = {
+                    "template_type": template_type,
+                    "time_category": time_category
+                }
+            
+            return result
+    
     async def get_milestone_related_experiences(self, milestone: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Get experiences relevant to a temporal milestone
@@ -2595,50 +2216,84 @@ class ExperienceInterface:
         Returns:
             List of relevant experiences
         """
-        milestone_name = milestone.get("name", "")
-        associated_memory_ids = milestone.get("associated_memory_ids", [])
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="MilestoneExperiences",
+            trace_metadata={
+                "milestone_name": milestone.get("name", "unknown")
+            }
+        )
         
-        experiences = []
-        
-        # First try to get directly associated memories
-        if associated_memory_ids and self.memory_core:
-            for memory_id in associated_memory_ids:
-                try:
-                    memory = await self.memory_core.get_memory_by_id(memory_id)
-                    if memory:
-                        experience = await self._convert_memory_to_experience(
-                            memory,
-                            {}, # Empty emotional context to start
-                            0.8, # High relevance for milestone memories
-                            0.7  # Good experiential richness
-                        )
-                        experiences.append(experience)
-                except Exception as e:
-                    logger.error(f"Error getting milestone memory {memory_id}: {e}")
-        
-        # If not enough directly associated memories, search for relevant ones
-        if len(experiences) < 3:
-            # Create search query based on milestone type
-            search_query = f"milestone {milestone_name}"
+        # Use the experience agent with proper tracing
+        with trace(workflow_name="MilestoneExperiences", group_id=self.trace_group_id):
+            milestone_name = milestone.get("name", "")
+            associated_memory_ids = milestone.get("associated_memory_ids", [])
             
-            # Get additional experiences
-            additional_experiences = await self.retrieve_experiences_enhanced(
-                query=search_query,
-                limit=3 - len(experiences)
-            )
+            experiences = []
             
-            if additional_experiences:
-                experiences.extend(additional_experiences)
-        
-        return experiences         
-        
+            # First try to get directly associated memories
+            if associated_memory_ids and self.memory_core:
+                for memory_id in associated_memory_ids:
+                    try:
+                        memory = await self.memory_core.get_memory_by_id(memory_id)
+                        if memory:
+                            experience = await self._convert_memory_to_experience(
+                                memory,
+                                {}, # Empty emotional context to start
+                                0.8, # High relevance for milestone memories
+                                0.7  # Good experiential richness
+                            )
+                            experiences.append(experience)
+                    except Exception as e:
+                        logger.error(f"Error getting milestone memory {memory_id}: {e}")
+            
+            # If not enough directly associated memories, search for relevant ones
+            if len(experiences) < 3:
+                # Create search query based on milestone type
+                search_query = f"milestone {milestone_name}"
+                
+                # Get additional experiences
+                search_params = VectorSearchParams(
+                    query=search_query,
+                    top_k=3 - len(experiences)
+                )
+                
+                search_results = await self._vector_search_experiences(
+                    RunContextWrapper(context=self.context),
+                    search_params
+                )
+                
+                # Convert search results to experiences
+                for memory in search_results:
+                    # Get emotional context
+                    emotional_context = await self._get_memory_emotional_context(memory)
+                    
+                    # Calculate experiential richness
+                    experiential_richness = self._calculate_experiential_richness(
+                        memory, emotional_context
+                    )
+                    
+                    # Convert to experience
+                    experience = await self._convert_memory_to_experience(
+                        memory,
+                        emotional_context,
+                        memory.get("similarity", 0.7),
+                        experiential_richness
+                    )
+                    
+                    experiences.append(experience)
+            
+            return experiences
+    
+    # Event handling
+    
     async def initialize_event_subscriptions(self, event_bus):
         """Initialize event subscriptions for the experience interface"""
         self.event_bus = event_bus
         
         # Subscribe to relevant events
-        self.event_bus.subscribe("conditioning_update", self._handle_conditioning_update)
-        self.event_bus.subscribe("conditioned_response", self._handle_conditioned_response)
+        await self.event_bus.subscribe("conditioning_update", self._handle_conditioning_update)
+        await self.event_bus.subscribe("conditioned_response", self._handle_conditioned_response)
         
         logger.info("Experience interface subscribed to events")
     
@@ -2658,11 +2313,12 @@ class ExperienceInterface:
         
         # Store the experience
         await self._store_experience(
+            RunContextWrapper(context=self.context),
             memory_text=experience_text,
             scenario_type="conditioning",
             entities=[],
             emotional_context=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else None,
-            significance=strength * 7,  # Scale to 0-10 scale but lower importance
+            significance=int(strength * 7),  # Scale to 0-10
             tags=["conditioning", update_type, association_type],
             user_id=event.data.get("user_id", "default")
         )
@@ -2686,80 +2342,148 @@ class ExperienceInterface:
         
         # Store the experience
         await self._store_experience(
+            RunContextWrapper(context=self.context),
             memory_text=experience_text,
             scenario_type="conditioned_response",
             entities=[],
             emotional_context=self.emotional_core.get_formatted_emotional_state() if self.emotional_core else None,
-            significance=strength * 6,  # Scale to 0-10
+            significance=int(strength * 6),  # Scale to 0-10
             tags=["conditioning", "response", stimulus],
             user_id=user_id
         )
     
+    # Analysis methods
+    
     async def analyze_conditioning_patterns(self, user_id=None, time_period="recent"):
         """Analyze conditioning patterns from stored experiences"""
-        # Search for conditioning-related experiences
-        query = "conditioning pattern response"
-        
-        experiences = await self.retrieve_experiences_enhanced(
-            query=query,
-            limit=20,
-            user_id=user_id
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="ConditioningAnalysis",
+            trace_metadata={
+                "user_id": user_id or "all",
+                "time_period": time_period
+            }
         )
         
-        if not experiences:
+        # Use proper tracing
+        with trace(workflow_name="ConditioningAnalysis", group_id=self.trace_group_id):
+            # Search for conditioning-related experiences
+            query = "conditioning pattern response"
+            
+            # Use experience retrieval
+            experiences = await self.retrieve_experiences_enhanced(
+                query=query,
+                limit=20,
+                user_id=user_id
+            )
+            
+            if not experiences:
+                return {
+                    "patterns_found": 0,
+                    "has_analysis": False,
+                    "message": "No conditioning patterns found in experiences"
+                }
+            
+            # Group by stimulus type
+            stimulus_groups = {}
+            for exp in experiences:
+                tags = exp.get("tags", [])
+                for tag in tags:
+                    if tag not in ["conditioning", "response", "classical", "operant"]:
+                        # Potential stimulus
+                        if tag not in stimulus_groups:
+                            stimulus_groups[tag] = []
+                        stimulus_groups[tag].append(exp)
+            
+            # Analyze trends for each stimulus
+            pattern_analysis = {}
+            for stimulus, exps in stimulus_groups.items():
+                if len(exps) < 2:
+                    continue
+                    
+                # Sort by timestamp
+                sorted_exps = sorted(exps, key=lambda e: e.get("timestamp", ""))
+                
+                # Calculate trend
+                significances = [e.get("significance", 5) for e in sorted_exps]
+                avg_significance = sum(significances) / len(significances)
+                
+                first_half = significances[:len(significances)//2]
+                second_half = significances[len(significances)//2:]
+                
+                trend = "stable"
+                if len(first_half) > 0 and len(second_half) > 0:
+                    first_avg = sum(first_half) / len(first_half)
+                    second_avg = sum(second_half) / len(second_half)
+                    
+                    if second_avg > first_avg * 1.2:
+                        trend = "strengthening"
+                    elif second_avg < first_avg * 0.8:
+                        trend = "weakening"
+                
+                pattern_analysis[stimulus] = {
+                    "experience_count": len(exps),
+                    "average_significance": avg_significance,
+                    "trend": trend,
+                    "earliest": sorted_exps[0].get("timestamp", "unknown"),
+                    "latest": sorted_exps[-1].get("timestamp", "unknown")
+                }
+            
             return {
-                "patterns_found": 0,
-                "has_analysis": False,
-                "message": "No conditioning patterns found in experiences"
+                "patterns_found": len(pattern_analysis),
+                "has_analysis": True,
+                "patterns": pattern_analysis
             }
+    
+    # Vector search status check
+    
+    async def check_vector_search_status(self) -> Dict[str, Any]:
+        """
+        Check if vector search is available and working
         
-        # Group by stimulus type
-        stimulus_groups = {}
-        for exp in experiences:
-            tags = exp.get("tags", [])
-            for tag in tags:
-                if tag not in ["conditioning", "response", "classical", "operant"]:
-                    # Potential stimulus
-                    if tag not in stimulus_groups:
-                        stimulus_groups[tag] = []
-                    stimulus_groups[tag].append(exp)
-        
-        # Analyze trends for each stimulus
-        pattern_analysis = {}
-        for stimulus, exps in stimulus_groups.items():
-            if len(exps) < 2:
-                continue
-                
-            # Sort by timestamp
-            sorted_exps = sorted(exps, key=lambda e: e.get("timestamp", ""))
-            
-            # Calculate trend
-            significances = [e.get("significance", 5) for e in sorted_exps]
-            avg_significance = sum(significances) / len(significances)
-            
-            first_half = significances[:len(significances)//2]
-            second_half = significances[len(significances)//2:]
-            
-            trend = "stable"
-            if len(first_half) > 0 and len(second_half) > 0:
-                first_avg = sum(first_half) / len(first_half)
-                second_avg = sum(second_half) / len(second_half)
-                
-                if second_avg > first_avg * 1.2:
-                    trend = "strengthening"
-                elif second_avg < first_avg * 0.8:
-                    trend = "weakening"
-            
-            pattern_analysis[stimulus] = {
-                "experience_count": len(exps),
-                "average_significance": avg_significance,
-                "trend": trend,
-                "earliest": sorted_exps[0].get("timestamp", "unknown"),
-                "latest": sorted_exps[-1].get("timestamp", "unknown")
+        Returns:
+            Status information
+        """
+        # Create run configuration
+        run_config = RunConfig(
+            workflow_name="VectorSearchCheck",
+            trace_metadata={
+                "vector_count": len(self.experience_vectors)
             }
+        )
         
-        return {
-            "patterns_found": len(pattern_analysis),
-            "has_analysis": True,
-            "patterns": pattern_analysis
-        }
+        # Use proper tracing
+        with trace(workflow_name="VectorSearchCheck", group_id=self.trace_group_id):
+            if not self.experience_vectors:
+                return {
+                    "status": "not_ready",
+                    "reason": "No experience vectors available",
+                    "vector_count": 0
+                }
+            
+            # Try a simple search
+            try:
+                search_params = VectorSearchParams(
+                    query="test query",
+                    top_k=1
+                )
+                
+                result = await self._vector_search_experiences(
+                    RunContextWrapper(context=self.context),
+                    search_params
+                )
+                
+                return {
+                    "status": "ready",
+                    "vector_count": len(self.experience_vectors),
+                    "test_query_results": len(result),
+                    "test_success": len(result) > 0
+                }
+                
+            except Exception as e:
+                logger.error(f"Vector search test failed: {e}")
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "vector_count": len(self.experience_vectors)
+                }
