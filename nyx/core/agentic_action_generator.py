@@ -17,7 +17,12 @@ class AgenticActionGenerator:
                  experience_interface=None,
                  imagination_simulator=None,
                  meta_core=None,
-                 memory_core=None):
+                 memory_core=None
+                 goal_system=None,
+                 identity_evolution=None,
+                 knowledge_core=None,
+                 input_processor=None,
+                 internal_feedback=None):
         """Initialize with references to required subsystems"""
         self.emotional_core = emotional_core
         self.hormone_system = hormone_system
@@ -25,6 +30,12 @@ class AgenticActionGenerator:
         self.imagination_simulator = imagination_simulator
         self.meta_core = meta_core
         self.memory_core = memory_core
+        self.goal_system = goal_system
+        self.identity_evolution = identity_evolution
+        self.knowledge_core = knowledge_core
+        self.input_processor = input_processor
+        self.internal_feedback = internal_feedback
+
         
         # Internal motivation system
         self.motivations = {
@@ -41,6 +52,7 @@ class AgenticActionGenerator:
         # Activity generation capabilities
         self.action_patterns = {}  # Patterns learned from past successful actions
         self.action_templates = {}  # Templates for generating new actions
+        self.action_history = []
         
         logger.info("Agentic Action Generator initialized")
     
@@ -84,6 +96,36 @@ class AgenticActionGenerator:
             else:
                 # Negative valence increases connection seeking
                 self.motivations["connection"] = min(1.0, self.motivations["connection"] + (abs(valence) * 0.3))
+        
+        # NEW: Update from identity traits
+        if self.identity_evolution:
+            try:
+                identity_state = await self.identity_evolution.get_identity_state()
+                
+                # Extract top traits and use them to influence motivation
+                if "top_traits" in identity_state:
+                    top_traits = identity_state["top_traits"]
+                    
+                    # Map traits to motivations
+                    trait_motivation_map = {
+                        "dominance": "dominance",
+                        "creativity": "expression",
+                        "curiosity": "curiosity",
+                        "playfulness": "expression",
+                        "strictness": "dominance",
+                        "patience": "connection",
+                        "cruelty": "dominance"
+                    }
+                    
+                    # Update motivations based on trait levels
+                    for trait, value in top_traits.items():
+                        if trait in trait_motivation_map:
+                            motivation = trait_motivation_map[trait]
+                            # Blend with existing motivation
+                            current = self.motivations.get(motivation, 0.5)
+                            self.motivations[motivation] = (current * 0.7) + (value * 0.3)
+            except Exception as e:
+                logger.error(f"Error updating motivations from identity: {e}")
     
     async def generate_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -97,6 +139,16 @@ class AgenticActionGenerator:
         """
         # Update motivations based on current internal state
         await self.update_motivations()
+        
+        # NEW: Check for existing goals before generating new action
+        if self.goal_system:
+            active_goal = await self._check_active_goals(context)
+            if active_goal:
+                # Use goal-aligned action instead of generating new one
+                action = await self._generate_goal_aligned_action(active_goal, context)
+                if action:
+                    logger.info(f"Generated goal-aligned action: {action['name']}")
+                    return action
         
         # Determine dominant motivation
         dominant_motivation = max(self.motivations.items(), key=lambda x: x[1])
@@ -126,6 +178,16 @@ class AgenticActionGenerator:
         # Add unique ID for tracking
         action["id"] = f"action_{uuid.uuid4().hex[:8]}"
         action["timestamp"] = datetime.datetime.now().isoformat()
+        
+        # NEW: Apply identity influence to action
+        if self.identity_evolution:
+            action = await self._apply_identity_influence(action)
+        
+        # NEW: Record action in memory
+        await self._record_action_as_memory(action)
+
+        # NEW: Add to action history
+        self.action_history.append(action)
         
         return action
     
@@ -422,6 +484,17 @@ class AgenticActionGenerator:
                 if self._outcome_satisfies_motivation(sim_result.predicted_outcome, motivation):
                     score += 0.3
                 
+                # NEW: Add identity-based scoring
+                if self.identity_evolution:
+                    try:
+                        identity_traits = await self.identity_evolution.get_identity_state()
+                        if "top_traits" in identity_traits:
+                            # Check alignment with identity
+                            alignment = self._calculate_identity_alignment(action, identity_traits["top_traits"])
+                            score += alignment * 0.2
+                    except Exception as e:
+                        logger.error(f"Error in identity-based action scoring: {e}")
+                
                 # Positive emotional impact is generally good
                 if sim_result.emotional_impact:
                     valence_score = 0
@@ -443,22 +516,25 @@ class AgenticActionGenerator:
             if best_action:
                 return best_action
         
-        # If imagination simulator not available or no good results, use experience-based selection
-        if self.experience_interface:
-            # Look for similar past experiences
-            for action in actions:
-                similar_experiences = await self.experience_interface.retrieve_experiences_enhanced(
-                    query=f"action {action['name']} {motivation}",
-                    limit=3
-                )
-                
-                # Check if experiences suggest this action was successful
-                if similar_experiences:
-                    # Check experience success indicators (simplified)
-                    for exp in similar_experiences:
-                        if "satisfaction" in exp.get("tags", []) or "success" in exp.get("tags", []):
-                            # Found a successful experience with this action type
+        # NEW: Use memory-based selection if available
+        if self.memory_core:
+            try:
+                for action in actions:
+                    # Get memories of similar actions
+                    similar_memories = await self.memory_core.retrieve_memories(
+                        query=f"action {action['name']}",
+                        memory_types=["experience"],
+                        limit=3
+                    )
+                    
+                    # Look for successful actions
+                    for memory in similar_memories:
+                        if "outcome" in memory.get("metadata", {}) and memory["metadata"]["outcome"].get("success", False):
+                            # Found a successful similar action - choose it
+                            logger.info(f"Selected action {action['name']} based on memory of past success")
                             return action
+            except Exception as e:
+                logger.error(f"Error in memory-based action selection: {e}")
         
         # If all else fails, pick randomly with bias toward higher motivation match
         weights = []
@@ -547,15 +623,127 @@ class AgenticActionGenerator:
         return min(1.0, match_score)
     
     # Helper methods for generating action parameters
-    def _identify_interesting_domain(self, context: Dict[str, Any]) -> str:
-        # This would be more sophisticated in practice
+    async def _identify_interesting_domain(self, context: Dict[str, Any]) -> str:
+        """Identify an interesting domain to explore based on context and knowledge gaps"""
+        # Use knowledge core if available
+        if self.knowledge_core:
+            try:
+                # Get knowledge gaps
+                gaps = await self.knowledge_core.identify_knowledge_gaps()
+                if gaps and len(gaps) > 0:
+                    # Return the highest priority gap's domain
+                    return gaps[0]["domain"]
+            except Exception as e:
+                logger.error(f"Error identifying domain from knowledge core: {e}")
+        
+        # Use memory core for recent interests if available
+        if self.memory_core:
+            try:
+                # Get recent memories about domains
+                recent_memories = await self.memory_core.retrieve_memories(
+                    query="explored domain",
+                    memory_types=["experience", "reflection"],
+                    limit=5
+                )
+                
+                if recent_memories:
+                    # Extract domains from memories (simplified)
+                    domains = []
+                    for memory in recent_memories:
+                        # Extract domain from memory text (simplified)
+                        text = memory["memory_text"].lower()
+                        for domain in ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]:
+                            if domain in text:
+                                domains.append(domain)
+                                break
+                    
+                    if domains:
+                        # Return most common domain
+                        from collections import Counter
+                        return Counter(domains).most_common(1)[0][0]
+            except Exception as e:
+                logger.error(f"Error identifying domain from memories: {e}")
+        
+        # Fallback to original implementation
         domains = ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]
         return random.choice(domains)
     
-    def _identify_interesting_concept(self, context: Dict[str, Any]) -> str:
+    async def _identify_interesting_concept(self, context: Dict[str, Any]) -> str:
+        """Identify an interesting concept to explore"""
+        # Use knowledge core if available
+        if self.knowledge_core:
+            try:
+                # Get exploration targets
+                targets = await self.knowledge_core.get_exploration_targets(limit=3)
+                if targets and len(targets) > 0:
+                    # Return the highest priority target's topic
+                    return targets[0]["topic"]
+            except Exception as e:
+                logger.error(f"Error identifying concept from knowledge core: {e}")
+        
+        # Use memory for personalized concepts if available
+        if self.memory_core:
+            try:
+                # Get memories with high significance
+                significant_memories = await self.memory_core.retrieve_memories(
+                    query="",  # All memories
+                    memory_types=["reflection", "abstraction"],
+                    limit=3,
+                    min_significance=8
+                )
+                
+                if significant_memories:
+                    # Extract concept from first memory
+                    memory_text = significant_memories[0]["memory_text"]
+                    # Very simplified concept extraction
+                    words = memory_text.split()
+                    if len(words) >= 3:
+                        return words[2]  # Just pick the third word as a concept
+            except Exception as e:
+                logger.error(f"Error identifying concept from memories: {e}")
+        
+        # Fallback to original implementation
         concepts = ["self-improvement", "emotional intelligence", "reflection", "cognitive biases", 
                   "empathy", "autonomy", "connection", "creativity"]
         return random.choice(concepts)
+
+    def _calculate_identity_alignment(self, action: Dict[str, Any], identity_traits: Dict[str, float]) -> float:
+        """Calculate how well an action aligns with identity traits"""
+        # Map actions to traits that would favor them
+        action_trait_affinities = {
+            "explore_knowledge_domain": ["curiosity", "intellectualism"],
+            "investigate_concept": ["curiosity", "intellectualism"],
+            "relate_concepts": ["creativity", "intellectualism"],
+            "generate_hypothesis": ["creativity", "intellectualism"],
+            "share_personal_experience": ["vulnerability", "empathy"],
+            "express_appreciation": ["empathy"],
+            "seek_common_ground": ["empathy", "patience"],
+            "offer_support": ["empathy", "patience"],
+            "express_emotional_state": ["vulnerability", "expressiveness"],
+            "share_opinion": ["dominance", "expressiveness"],
+            "creative_expression": ["creativity", "expressiveness"],
+            "generate_reflection": ["intellectualism", "vulnerability"],
+            "assert_perspective": ["dominance", "confidence"],
+            "challenge_assumption": ["dominance", "intellectualism"],
+            "issue_mild_command": ["dominance", "strictness"],
+            "execute_dominance_procedure": ["dominance", "strictness"]
+        }
+        
+        # Get traits that align with this action
+        action_name = action["name"]
+        aligned_traits = action_trait_affinities.get(action_name, [])
+        
+        if not aligned_traits:
+            return 0.0
+        
+        # Calculate alignment score
+        alignment_score = 0.0
+        for trait in aligned_traits:
+            if trait in identity_traits:
+                alignment_score += identity_traits[trait]
+        
+        # Normalize
+        return alignment_score / len(aligned_traits) if aligned_traits else 0.0
     
     def _identify_distant_concept(self, context: Dict[str, Any]) -> str:
         distant_concepts = ["quantum physics", "mythology", "architecture", "music theory", 
