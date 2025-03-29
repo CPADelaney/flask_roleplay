@@ -498,6 +498,40 @@ async def initialize(self):
 
         # 17. Create main orchestration agent
         self.brain_agent = self._create_brain_agent()
+
+        # Initialize procedural memory if needed
+        if not hasattr(self, "procedural_memory") or not self.procedural_memory:
+            from nyx.core.procedural_memory import ProceduralMemoryManager
+            self.procedural_memory = ProceduralMemoryManager()
+            logger.debug("Procedural memory initialized")
+        
+        # Create agent-enhanced memory if not already present
+        if not hasattr(self, "agent_enhanced_memory") or not self.agent_enhanced_memory:
+            from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+            self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
+            logger.debug("Agent enhanced memory initialized")
+        
+        # Find or create the agentic action generator
+        if not hasattr(self, "agentic_action_generator") or not self.agentic_action_generator:
+            # Create a new action generator with references to brain systems
+            from nyx.core.agentic_action_generator import AgenticActionGenerator
+            self.agentic_action_generator = AgenticActionGenerator(
+                emotional_core=self.emotional_core,
+                hormone_system=self.hormone_system,
+                experience_interface=self.experience_interface,
+                imagination_simulator=self.imagination_simulator,
+                meta_core=self.meta_core,
+                memory_core=self.memory_core,
+                goal_system=self.goal_manager,
+                identity_evolution=self.identity_evolution,
+                knowledge_core=self.knowledge_core,
+                input_processor=getattr(self, "conditioned_input_processor", None),
+                internal_feedback=self.internal_feedback
+            )
+            logger.debug("Agentic action generator initialized")
+        
+        # Integrate procedural memory with action generator
+        await self.integrate_procedural_memory_with_actions()
         
         self.integration_manager = create_integration_manager(self)
         await self.integration_manager.initialize()
@@ -927,6 +961,545 @@ async def initialize(self):
 
             logger.debug(f"--- Finished Cognitive Cycle {self.cognitive_cycles_executed} ---")
         return cycle_results
+    
+    async def integrate_procedural_memory_with_actions(self):
+        """
+        Integrates procedural memory with the agentic action generator
+        to enable learning from activities.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        # Ensure both components are available
+        if not hasattr(self, "agent_enhanced_memory") or not self.agent_enhanced_memory:
+            if hasattr(self, "procedural_memory") and self.procedural_memory:
+                # Create agent-enhanced memory wrapper
+                from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+                self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
+                logger.info("Created AgentEnhancedMemoryManager wrapper")
+            else:
+                logger.warning("Procedural memory not available for integration")
+                return {"success": False, "reason": "procedural_memory not initialized"}
+        
+        if not hasattr(self, "agentic_action_generator") or not self.agentic_action_generator:
+            logger.warning("Agentic action generator not available for integration")
+            return {"success": False, "reason": "agentic_action_generator not initialized"}
+        
+        # Register action execution functions with procedural memory
+        self.agent_enhanced_memory.register_function(
+            "execute_action", self._execute_action_wrapper
+        )
+        self.agent_enhanced_memory.register_function(
+            "evaluate_action_outcome", self._evaluate_action_outcome_wrapper
+        )
+        
+        # Register cognitive cycle hook to consider actions during cognitive cycles
+        if hasattr(self, "run_cognitive_cycle"):
+            # Monkey patch the original run_cognitive_cycle to include activity execution
+            original_run_cognitive_cycle = self.run_cognitive_cycle
+            
+            async def enhanced_cognitive_cycle(context_data=None):
+                # Run the original cognitive cycle
+                result = await original_run_cognitive_cycle(context_data)
+                
+                # Add activity execution if appropriate
+                activity_result = await self._consider_activity_execution(context_data or {})
+                if activity_result:
+                    result["activity_execution"] = activity_result
+                
+                return result
+            
+            self.run_cognitive_cycle = enhanced_cognitive_cycle
+        
+        # Track performance metrics
+        if not hasattr(self, "procedural_activity_metrics"):
+            self.procedural_activity_metrics = {
+                "total_activities": 0,
+                "successful_activities": 0,
+                "procedure_used_count": 0,
+                "procedure_learned_count": 0,
+                "success_rates": {}  # Activity type -> success rate
+            }
+        
+        logger.info("Successfully integrated procedural memory with action generator")
+        return {"success": True}
+    
+    async def _execute_action_wrapper(self, action_name: str, action_params: Dict[str, Any], context: Dict[str, Any] = None):
+        """
+        Wrapper to execute actions from procedural memory through the action generator
+        """
+        logger.debug(f"Executing action: {action_name} with params: {action_params}")
+        
+        # Create action format expected by executor
+        action = {
+            "name": action_name,
+            "parameters": action_params,
+            "source": "procedural_memory"
+        }
+        
+        # Execute using action generator
+        if hasattr(self.agentic_action_generator, "execute_action"):
+            result = await self.agentic_action_generator.execute_action(action, context or {})
+            return result
+        else:
+            return {
+                "success": False, 
+                "error": "Action generator doesn't support direct execution"
+            }
+    
+    async def _evaluate_action_outcome_wrapper(self, action: Dict[str, Any], outcome: Dict[str, Any], context: Dict[str, Any] = None):
+        """
+        Evaluate and process action outcomes for procedural memory
+        """
+        # Record the outcome with the action generator for its own learning
+        if hasattr(self.agentic_action_generator, "record_action_outcome"):
+            await self.agentic_action_generator.record_action_outcome(action, outcome)
+        
+        # Create evaluation result
+        return {
+            "success": outcome.get("success", False),
+            "satisfaction": 0.8 if outcome.get("success", False) else 0.3,
+            "improvements": []  # Would contain suggested improvements
+        }
+    
+    async def _consider_activity_execution(self, context: Dict[str, Any]):
+        """
+        Consider whether to execute an activity during cognitive cycle
+        """
+        # Check if any goals/needs might trigger an activity
+        if self.goal_manager and hasattr(self.goal_manager, "get_prioritized_goals"):
+            # Get active goals
+            goals = await self.goal_manager.get_prioritized_goals()
+            
+            # Check if any goal needs an activity executed
+            for goal in goals:
+                if goal.status == "active" and hasattr(goal, "current_step"):
+                    # Check if current step is an activity that needs execution
+                    if getattr(goal.current_step, "type", "") == "activity":
+                        # Execute activity to advance goal
+                        activity_def = getattr(goal.current_step, "activity", {})
+                        if activity_def:
+                            return await self.execute_goal_activity(activity_def, goal.id)
+        
+        # Consider spontaneous activity based on needs/motivations (20% chance)
+        import random
+        if random.random() < 0.2:
+            # Check time since last activity to avoid too much activity
+            if not hasattr(self, "last_spontaneous_activity_time"):
+                self.last_spontaneous_activity_time = datetime.datetime.now() - datetime.timedelta(minutes=10)
+                
+            time_since_last = (datetime.datetime.now() - self.last_spontaneous_activity_time).total_seconds()
+            if time_since_last > 300:  # 5+ minutes since last spontaneous activity
+                return await self.generate_and_execute_activity(context)
+        
+        return None
+    
+    async def execute_goal_activity(self, activity: Dict[str, Any], goal_id: str) -> Dict[str, Any]:
+        """
+        Execute an activity needed for a specific goal
+        """
+        # Add goal context to the activity
+        context = {"goal_id": goal_id}
+        
+        # Execute the activity
+        result = await self.execute_activity(activity, context)
+        
+        # Update goal with result
+        if self.goal_manager:
+            await self.goal_manager.update_goal_step_result(
+                goal_id=goal_id,
+                step_result=result
+            )
+        
+        return result
+    
+    async def generate_and_execute_activity(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate and execute an activity based on current motivations
+        """
+        # Use action generator to create an appropriate activity
+        action = await self.agentic_action_generator.generate_action(context)
+        
+        # Convert action to activity format
+        activity = {
+            "name": action["name"],
+            "domain": action.get("motivation", {}).get("dominant", "general"),
+            "parameters": action.get("parameters", {}),
+            "motivation": action.get("motivation", {}),
+            "description": action.get("description", f"Activity {action['name']}")
+        }
+        
+        # Execute the activity
+        result = await self.execute_activity(activity, context)
+        
+        # Update tracking
+        self.last_spontaneous_activity_time = datetime.datetime.now()
+        
+        return result
+    
+    async def execute_activity(self, activity: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute an activity with potential procedural enhancement
+        """
+        logger.info(f"Executing activity: {activity['name']}")
+        context = context or {}
+        
+        # Record start time
+        start_time = datetime.datetime.now()
+        
+        # Check if we have a procedure that can be used for this activity
+        similar_procedures = await self.find_procedures_for_activity(
+            activity=activity,
+            context=context
+        )
+        
+        used_procedure = False
+        execution_result = None
+        
+        # If we have a good procedure match, use it
+        if similar_procedures and similar_procedures[0]["similarity"] > 0.7:
+            best_match = similar_procedures[0]
+            if best_match["proficiency"] > 0.5:  # Only use if reasonably proficient
+                logger.info(f"Using procedure '{best_match['name']}' for activity '{activity['name']}'")
+                
+                # Execute with procedure
+                execution_result = await self.execute_activity_with_procedure(
+                    activity=activity,
+                    procedure_name=best_match["name"],
+                    context=context
+                )
+                
+                used_procedure = True
+                
+                # Track usage of procedure
+                self.procedural_activity_metrics["procedure_used_count"] += 1
+        
+        # If no procedure used, execute directly with the activity executor
+        if not used_procedure:
+            # Execute with default agent activity execution
+            action = {
+                "name": activity["name"],
+                "parameters": activity.get("parameters", {}),
+                "motivation": activity.get("motivation", {}),
+                "description": activity.get("description", "")
+            }
+            
+            try:
+                # Execute the action
+                if hasattr(self.agentic_action_generator, "execute_action"):
+                    execution_result = await self.agentic_action_generator.execute_action(action, context)
+                else:
+                    # Fallback if execute_action doesn't exist
+                    execution_result = {"success": False, "error": "Activity executor doesn't support execute_action method"}
+            except Exception as e:
+                logger.error(f"Error executing activity {activity['name']}: {str(e)}")
+                execution_result = {"success": False, "error": str(e)}
+            
+            # Learn from this execution for future use
+            await self.learn_from_activity(
+                activity=activity,
+                execution_result=execution_result,
+                domain=activity.get("domain", "general")
+            )
+            
+            # Track new procedure learning
+            self.procedural_activity_metrics["procedure_learned_count"] += 1
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        execution_result["execution_time"] = execution_time
+        
+        # Update performance metrics
+        self.procedural_activity_metrics["total_activities"] += 1
+        if execution_result.get("success", False):
+            self.procedural_activity_metrics["successful_activities"] += 1
+        
+        # Update success rate for this type of activity
+        activity_type = activity.get("name", "unknown")
+        if activity_type not in self.procedural_activity_metrics["success_rates"]:
+            self.procedural_activity_metrics["success_rates"][activity_type] = {"success": 0, "total": 0}
+        
+        self.procedural_activity_metrics["success_rates"][activity_type]["total"] += 1
+        if execution_result.get("success", False):
+            self.procedural_activity_metrics["success_rates"][activity_type]["success"] += 1
+        
+        # Provide feedback to both systems
+        await self._provide_activity_feedback(activity, execution_result, used_procedure)
+        
+        # Return the execution result
+        return execution_result
+    
+    async def find_procedures_for_activity(self, activity: Dict[str, Any], context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Find procedures that could be used for executing an activity
+        """
+        if not hasattr(self, "agent_enhanced_memory") or not self.agent_enhanced_memory:
+            return []
+        
+        # Map activity domain to procedural domain
+        domain = activity.get("domain", "general")
+        domain_mappings = {
+            "general": "general",
+            "conversation": "dialogue",
+            "task_execution": "execution",
+            "information_retrieval": "search",
+            "content_creation": "creation",
+            "curiosity": "exploration",
+            "connection": "social",
+            "expression": "creative",
+            "dominance": "control",
+            "competence": "skill",
+            "self_improvement": "learning"
+        }
+        proc_domain = domain_mappings.get(domain, "general")
+        
+        # Get all procedures in this domain
+        all_procedures = [p for p in self.agent_enhanced_memory.procedures.values() 
+                         if p.domain == proc_domain]
+        
+        if not all_procedures:
+            return []
+        
+        # Calculate similarity scores
+        similar_procedures = []
+        
+        for procedure in all_procedures:
+            # Calculate similarity
+            similarity = await self._calculate_activity_similarity(activity, procedure)
+            
+            if similarity > 0.3:  # Minimum threshold
+                similar_procedures.append({
+                    "name": procedure.name,
+                    "id": procedure.id,
+                    "similarity": similarity,
+                    "proficiency": procedure.proficiency,
+                    "average_execution_time": procedure.average_execution_time
+                })
+        
+        # Sort by similarity
+        similar_procedures.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        return similar_procedures
+    
+    async def _calculate_activity_similarity(self, activity: Dict[str, Any], procedure) -> float:
+        """
+        Calculate similarity between an activity and a procedure
+        """
+        # Extract activity steps
+        activity_steps = activity.get("steps", [])
+        if not activity_steps and "name" in activity:
+            # Single action activity
+            activity_steps = [{"action": activity["name"], "params": activity.get("parameters", {})}]
+        
+        # Extract procedure steps
+        procedure_steps = procedure.steps
+        
+        # Length difference penalty
+        length_diff = abs(len(activity_steps) - len(procedure_steps))
+        length_penalty = max(0, 1 - (length_diff / max(len(activity_steps), len(procedure_steps))))
+        
+        # Compare steps
+        step_similarities = []
+        
+        for i in range(min(len(activity_steps), len(procedure_steps))):
+            activity_step = activity_steps[i]
+            procedure_step = procedure_steps[i]
+            
+            # Compare actions
+            action_similarity = 0.0
+            if activity_step.get("action") == procedure_step.get("function"):
+                action_similarity = 1.0
+            elif activity_step.get("action", "").lower() in procedure_step.get("function", "").lower():
+                action_similarity = 0.7
+            elif procedure_step.get("function", "").lower() in activity_step.get("action", "").lower():
+                action_similarity = 0.7
+            
+            # Compare parameters
+            param_similarity = 0.0
+            activity_params = activity_step.get("params", {})
+            procedure_params = procedure_step.get("parameters", {})
+            
+            if activity_params and procedure_params:
+                # Count matching params
+                matching_params = 0
+                for key in set(activity_params.keys()) & set(procedure_params.keys()):
+                    if activity_params[key] == procedure_params[key]:
+                        matching_params += 1
+                
+                total_params = len(set(activity_params.keys()) | set(procedure_params.keys()))
+                if total_params > 0:
+                    param_similarity = matching_params / total_params
+            elif not activity_params and not procedure_params:
+                param_similarity = 1.0
+            
+            # Combined step similarity
+            step_similarity = action_similarity * 0.7 + param_similarity * 0.3
+            step_similarities.append(step_similarity)
+        
+        # Overall similarity
+        if not step_similarities:
+            return 0.0
+        
+        avg_step_similarity = sum(step_similarities) / len(step_similarities)
+        overall_similarity = avg_step_similarity * 0.8 + length_penalty * 0.2
+        
+        return overall_similarity
+    
+    async def execute_activity_with_procedure(self, activity: Dict[str, Any], procedure_name: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute an activity using a learned procedure
+        """
+        if not hasattr(self, "agent_enhanced_memory") or not self.agent_enhanced_memory:
+            return {"success": False, "error": "Procedural memory not available"}
+        
+        # Check if procedure exists
+        if procedure_name not in self.agent_enhanced_memory.procedures:
+            return {
+                "success": False,
+                "error": f"Procedure '{procedure_name}' not found"
+            }
+        
+        # Initialize context if needed
+        execution_context = context.copy() if context else {}
+        
+        # Map activity parameters to procedure context
+        activity_name = activity.get("name", "unknown_activity")
+        execution_context["activity_name"] = activity_name
+        execution_context["activity_type"] = activity.get("type", "unknown_type")
+        
+        # Map activity parameters
+        for key, value in activity.get("parameters", {}).items():
+            execution_context[key] = value
+        
+        # Map state information if available
+        for key, value in activity.get("initial_state", {}).items():
+            execution_context[key] = value
+        
+        # Execute the procedure
+        start_time = datetime.datetime.now()
+        
+        result = await self.agent_enhanced_memory.execute_procedure(
+            name=procedure_name,
+            context=execution_context
+        )
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        # Return results with additional metadata
+        return {
+            "success": result.success,
+            "results": result.results if hasattr(result, "results") else [],
+            "execution_time": execution_time,
+            "procedure_used": procedure_name,
+            "procedure_proficiency": self.agent_enhanced_memory.procedures[procedure_name].proficiency
+        }
+    
+    async def learn_from_activity(self, activity: Dict[str, Any], execution_result: Dict[str, Any], domain: str = "general") -> Dict[str, Any]:
+        """
+        Learn a procedure from an executed activity
+        """
+        if not hasattr(self, "agent_enhanced_memory") or not self.agent_enhanced_memory:
+            return {"success": False, "error": "Procedural memory not available"}
+        
+        # Generate a name for the procedure
+        activity_name = activity.get("name", "unknown_activity")
+        procedure_name = f"{activity_name}_{int(datetime.datetime.now().timestamp())}"
+        
+        # Convert to steps format expected by procedural memory
+        steps = []
+        
+        # If activity has explicit steps, use those
+        if "steps" in activity:
+            for i, step in enumerate(activity["steps"]):
+                step_def = {
+                    "id": step.get("id", f"step_{i}"),
+                    "function": step.get("action", f"step_{i}_action"),
+                    "parameters": step.get("params", {}),
+                    "description": step.get("description", f"Step {i}")
+                }
+                steps.append(step_def)
+        else:
+            # Create a single step from the activity
+            steps.append({
+                "id": "main_step",
+                "function": "execute_action",
+                "parameters": {
+                    "action_name": activity["name"],
+                    "action_params": activity.get("parameters", {})
+                },
+                "description": activity.get("description", f"Execute {activity['name']}")
+            })
+        
+        # Create the procedure
+        result = await self.agent_enhanced_memory.create_procedure(
+            name=procedure_name,
+            steps=steps,
+            description=f"Procedure for {activity_name}",
+            domain=domain
+        )
+        
+        return {
+            "success": True,
+            "procedure_name": procedure_name,
+            "steps_count": len(steps),
+            "domain": domain
+        }
+    
+    async def _provide_activity_feedback(self, activity: Dict[str, Any], result: Dict[str, Any], used_procedure: bool) -> None:
+        """
+        Provide feedback about activity execution to various systems
+        """
+        # Record outcome with activity executor
+        if self.agentic_action_generator and hasattr(self.agentic_action_generator, "record_action_outcome"):
+            await self.agentic_action_generator.record_action_outcome(
+                action={"name": activity["name"], "parameters": activity.get("parameters", {})},
+                outcome=result
+            )
+        
+        # If we used a procedure, provide feedback for improvement
+        if used_procedure and "procedure_used" in result:
+            procedure_name = result["procedure_used"]
+            
+            # Create feedback based on result
+            feedback = {
+                "success": result.get("success", False),
+                "satisfaction": 0.8 if result.get("success", False) else 0.2,
+                "execution_time": result.get("execution_time", 0)
+            }
+            
+            # Include any problems or suggestions
+            if not result.get("success", False) and "error" in result:
+                feedback["problem_steps"] = [{
+                    "step_id": result.get("failed_step_id", "unknown"),
+                    "problem": result.get("error"),
+                    "solution": {"new_parameters": {}}  # Simple placeholder
+                }]
+            
+            # Provide feedback to procedural memory
+            if hasattr(self.agent_enhanced_memory, "improve_procedure_from_feedback"):
+                await self.agent_enhanced_memory.improve_procedure_from_feedback(
+                    procedure_name=procedure_name,
+                    feedback=feedback
+                )
+        
+        # Update brain's memory with activity outcome
+        if self.memory_core:
+            # Create memory text
+            memory_text = f"Executed activity '{activity['name']}' with result: {result.get('success', False)}"
+            
+            # Add memory
+            await self.memory_core.add_memory(
+                memory_text=memory_text,
+                memory_type="experience",
+                significance=7 if result.get("success", False) else 5,
+                metadata={
+                    "activity": activity,
+                    "result": result,
+                    "used_procedure": used_procedure,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            )
 
 
     @function_tool
