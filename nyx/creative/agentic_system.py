@@ -9,9 +9,9 @@ from typing import Dict, List, Any, Optional, Union
 import importlib
 
 # Import the systems we're integrating
-from nyx.creative.content_system import CreativeContentSystem, ContentType
-from nyx.creative.analysis_sandbox import CodeAnalyzer, SandboxExecutor
-from nyx.creative.capability_system import CapabilityAssessmentSystem, CapabilityModel
+from creative.content_system import CreativeContentSystem, ContentType
+from creative.analysis_sandbox import CodeAnalyzer, SandboxExecutor
+from creative.capability_system import CapabilityAssessmentSystem, CapabilityModel
 
 logger = logging.getLogger(__name__)
 
