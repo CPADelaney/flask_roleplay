@@ -5,8 +5,9 @@ import datetime
 import uuid
 import asyncio
 import json
-from typing import Dict, List, Any, Optional, Set, Union
+from typing import Dict, List, Any, Optional, Set, Union, Tuple
 from pydantic import BaseModel, Field, field_validator
+from enum import Enum
 
 from agents import (
     Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper,
@@ -34,6 +35,29 @@ class GoalStep(BaseModel):
             raise ValueError('Action must be a non-empty string')
         return v
 
+class TimeHorizon(str, Enum):
+    """Time horizon for goals - affects planning, execution and priority calculations"""
+    SHORT_TERM = "short_term"  # Hours to days
+    MEDIUM_TERM = "medium_term"  # Days to weeks
+    LONG_TERM = "long_term"  # Weeks to months/years
+
+class EmotionalMotivation(BaseModel):
+    """Emotional motivation behind a goal"""
+    primary_need: str = Field(..., description="Primary emotional need driving this goal")
+    intensity: float = Field(0.5, ge=0.0, le=1.0, description="Intensity of the emotional motivation")
+    expected_satisfaction: float = Field(0.5, ge=0.0, le=1.0, description="Expected satisfaction from achieving the goal")
+    associated_chemicals: Dict[str, float] = Field(default_factory=dict, description="Associated neurochemicals and their expected changes")
+    description: str = Field("", description="Description of the emotional motivation")
+
+class GoalRelationship(BaseModel):
+    """Relationship between goals"""
+    parent_goal_id: Optional[str] = Field(None, description="ID of the parent goal")
+    child_goal_ids: List[str] = Field(default_factory=list, description="IDs of child goals")
+    supports_goal_ids: List[str] = Field(default_factory=list, description="IDs of goals this goal supports")
+    conflicts_with_goal_ids: List[str] = Field(default_factory=list, description="IDs of goals this goal conflicts with")
+    relationship_type: str = Field("independent", description="Type of relationship (hierarchical, supportive, conflicting)")
+
+
 class Goal(BaseModel):
     id: str = Field(default_factory=lambda: f"goal_{uuid.uuid4().hex[:8]}")
     description: str
@@ -48,6 +72,12 @@ class Goal(BaseModel):
     current_step_index: int = Field(0, description="Index of the next step to execute")
     execution_history: List[Dict[str, Any]] = Field(default_factory=list, description="Log of step execution attempts")
     last_error: Optional[str] = None
+    time_horizon: TimeHorizon = Field(TimeHorizon.MEDIUM_TERM, description="Time horizon for the goal")
+    emotional_motivation: Optional[EmotionalMotivation] = None
+    relationships: GoalRelationship = Field(default_factory=GoalRelationship)
+    recurring: bool = Field(False, description="Whether this is a recurring goal")
+    recurrence_pattern: Optional[Dict[str, Any]] = None  # For recurring goals
+    progress: float = Field(0.0, ge=0.0, le=1.0, description="Progress toward completion (0.0-1.0)")
 
 # New Pydantic models for structured I/O with Agents
 class GoalValidationResult(BaseModel):
@@ -76,6 +106,32 @@ class PlanGenerationResult(BaseModel):
     reasoning: str = Field(..., description="Reasoning behind the plan")
     estimated_steps: int = Field(..., description="Estimated number of steps")
     estimated_completion_time: Optional[str] = Field(None, description="Estimated completion time")
+
+class GoalHierarchyNode(BaseModel):
+    """Node in a goal hierarchy visualization"""
+    goal_id: str
+    description: str
+    time_horizon: TimeHorizon
+    status: str
+    priority: float
+    children: List["GoalHierarchyNode"] = Field(default_factory=list)
+
+class GoalCreationWithMotivation(BaseModel):
+    """Input model for goal creation with motivation"""
+    description: str
+    priority: float = 0.5
+    time_horizon: TimeHorizon = TimeHorizon.MEDIUM_TERM
+    deadline: Optional[str] = None
+    emotional_motivation: Optional[EmotionalMotivation] = None
+    associated_need: Optional[str] = None
+    parent_goal_id: Optional[str] = None
+
+class GoalMotivationAnalysis(BaseModel):
+    """Output model for analyzing goal motivations"""
+    emotional_needs: Dict[str, int] = Field(default_factory=dict)
+    primary_motivations: List[str] = Field(default_factory=list)
+    chemical_associations: Dict[str, float] = Field(default_factory=dict)
+    motivation_patterns: List[Dict[str, Any]] = Field(default_factory=list)
 
 class RunContext(BaseModel):
     """Context model for agent execution"""
@@ -1054,7 +1110,555 @@ class GoalManager:
             "status": status,
             "notifications": notifications
         }
+
+    async def add_goal_with_motivation(self, 
+                                    goal_data: GoalCreationWithMotivation) -> str:
+        """Creates a goal with emotional motivation and time horizon specifications"""
+        # Create base fields for the goal
+        goal_fields = {
+            "description": goal_data.description,
+            "priority": goal_data.priority,
+            "source": "explicit",
+            "associated_need": goal_data.associated_need,
+            "time_horizon": goal_data.time_horizon
+        }
+        
+        # Add deadline if provided
+        if goal_data.deadline:
+            try:
+                deadline = datetime.datetime.fromisoformat(goal_data.deadline)
+                goal_fields["deadline"] = deadline
+            except ValueError:
+                logger.warning(f"Invalid deadline format: {goal_data.deadline}")
+        
+        # Add emotional motivation if provided
+        if goal_data.emotional_motivation:
+            goal_fields["emotional_motivation"] = goal_data.emotional_motivation
+        
+        # Create goal relationships if parent_goal_id is provided
+        relationships = GoalRelationship()
+        if goal_data.parent_goal_id:
+            async with self._lock:
+                if goal_data.parent_goal_id in self.goals:
+                    relationships.parent_goal_id = goal_data.parent_goal_id
+                    relationships.relationship_type = "hierarchical"
+                    goal_fields["relationships"] = relationships
+        
+        # Create the goal using the existing add_goal method
+        goal_id = await self.add_goal(**goal_fields)
+        
+        # Update parent goal's relationships if applicable
+        if goal_data.parent_goal_id and goal_id:
+            async with self._lock:
+                if goal_data.parent_goal_id in self.goals:
+                    parent_goal = self.goals[goal_data.parent_goal_id]
+                    parent_relationships = parent_goal.relationships
+                    
+                    # Add this goal as a child of the parent
+                    if not parent_relationships:
+                        parent_relationships = GoalRelationship()
+                    
+                    parent_relationships.child_goal_ids.append(goal_id)
+                    
+                    # Update the parent goal
+                    parent_goal.relationships = parent_relationships
+        
+        return goal_id
     
+    async def create_goal_hierarchy(self, 
+                                 root_goal_data: Dict[str, Any],
+                                 subgoals_data: List[Dict[str, Any]]) -> str:
+        """Creates a hierarchical structure of goals with a root goal and subgoals"""
+        # First create the root goal
+        root_goal = GoalCreationWithMotivation(**root_goal_data)
+        root_goal_id = await self.add_goal_with_motivation(root_goal)
+        
+        if not root_goal_id:
+            return None
+        
+        # Create each subgoal and link to the root goal
+        for subgoal_data in subgoals_data:
+            subgoal_data["parent_goal_id"] = root_goal_id
+            subgoal = GoalCreationWithMotivation(**subgoal_data)
+            await self.add_goal_with_motivation(subgoal)
+        
+        return root_goal_id
+    
+    async def get_goal_hierarchy(self, root_goal_id: Optional[str] = None) -> List[GoalHierarchyNode]:
+        """
+        Retrieves the goal hierarchy as a tree structure.
+        If root_goal_id is provided, returns that specific hierarchy.
+        Otherwise, returns all top-level goals.
+        """
+        async with self._lock:
+            # If a specific root goal is requested
+            if root_goal_id:
+                if root_goal_id not in self.goals:
+                    return []
+                root_goal = self.goals[root_goal_id]
+                return [await self._build_goal_node(root_goal)]
+            
+            # Otherwise, find all top-level goals (goals without parents)
+            top_level_goals = []
+            for goal_id, goal in self.goals.items():
+                # Check if this goal has no parent
+                if not hasattr(goal, 'relationships') or not goal.relationships or not goal.relationships.parent_goal_id:
+                    # This is a top-level goal
+                    top_level_goals.append(await self._build_goal_node(goal))
+            
+            return top_level_goals
+    
+    async def _build_goal_node(self, goal) -> GoalHierarchyNode:
+        """Helper method to recursively build goal hierarchy nodes"""
+        # Create the current node
+        node = GoalHierarchyNode(
+            goal_id=goal.id,
+            description=goal.description,
+            time_horizon=goal.time_horizon if hasattr(goal, 'time_horizon') else TimeHorizon.MEDIUM_TERM,
+            status=goal.status,
+            priority=goal.priority,
+            children=[]
+        )
+        
+        # Add child goals if any
+        if hasattr(goal, 'relationships') and goal.relationships and goal.relationships.child_goal_ids:
+            for child_id in goal.relationships.child_goal_ids:
+                if child_id in self.goals:
+                    child_node = await self._build_goal_node(self.goals[child_id])
+                    node.children.append(child_node)
+        
+        return node
+    
+    async def analyze_goal_motivations(self) -> GoalMotivationAnalysis:
+        """Analyzes patterns in goal motivations across all goals"""
+        async with self._lock:
+            # Initialize analysis data
+            emotional_needs = {}
+            chemical_associations = {}
+            motivation_patterns = []
+            
+            # Scan all goals with emotional motivations
+            for goal_id, goal in self.goals.items():
+                if hasattr(goal, 'emotional_motivation') and goal.emotional_motivation:
+                    # Count emotional needs
+                    primary_need = goal.emotional_motivation.primary_need
+                    emotional_needs[primary_need] = emotional_needs.get(primary_need, 0) + 1
+                    
+                    # Aggregate chemical associations
+                    for chemical, value in goal.emotional_motivation.associated_chemicals.items():
+                        chemical_associations[chemical] = chemical_associations.get(chemical, 0.0) + value
+                    
+                    # Check for patterns based on time horizon
+                    time_horizon = goal.time_horizon if hasattr(goal, 'time_horizon') else TimeHorizon.MEDIUM_TERM
+                    
+                    # Add to pattern analysis
+                    motivation_patterns.append({
+                        "need": primary_need,
+                        "time_horizon": time_horizon,
+                        "status": goal.status,
+                        "intensity": goal.emotional_motivation.intensity,
+                        "goal_id": goal_id
+                    })
+            
+            # Calculate primary motivations (top 3)
+            primary_motivations = sorted(emotional_needs.keys(), 
+                                        key=lambda x: emotional_needs[x], 
+                                        reverse=True)[:3]
+            
+            # Normalize chemical associations
+            for chemical in chemical_associations:
+                chemical_associations[chemical] /= max(1, len(motivation_patterns))
+            
+            return GoalMotivationAnalysis(
+                emotional_needs=emotional_needs,
+                primary_motivations=primary_motivations,
+                chemical_associations=chemical_associations,
+                motivation_patterns=motivation_patterns
+            )
+    
+    async def suggest_new_goals(self, 
+                             based_on_need: Optional[str] = None, 
+                             time_horizon: Optional[TimeHorizon] = None) -> List[Dict[str, Any]]:
+        """
+        Suggests new goals based on analysis of existing goals, emotional needs,
+        and system state. Can focus on specific needs or time horizons.
+        """
+        # This method would use the GoalManager's AI planning agent to generate suggestions
+        # based on analysis of existing goals and emotional needs
+        
+        # First, analyze current goal motivations
+        motivation_analysis = await self.analyze_goal_motivations()
+        
+        # Get data about completed goals for learning patterns
+        completed_goals = await self.get_all_goals(status_filter=["completed"])
+        
+        # Prepare context for the planning agent
+        context = {
+            "motivation_analysis": motivation_analysis.model_dump(),
+            "completed_goals": completed_goals,
+            "based_on_need": based_on_need,
+            "time_horizon": time_horizon.value if time_horizon else None,
+            "current_goals_count": len(self.goals)
+        }
+        
+        # Use the planning agent to generate suggestions
+        try:
+            result = await Runner.run(
+                self.planning_agent,
+                json.dumps(context),
+                context=RunContext(goal_id="goal_suggestion", brain_available=self.brain is not None),
+                run_config={
+                    "workflow_name": "GoalSuggestion",
+                    "trace_metadata": {
+                        "based_on_need": based_on_need,
+                        "time_horizon": time_horizon.value if time_horizon else None
+                    }
+                }
+            )
+            
+            # Extract suggestions from agent output
+            suggested_goals = result.final_output.get("suggested_goals", [])
+            
+            return suggested_goals
+        except Exception as e:
+            logger.error(f"Error generating goal suggestions: {e}")
+            return []
+    
+    # ==================================================
+    # Method overrides for time horizon integration
+    # ==================================================
+    
+    def _modify_get_prioritized_goals(self) -> List[Goal]:
+        """Returns active and pending goals sorted by priority with time horizon considerations."""
+        # This would modify the existing get_prioritized_goals method
+        
+        # Create a copy of the active/pending goals while holding the lock
+        goals_copy = {}
+        try:
+            asyncio.run(self._lock.acquire())  # Use run for sync context
+            goals_copy = {
+                g_id: g.model_copy() for g_id, g in self.goals.items() 
+                if g.status in ["pending", "active"]
+            }
+        finally:
+            self._lock.release()
+    
+        if not goals_copy:
+            return []
+    
+        # Process the copy without holding the lock
+        now = datetime.datetime.now()
+        
+        def sort_key(g: Goal) -> float:
+            # Basic priority from existing method
+            age_penalty = (now - g.creation_time).total_seconds() / (3600 * 24)  # Age in days
+            status_boost = 0.05 if g.status == "pending" else -0.05
+            
+            # Add urgency based on deadline if present
+            deadline_urgency = 0.0
+            if g.deadline:
+                time_to_deadline = (g.deadline - now).total_seconds()
+                if time_to_deadline > 0:
+                    # Increase priority as deadline approaches
+                    deadline_urgency = min(0.3, 86400 / max(3600, time_to_deadline))  # Max boost of 0.3
+                else:
+                    # Past deadline, very high urgency
+                    deadline_urgency = 0.4
+            
+            # NEW: Time horizon modifications
+            time_horizon_factor = 0.0
+            if hasattr(g, 'time_horizon'):
+                # Short-term goals get higher base priority
+                if g.time_horizon == TimeHorizon.SHORT_TERM:
+                    time_horizon_factor = 0.2
+                elif g.time_horizon == TimeHorizon.MEDIUM_TERM:
+                    time_horizon_factor = 0.1
+                # Long-term goals don't get a boost
+            
+            # NEW: Emotional motivation intensity boost
+            motivation_boost = 0.0
+            if hasattr(g, 'emotional_motivation') and g.emotional_motivation:
+                motivation_boost = g.emotional_motivation.intensity * 0.15
+            
+            return g.priority + (age_penalty * 0.01 * status_boost) + deadline_urgency + time_horizon_factor + motivation_boost
+    
+        sorted_goals = list(goals_copy.values())
+        sorted_goals.sort(key=sort_key, reverse=True)
+        return sorted_goals
+    
+    # ==================================================
+    # Integration with emotional/reward systems
+    # ==================================================
+    
+    async def _link_goal_to_emotional_system(self, goal_id: str, emotion_data: Dict[str, Any]) -> bool:
+        """Creates an emotional link for a goal to influence the emotional state"""
+        if not self.brain or not hasattr(self.brain, "emotional_core"):
+            return False
+        
+        emotional_core = self.brain.emotional_core
+        
+        # Check if the goal exists
+        async with self._lock:
+            if goal_id not in self.goals:
+                return False
+            
+            goal = self.goals[goal_id]
+        
+        # Link based on emotional motivation if available
+        if hasattr(goal, 'emotional_motivation') and goal.emotional_motivation:
+            # Set up chemical changes based on goal's emotional motivation
+            chemicals = goal.emotional_motivation.associated_chemicals
+            
+            # Apply a small anticipatory boost
+            for chemical, value in chemicals.items():
+                try:
+                    # Small anticipatory boost for focusing on the goal
+                    await emotional_core.update_neurochemical(chemical, value * 0.2)
+                except Exception as e:
+                    logger.error(f"Error updating neurochemical {chemical}: {e}")
+        
+        return True
+    
+    async def _process_goal_completion_reward(self, goal_id: str, result: Any) -> Dict[str, Any]:
+        """Processes reward signals when a goal is completed"""
+        if not self.brain or not hasattr(self.brain, "reward_system"):
+            return {"success": False, "reason": "No reward system available"}
+        
+        reward_system = self.brain.reward_system
+        
+        # Check if the goal exists
+        async with self._lock:
+            if goal_id not in self.goals:
+                return {"success": False, "reason": "Goal not found"}
+            
+            goal = self.goals[goal_id]
+        
+        # Calculate base reward based on priority and time horizon
+        base_reward = goal.priority
+        
+        # Adjust based on time horizon (more immediate satisfaction for short-term goals)
+        time_horizon_factor = 1.0
+        if hasattr(goal, 'time_horizon'):
+            if goal.time_horizon == TimeHorizon.SHORT_TERM:
+                time_horizon_factor = 1.2  # 20% boost for short-term goal completion
+            elif goal.time_horizon == TimeHorizon.LONG_TERM:
+                time_horizon_factor = 0.9  # 10% reduction for long-term goals (but more satisfaction overall)
+        
+        # Adjust based on emotional motivation if available
+        satisfaction_factor = 1.0
+        if hasattr(goal, 'emotional_motivation') and goal.emotional_motivation:
+            satisfaction_factor = goal.emotional_motivation.expected_satisfaction
+        
+        # Calculate final reward
+        reward_value = base_reward * time_horizon_factor * satisfaction_factor
+        
+        # Create context for the reward
+        context = {
+            "goal_id": goal_id,
+            "goal_description": goal.description,
+            "time_horizon": goal.time_horizon.value if hasattr(goal, 'time_horizon') else "medium_term",
+            "emotional_need": goal.emotional_motivation.primary_need if hasattr(goal, 'emotional_motivation') and goal.emotional_motivation else None,
+            "achievement_type": "goal_completion"
+        }
+        
+        try:
+            # Import RewardSignal locally to avoid circular imports
+            from nyx.core.reward_system import RewardSignal
+            
+            # Create and process reward signal
+            reward_signal = RewardSignal(
+                value=reward_value,
+                source="GoalManager",
+                context=context,
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            reward_result = await reward_system.process_reward_signal(reward_signal)
+            
+            # Apply neurochemical effects if emotional motivation exists
+            if hasattr(goal, 'emotional_motivation') and goal.emotional_motivation and hasattr(self.brain, "emotional_core"):
+                emotional_core = self.brain.emotional_core
+                chemicals = goal.emotional_motivation.associated_chemicals
+                
+                # Apply chemical changes in stronger amounts than the anticipatory boost
+                for chemical, value in chemicals.items():
+                    try:
+                        await emotional_core.update_neurochemical(chemical, value * 0.8)
+                    except Exception as e:
+                        logger.error(f"Error updating neurochemical {chemical}: {e}")
+            
+            return {
+                "success": True,
+                "reward_value": reward_value,
+                "reward_result": reward_result
+            }
+                
+        except Exception as e:
+            logger.error(f"Error processing goal completion reward: {e}")
+            return {"success": False, "reason": str(e)}
+    
+    # ==================================================
+    # Functions to help with goal creation
+    # ==================================================
+    
+    async def derive_emotional_motivation(self, goal_description: str, need: Optional[str] = None) -> EmotionalMotivation:
+        """
+        Analyzes a goal description to derive likely emotional motivation,
+        using the emotional core if available.
+        """
+        # Start with default values
+        motivation = EmotionalMotivation(
+            primary_need=need or "accomplishment",
+            intensity=0.5,
+            expected_satisfaction=0.6,
+            associated_chemicals={"nyxamine": 0.3, "seranix": 0.2},
+            description="Derived emotional motivation"
+        )
+        
+        # Use emotional core to refine if available
+        if self.brain and hasattr(self.brain, "emotional_core"):
+            emotional_core = self.brain.emotional_core
+            
+            # Common emotional needs mapped to chemicals
+            need_to_chemicals = {
+                "accomplishment": {"nyxamine": 0.4, "seranix": 0.2},
+                "connection": {"oxynixin": 0.5, "seranix": 0.2},
+                "security": {"seranix": 0.4, "cortanyx": -0.3},
+                "control": {"adrenyx": 0.3, "cortanyx": -0.2},
+                "growth": {"nyxamine": 0.3, "adrenyx": 0.2},
+                "pleasure": {"nyxamine": 0.5},
+                "meaning": {"nyxamine": 0.3, "seranix": 0.3, "oxynixin": 0.2},
+                "efficiency": {"nyxamine": 0.2, "cortanyx": -0.2},
+                "autonomy": {"adrenyx": 0.2, "nyxamine": 0.2},
+                "challenge": {"adrenyx": 0.4, "nyxamine": 0.3}
+            }
+            
+            # Analyze text for emotional content if no need specified
+            if not need:
+                # Simplified analysis - in a real implementation, you might use the emotional core's analysis tools
+                
+                # Check for key words/phrases that suggest specific needs
+                lower_text = goal_description.lower()
+                
+                if any(word in lower_text for word in ["connect", "bond", "relate", "together", "relationship"]):
+                    motivation.primary_need = "connection"
+                    motivation.associated_chemicals = need_to_chemicals["connection"]
+                    
+                elif any(word in lower_text for word in ["grow", "improve", "better", "learn", "develop"]):
+                    motivation.primary_need = "growth"
+                    motivation.associated_chemicals = need_to_chemicals["growth"]
+                    
+                elif any(word in lower_text for word in ["secure", "safe", "protect", "prevent", "avoid"]):
+                    motivation.primary_need = "security"
+                    motivation.associated_chemicals = need_to_chemicals["security"]
+                    
+                elif any(word in lower_text for word in ["control", "manage", "direct", "lead", "organize"]):
+                    motivation.primary_need = "control"
+                    motivation.associated_chemicals = need_to_chemicals["control"]
+                    
+                elif any(word in lower_text for word in ["meaning", "purpose", "value", "important", "significant"]):
+                    motivation.primary_need = "meaning"
+                    motivation.associated_chemicals = need_to_chemicals["meaning"]
+                    
+                elif any(word in lower_text for word in ["enjoy", "fun", "pleasure", "happy", "delight"]):
+                    motivation.primary_need = "pleasure"
+                    motivation.associated_chemicals = need_to_chemicals["pleasure"]
+                    
+                elif any(word in lower_text for word in ["challenge", "difficult", "hard", "master", "overcome"]):
+                    motivation.primary_need = "challenge"
+                    motivation.associated_chemicals = need_to_chemicals["challenge"]
+                    
+                elif any(word in lower_text for word in ["efficient", "quick", "optimize", "streamline", "automate"]):
+                    motivation.primary_need = "efficiency"
+                    motivation.associated_chemicals = need_to_chemicals["efficiency"]
+            else:
+                # Use provided need if specified
+                if need in need_to_chemicals:
+                    motivation.associated_chemicals = need_to_chemicals[need]
+            
+            # Set description based on need
+            need_descriptions = {
+                "accomplishment": "Desire to achieve something meaningful and receive recognition",
+                "connection": "Desire for authentic bonding and meaningful relationships",
+                "security": "Desire for safety, stability and predictability",
+                "control": "Desire to influence outcomes and direct processes",
+                "growth": "Desire to improve skills, knowledge and capabilities",
+                "pleasure": "Desire for enjoyment and positive experiences",
+                "meaning": "Desire for purpose and significance",
+                "efficiency": "Desire to optimize processes and save resources",
+                "autonomy": "Desire for independence and self-direction",
+                "challenge": "Desire to overcome difficult obstacles"
+            }
+            
+            if motivation.primary_need in need_descriptions:
+                motivation.description = need_descriptions[motivation.primary_need]
+        
+        return motivation
+    
+    # ==================================================
+    # Modified update_goal_status method to handle hierarchical goals
+    # ==================================================
+    
+    async def update_goal_status_with_hierarchy(self, goal_id: str, status: str, result: Optional[Any] = None, error: Optional[str] = None):
+        """Updates goal status with hierarchy considerations - handles parent/child relationships"""
+        async with self._lock:
+            if goal_id not in self.goals:
+                logger.warning(f"Attempted to update status for unknown goal: {goal_id}")
+                return
+    
+            goal = self.goals[goal_id]
+            old_status = goal.status
+            if old_status == status: 
+                return  # No change
+    
+            # Update the goal's status
+            goal.status = status
+            goal.last_error = error
+    
+            if status in ["completed", "failed", "abandoned"]:
+                goal.completion_time = datetime.datetime.now()
+                self.active_goals.discard(goal_id)
+                
+                # Update statistics
+                if status == "completed":
+                    self.goal_statistics["completed"] += 1
+                    # Process completion reward
+                    await self._process_goal_completion_reward(goal_id, result)
+                    
+                    # Update progress of parent goal if this is a child goal
+                    if hasattr(goal, 'relationships') and goal.relationships and goal.relationships.parent_goal_id:
+                        parent_id = goal.relationships.parent_goal_id
+                        if parent_id in self.goals:
+                            parent_goal = self.goals[parent_id]
+                            
+                            # Calculate new progress percentage
+                            if hasattr(parent_goal, 'relationships') and parent_goal.relationships:
+                                total_children = len(parent_goal.relationships.child_goal_ids)
+                                if total_children > 0:
+                                    # Count completed children
+                                    completed_children = 0
+                                    for child_id in parent_goal.relationships.child_goal_ids:
+                                        if child_id in self.goals and self.goals[child_id].status == "completed":
+                                            completed_children += 1
+                                    
+                                    # Update parent progress
+                                    if hasattr(parent_goal, 'progress'):
+                                        parent_goal.progress = completed_children / total_children
+                                        
+                                        # If all children completed, mark parent as completed
+                                        if completed_children == total_children:
+                                            await self.update_goal_status(parent_id, "completed", result="All subgoals completed")
+                                            
+                elif status == "failed":
+                    self.goal_statistics["failed"] += 1
+                elif status == "abandoned":
+                    self.goal_statistics["abandoned"] += 1
+    
+            logger.info(f"Goal '{goal_id}' status changed from {old_status} to {status}.")
+    
+        # Notify systems
+        await self._notify_systems(goal_id, status, result, error)
+        
     @function_tool
     async def _check_concurrency_limits(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
