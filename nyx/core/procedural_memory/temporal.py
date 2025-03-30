@@ -1,12 +1,15 @@
 # nyx/core/procedural_memory/temporal.py
 
 import datetime
-import threading
+import asyncio
 import functools
 import heapq
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Set, Iterator
 from pydantic import BaseModel, Field
+
+# OpenAI Agents SDK imports
+from agents.tracing import custom_span, trace as agents_trace
 
 from .models import Procedure
 
@@ -25,31 +28,33 @@ class TemporalNode(BaseModel):
     
     def is_valid(self, execution_history: List[Dict[str, Any]]) -> bool:
         """Check if this node's temporal constraints are valid"""
-        for constraint in self.temporal_constraints:
-            constraint_type = constraint.get("type")
+        with custom_span("temporal_node_validation", 
+                      {"node_id": self.id, "constraints_count": len(self.temporal_constraints)}):
+            for constraint in self.temporal_constraints:
+                constraint_type = constraint.get("type")
+                
+                if constraint_type == "after":
+                    # Must occur after another action
+                    ref_action = constraint.get("action")
+                    if not any(h["action"] == ref_action for h in execution_history):
+                        return False
+                elif constraint_type == "before":
+                    # Must occur before another action
+                    ref_action = constraint.get("action")
+                    if any(h["action"] == ref_action for h in execution_history):
+                        return False
+                elif constraint_type == "delay":
+                    # Must wait minimum time from last action
+                    if execution_history:
+                        last_time = execution_history[-1].get("timestamp")
+                        min_delay = constraint.get("min_delay", 0)
+                        if last_time:
+                            last_time = datetime.datetime.fromisoformat(last_time)
+                            elapsed = (datetime.datetime.now() - last_time).total_seconds()
+                            if elapsed < min_delay:
+                                return False
             
-            if constraint_type == "after":
-                # Must occur after another action
-                ref_action = constraint.get("action")
-                if not any(h["action"] == ref_action for h in execution_history):
-                    return False
-            elif constraint_type == "before":
-                # Must occur before another action
-                ref_action = constraint.get("action")
-                if any(h["action"] == ref_action for h in execution_history):
-                    return False
-            elif constraint_type == "delay":
-                # Must wait minimum time from last action
-                if execution_history:
-                    last_time = execution_history[-1].get("timestamp")
-                    min_delay = constraint.get("min_delay", 0)
-                    if last_time:
-                        last_time = datetime.datetime.fromisoformat(last_time)
-                        elapsed = (datetime.datetime.now() - last_time).total_seconds()
-                        if elapsed < min_delay:
-                            return False
-        
-        return True
+            return True
 
     def estimate_memory_usage(self) -> int:
         """Estimate memory usage of this node in bytes"""
@@ -144,89 +149,145 @@ class TemporalProcedureGraph(BaseModel):
     domain: str
     created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    _graph_lock = threading.RLock()  # Class level lock for thread safety
+    _graph_lock = None  # Will be initialized in __post_init__
     
-    def add_node(self, node: TemporalNode) -> None:
+    def __post_init__(self):
+        """Initialize asyncio lock"""
+        self._graph_lock = asyncio.Lock()
+    
+    async def add_node(self, node: TemporalNode) -> None:
         """Add a node to the graph (thread-safe)"""
-        with self._graph_lock:
+        async with self._graph_lock:
             self.nodes[node.id] = node
             self.last_updated = datetime.datetime.now().isoformat()
-
-def add_node(self, node: TemporalNode) -> None:
-    """Add a node to the graph (thread-safe)"""
-    with self._graph_lock:
-        self.nodes[node.id] = node
-        self.last_updated = datetime.datetime.now().isoformat()
-
-def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
-    """Add an edge between nodes (thread-safe)"""
-    with self._graph_lock:
-        if from_id in self.nodes and to_id in self.nodes:
-            self.edges.append((from_id, to_id, properties or {}))
+    
+    async def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
+        """Add an edge between nodes (thread-safe)"""
+        async with self._graph_lock:
+            if from_id in self.nodes and to_id in self.nodes:
+                self.edges.append((from_id, to_id, properties or {}))
+                
+                # Update node connections
+                self.nodes[from_id].next_nodes.append(to_id)
+                self.nodes[to_id].prev_nodes.append(from_id)
+                
+                self.last_updated = datetime.datetime.now().isoformat()
+    
+    def validate_temporal_constraints(self) -> bool:
+        """Validate that temporal constraints are consistent"""
+        with custom_span("validate_temporal_constraints", {"graph_id": self.id}):
+            # Check for cycles with minimum durations
+            visited = set()
+            path = set()
             
-            # Update node connections
-            self.nodes[from_id].next_nodes.append(to_id)
-            self.nodes[to_id].prev_nodes.append(from_id)
+            # Check each start node
+            for start in self.start_nodes:
+                if not self._check_for_negative_cycles(start, visited, path, 0):
+                    return False
             
-            self.last_updated = datetime.datetime.now().isoformat()
-
-def validate_temporal_constraints(self) -> Tuple[bool, Optional[str]]:
-    """
-    Validate that temporal constraints are consistent
+            return True
     
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    # Check for cycles with minimum durations
-    visited = set()
-    path = set()
+    def _check_for_negative_cycles(self, 
+                                node_id: str, 
+                                visited: Set[str], 
+                                path: Set[str], 
+                                current_duration: float) -> bool:
+        """Check for negative cycles in the graph (would make it impossible to satisfy)"""
+        if node_id in path:
+            # Found a cycle, check if the total duration is negative
+            return current_duration >= 0
+        
+        if node_id in visited:
+            return True
+        
+        visited.add(node_id)
+        path.add(node_id)
+        
+        # Check outgoing edges
+        for source, target, props in self.edges:
+            if source == node_id:
+                # Get edge duration
+                min_duration = props.get("min_duration", 0)
+                
+                # Recurse
+                if not self._check_for_negative_cycles(target, visited, path, 
+                                                    current_duration + min_duration):
+                    return False
+        
+        path.remove(node_id)
+        return True
     
-    # Check each start node
-    for start in self.start_nodes:
-        result, error_message = self._check_for_negative_cycles(start, visited, path, 0)
-        if not result:
-            return False, error_message
-    
-    return True, None
-
-def _check_for_negative_cycles(self, 
-                             node_id: str, 
-                             visited: Set[str], 
-                             path: Set[str], 
-                             current_duration: float) -> Tuple[bool, Optional[str]]:
-    """
-    Check for negative cycles in the graph (would make it impossible to satisfy)
-    
-    Returns:
-        Tuple of (no_negative_cycles, error_message)
-    """
-    if node_id in path:
-        # Found a cycle, check if the total duration is negative
-        if current_duration < 0:
-            return False, f"Negative cycle detected with duration {current_duration}"
-        return True, None
-    
-    if node_id in visited:
-        return True, None
-    
-    visited.add(node_id)
-    path.add(node_id)
-    
-    # Check outgoing edges
-    for source, target, props in self.edges:
-        if source == node_id:
-            # Get edge duration
-            min_duration = props.get("min_duration", 0)
+    def get_next_executable_nodes(self, execution_history: List[Dict[str, Any]]) -> List[str]:
+        """Get nodes that can be executed next based on history"""
+        with custom_span("get_next_executable_nodes", 
+                      {"history_length": len(execution_history)}):
+            # Start with nodes that have no predecessors if no history
+            if not execution_history:
+                return self.start_nodes
             
-            # Recurse
-            result, error_message = self._check_for_negative_cycles(
-                target, visited, path, current_duration + min_duration
+            # Get last executed node
+            last_action = execution_history[-1].get("node_id")
+            if not last_action or last_action not in self.nodes:
+                # Can't determine next actions
+                return []
+            
+            # Get possible next nodes
+            next_nodes = self.nodes[last_action].next_nodes
+            
+            # Filter by temporal constraints
+            valid_nodes = []
+            for node_id in next_nodes:
+                if node_id in self.nodes and self.nodes[node_id].is_valid(execution_history):
+                    valid_nodes.append(node_id)
+            
+            return valid_nodes
+    
+    @classmethod
+    def from_procedure(cls, procedure: Procedure) -> 'TemporalProcedureGraph':
+        """Convert a standard procedure to a temporal procedure graph"""
+        with custom_span("create_temporal_graph_from_procedure", 
+                      {"procedure_id": procedure.id}):
+            graph = cls(
+                id=f"temporal_{procedure.id}",
+                name=f"Temporal graph for {procedure.name}",
+                domain=procedure.domain
             )
-            if not result:
-                return False, error_message
-    
-    path.remove(node_id)
-    return True, None
+            
+            # Create nodes for each step
+            for i, step in enumerate(procedure.steps):
+                node = TemporalNode(
+                    id=f"node_{step['id']}",
+                    action={
+                        "function": step["function"],
+                        "parameters": step.get("parameters", {}),
+                        "description": step.get("description", f"Step {i+1}"),
+                        "step_id": step["id"]
+                    }
+                )
+                
+                graph.nodes[node.id] = node
+                
+                # First step is a start node
+                if i == 0:
+                    graph.start_nodes.append(node.id)
+                
+                # Last step is an end node
+                if i == len(procedure.steps) - 1:
+                    graph.end_nodes.append(node.id)
+            
+            # Create edges for sequential execution
+            for i in range(len(procedure.steps) - 1):
+                current_id = f"node_{procedure.steps[i]['id']}"
+                next_id = f"node_{procedure.steps[i+1]['id']}"
+                
+                graph.edges.append((current_id, next_id, {}))
+                
+                # Update node connections
+                graph.nodes[current_id].next_nodes.append(next_id)
+                graph.nodes[next_id].prev_nodes.append(current_id)
+            
+            return graph
+
 
     def estimate_memory_usage(self) -> int:
         """Estimate memory usage of this graph in bytes"""
@@ -623,20 +684,25 @@ class ProcedureGraph(BaseModel):
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     entry_points: List[str] = Field(default_factory=list)
     exit_points: List[str] = Field(default_factory=list)
-    _procedure_graph_lock = threading.RLock()  # Class level lock for thread safety
+    _graph_lock = None  # Will be initialized in __post_init__
     
-    def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
+    def __post_init__(self):
+        """Initialize asyncio lock"""
+        self._graph_lock = asyncio.Lock()
+    
+    async def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
         """Add a node to the graph (thread-safe)"""
-        with self._procedure_graph_lock:
+        async with self._graph_lock:
             self.nodes[node_id] = data
     
-    def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
-        """Add an edge to the graph"""
-        self.edges.append({
-            "from": from_id,
-            "to": to_id,
-            "properties": properties or {}
-        })
+    async def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
+        """Add an edge to the graph (thread-safe)"""
+        async with self._graph_lock:
+            self.edges.append({
+                "from": from_id,
+                "to": to_id,
+                "properties": properties or {}
+            })
     
     def find_execution_path(
         self, 
@@ -644,111 +710,114 @@ class ProcedureGraph(BaseModel):
         goal: Dict[str, Any]
     ) -> List[str]:
         """Find execution path through the graph given context and goal"""
+        with custom_span("find_execution_path", 
+                      {"entry_points": len(self.entry_points), 
+                       "exit_points": len(self.exit_points)}):
+            if not self.entry_points:
+                return []
+            
+            # Find all paths from entry to exit points
+            all_paths = []
+            
+            for entry in self.entry_points:
+                for exit_point in self.exit_points:
+                    paths = self._find_all_paths(entry, exit_point)
+                    all_paths.extend(paths)
+            
+            if not all_paths:
+                return []
+            
+            # Score each path based on context and goal
+            scored_paths = []
+            
+            for path in all_paths:
+                score = self._score_path(path, context, goal)
+                scored_paths.append((path, score))
+            
+            # Return highest scoring path
+            best_path, _ = max(scored_paths, key=lambda x: x[1])
+            return best_path
+
+    _procedure_graph_lock = threading.RLock()  # Class level lock for thread safety
+
+    def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
+        """Add a node to the graph (thread-safe)"""
+        with self._procedure_graph_lock:
+            self.nodes[node_id] = data
+    
+    def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
+        """Add an edge to the graph (thread-safe)"""
+        with self._procedure_graph_lock:
+            self.edges.append({
+                "from": from_id,
+                "to": to_id,
+                "properties": properties or {}
+            })
+    
+    def find_execution_path(
+        self, 
+        context: Dict[str, Any],
+        goal: Dict[str, Any]
+    ) -> List[str]:
+        """
+        Find execution path through the graph given context and goal
+        Optimized version with caching
+        """
+        # Generate cache key
+        context_key = frozenset((k, str(v)) for k, v in context.items() if not isinstance(v, (dict, list, set)))
+        goal_key = frozenset((k, str(v)) for k, v in goal.items())
+        cache_key = (context_key, goal_key)
+        
+        # Check cache using function-level attribute
+        if not hasattr(self.find_execution_path, "cache"):
+            self.find_execution_path.cache = {}
+        
+        if cache_key in self.find_execution_path.cache:
+            cached_result, timestamp = self.find_execution_path.cache[cache_key]
+            # Cache results for 5 minutes
+            if (datetime.datetime.now() - timestamp).total_seconds() < 300:
+                return cached_result
+        
+        # Find paths as before
         if not self.entry_points:
             return []
         
-        # Find all paths from entry to exit points
         all_paths = []
         
+        # Use optimized path finding for better performance
         for entry in self.entry_points:
             for exit_point in self.exit_points:
-                paths = self._find_all_paths(entry, exit_point)
+                paths = self._find_paths_optimized(entry, exit_point)
                 all_paths.extend(paths)
         
         if not all_paths:
+            # Cache empty result
+            self.find_execution_path.cache[cache_key] = ([], datetime.datetime.now())
             return []
         
-        # Score each path based on context and goal
+        # Score paths in parallel
         scored_paths = []
         
+        # Score each path (sequential for now)
         for path in all_paths:
             score = self._score_path(path, context, goal)
             scored_paths.append((path, score))
         
         # Return highest scoring path
         best_path, _ = max(scored_paths, key=lambda x: x[1])
+        
+        # Cache result with timestamp
+        self.find_execution_path.cache[cache_key] = (best_path, datetime.datetime.now())
+        
+        # Clean cache if too large (keep only most recent 50 entries)
+        if len(self.find_execution_path.cache) > 50:
+            # Sort by timestamp
+            sorted_cache = sorted(self.find_execution_path.cache.items(), 
+                                key=lambda x: x[1][1], reverse=True)
+            # Keep only the most recent 50
+            self.find_execution_path.cache = dict(sorted_cache[:50])
+        
         return best_path
-
-_procedure_graph_lock = threading.RLock()  # Class level lock for thread safety
-
-def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
-    """Add a node to the graph (thread-safe)"""
-    with self._procedure_graph_lock:
-        self.nodes[node_id] = data
-
-def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
-    """Add an edge to the graph (thread-safe)"""
-    with self._procedure_graph_lock:
-        self.edges.append({
-            "from": from_id,
-            "to": to_id,
-            "properties": properties or {}
-        })
-
-def find_execution_path(
-    self, 
-    context: Dict[str, Any],
-    goal: Dict[str, Any]
-) -> List[str]:
-    """
-    Find execution path through the graph given context and goal
-    Optimized version with caching
-    """
-    # Generate cache key
-    context_key = frozenset((k, str(v)) for k, v in context.items() if not isinstance(v, (dict, list, set)))
-    goal_key = frozenset((k, str(v)) for k, v in goal.items())
-    cache_key = (context_key, goal_key)
-    
-    # Check cache using function-level attribute
-    if not hasattr(self.find_execution_path, "cache"):
-        self.find_execution_path.cache = {}
-    
-    if cache_key in self.find_execution_path.cache:
-        cached_result, timestamp = self.find_execution_path.cache[cache_key]
-        # Cache results for 5 minutes
-        if (datetime.datetime.now() - timestamp).total_seconds() < 300:
-            return cached_result
-    
-    # Find paths as before
-    if not self.entry_points:
-        return []
-    
-    all_paths = []
-    
-    # Use optimized path finding for better performance
-    for entry in self.entry_points:
-        for exit_point in self.exit_points:
-            paths = self._find_paths_optimized(entry, exit_point)
-            all_paths.extend(paths)
-    
-    if not all_paths:
-        # Cache empty result
-        self.find_execution_path.cache[cache_key] = ([], datetime.datetime.now())
-        return []
-    
-    # Score paths in parallel
-    scored_paths = []
-    
-    # Score each path (sequential for now)
-    for path in all_paths:
-        score = self._score_path(path, context, goal)
-        scored_paths.append((path, score))
-    
-    # Return highest scoring path
-    best_path, _ = max(scored_paths, key=lambda x: x[1])
-    
-    # Cache result with timestamp
-    self.find_execution_path.cache[cache_key] = (best_path, datetime.datetime.now())
-    
-    # Clean cache if too large (keep only most recent 50 entries)
-    if len(self.find_execution_path.cache) > 50:
-        # Sort by timestamp
-        sorted_cache = sorted(self.find_execution_path.cache.items(), 
-                            key=lambda x: x[1][1], reverse=True)
-        # Keep only the most recent 50
-        self.find_execution_path.cache = dict(sorted_cache[:50])
-    
-    return best_path
     
     def _find_paths_optimized(self, start: str, end: str, max_paths: int = 5) -> List[List[str]]:
         """
@@ -952,39 +1021,44 @@ def find_execution_path(
     @classmethod
     def from_procedure(cls, procedure: Procedure) -> 'ProcedureGraph':
         """Convert a standard procedure to a graph representation"""
-        graph = cls()
-        
-        # Create nodes for each step
-        for i, step in enumerate(procedure.steps):
-            node_id = f"node_{step['id']}"
+        with custom_span("create_procedure_graph", {"procedure_id": procedure.id}):
+            graph = cls()
             
-            # Extract preconditions and postconditions
-            preconditions = step.get("preconditions", {})
-            postconditions = step.get("postconditions", {})
+            # Create nodes for each step
+            for i, step in enumerate(procedure.steps):
+                node_id = f"node_{step['id']}"
+                
+                # Extract preconditions and postconditions
+                preconditions = step.get("preconditions", {})
+                postconditions = step.get("postconditions", {})
+                
+                # Create node
+                graph.nodes[node_id] = {
+                    "step_id": step["id"],
+                    "function": step["function"],
+                    "parameters": step.get("parameters", {}),
+                    "description": step.get("description", f"Step {i+1}"),
+                    "preconditions": preconditions,
+                    "postconditions": postconditions
+                }
+                
+                # First step is an entry point
+                if i == 0:
+                    graph.entry_points.append(node_id)
+                
+                # Last step is an exit point
+                if i == len(procedure.steps) - 1:
+                    graph.exit_points.append(node_id)
             
-            # Create node
-            graph.add_node(node_id, {
-                "step_id": step["id"],
-                "function": step["function"],
-                "parameters": step.get("parameters", {}),
-                "description": step.get("description", f"Step {i+1}"),
-                "preconditions": preconditions,
-                "postconditions": postconditions
-            })
+            # Create edges for sequential execution
+            for i in range(len(procedure.steps) - 1):
+                from_id = f"node_{procedure.steps[i]['id']}"
+                to_id = f"node_{procedure.steps[i+1]['id']}"
+                
+                graph.edges.append({
+                    "from": from_id,
+                    "to": to_id,
+                    "properties": {}
+                })
             
-            # First step is an entry point
-            if i == 0:
-                graph.entry_points.append(node_id)
-            
-            # Last step is an exit point
-            if i == len(procedure.steps) - 1:
-                graph.exit_points.append(node_id)
-        
-        # Create edges for sequential execution
-        for i in range(len(procedure.steps) - 1):
-            from_id = f"node_{procedure.steps[i]['id']}"
-            to_id = f"node_{procedure.steps[i+1]['id']}"
-            
-            graph.add_edge(from_id, to_id)
-        
-        return graph
+            return graph
