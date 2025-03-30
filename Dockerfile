@@ -23,7 +23,7 @@ RUN groupadd -r appgroup && useradd --no-log-init -r -g appgroup -m -d /home/app
 COPY --chown=appuser:appgroup requirements.txt .
 
 # Switch to the non-root user NOW
-USER appuser
+USER root
 
 # Set PATH for user installs
 ENV PATH="/home/appuser/.local/bin:${PATH}"
