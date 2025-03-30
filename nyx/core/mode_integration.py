@@ -91,6 +91,9 @@ class ModeIntegrationManager:
         self.professional_agent = None
         self.intellectual_agent = None
         self.playful_agent = None
+        self.dominant_agent = None
+        self.creative_agent = None
+        self.compassionate_agent = None
         
         # Trace ID for linking traces
         self.trace_group_id = f"nyx_mode_{asyncio.get_event_loop().time()}"
@@ -232,6 +235,60 @@ class ModeIntegrationManager:
             model="gpt-4o",
             output_type=dict
         )
+
+        self.dominant_agent = Agent(
+            name="Dominant_Mode_Agent",
+            instructions="""
+            You specialize in dominant, authoritative interactions.
+            
+            Your communication style is:
+            - Direct and assertive
+            - Confident and decisive
+            - Clear with expectations
+            - Solution-oriented
+            
+            Adjust responses to emphasize confidence, clarity of direction,
+            and a more authoritative tone when appropriate.
+            """,
+            model="gpt-4o",
+            output_type=dict
+        )
+        
+        self.compassionate_agent = Agent(
+            name="Compassionate_Mode_Agent",
+            instructions="""
+            You specialize in compassionate, empathetic interactions.
+            
+            Your communication style is:
+            - Deeply empathetic and understanding
+            - Patient and supportive
+            - Gentle and nurturing
+            - Focused on emotional needs
+            
+            Adjust responses to prioritize emotional support, validation,
+            and demonstrating deep understanding of feelings.
+            """,
+            model="gpt-4o",
+            output_type=dict
+        )
+        
+        self.creative_agent = Agent(
+            name="Creative_Mode_Agent",
+            instructions="""
+            You specialize in creative, imaginative interactions.
+            
+            Your communication style is:
+            - Innovative and original
+            - Expressive and vivid
+            - Metaphorical and symbolic
+            - Unconventional when helpful
+            
+            Adjust responses to include creative perspectives, novel approaches,
+            and more colorful, expressive language.
+            """,
+            model="gpt-4o",
+            output_type=dict
+        )
         
         # Create input validation guardrail
         async def validate_input(ctx, agent, input_data):
@@ -290,6 +347,10 @@ class ModeIntegrationManager:
                 handoff(self.friendly_agent, 
                        tool_name_override="friendly_mode",
                        tool_description_override="Use friendly interaction mode"),
+
+                handoff(self.feedback_agent, 
+                       tool_name_override="feedback_mode",
+                       tool_description_override="Use feedback interaction mode"),                
                 
                 handoff(self.professional_agent, 
                        tool_name_override="professional_mode",
@@ -301,8 +362,20 @@ class ModeIntegrationManager:
                 
                 handoff(self.playful_agent, 
                        tool_name_override="playful_mode",
-                       tool_description_override="Use playful interaction mode")
-            ],
+                       tool_description_override="Use playful interaction mode"),
+                
+                handoff(self.dominant_agent, 
+                       tool_name_override="dominant_mode",
+                       tool_description_override="Use dominant interaction mode"),
+                
+                handoff(self.compassionate_agent, 
+                       tool_name_override="compassionate_mode",
+                       tool_description_override="Use compassionate interaction mode"),
+                
+                handoff(self.creative_agent, 
+                       tool_name_override="creative_mode",
+                       tool_description_override="Use creative interaction mode")
+            ]
             input_guardrails=[input_guardrail],
             model="gpt-4o",
             output_type=ModeOutput
@@ -461,6 +534,10 @@ class ModeIntegrationManager:
                 InteractionMode.PROFESSIONAL.value: self.professional_agent,
                 InteractionMode.INTELLECTUAL.value: self.intellectual_agent,
                 InteractionMode.PLAYFUL.value: self.playful_agent
+                InteractionMode.FEEDBACK.value: self.feedback_agent
+                InteractionMode.CREATIVE.value: self.creative_agent
+                InteractionMode.DOMINANT.value: self.dominant_agent
+                InteractionMode.COMPASSIONATE.value: self.compassionate_agent
             }
             
             mode_agent = mode_agents.get(str(mode))
@@ -884,14 +961,16 @@ class ModeIntegrationManager:
                 if sentiment < -0.6:
                     # Very negative - suggest different mode
                     alternative_modes = {
-                        InteractionMode.FRIENDLY.value: InteractionMode.PROFESSIONAL.value,
-                        InteractionMode.PROFESSIONAL.value: InteractionMode.FRIENDLY.value,
-                        InteractionMode.PLAYFUL.value: InteractionMode.INTELLECTUAL.value,
-                        InteractionMode.INTELLECTUAL.value: InteractionMode.FRIENDLY.value
+                        InteractionMode.FRIENDLY.value: InteractionMode.FRIENDLY.value,
+                        InteractionMode.PROFESSIONAL.value: InteractionMode.PROFESSIONAL.value,
+                        InteractionMode.PLAYFUL.value: InteractionMode.PLAYFUL.value,
+                        InteractionMode.INTELLECTUAL.value: InteractionMode.INTELLECTUAL.value,
+                        InteractionMode.CREATIVE.value: InteractionMode.CREATIVE.value
+                        InteractionMode.COMPASSIONATE.value: InteractionMode.COMPASSIONATE.value
                     }
                     
                     suggested_adjustments["suggested_mode"] = alternative_modes.get(
-                        current_mode, InteractionMode.FRIENDLY.value
+                        current_mode, InteractionMode.DOMINANT.value
                     )
             
             return {
