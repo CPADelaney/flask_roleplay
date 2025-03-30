@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 from collections import defaultdict
 
-from agents import Agent, Runner, function_tool, RunContextWrapper, trace
+from agents import Agent, Runner, function_tool, RunContextWrapper, trace, ModelSettings, handoff, InputGuardrail
 
 class AttentionalFocus(BaseModel):
     """Schema for current attentional focus"""
@@ -40,7 +40,19 @@ class AttentionDecisionOutput(BaseModel):
     inhibit_targets: List[Dict[str, Any]] = Field(..., description="Targets to inhibit attention from")
     reasoning: str = Field(..., description="Reasoning for attention decisions")
     resources_allocated: float = Field(..., description="Percentage of attentional resources allocated")
-    
+
+class InvalidInputGuardrailOutput(BaseModel):
+    """Output schema for input validation"""
+    is_valid: bool = Field(..., description="Whether the input is valid")
+    reason: str = Field(..., description="Reason for invalid input")
+
+# Define an AttentionContext for strong typing
+class AttentionContext:
+    """Context for the attention controller system"""
+    def __init__(self, emotional_core=None):
+        self.emotional_core = emotional_core
+        self.trace_id = f"attention_{time.time()}"
+
 class AttentionalController:
     """
     Controls attention across all system components by determining
@@ -78,15 +90,31 @@ class AttentionalController:
         
         self.logger = logging.getLogger(__name__)
         
-        # Initialize the attention agent
-        self.attention_agent = self._create_attention_agent()
+        # Create shared context for the agents
+        self.attention_context = AttentionContext(emotional_core=emotional_core)
+        
+        # Initialize agent system
+        self._initialize_agents()
         
         # Trace ID for linking traces
         self.trace_group_id = f"attention_{time.time()}"
     
-    def _create_attention_agent(self) -> Agent:
+    def _initialize_agents(self):
+        """Initialize all agents needed for the attention system"""
+        # Create main attention allocation agent
+        self.attention_agent = self._create_attention_agent()
+        
+        # Create specialized agents for different attention functions
+        self.saliency_agent = self._create_saliency_agent()
+        self.focus_agent = self._create_focus_agent()
+        self.inhibition_agent = self._create_inhibition_agent()
+        
+        # Create input validation guardrail
+        self.input_validation = self._create_input_validation()
+    
+    def _create_attention_agent(self) -> Agent[AttentionContext]:
         """Create agent for attention allocation decisions"""
-        return Agent(
+        return Agent[AttentionContext](
             name="Attention_Allocator",
             instructions="""
             You are the attention allocation system for Nyx.
@@ -118,12 +146,123 @@ class AttentionalController:
                 function_tool(self._recover_attentional_resources),
                 function_tool(self._get_current_attentional_state)
             ],
-            output_type=AttentionDecisionOutput
+            handoffs=[
+                handoff(self.saliency_agent),
+                handoff(self.focus_agent),
+                handoff(self.inhibition_agent)
+            ],
+            output_type=AttentionDecisionOutput,
+            input_guardrails=[
+                InputGuardrail(guardrail_function=self.input_validation)
+            ],
+            model="gpt-4o",
+            model_settings=ModelSettings(
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
         )
     
+    def _create_saliency_agent(self) -> Agent[AttentionContext]:
+        """Create specialized agent for calculating saliency"""
+        return Agent[AttentionContext](
+            name="Saliency_Calculator",
+            instructions="""
+            You are specialized in calculating the saliency (attention-worthiness) of items.
+            Consider:
+            - Novelty: How new or unexpected is this stimulus?
+            - Intensity: How strong is the signal?
+            - Emotional relevance: How emotionally significant is this stimulus?
+            - Goal relevance: How relevant is this to current goals or tasks?
+            
+            Calculate a saliency score between 0.0 (not salient) and 1.0 (extremely salient).
+            """,
+            tools=[
+                function_tool(self._calculate_emotional_impact),
+                function_tool(self._calculate_goal_relevance)
+            ],
+            model="gpt-4o-mini"
+        )
+    
+    def _create_focus_agent(self) -> Agent[AttentionContext]:
+        """Create specialized agent for focus management"""
+        return Agent[AttentionContext](
+            name="Focus_Manager",
+            instructions="""
+            You are specialized in managing attentional focus.
+            Your job is to:
+            - Decide which items deserve focus
+            - Determine the appropriate strength of attention
+            - Set duration of attentional focus
+            - Ensure resources are allocated efficiently
+            
+            Prioritize focus based on saliency, goals, and available resources.
+            """,
+            tools=[
+                function_tool(self._focus_attention),
+                function_tool(self._maintain_attention)
+            ],
+            model="gpt-4o-mini"
+        )
+    
+    def _create_inhibition_agent(self) -> Agent[AttentionContext]:
+        """Create specialized agent for inhibition management"""
+        return Agent[AttentionContext](
+            name="Inhibition_Manager",
+            instructions="""
+            You are specialized in managing attentional inhibition.
+            Your job is to:
+            - Identify targets that should be inhibited from attention
+            - Determine inhibition duration
+            - Release inhibition when appropriate
+            
+            Inhibit targets that are distracting, irrelevant, or have been processed sufficiently.
+            """,
+            tools=[
+                function_tool(self._inhibit_attention)
+            ],
+            model="gpt-4o-mini"
+        )
+    
+    async def _input_validation(self, 
+                              ctx: RunContextWrapper[AttentionContext], 
+                              agent: Agent[AttentionContext], 
+                              input_data: str | List[Any]) -> dict:
+        """Validate input for the attention system"""
+        try:
+            # Parse the input
+            if isinstance(input_data, str):
+                data = json.loads(input_data)
+            else:
+                data = input_data
+                
+            # Check for required fields
+            if "salient_items" not in data:
+                return {
+                    "is_valid": False,
+                    "reason": "Input must contain 'salient_items' field"
+                }
+                
+            # Check that salient_items is a list
+            if not isinstance(data["salient_items"], list):
+                return {
+                    "is_valid": False,
+                    "reason": "salient_items must be a list"
+                }
+                
+            # Input is valid
+            return {
+                "is_valid": True,
+                "reason": ""
+            }
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "reason": f"Invalid input: {str(e)}"
+            }
+    
     async def update_attention(self, 
-                              salient_items: List[Dict[str, Any]] = None,
-                              control_signals: List[AttentionalControl] = None) -> List[AttentionalFocus]:
+                             salient_items: List[Dict[str, Any]] = None,
+                             control_signals: List[AttentionalControl] = None) -> List[AttentionalFocus]:
         """
         Update attentional focus based on salient items and control signals
         
@@ -136,7 +275,7 @@ class AttentionalController:
         """
         with trace(workflow_name="Attention_Update", group_id=self.trace_group_id):
             # 1. Update attentional resources
-            await self._recover_attentional_resources(RunContextWrapper(context=None))
+            await self._recover_attentional_resources(RunContextWrapper(context=self.attention_context))
             
             # 2. Process any control signals (top-down attention)
             # This is mandatory processing, so we handle these before agent decisions
@@ -147,11 +286,25 @@ class AttentionalController:
             # 3. Add any pending control requests
             for request in self.control_requests:
                 if request.action == "focus":
-                    await self._focus_attention(RunContextWrapper(context=None), request.target, request.priority, request.duration_ms, request.source)
+                    await self._focus_attention(
+                        RunContextWrapper(context=self.attention_context), 
+                        request.target, 
+                        request.priority, 
+                        request.duration_ms, 
+                        request.source
+                    )
                 elif request.action == "inhibit":
-                    await self._inhibit_attention(RunContextWrapper(context=None), request.target, request.duration_ms)
+                    await self._inhibit_attention(
+                        RunContextWrapper(context=self.attention_context), 
+                        request.target, 
+                        request.duration_ms
+                    )
                 elif request.action == "maintain":
-                    await self._maintain_attention(RunContextWrapper(context=None), request.target, request.duration_ms)
+                    await self._maintain_attention(
+                        RunContextWrapper(context=self.attention_context), 
+                        request.target, 
+                        request.duration_ms
+                    )
             
             # Clear processed requests
             self.control_requests = []
@@ -159,17 +312,20 @@ class AttentionalController:
             # 4. Run the attention agent to process salient items and make decisions
             if salient_items:
                 # Get current attentional state for agent context
-                current_state = await self._get_current_attentional_state(RunContextWrapper(context=None))
+                current_state = await self._get_current_attentional_state(
+                    RunContextWrapper(context=self.attention_context)
+                )
                 
                 # Run the agent to make attention decisions
                 result = await Runner.run(
                     self.attention_agent,
-                    json.dumps({
+                    {
                         "salient_items": salient_items,
                         "current_state": current_state,
                         "available_resources": self.attentional_resources,
                         "max_foci": self.max_foci
-                    })
+                    },
+                    context=self.attention_context
                 )
                 
                 # Process agent decisions
@@ -178,7 +334,7 @@ class AttentionalController:
                 # Apply focus decisions
                 for focus_target in decisions.focus_targets:
                     await self._focus_attention(
-                        RunContextWrapper(context=None),
+                        RunContextWrapper(context=self.attention_context),
                         focus_target["target"],
                         focus_target.get("strength", 0.7),
                         focus_target.get("duration_ms", 2000),
@@ -188,7 +344,7 @@ class AttentionalController:
                 # Apply inhibit decisions
                 for inhibit_target in decisions.inhibit_targets:
                     await self._inhibit_attention(
-                        RunContextWrapper(context=None),
+                        RunContextWrapper(context=self.attention_context),
                         inhibit_target["target"],
                         inhibit_target.get("duration_ms", 5000)
                     )
@@ -205,7 +361,7 @@ class AttentionalController:
             return self.current_foci
     
     @function_tool
-    async def _recover_attentional_resources(self, ctx: RunContextWrapper):
+    async def _recover_attentional_resources(self, ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
         """
         Recover attentional resources over time
         
@@ -221,7 +377,7 @@ class AttentionalController:
             
             # Update resources (capped at max capacity)
             self.attentional_resources = min(self.total_attentional_capacity, 
-                                           self.attentional_resources + recovery_amount)
+                                          self.attentional_resources + recovery_amount)
             
             # Update last recovery time
             self.last_recovery_time = current_time
@@ -232,7 +388,7 @@ class AttentionalController:
             "recovery_rate": self.resource_recovery_rate
         }
     
-    async def _process_control_signal(self, signal: AttentionalControl):
+    async def _process_control_signal(self, signal: AttentionalControl) -> bool:
         """Process an attentional control signal"""
         # Add to request queue
         self.control_requests.append(signal)
@@ -240,11 +396,11 @@ class AttentionalController:
     
     @function_tool
     async def _focus_attention(self, 
-                             ctx: RunContextWrapper,
-                             target: str, 
-                             strength: float, 
-                             duration_ms: int,
-                             source: str):
+                            ctx: RunContextWrapper[AttentionContext],
+                            target: str, 
+                            strength: float, 
+                            duration_ms: int,
+                            source: str) -> Dict[str, Any]:
         """
         Focus attention on a specific target
         
@@ -285,7 +441,7 @@ class AttentionalController:
                     strength=strength,
                     duration_ms=duration_ms,
                     source=source,
-                    timestamp=time.time()
+                    timestamp=str(time.time())
                 )
                 
                 # Add to current foci
@@ -318,7 +474,7 @@ class AttentionalController:
                 strength=strength,
                 duration_ms=duration_ms,
                 source=source,
-                timestamp=time.time()
+                timestamp=str(time.time())
             )
             
             # Add to current foci
@@ -336,7 +492,10 @@ class AttentionalController:
             }
     
     @function_tool
-    async def _inhibit_attention(self, ctx: RunContextWrapper, target: str, duration_ms: int):
+    async def _inhibit_attention(self, 
+                              ctx: RunContextWrapper[AttentionContext], 
+                              target: str, 
+                              duration_ms: int) -> Dict[str, Any]:
         """
         Inhibit attention to a specific target for a duration
         
@@ -366,7 +525,10 @@ class AttentionalController:
         }
     
     @function_tool
-    async def _maintain_attention(self, ctx: RunContextWrapper, target: str, duration_ms: int):
+    async def _maintain_attention(self, 
+                               ctx: RunContextWrapper[AttentionContext], 
+                               target: str, 
+                               duration_ms: int) -> Dict[str, Any]:
         """
         Maintain attention on a currently focused target
         
@@ -428,7 +590,9 @@ class AttentionalController:
             del self.inhibited_targets[target]
     
     @function_tool
-    async def _calculate_saliency(self, ctx: RunContextWrapper, item: Dict[str, Any]) -> float:
+    async def _calculate_saliency(self, 
+                               ctx: RunContextWrapper[AttentionContext], 
+                               item: Dict[str, Any]) -> float:
         """
         Calculate saliency score for an item
         
@@ -459,10 +623,10 @@ class AttentionalController:
         )
         
         # Check emotional core for additional affective influence
-        if self.emotional_core:
+        if ctx.context.emotional_core:
             try:
-                emotional_state = self.emotional_core.get_emotional_state()
-                arousal = self.emotional_core.get_emotional_arousal()
+                emotional_state = ctx.context.emotional_core.get_emotional_state()
+                arousal = ctx.context.emotional_core.get_emotional_arousal()
                 
                 # High arousal amplifies saliency
                 if arousal > 0.6:
@@ -471,7 +635,7 @@ class AttentionalController:
                     saliency *= 0.8
                     
                 # Check valence influence if strong emotion is present
-                strongest_emotion, strength = self.emotional_core.get_dominant_emotion()
+                strongest_emotion, strength = ctx.context.emotional_core.get_dominant_emotion()
                 if strength > 0.6:
                     # Check if emotion matches item
                     if "emotion" in item and item["emotion"] == strongest_emotion:
@@ -481,6 +645,74 @@ class AttentionalController:
         
         # Normalize saliency to 0-1 range
         return max(0.0, min(1.0, saliency))
+    
+    # New helper functions to support specialized agents
+    
+    @function_tool
+    async def _calculate_emotional_impact(self, 
+                                      ctx: RunContextWrapper[AttentionContext], 
+                                      item: Dict[str, Any]) -> float:
+        """
+        Calculate emotional impact of an item
+        
+        Args:
+            item: Item to evaluate
+            
+        Returns:
+            Emotional impact score (0.0-1.0)
+        """
+        # Default emotional impact
+        impact = item.get("emotional_impact", 0.5)
+        
+        # If emotional core is available, do more sophisticated calculation
+        if ctx.context.emotional_core:
+            try:
+                # Get current emotional state
+                emotional_state = ctx.context.emotional_core.get_emotional_state()
+                
+                # Check for emotion matching
+                if "emotion" in item:
+                    item_emotion = item["emotion"]
+                    for emotion, level in emotional_state.items():
+                        if emotion.lower() == item_emotion.lower():
+                            # Boost impact for matching emotions
+                            impact = max(impact, level * 1.2)
+                
+                # Adjust based on overall arousal
+                arousal = ctx.context.emotional_core.get_emotional_arousal()
+                impact *= 0.7 + (arousal * 0.6)  # Scale impact with arousal
+                
+            except Exception as e:
+                self.logger.error(f"Error calculating emotional impact: {e}")
+        
+        # Ensure result is in valid range
+        return max(0.0, min(1.0, impact))
+    
+    @function_tool
+    async def _calculate_goal_relevance(self, 
+                                    ctx: RunContextWrapper[AttentionContext], 
+                                    item: Dict[str, Any]) -> float:
+        """
+        Calculate goal relevance of an item
+        
+        Args:
+            item: Item to evaluate
+            
+        Returns:
+            Goal relevance score (0.0-1.0)
+        """
+        # Default relevance from item
+        relevance = item.get("goal_relevance", 0.5)
+        
+        # If item relates to a current focus, increase relevance
+        target = item.get("target", item.get("id", "unknown"))
+        for focus in self.current_foci:
+            if focus.target == target or target.startswith(focus.target):
+                # Item relates to current focus, increase relevance
+                relevance = max(relevance, focus.strength * 1.1)
+        
+        # Ensure result is in valid range
+        return max(0.0, min(1.0, relevance))
     
     def _update_history(self):
         """Update attentional history with current focus"""
@@ -504,9 +736,9 @@ class AttentionalController:
     
     @function_tool
     async def _calculate_attention_weight(self, 
-                                      ctx: RunContextWrapper,
-                                      item: Any, 
-                                      modality: str = None) -> float:
+                                     ctx: RunContextWrapper[AttentionContext],
+                                     item: Any, 
+                                     modality: str = None) -> float:
         """
         Calculate attention weight for an item based on current attentional focus
         
@@ -563,7 +795,7 @@ class AttentionalController:
         self.attention_biases[target] = new_bias
         
     @function_tool
-    async def _get_current_attentional_state(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_current_attentional_state(self, ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
         """
         Get the current attentional state
         
