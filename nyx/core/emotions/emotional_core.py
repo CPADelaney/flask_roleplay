@@ -389,7 +389,9 @@ class EmotionalCore:
             output_guardrails=[
                 EmotionalGuardrails.validate_emotional_output
             ],
-            output_type=EmotionalResponseOutput
+            output_type=EmotionalResponseOutput,
+            # The handoffs configuration is now separated for clarity
+            handoffs=self._configure_enhanced_handoffs()
         )
         
         # Configure handoffs after all agents are created
@@ -419,6 +421,214 @@ class EmotionalCore:
                 on_handoff=self._on_learning_handoff
             )
         ]
+
+    def _configure_enhanced_handoffs(self):
+        """
+        Configure enhanced handoffs with improved descriptions and input filters
+        
+        Returns:
+            List of configured handoffs
+        """
+        return [
+            handoff(
+                self.agents["neurochemical"], 
+                tool_name_override="process_emotions", 
+                tool_description_override=(
+                    "Process and update digital neurochemicals based on emotional analysis. "
+                    "This specialized agent manages the digital neurochemical system that forms "
+                    "the foundation of all emotional responses. Use when an emotional response "
+                    "requires updating the internal neurochemical state."
+                ),
+                input_type=NeurochemicalRequest,
+                input_filter=self._enhanced_neurochemical_input_filter,
+                on_handoff=self._on_neurochemical_handoff
+            ),
+            handoff(
+                self.agents["reflection"], 
+                tool_name_override="generate_reflection",
+                tool_description_override=(
+                    "Generate deeper emotional reflection and internal thoughts. "
+                    "This specialized agent creates authentic-sounding internal dialogue "
+                    "based on the current emotional state. Use when introspection or "
+                    "emotional processing depth is needed."
+                ),
+                input_type=ReflectionRequest,
+                input_filter=self._enhanced_reflection_input_filter,
+                on_handoff=self._on_reflection_handoff
+            ),
+            handoff(
+                self.agents["learning"],
+                tool_name_override="record_and_learn",
+                tool_description_override=(
+                    "Record interaction patterns and apply learning adaptations. "
+                    "This specialized agent analyzes emotional patterns over time and "
+                    "develops learning rules to adapt emotional responses. Use when "
+                    "the system needs to learn from interactions or adapt future responses."
+                ),
+                input_type=LearningRequest,
+                input_filter=self._enhanced_learning_input_filter,
+                on_handoff=self._on_learning_handoff
+            )
+        ]
+
+    def _enhanced_neurochemical_input_filter(self, handoff_data):
+        """
+        Enhanced handoff input filter for neurochemical agent with improved context preparation
+        
+        Args:
+            handoff_data: The handoff input data
+            
+        Returns:
+            Filtered handoff data
+        """
+        # Start with the base filter from SDK
+        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        
+        # Extract the last user message for deeper analysis
+        last_user_message = None
+        for item in reversed(filtered_data.input_history):
+            if isinstance(item, dict) and item.get("role") == "user":
+                last_user_message = item.get("content", "")
+                break
+        
+        # Add enhanced preprocessing information as context
+        if last_user_message:
+            # Create a system message with rich analysis
+            updated_items = list(filtered_data.pre_handoff_items)
+            updated_items.append({
+                "role": "system",
+                "content": json.dumps({
+                    "preprocessed_analysis": {
+                        "message_length": len(last_user_message),
+                        "dominant_pattern": self._quick_pattern_analysis(last_user_message),
+                        "current_cycle": self.context.cycle_count,
+                        "current_neurochemicals": {
+                            c: round(d["value"], 2) for c, d in self.neurochemicals.items()
+                        },
+                        "recent_chemical_updates": [
+                            update for update in self.context.get_circular_buffer("chemical_updates")[-3:]
+                        ] if self.context.get_circular_buffer("chemical_updates") else []
+                    }
+                })
+            })
+            filtered_data.pre_handoff_items = tuple(updated_items)
+        
+        return filtered_data
+    
+    def _enhanced_reflection_input_filter(self, handoff_data):
+        """
+        Enhanced handoff input filter for reflection agent with richer emotional context
+        
+        Args:
+            handoff_data: The handoff input data
+            
+        Returns:
+            Filtered handoff data
+        """
+        # Start with basic relevant history
+        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        
+        # Add rich emotional context
+        # Extract recent emotional state history
+        emotion_history = []
+        for state in self.emotional_state_history[-5:]:  # Last 5 states
+            if "primary_emotion" in state:
+                emotion_history.append({
+                    "emotion": state["primary_emotion"].get("name", "unknown"),
+                    "intensity": state["primary_emotion"].get("intensity", 0.5),
+                    "valence": state.get("valence", 0),
+                    "arousal": state.get("arousal", 0.5)
+                })
+        
+        # Add emotional patterns for richer context
+        updated_items = list(filtered_data.pre_handoff_items)
+        
+        # Add emotion history
+        updated_items.append({
+            "role": "system",
+            "content": f"Recent emotional states: {json.dumps(emotion_history)}"
+        })
+        
+        # Add previous reflections for continuity
+        recent_thoughts = self.context.get_value("recent_thoughts", [])
+        if recent_thoughts:
+            updated_items.append({
+                "role": "system",
+                "content": f"Previous reflections: {json.dumps(recent_thoughts[-2:])}"
+            })
+        
+        # Add neurochemical context
+        cached_chemicals = self.context.get_cached_neurochemicals()
+        if cached_chemicals:
+            updated_items.append({
+                "role": "system",
+                "content": f"Current neurochemical state: {json.dumps({c: round(v, 2) for c, v in cached_chemicals.items()})}"
+            })
+        
+        filtered_data.pre_handoff_items = tuple(updated_items)
+        
+        return filtered_data
+    
+    def _enhanced_learning_input_filter(self, handoff_data):
+        """
+        Enhanced handoff input filter for learning agent with pattern analysis
+        
+        Args:
+            handoff_data: The handoff input data
+            
+        Returns:
+            Filtered handoff data
+        """
+        # Start with relevant history
+        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        
+        # Add pattern history and learning context
+        pattern_history = self.context.get_value("pattern_history", [])
+        
+        updated_items = list(filtered_data.pre_handoff_items)
+        if pattern_history:
+            updated_items.append({
+                "role": "system",
+                "content": f"Recent interaction patterns: {json.dumps(pattern_history[-5:])}"
+            })
+        
+        # Add learning stats
+        learning_stats = {
+            "positive_patterns": len(self.reward_learning["positive_patterns"]),
+            "negative_patterns": len(self.reward_learning["negative_patterns"]),
+            "learned_rules": len(self.reward_learning["learned_rules"])
+        }
+        updated_items.append({
+            "role": "system",
+            "content": f"Learning statistics: {json.dumps(learning_stats)}"
+        })
+        
+        # Add dominant patterns
+        if self.reward_learning["positive_patterns"] or self.reward_learning["negative_patterns"]:
+            # Get top patterns
+            top_positive = sorted(
+                self.reward_learning["positive_patterns"].items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            top_negative = sorted(
+                self.reward_learning["negative_patterns"].items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            updated_items.append({
+                "role": "system",
+                "content": (
+                    f"Top positive patterns: {json.dumps(dict(top_positive))}\n"
+                    f"Top negative patterns: {json.dumps(dict(top_negative))}"
+                )
+            })
+        
+        filtered_data.pre_handoff_items = tuple(updated_items)
+        
+        return filtered_data
     
     def _neurochemical_input_filter(self, handoff_data):
         """
