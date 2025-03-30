@@ -6,13 +6,20 @@ import random
 import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
+import os
 
+# Update imports to use OpenAI Agents SDK
 from agents import (
     Agent, Runner, trace, function_tool, handoff, RunContextWrapper, 
     InputGuardrail, GuardrailFunctionOutput, RunConfig, RunHooks,
-    ModelSettings
+    ModelSettings, set_default_openai_key
 )
 from pydantic import BaseModel, Field
+
+# Configure OpenAI API key
+if "OPENAI_API_KEY" not in os.environ:
+    # Replace with your actual key if not using environment variable
+    set_default_openai_key("sk-your-key-here")
 
 logger = logging.getLogger(__name__)
 
@@ -108,14 +115,14 @@ class ExperienceConsolidationSystem:
         # Create context object for sharing state between agents
         self.context = ConsolidationContext()
         
+        # Create run hooks for monitoring
+        self.run_hooks = ConsolidationRunHooks()
+        
         # Initialize agents with properly defined handoffs
         self.candidate_finder_agent = self._create_candidate_finder_agent()
         self.consolidation_agent = self._create_consolidation_agent()
         self.evaluation_agent = self._create_evaluation_agent()
         self.orchestrator_agent = self._create_orchestrator_agent()
-        
-        # Create run hooks for monitoring
-        self.run_hooks = ConsolidationRunHooks()
         
         # Configuration settings
         self.similarity_threshold = 0.7
@@ -257,6 +264,7 @@ class ExperienceConsolidationSystem:
             output_type=ConsolidationEvaluation
         )
     
+    
     # Guardrail functions
     
     async def _consolidation_request_guardrail(self, ctx, agent, input_data):
@@ -283,7 +291,7 @@ class ExperienceConsolidationSystem:
             output_info={"valid": True},
             tripwire_triggered=False
         )
-    
+        
     # Tool functions with pydantic models for parameters
     
     @function_tool
@@ -969,7 +977,7 @@ class ExperienceConsolidationSystem:
             except Exception as e:
                 logger.error(f"Error finding consolidation candidates: {e}")
                 return []
-    
+                
     async def create_consolidated_experience(self, 
                                          candidate: ConsolidationCandidate) -> Optional[ConsolidationOutput]:
         """
