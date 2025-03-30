@@ -18,19 +18,21 @@ from typing import (
 
 from agents import (
     RunConfig, ModelSettings, InputGuardrail, OutputGuardrail, 
-    trace, custom_span, gen_trace_id, function_span, Agent, 
-    Model, ModelProvider, OpenAIProvider
+    trace, custom_span, agent_span, gen_span_id, gen_trace_id, function_span, Agent, 
+    Model, ModelProvider, OpenAIProvider, RunContextWrapper
 )
 from agents.exceptions import UserError, AgentsException, ModelBehaviorError
 from agents.tracing import Trace, Span, gen_span_id, add_trace_processor
 from agents.extensions.handoff_filters import keep_relevant_history
+
+from nyx.core.emotions.context import EmotionalContext
 
 logger = logging.getLogger(__name__)
 
 # Define type variables for better typing
 T = TypeVar('T')
 TFunc = TypeVar('TFunc', bound=Callable[..., Any])
-TContext = TypeVar('TContext')
+TContext = TypeVar('TContext', bound=EmotionalContext)
 TReturn = TypeVar('TReturn')
 
 def handle_errors(logger_message: str = "An error occurred", 
@@ -659,6 +661,67 @@ class EmotionalToolUtils:
         except ImportError:
             logger.warning("OpenAI Agents SDK not found")
             return False
+
+    def create_emotion_trace(
+        workflow_name: str,
+        ctx: RunContextWrapper[EmotionalContext],
+        **additional_metadata
+    ) -> Callable:
+        """
+        Create a standardized emotion trace with consistent metadata structure.
+        
+        Args:
+            workflow_name: Name of the workflow (e.g., "Emotional_Processing")
+            ctx: Context wrapper containing emotional state
+            additional_metadata: Any additional metadata to include
+            
+        Returns:
+            Trace context manager
+        """
+        # Get conversation ID for grouping from context
+        conversation_id = ctx.context.get_value("conversation_id")
+        if not conversation_id:
+            conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
+            ctx.context.set_value("conversation_id", conversation_id)
+        
+        # Create consistent base metadata
+        metadata = {
+            "system": "nyx_emotional_core",
+            "version": "1.0",
+            "cycle": ctx.context.cycle_count,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Add emotional state if available
+        if ctx.context.last_emotions:
+            # Get primary emotion (with highest intensity)
+            primary_emotion = max(ctx.context.last_emotions.items(), key=lambda x: x[1])
+            metadata["primary_emotion"] = primary_emotion[0]
+            metadata["intensity"] = primary_emotion[1]
+            
+            # Add significant secondary emotions for better emotional context
+            secondary_emotions = {
+                emotion: intensity 
+                for emotion, intensity in ctx.context.last_emotions.items()
+                if emotion != primary_emotion[0] and intensity > 0.3
+            }
+            if secondary_emotions:
+                metadata["secondary_emotions"] = secondary_emotions
+        
+        # Add active agent information
+        if ctx.context.active_agent:
+            metadata["active_agent"] = ctx.context.active_agent
+        
+        # Add additional metadata
+        metadata.update(additional_metadata)
+        
+        # Create and return the trace
+        return trace(
+            workflow_name=workflow_name,
+            trace_id=gen_trace_id(),
+            group_id=conversation_id,
+            metadata=metadata
+        )
     
     def create_enhanced_run_config(
         workflow_name: str,
