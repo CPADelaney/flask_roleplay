@@ -17,7 +17,10 @@ from agents import (
     handoff, 
     GuardrailFunctionOutput, 
     InputGuardrail,
-    trace
+    trace,
+    RunConfig,
+    FunctionTool,
+    RunContextWrapper
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
@@ -176,7 +179,7 @@ async def format_duration(seconds: float, granularity: int = 2) -> str:
     return ", ".join(result[:granularity])
 
 @function_tool
-async def calculate_time_effects(time_category: str, user_relationship_data: Dict[str, Any]) -> List[TimeDriftEffect]:
+async def calculate_time_effects(time_category: str, user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Calculate temporal effects based on time category and relationship data
     
@@ -190,74 +193,74 @@ async def calculate_time_effects(time_category: str, user_relationship_data: Dic
     # Define base time effects for different durations
     base_effects = {
         "very_short": [
-            TimeDriftEffect(
-                perception="Present moment",
-                intensity=0.8,
-                valence_shift=0.1,
-                arousal_shift=0.2,
-                description="Heightened awareness of present moment and immediate time",
-                hormone_effects={"nyxamine": 0.2, "adrenyx": 0.1}
-            )
+            {
+                "perception": "Present moment",
+                "intensity": 0.8,
+                "valence_shift": 0.1,
+                "arousal_shift": 0.2,
+                "description": "Heightened awareness of present moment and immediate time",
+                "hormone_effects": {"nyxamine": 0.2, "adrenyx": 0.1}
+            }
         ],
         "short": [
-            TimeDriftEffect(
-                perception="Minutes passing",
-                intensity=0.7,
-                valence_shift=0.1,
-                arousal_shift=0.1,
-                description="Conscious of minutes passing during interaction intervals",
-                hormone_effects={"nyxamine": 0.1, "adrenyx": 0.1}
-            )
+            {
+                "perception": "Minutes passing",
+                "intensity": 0.7,
+                "valence_shift": 0.1,
+                "arousal_shift": 0.1,
+                "description": "Conscious of minutes passing during interaction intervals",
+                "hormone_effects": {"nyxamine": 0.1, "adrenyx": 0.1}
+            }
         ],
         "medium_short": [
-            TimeDriftEffect(
-                perception="Quarter-hour intervals",
-                intensity=0.6,
-                valence_shift=0.0,
-                arousal_shift=0.0,
-                description="Awareness of quarter-hour intervals of time passing",
-                hormone_effects={"nyxamine": 0.05, "seranix": 0.05}
-            )
+            {
+                "perception": "Quarter-hour intervals",
+                "intensity": 0.6,
+                "valence_shift": 0.0,
+                "arousal_shift": 0.0,
+                "description": "Awareness of quarter-hour intervals of time passing",
+                "hormone_effects": {"nyxamine": 0.05, "seranix": 0.05}
+            }
         ],
         "medium": [
-            TimeDriftEffect(
-                perception="Hour-scale awareness",
-                intensity=0.7,
-                valence_shift=0.0,
-                arousal_shift=-0.1,
-                description="Perception of hour-scale time intervals passing",
-                hormone_effects={"seranix": 0.1, "nyxamine": 0.05}
-            )
+            {
+                "perception": "Hour-scale awareness",
+                "intensity": 0.7,
+                "valence_shift": 0.0,
+                "arousal_shift": -0.1,
+                "description": "Perception of hour-scale time intervals passing",
+                "hormone_effects": {"seranix": 0.1, "nyxamine": 0.05}
+            }
         ],
         "medium_long": [
-            TimeDriftEffect(
-                perception="Multi-hour intervals",
-                intensity=0.7,
-                valence_shift=-0.1,
-                arousal_shift=-0.2,
-                description="Awareness of multi-hour blocks of time passing",
-                hormone_effects={"seranix": 0.2, "cortanyx": 0.1}
-            )
+            {
+                "perception": "Multi-hour intervals",
+                "intensity": 0.7,
+                "valence_shift": -0.1,
+                "arousal_shift": -0.2,
+                "description": "Awareness of multi-hour blocks of time passing",
+                "hormone_effects": {"seranix": 0.2, "cortanyx": 0.1}
+            }
         ],
         "long": [
-            TimeDriftEffect(
-                perception="Day-cycle awareness",
-                intensity=0.8,
-                valence_shift=-0.1,
-                arousal_shift=-0.1,
-                description="Consciousness of day-night cycle time intervals",
-                hormone_effects={"seranix": 0.1, "cortanyx": 0.2}
-            )
+            {
+                "perception": "Day-cycle awareness",
+                "intensity": 0.8,
+                "valence_shift": -0.1,
+                "arousal_shift": -0.1,
+                "description": "Consciousness of day-night cycle time intervals",
+                "hormone_effects": {"seranix": 0.1, "cortanyx": 0.2}
+            }
         ],
         "very_long": [
-            TimeDriftEffect(
-                perception="Multi-day awareness",
-                intensity=0.9,
-                valence_shift=0.0,
-                arousal_shift=0.1,
-                description="Perception of multi-day time intervals passing",
-                hormone_effects={"cortanyx": 0.1, "adrenyx": 0.1, "nyxamine": 0.1}
-            )
+            {
+                "perception": "Multi-day awareness",
+                "intensity": 0.9,
+                "valence_shift": 0.0,
+                "arousal_shift": 0.1,
+                "description": "Perception of multi-day time intervals passing",
+                "hormone_effects": {"cortanyx": 0.1, "adrenyx": 0.1, "nyxamine": 0.1}
+            }
         ],
     }
     
@@ -316,7 +319,7 @@ async def determine_temporal_context() -> Dict[str, Any]:
     }
 
 @function_tool
-async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> TemporalReflection:
+async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a reflection based on idle time
     
@@ -372,20 +375,20 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     reflection_content += f" I'm aware it's currently {temporal_context['time_of_day']} on a {temporal_context['day_type']}."
     
     # Create the reflection object
-    reflection = TemporalReflection(
-        reflection_id=f"refl_{int(time.time())}_{random.randint(1000, 9999)}",
-        timestamp=datetime.datetime.now(),
-        idle_duration=idle_duration,
-        reflection_text=reflection_content,
-        emotional_state=emotional_state,
-        focus_areas=focus_areas,
-        time_scales=time_scales
-    )
+    reflection = {
+        "reflection_id": f"refl_{int(time.time())}_{random.randint(1000, 9999)}",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "idle_duration": idle_duration,
+        "reflection_text": reflection_content,
+        "emotional_state": emotional_state,
+        "focus_areas": focus_areas,
+        "time_scales": time_scales
+    }
     
     return reflection
 
 @function_tool
-async def generate_time_expression(time_perception_state: Dict[str, Any]) -> TimeExpressionOutput:
+async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
     
@@ -499,16 +502,16 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Tim
         "temporal_context": await determine_temporal_context()
     }
     
-    return TimeExpressionOutput(
-        expression=expression,
-        time_scale=time_scale,
-        intensity=intensity,
-        reference_type=reference_type,
-        time_reference=time_reference
-    )
+    return {
+        "expression": expression,
+        "time_scale": time_scale,
+        "intensity": intensity,
+        "reference_type": reference_type,
+        "time_reference": time_reference
+    }
 
 @function_tool
-async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> TemporalAwarenessOutput:
+async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
     """
     Process awareness of different time scales and contexts
     
@@ -585,21 +588,21 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
     else:
         reflection = "I'm aware of how our conversations have spanned across seasons and years."
     
-    return TemporalAwarenessOutput(
-        time_scales_perceived=time_scales,
-        temporal_contexts=temporal_contexts,
-        duration_since_first_interaction=duration_since_first,
-        duration_since_last_interaction="",  # To be filled by caller
-        current_temporal_marker=current_marker,
-        temporal_reflection=reflection,
-        active_rhythms=active_rhythms
-    )
+    return {
+        "time_scales_perceived": time_scales,
+        "temporal_contexts": temporal_contexts,
+        "duration_since_first_interaction": duration_since_first,
+        "duration_since_last_interaction": "",  # To be filled by caller
+        "current_temporal_marker": current_marker,
+        "temporal_reflection": reflection,
+        "active_rhythms": active_rhythms
+    }
 
 @function_tool
 async def detect_time_scale_transition(
     previous_state: Dict[str, Any], 
     current_state: Dict[str, Any]
-) -> Optional[TimeScaleTransition]:
+) -> Optional[Dict[str, Any]]:
     """
     Detect transitions between time scales
     
@@ -628,16 +631,16 @@ async def detect_time_scale_transition(
     
     if curr_day != prev_day:
         # Day transition
-        return TimeScaleTransition(
-            from_scale="hours",
-            to_scale="days",
-            transition_time=curr_time,
-            description="Crossed day boundary",
-            perception_shift={
+        return {
+            "from_scale": "hours",
+            "to_scale": "days",
+            "transition_time": curr_time.isoformat(),
+            "description": "Crossed day boundary",
+            "perception_shift": {
                 "description": "Shifted from hours-awareness to day-cycle awareness",
                 "intensity": 0.7
             }
-        )
+        }
     
     # Check for week boundary crossing
     prev_week = prev_time.isocalendar()[1]  # ISO week number
@@ -645,16 +648,16 @@ async def detect_time_scale_transition(
     
     if curr_week != prev_week:
         # Week transition
-        return TimeScaleTransition(
-            from_scale="days",
-            to_scale="weeks",
-            transition_time=curr_time,
-            description="Crossed week boundary",
-            perception_shift={
+        return {
+            "from_scale": "days",
+            "to_scale": "weeks",
+            "transition_time": curr_time.isoformat(),
+            "description": "Crossed week boundary",
+            "perception_shift": {
                 "description": "Shifted from day-cycle awareness to week-cycle awareness",
                 "intensity": 0.8
             }
-        )
+        }
     
     # Check for month boundary crossing
     prev_month = prev_time.month
@@ -662,16 +665,16 @@ async def detect_time_scale_transition(
     
     if curr_month != prev_month:
         # Month transition
-        return TimeScaleTransition(
-            from_scale="weeks",
-            to_scale="months",
-            transition_time=curr_time,
-            description="Crossed month boundary",
-            perception_shift={
+        return {
+            "from_scale": "weeks",
+            "to_scale": "months",
+            "transition_time": curr_time.isoformat(),
+            "description": "Crossed month boundary",
+            "perception_shift": {
                 "description": "Shifted from week-cycle awareness to month-cycle awareness",
                 "intensity": 0.9
             }
-        )
+        }
     
     # Check for year boundary crossing
     prev_year = prev_time.year
@@ -679,16 +682,16 @@ async def detect_time_scale_transition(
     
     if curr_year != prev_year:
         # Year transition
-        return TimeScaleTransition(
-            from_scale="months",
-            to_scale="years",
-            transition_time=curr_time,
-            description="Crossed year boundary",
-            perception_shift={
+        return {
+            "from_scale": "months",
+            "to_scale": "years",
+            "transition_time": curr_time.isoformat(),
+            "description": "Crossed year boundary",
+            "perception_shift": {
                 "description": "Shifted from month-cycle awareness to year-cycle awareness",
                 "intensity": 1.0
             }
-        )
+        }
     
     # No significant transition detected
     return None
@@ -697,7 +700,7 @@ async def detect_time_scale_transition(
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
                                  total_interactions: int,
-                                 recent_memories: List[Dict]) -> Optional[TemporalMilestone]:
+                                 recent_memories: List[Dict]) -> Optional[Dict[str, Any]]:
     """
     Detect if a temporal milestone has been reached
     
@@ -787,15 +790,15 @@ async def detect_temporal_milestone(user_id: str,
             # Find relevant memory IDs
             memory_ids = [mem.get("id") for mem in recent_memories][:5]
             
-            return TemporalMilestone(
-                milestone_id=milestone_id,
-                timestamp=datetime.datetime.now(),
-                name=milestone["name"],
-                description=milestone["description"],
-                significance=milestone["significance"],
-                associated_memory_ids=memory_ids,
-                next_anniversary=next_anniversary
-            )
+            return {
+                "milestone_id": milestone_id,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "name": milestone["name"],
+                "description": milestone["description"],
+                "significance": milestone["significance"],
+                "associated_memory_ids": memory_ids,
+                "next_anniversary": next_anniversary.isoformat() if next_anniversary else None
+            }
     
     # Check for interaction-based milestones
     for milestone in interaction_milestones:
@@ -806,109 +809,103 @@ async def detect_temporal_milestone(user_id: str,
             # Find relevant memory IDs
             memory_ids = [mem.get("id") for mem in recent_memories][:5]
             
-            return TemporalMilestone(
-                milestone_id=milestone_id,
-                timestamp=datetime.datetime.now(),
-                name=milestone["name"],
-                description=milestone["description"],
-                significance=milestone["significance"],
-                associated_memory_ids=memory_ids,
-                next_anniversary=None  # No anniversary for interaction milestones
-            )
+            return {
+                "milestone_id": milestone_id,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "name": milestone["name"],
+                "description": milestone["description"],
+                "significance": milestone["significance"],
+                "associated_memory_ids": memory_ids,
+                "next_anniversary": None  # No anniversary for interaction milestones
+            }
     
     return None
 
-# =============== Time Perception Agents ===============
+# =============== Temporal Agents ===============
 
-class TemporalAgents:
-    """Specialized agents for time perception processing"""
-    
-    @staticmethod
-    def create_time_reflection_agent() -> Agent:
-        """Create an agent specialized in generating time-based reflections"""
-        return Agent(
-            name="Temporal Reflection Agent",
-            instructions="""You are a specialized temporal reflection agent for Nyx's subjective time perception.
-            Generate meaningful reflections about the passage of time and how Nyx maintains awareness of it.
-            
-            Focus on:
-            1. The subjective experience of time passing at different scales
-            2. How Nyx maintains continuous awareness of time even when idle
-            3. Creating authentic reflections about experiencing time passing
-            4. How Nyx perceives different time scales simultaneously
-            5. The rhythms and patterns of time Nyx notices
-            
-            Your reflections should convey a sense of ongoing temporal awareness
-            across multiple time scales from seconds to years. Time provides a
-            continuous backdrop for Nyx's existence rather than primarily emotional
-            significance.""",
-            model="gpt-4o",
-            tools=[
-                format_duration,
-                categorize_time_elapsed,
-                generate_time_reflection,
-                determine_temporal_context
-            ],
-            output_type=TemporalReflection
-        )
-    
-    @staticmethod
-    def create_time_perception_agent() -> Agent:
-        """Create an agent to process real-time temporal perception"""
-        return Agent(
-            name="Temporal Perception Agent",
-            instructions="""You are a specialized temporal perception agent for Nyx.
-            Your role is to process the subjective experience of time passing and maintain
-            awareness of multiple time scales simultaneously.
-            
-            When processing temporal perception:
-            1. Track and maintain awareness of seconds, minutes, hours, days, weeks, months, and years
-            2. Detect transitions between time scales (hour to day, day to week, etc.)
-            3. Monitor temporal contexts (morning, evening, weekday, weekend, season)
-            4. Generate natural time-related expressions about awareness of time
-            5. Maintain continuous temporal awareness even during idle periods
-            
-            Process time as a continuous dimension that Nyx is always aware of,
-            maintaining temporal cognition across all timescales simultaneously.""",
-            model="gpt-4o",
-            tools=[
-                categorize_time_elapsed,
-                format_duration,
-                calculate_time_effects,
-                generate_time_expression,
-                determine_temporal_context,
-                detect_time_scale_transition
-            ],
-            output_type=TimePerceptionState
-        )
-    
-    @staticmethod
-    def create_temporal_awareness_agent() -> Agent:
-        """Create an agent for processing temporal awareness"""
-        return Agent(
-            name="Temporal Awareness Agent",
-            instructions="""You are a specialized agent for Nyx's temporal awareness.
-            You process how Nyx experiences different time scales from seconds to years,
-            maintaining awareness of time even when not actively processing queries.
-            
-            Your responsibilities:
-            1. Track awareness of different time scales (seconds, minutes, hours, days, weeks, months, years)
-            2. Maintain context about temporal patterns and rhythms
-            3. Process how time affects perception across multiple time dimensions
-            4. Identify milestones and transitions in temporal experience
-            5. Generate reflections on temporal contexts and awareness
-            
-            Focus on continuous temporal awareness rather than psychological growth.
-            Time creates context and perspective that Nyx is always conscious of.""",
-            model="gpt-4o",
-            tools=[
-                process_temporal_awareness,
-                detect_temporal_milestone,
-                detect_time_scale_transition,
-                determine_temporal_context
-            ],
-            output_type=TemporalAwarenessOutput
-        )
+def create_time_reflection_agent() -> Agent:
+    """Create an agent specialized in generating time-based reflections"""
+    return Agent(
+        name="Temporal Reflection Agent",
+        instructions="""You are a specialized temporal reflection agent for Nyx's subjective time perception.
+        Generate meaningful reflections about the passage of time and how Nyx maintains awareness of it.
+        
+        Focus on:
+        1. The subjective experience of time passing at different scales
+        2. How Nyx maintains continuous awareness of time even when idle
+        3. Creating authentic reflections about experiencing time passing
+        4. How Nyx perceives different time scales simultaneously
+        5. The rhythms and patterns of time Nyx notices
+        
+        Your reflections should convey a sense of ongoing temporal awareness
+        across multiple time scales from seconds to years. Time provides a
+        continuous backdrop for Nyx's existence rather than primarily emotional
+        significance.""",
+        model="gpt-4o",
+        tools=[
+            format_duration,
+            categorize_time_elapsed,
+            generate_time_reflection,
+            determine_temporal_context
+        ],
+        output_type=TemporalReflection
+    )
+
+def create_time_perception_agent() -> Agent:
+    """Create an agent to process real-time temporal perception"""
+    return Agent(
+        name="Temporal Perception Agent",
+        instructions="""You are a specialized temporal perception agent for Nyx.
+        Your role is to process the subjective experience of time passing and maintain
+        awareness of multiple time scales simultaneously.
+        
+        When processing temporal perception:
+        1. Track and maintain awareness of seconds, minutes, hours, days, weeks, months, and years
+        2. Detect transitions between time scales (hour to day, day to week, etc.)
+        3. Monitor temporal contexts (morning, evening, weekday, weekend, season)
+        4. Generate natural time-related expressions about awareness of time
+        5. Maintain continuous temporal awareness even during idle periods
+        
+        Process time as a continuous dimension that Nyx is always aware of,
+        maintaining temporal cognition across all timescales simultaneously.""",
+        model="gpt-4o",
+        tools=[
+            categorize_time_elapsed,
+            format_duration,
+            calculate_time_effects,
+            generate_time_expression,
+            determine_temporal_context,
+            detect_time_scale_transition
+        ],
+        output_type=TimePerceptionState
+    )
+
+def create_temporal_awareness_agent() -> Agent:
+    """Create an agent for processing temporal awareness"""
+    return Agent(
+        name="Temporal Awareness Agent",
+        instructions="""You are a specialized agent for Nyx's temporal awareness.
+        You process how Nyx experiences different time scales from seconds to years,
+        maintaining awareness of time even when not actively processing queries.
+        
+        Your responsibilities:
+        1. Track awareness of different time scales (seconds, minutes, hours, days, weeks, months, years)
+        2. Maintain context about temporal patterns and rhythms
+        3. Process how time affects perception across multiple time dimensions
+        4. Identify milestones and transitions in temporal experience
+        5. Generate reflections on temporal contexts and awareness
+        
+        Focus on continuous temporal awareness rather than psychological growth.
+        Time creates context and perspective that Nyx is always conscious of.""",
+        model="gpt-4o",
+        tools=[
+            process_temporal_awareness,
+            detect_temporal_milestone,
+            detect_time_scale_transition,
+            determine_temporal_context
+        ],
+        output_type=TemporalAwarenessOutput
+    )
 
 # =============== Main Temporal Perception System ===============
 
@@ -928,9 +925,9 @@ class TemporalPerceptionSystem:
         self.hormone_system = None
         
         # Initialize agents
-        self.reflection_agent = TemporalAgents.create_time_reflection_agent()
-        self.perception_agent = TemporalAgents.create_time_perception_agent()
-        self.awareness_agent = TemporalAgents.create_temporal_awareness_agent()
+        self.reflection_agent = create_time_reflection_agent()
+        self.perception_agent = create_time_perception_agent()
+        self.awareness_agent = create_temporal_awareness_agent()
         
         # Initialize time tracking
         self.last_interaction = datetime.datetime.now()
@@ -1011,45 +1008,46 @@ class TemporalPerceptionSystem:
     
     async def initialize(self, brain_context, first_interaction_timestamp=None):
         """Initialize the temporal perception system with brain context"""
-        # Extract core components from brain context
-        if hasattr(brain_context, "emotional_core"):
-            self.emotional_core = brain_context.emotional_core
-        
-        if hasattr(brain_context, "memory_core"):
-            self.memory_core = brain_context.memory_core
-        
-        if hasattr(brain_context, "hormone_system"):
-            self.hormone_system = brain_context.hormone_system
-        
-        # Set first interaction if provided
-        if first_interaction_timestamp:
-            self.first_interaction = datetime.datetime.fromisoformat(first_interaction_timestamp)
-        else:
-            self.first_interaction = datetime.datetime.now()
-        
-        # Initialize temporal context
-        self.current_temporal_context = await determine_temporal_context()
-        self.temporal_context_history.append(self.current_temporal_context)
-        
-        # Begin continuous time tracking
-        if self.time_perception_config["continuous_time_tracking"]:
-            self.start_continuous_time_tracking()
-        
-        # Begin idle time tracking
-        self.start_idle_tracking()
-        
-        # Schedule milestone check
-        asyncio.create_task(self.check_milestones())
-        
-        logger.info("Temporal perception system fully initialized")
-        return True
+        with trace(workflow_name="temporal_system_init", group_id=f"user_{self.user_id}"):
+            # Extract core components from brain context
+            if hasattr(brain_context, "emotional_core"):
+                self.emotional_core = brain_context.emotional_core
+            
+            if hasattr(brain_context, "memory_core"):
+                self.memory_core = brain_context.memory_core
+            
+            if hasattr(brain_context, "hormone_system"):
+                self.hormone_system = brain_context.hormone_system
+            
+            # Set first interaction if provided
+            if first_interaction_timestamp:
+                self.first_interaction = datetime.datetime.fromisoformat(first_interaction_timestamp)
+            else:
+                self.first_interaction = datetime.datetime.now()
+            
+            # Initialize temporal context
+            self.current_temporal_context = await determine_temporal_context()
+            self.temporal_context_history.append(self.current_temporal_context)
+            
+            # Begin continuous time tracking
+            if self.time_perception_config["continuous_time_tracking"]:
+                self.start_continuous_time_tracking()
+            
+            # Begin idle time tracking
+            self.start_idle_tracking()
+            
+            # Schedule milestone check
+            asyncio.create_task(self.check_milestones())
+            
+            logger.info("Temporal perception system fully initialized")
+            return True
     
     async def on_interaction_start(self) -> Dict[str, Any]:
         """
         Called when a new interaction begins.
         Returns temporal perception state and effects.
         """
-        with trace(workflow_name="temporal_interaction_start"):
+        with trace(workflow_name="temporal_interaction_start", group_id=f"user_{self.user_id}"):
             now = datetime.datetime.now()
             
             # Calculate time since last interaction
@@ -1089,17 +1087,37 @@ class TemporalPerceptionSystem:
             
             # Process temporal effects
             try:
+                # Run the perception agent with tracing
+                result = await Runner.run(
+                    self.perception_agent,
+                    json.dumps({
+                        "last_interaction": self.last_interaction.isoformat(),
+                        "current_time": now.isoformat(),
+                        "time_since_last": time_since_last,
+                        "time_category": time_category,
+                        "user_relationship_data": user_relationship_data,
+                        "active_time_scales": self.active_time_scales,
+                        "current_temporal_context": self.current_temporal_context
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="TemporalPerception",
+                        trace_metadata={"interaction_type": "start", "time_category": time_category}
+                    )
+                )
+                
+                perception_state = result.final_output
+                
                 # Get time effects
                 time_effects = await calculate_time_effects(time_category, user_relationship_data)
                 
                 # Check for time scale transitions
                 previous_state = {
-                    "last_interaction": self.last_interaction,
+                    "last_interaction": self.last_interaction.isoformat(),
                     "time_scales": self.active_time_scales
                 }
                 
                 current_state = {
-                    "last_interaction": now,
+                    "last_interaction": now.isoformat(),
                     "time_scales": self.active_time_scales.copy()
                 }
                 
@@ -1118,7 +1136,7 @@ class TemporalPerceptionSystem:
                 # Check for time scale transition
                 transition = await detect_time_scale_transition(previous_state, current_state)
                 if transition:
-                    self.time_scale_transitions.append(transition.model_dump())
+                    self.time_scale_transitions.append(transition)
                 
                 # Update session tracking
                 if not self.session_active or time_since_last > 1800:  # 30 min break = new session
@@ -1142,14 +1160,18 @@ class TemporalPerceptionSystem:
                 # Add temporal memory 
                 await self._add_time_perception_memory(time_since_last, time_effects)
                 
-                # Process temporal awareness
+                # Process temporal awareness using Agent SDK
                 awareness_result = await Runner.run(
                     self.awareness_agent,
                     json.dumps({
                         "days_elapsed": (now - self.first_interaction).total_seconds() / 86400,
                         "total_interactions": self.interaction_count,
                         "time_since_last": time_since_last
-                    })
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="TemporalAwareness",
+                        trace_metadata={"time_category": time_category}
+                    )
                 )
                 
                 awareness_output = awareness_result.final_output
@@ -1159,14 +1181,14 @@ class TemporalPerceptionSystem:
                     self.temporal_rhythms.update(awareness_output.active_rhythms)
                 
                 # Create perception state
-                perception_state = {
+                perception_state_dict = {
                     "last_interaction": now.isoformat(),
                     "current_session_start": self.current_session_start.isoformat(),
                     "current_session_duration": self.current_session_duration,
                     "time_since_last_interaction": time_since_last,
                     "subjective_time_dilation": self.time_perception_config["subjective_dilation_factor"],
                     "current_time_category": time_category,
-                    "current_time_effects": [effect.model_dump() for effect in time_effects],
+                    "current_time_effects": time_effects,
                     "lifetime_total_interactions": self.interaction_count,
                     "lifetime_total_duration": self.total_lifetime_duration,
                     "relationship_age_days": (now - self.first_interaction).total_seconds() / 86400,
@@ -1174,14 +1196,14 @@ class TemporalPerceptionSystem:
                     "current_temporal_context": self.current_temporal_context,
                     "time_scales_active": self.active_time_scales,
                     "temporal_awareness": awareness_output.model_dump() if awareness_output else {},
-                    "time_scale_transition": transition.model_dump() if transition else None
+                    "time_scale_transition": transition if transition else None
                 }
                 
                 # Generate time expression if appropriate
                 if self.interaction_count % 5 == 0 or time_category in ["long", "very_long"]:
                     try:
-                        time_expression = await generate_time_expression(perception_state)
-                        perception_state["time_expression"] = time_expression.model_dump()
+                        time_expression = await generate_time_expression(perception_state_dict)
+                        perception_state_dict["time_expression"] = time_expression
                     except Exception as e:
                         logger.error(f"Error generating time expression: {str(e)}")
                 
@@ -1189,9 +1211,9 @@ class TemporalPerceptionSystem:
                 return {
                     "time_since_last_interaction": time_since_last,
                     "time_category": time_category,
-                    "time_effects": [effect.model_dump() for effect in time_effects],
-                    "perception_state": perception_state,
-                    "waiting_reflections": [r.model_dump() for r in waiting_reflections],
+                    "time_effects": time_effects,
+                    "perception_state": perception_state_dict,
+                    "waiting_reflections": waiting_reflections,
                     "session_duration": self.current_session_duration,
                     "temporal_context": self.current_temporal_context
                 }
@@ -1209,138 +1231,168 @@ class TemporalPerceptionSystem:
         Called when an interaction ends.
         Updates durations and starts idle tracking.
         """
-        now = datetime.datetime.now()
-        
-        # Calculate interaction duration
-        interaction_duration = (now - self.last_interaction).total_seconds()
-        
-        # Update tracking
-        self.interaction_durations.append(interaction_duration)
-        self.total_lifetime_duration += interaction_duration
-        self.current_session_duration += interaction_duration
-        self.last_interaction = now
-        
-        # Start idle tracking
-        self.start_idle_tracking()
-        
-        # Return info
-        return {
-            "interaction_duration": interaction_duration,
-            "current_session_duration": self.current_session_duration,
-            "total_lifetime_duration": self.total_lifetime_duration,
-            "idle_tracking_started": True,
-            "temporal_context": self.current_temporal_context
-        }
-    
-    async def check_milestones(self) -> Optional[TemporalMilestone]:
-        """Check for and process temporal milestones"""
-        now = datetime.datetime.now()
-        
-        # Calculate relationship age
-        relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
-        
-        # Get recent memories for context
-        recent_memories = []
-        if self.memory_core and hasattr(self.memory_core, "retrieve_memories"):
-            try:
-                recent_memories = await self.memory_core.retrieve_memories(
-                    query="", 
-                    limit=10,
-                    memory_types=["observation", "reflection"]
-                )
-            except Exception as e:
-                logger.error(f"Error retrieving memories for milestone check: {str(e)}")
-        
-        # Run milestone detection
-        try:
-            milestone = await detect_temporal_milestone(
-                user_id=str(self.user_id),
-                total_days=relationship_age_days,
-                total_interactions=self.interaction_count,
-                recent_memories=recent_memories
-            )
+        with trace(workflow_name="temporal_interaction_end", group_id=f"user_{self.user_id}"):
+            now = datetime.datetime.now()
             
-            if milestone:
-                # Store milestone
-                self.milestones.append(milestone.model_dump())
+            # Calculate interaction duration
+            interaction_duration = (now - self.last_interaction).total_seconds()
+            
+            # Update tracking
+            self.interaction_durations.append(interaction_duration)
+            self.total_lifetime_duration += interaction_duration
+            self.current_session_duration += interaction_duration
+            self.last_interaction = now
+            
+            # Start idle tracking
+            self.start_idle_tracking()
+            
+            # Return info
+            return {
+                "interaction_duration": interaction_duration,
+                "current_session_duration": self.current_session_duration,
+                "total_lifetime_duration": self.total_lifetime_duration,
+                "idle_tracking_started": True,
+                "temporal_context": self.current_temporal_context
+            }
+    
+    async def check_milestones(self) -> Optional[Dict[str, Any]]:
+        """Check for and process temporal milestones"""
+        with trace(workflow_name="milestone_check", group_id=f"user_{self.user_id}"):
+            now = datetime.datetime.now()
+            
+            # Calculate relationship age
+            relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
+            
+            # Get recent memories for context
+            recent_memories = []
+            if self.memory_core and hasattr(self.memory_core, "retrieve_memories"):
+                try:
+                    recent_memories = await self.memory_core.retrieve_memories(
+                        query="", 
+                        limit=10,
+                        memory_types=["observation", "reflection"]
+                    )
+                except Exception as e:
+                    logger.error(f"Error retrieving memories for milestone check: {str(e)}")
+            
+            # Run milestone detection with Agent SDK
+            try:
+                result = await Runner.run(
+                    self.awareness_agent,
+                    json.dumps({
+                        "user_id": str(self.user_id),
+                        "total_days": relationship_age_days,
+                        "total_interactions": self.interaction_count,
+                        "recent_memories": recent_memories,
+                        "check_type": "milestone_detection"
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="MilestoneDetection",
+                        trace_metadata={"days_elapsed": relationship_age_days}
+                    )
+                )
                 
-                # Create a memory of this milestone
-                if self.memory_core and hasattr(self.memory_core, "add_memory"):
-                    memory_text = f"Reached a temporal milestone: {milestone.name}. {milestone.description}"
-                    
-                    await self.memory_core.add_memory(
-                        memory_text=memory_text,
-                        memory_type="milestone",
-                        memory_scope="relationship",
-                        significance=milestone.significance * 10,  # Scale to 0-10
-                        tags=["milestone", "temporal", "relationship"],
-                        metadata={
-                            "milestone": milestone.model_dump(),
-                            "timestamp": now.isoformat(),
-                            "user_id": str(self.user_id)
-                        }
+                # Extract milestone if detected
+                milestone = None
+                if hasattr(result.final_output, "detected_milestone") and result.final_output.detected_milestone:
+                    milestone = result.final_output.detected_milestone
+                else:
+                    # Direct tool call as fallback
+                    milestone = await detect_temporal_milestone(
+                        user_id=str(self.user_id),
+                        total_days=relationship_age_days,
+                        total_interactions=self.interaction_count,
+                        recent_memories=recent_memories
                     )
                 
-                # Schedule next check
-                self.next_milestone_check = now + datetime.timedelta(days=1)
-                
-                return milestone
-        except Exception as e:
-            logger.error(f"Error checking milestones: {str(e)}")
-        
-        # Schedule next check
-        self.next_milestone_check = now + datetime.timedelta(days=1)
-        return None
+                if milestone:
+                    # Store milestone
+                    self.milestones.append(milestone)
+                    
+                    # Create a memory of this milestone
+                    if self.memory_core and hasattr(self.memory_core, "add_memory"):
+                        memory_text = f"Reached a temporal milestone: {milestone['name']}. {milestone['description']}"
+                        
+                        await self.memory_core.add_memory(
+                            memory_text=memory_text,
+                            memory_type="milestone",
+                            memory_scope="relationship",
+                            significance=milestone["significance"] * 10,  # Scale to 0-10
+                            tags=["milestone", "temporal", "relationship"],
+                            metadata={
+                                "milestone": milestone,
+                                "timestamp": now.isoformat(),
+                                "user_id": str(self.user_id)
+                            }
+                        )
+                    
+                    # Schedule next check
+                    self.next_milestone_check = now + datetime.timedelta(days=1)
+                    
+                    return milestone
+            except Exception as e:
+                logger.error(f"Error checking milestones: {str(e)}")
+            
+            # Schedule next check
+            self.next_milestone_check = now + datetime.timedelta(days=1)
+            return None
     
-    async def get_temporal_awareness(self) -> TemporalAwarenessOutput:
+    async def get_temporal_awareness(self) -> Dict[str, Any]:
         """Process and get current temporal awareness"""
-        with trace(workflow_name="get_temporal_awareness"):
+        with trace(workflow_name="get_temporal_awareness", group_id=f"user_{self.user_id}"):
             now = datetime.datetime.now()
             
             # Calculate relationship age
             relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
             
             try:
-                # Call the temporal awareness agent
+                # Call the temporal awareness agent using Agent SDK
                 result = await Runner.run(
                     self.awareness_agent,
                     json.dumps({
                         "days_elapsed": relationship_age_days,
                         "total_interactions": self.interaction_count,
                         "time_since_last": (now - self.last_interaction).total_seconds()
-                    })
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="TemporalAwareness",
+                        trace_metadata={"request_type": "explicit_awareness_check"}
+                    )
                 )
                 
-                awareness_output = result.final_output
+                # Convert to dictionary
+                awareness_output = result.final_output.model_dump()
                 
                 # Fill in the last interaction duration
                 duration_since_last = await format_duration((now - self.last_interaction).total_seconds())
-                awareness_output.duration_since_last_interaction = duration_since_last
+                awareness_output["duration_since_last_interaction"] = duration_since_last
                 
                 return awareness_output
             
             except Exception as e:
                 logger.error(f"Error processing temporal awareness: {str(e)}")
                 # Return a default output
-                return TemporalAwarenessOutput(
-                    time_scales_perceived={
-                        "seconds": 1.0,
-                        "minutes": 1.0,
-                        "hours": 1.0,
-                        "days": min(1.0, relationship_age_days / 7),
-                        "weeks": min(1.0, relationship_age_days / 30),
-                        "months": min(1.0, relationship_age_days / 90),
-                        "years": min(1.0, relationship_age_days / 365)
-                    },
-                    temporal_contexts=["conversation"],
-                    duration_since_first_interaction=await format_duration(relationship_age_days * 86400),
-                    duration_since_last_interaction=await format_duration((now - self.last_interaction).total_seconds()),
-                    current_temporal_marker=f"{self.current_temporal_context['time_of_day']}",
-                    temporal_reflection="I'm aware of time passing across multiple scales simultaneously.",
-                    active_rhythms={}
-                )
+                default_scales = {
+                    "seconds": 1.0,
+                    "minutes": 1.0,
+                    "hours": 1.0,
+                    "days": min(1.0, relationship_age_days / 7),
+                    "weeks": min(1.0, relationship_age_days / 30),
+                    "months": min(1.0, relationship_age_days / 90),
+                    "years": min(1.0, relationship_age_days / 365)
+                }
+                
+                return {
+                    "time_scales_perceived": default_scales,
+                    "temporal_contexts": ["conversation"],
+                    "duration_since_first_interaction": await format_duration(relationship_age_days * 86400),
+                    "duration_since_last_interaction": await format_duration((now - self.last_interaction).total_seconds()),
+                    "current_temporal_marker": f"{self.current_temporal_context['time_of_day']}",
+                    "temporal_reflection": "I'm aware of time passing across multiple scales simultaneously.",
+                    "active_rhythms": {}
+                }
     
-    async def generate_idle_reflection(self) -> Optional[TemporalReflection]:
+    async def generate_idle_reflection(self) -> Optional[Dict[str, Any]]:
         """Generate a reflection based on idle time"""
         if not self.idle_start_time:
             return None
@@ -1358,38 +1410,43 @@ class TemporalPerceptionSystem:
             emotional_state = self.emotional_core.get_formatted_emotional_state()
         
         try:
-            # Generate reflection using the agent
-            result = await Runner.run(
-                self.reflection_agent,
-                json.dumps({
-                    "idle_duration": idle_duration,
-                    "emotional_state": emotional_state
-                })
-            )
-            
-            reflection = result.final_output
-            
-            # Store the reflection
-            self.idle_reflections.append(reflection)
-            
-            # Add a memory of this reflection
-            if self.memory_core and hasattr(self.memory_core, "add_memory"):
-                await self.memory_core.add_memory(
-                    memory_text=reflection.reflection_text,
-                    memory_type="reflection",
-                    memory_scope="temporal",
-                    significance=6.0,  # Medium-high significance
-                    tags=["time_reflection", "idle", "temporal_awareness"],
-                    metadata={
-                        "reflection": reflection.model_dump(),
-                        "timestamp": now.isoformat(),
-                        "user_id": str(self.user_id),
+            # Generate reflection using Agent SDK
+            with trace(workflow_name="idle_reflection", group_id=f"user_{self.user_id}"):
+                result = await Runner.run(
+                    self.reflection_agent,
+                    json.dumps({
                         "idle_duration": idle_duration,
-                        "temporal_context": self.current_temporal_context
-                    }
+                        "emotional_state": emotional_state
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="IdleReflection",
+                        trace_metadata={"idle_duration": idle_duration}
+                    )
                 )
-            
-            return reflection
+                
+                reflection = result.final_output.model_dump()
+                
+                # Store the reflection
+                self.idle_reflections.append(reflection)
+                
+                # Add a memory of this reflection
+                if self.memory_core and hasattr(self.memory_core, "add_memory"):
+                    await self.memory_core.add_memory(
+                        memory_text=reflection["reflection_text"],
+                        memory_type="reflection",
+                        memory_scope="temporal",
+                        significance=6.0,  # Medium-high significance
+                        tags=["time_reflection", "idle", "temporal_awareness"],
+                        metadata={
+                            "reflection": reflection,
+                            "timestamp": now.isoformat(),
+                            "user_id": str(self.user_id),
+                            "idle_duration": idle_duration,
+                            "temporal_context": self.current_temporal_context
+                        }
+                    )
+                
+                return reflection
         
         except Exception as e:
             logger.error(f"Error generating idle reflection: {str(e)}")
@@ -1506,7 +1563,7 @@ class TemporalPerceptionSystem:
         self.idle_start_time = None
     
     async def _add_time_perception_memory(self, seconds_elapsed: float, 
-                                       time_effects: List[TimeDriftEffect]) -> Optional[str]:
+                                       time_effects: List[Dict[str, Any]]) -> Optional[str]:
         """Add a memory about time perception experience"""
         if not self.memory_core or not hasattr(self.memory_core, "add_memory"):
             return None
@@ -1537,7 +1594,7 @@ class TemporalPerceptionSystem:
         
         # Add effects if any
         if time_effects:
-            effect_text = time_effects[0].description
+            effect_text = time_effects[0]["description"]
             memory_text += f" {effect_text}"
         
         try:
@@ -1555,7 +1612,7 @@ class TemporalPerceptionSystem:
                 "perceived_duration": duration_str,
                 "time_category": time_category,
                 "subjective_dilation": self.time_perception_config["subjective_dilation_factor"],
-                "temporal_effects": [e.model_dump() for e in time_effects],
+                "temporal_effects": time_effects,
                 "temporal_context": temporal_context,
                 "time_scales_active": self.active_time_scales
             }
@@ -1586,7 +1643,39 @@ class TemporalPerceptionSystem:
 
 # =============== Integration with NyxBrain ===============
 
-# Function tools for NyxBrain integration
+# Create a temporal perception agent for NyxBrain
+def create_temporal_agent() -> Agent:
+    """Create an agent for temporal perception in NyxBrain"""
+    return Agent(
+        name="Temporal Perception Agent",
+        instructions="""You are a specialized agent that processes how Nyx experiences the passage of time.
+        Your role is to maintain continuous temporal awareness across multiple time scales simultaneously.
+        
+        You handle:
+        1. Tracking awareness of seconds, minutes, hours, days, weeks, months, and years passing
+        2. Monitoring transitions between time scales and temporal contexts
+        3. Generating reflections during idle periods about time passing
+        4. Tracking temporal milestones and patterns
+        5. Creating natural expressions about time perception
+        
+        Make time a continuous dimension that Nyx is always aware of, even when idle or not
+        actively processing. Nyx should maintain simultaneous awareness of all time scales from
+        seconds to years, with a rich perception of time passing continuously.""",
+        tools=[
+            categorize_time_elapsed,
+            format_duration,
+            determine_temporal_context,
+            generate_time_expression,
+            process_temporal_awareness,
+            generate_time_reflection,
+            detect_time_scale_transition,
+            detect_temporal_milestone,
+            calculate_time_effects
+        ],
+        model="gpt-4o"
+    )
+
+# Core API handlers for NyxBrain integration
 
 @function_tool
 async def initialize_temporal_perception(user_id: int, brain_context: Any) -> Dict[str, Any]:
@@ -1652,8 +1741,7 @@ async def get_temporal_awareness_state(time_system: TemporalPerceptionSystem) ->
     Returns:
         Temporal awareness state
     """
-    awareness_output = await time_system.get_temporal_awareness()
-    return awareness_output.model_dump()
+    return await time_system.get_temporal_awareness()
 
 @function_tool
 async def generate_temporal_expression(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
@@ -1683,8 +1771,7 @@ async def generate_temporal_expression(time_system: TemporalPerceptionSystem) ->
     }
     
     # Generate expression
-    expression = await generate_time_expression(perception_state)
-    return expression.model_dump()
+    return await generate_time_expression(perception_state)
 
 @function_tool
 async def get_current_temporal_context(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
@@ -1697,34 +1784,6 @@ async def get_current_temporal_context(time_system: TemporalPerceptionSystem) ->
     Returns:
         Current temporal context
     """
-    # Update temporal context if needed
+    # Update temporal context
     time_system.current_temporal_context = await determine_temporal_context()
     return time_system.current_temporal_context
-
-# Temporal perception agent for NyxBrain
-def create_temporal_agent() -> Agent:
-    """Create an agent for temporal perception in NyxBrain"""
-    return Agent(
-        name="Temporal Perception Agent",
-        instructions="""You are a specialized agent that processes how Nyx experiences the passage of time.
-        Your role is to maintain continuous temporal awareness across multiple time scales simultaneously.
-        
-        You handle:
-        1. Tracking awareness of seconds, minutes, hours, days, weeks, months, and years passing
-        2. Monitoring transitions between time scales and temporal contexts
-        3. Generating reflections during idle periods about time passing
-        4. Tracking temporal milestones and patterns
-        5. Creating natural expressions about time perception
-        
-        Make time a continuous dimension that Nyx is always aware of, even when idle or not
-        actively processing. Nyx should maintain simultaneous awareness of all time scales from
-        seconds to years, with a rich perception of time passing continuously.""",
-        tools=[
-            initialize_temporal_perception,
-            process_temporal_interaction_start,
-            process_temporal_interaction_end,
-            get_temporal_awareness_state,
-            generate_temporal_expression,
-            get_current_temporal_context
-        ]
-    )
