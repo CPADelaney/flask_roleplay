@@ -749,7 +749,9 @@ class EmotionalCore:
                 "input_text": input_data.input_text[:100], # Truncate for logging
                 "dominant_emotion": input_data.dominant_emotion,
                 "intensity": input_data.intensity,
-                "update_chemicals": input_data.update_chemicals
+                "update_chemicals": input_data.update_chemicals,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "cycle": ctx.context.cycle_count
             }
         ):
             # Pre-fetch current neurochemical values for better performance
@@ -757,7 +759,29 @@ class EmotionalCore:
                 c: d["value"] for c, d in self.neurochemicals.items()
             }
             ctx.context.record_neurochemical_values(neurochemical_state)
+            
+            # Store handoff in context
+            ctx.context.record_agent_state("Neurochemical Agent", {
+                "handoff_received": True,
+                "input_emotion": input_data.dominant_emotion,
+                "input_intensity": input_data.intensity,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "source_agent": ctx.context.active_agent
+            })
+            
+            # Add circular buffer entry
+            ctx.context._add_to_circular_buffer("handoffs", {
+                "from": ctx.context.active_agent,
+                "to": "Neurochemical Agent",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "input_data": {
+                    "emotion": input_data.dominant_emotion,
+                    "intensity": input_data.intensity
+                },
+                "cycle": ctx.context.cycle_count
+            })
     
+        
     async def _on_reflection_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: ReflectionRequest):
         """
         Enhanced callback when handing off to reflection agent with structured input
@@ -779,7 +803,9 @@ class EmotionalCore:
                     "primary": input_data.emotional_state.primary_emotion.name,
                     "valence": input_data.emotional_state.valence
                 },
-                "consider_history": input_data.consider_history
+                "consider_history": input_data.consider_history,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "cycle": ctx.context.cycle_count
             }
         ):
             # Pre-calculate emotional state for better performance
@@ -789,6 +815,37 @@ class EmotionalCore:
                 ctx.context.last_emotions = emotional_state
             except Exception as e:
                 logger.error(f"Error pre-calculating emotions: {e}")
+            
+            # Store reflection context
+            ctx.context.set_value("reflection_session_start", datetime.datetime.now().isoformat())
+            ctx.context.set_value("reflection_input", {
+                "text": input_data.input_text,
+                "emotional_state": {
+                    "primary": input_data.emotional_state.primary_emotion.name,
+                    "intensity": input_data.emotional_state.primary_emotion.intensity
+                }
+            })
+            
+            # Store handoff in context
+            ctx.context.record_agent_state("Reflection Agent", {
+                "handoff_received": True,
+                "reflection_depth": input_data.reflection_depth,
+                "consider_history": input_data.consider_history,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "source_agent": ctx.context.active_agent
+            })
+            
+            # Add circular buffer entry
+            ctx.context._add_to_circular_buffer("handoffs", {
+                "from": ctx.context.active_agent,
+                "to": "Reflection Agent",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "input_data": {
+                    "reflection_depth": input_data.reflection_depth,
+                    "primary_emotion": input_data.emotional_state.primary_emotion.name
+                },
+                "cycle": ctx.context.cycle_count
+            })
     
     async def _on_learning_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: LearningRequest):
         """
@@ -937,9 +994,10 @@ class EmotionalCore:
             self.history_index = (self.history_index + 1) % self.max_history_size
             self.emotional_state_history[self.history_index] = state
     
+
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
         """
-        Process input text through the DNM and update emotional state
+        Process input text through the emotional system with enhanced SDK integration
         
         Args:
             text: Input text to process
@@ -959,25 +1017,13 @@ class EmotionalCore:
             conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
             self.context.set_value("conversation_id", conversation_id)
         
-        # Simplified RunConfig creation using SDK patterns
-        run_config = RunConfig(
-            workflow_name="Emotional_Processing",
-            trace_id=f"emotion_trace_{self.context.cycle_count}",
-            group_id=conversation_id,
-            model=orchestrator.model,
-            model_settings=ModelSettings(temperature=0.4, max_tokens=300),
-            trace_metadata={
-                "input_text_length": len(text),
-                "cycle_count": self.context.cycle_count,
-                "pattern_analysis": self._quick_pattern_analysis(text)
-            }
-        )
-        
-        # Track API call start time
+        # Start time for performance tracking
         start_time = datetime.datetime.now()
         
-        # Run ID for tracking
+        # Create unique run ID
         run_id = f"run_{datetime.datetime.now().timestamp()}"
+        
+        # Track run
         self.active_runs[run_id] = {
             "start_time": start_time,
             "input": text[:100],  # Truncate for logging
@@ -985,25 +1031,40 @@ class EmotionalCore:
             "conversation_id": conversation_id
         }
         
-        # Run the orchestrator with proper trace using SDK features
-        with trace(
-            workflow_name="Emotional_Processing", 
-            trace_id=f"emotion_trace_{self.context.cycle_count}",
-            group_id=conversation_id,
-            metadata={
-                "input_text_length": len(text),
-                "cycle_count": self.context.cycle_count,
-                "run_id": run_id
-            }
+        # Using enhanced tracing utilities
+        with create_emotion_trace(
+            workflow_name="Emotional_Processing",
+            ctx=RunContextWrapper(context=self.context),
+            input_text_length=len(text),
+            run_id=run_id,
+            pattern_analysis=self._quick_pattern_analysis(text)
         ):
             try:
-                # Create structured input for the agent
+                # Structured input with enhanced data
                 structured_input = json.dumps({
                     "input_text": text,
-                    "current_cycle": self.context.cycle_count
+                    "current_cycle": self.context.cycle_count,
+                    "context": {
+                        "previous_emotions": self.context.last_emotions,
+                        "current_chemicals": {
+                            c: round(d["value"], 2) for c, d in self.neurochemicals.items()
+                        } if self.neurochemicals else {}
+                    }
                 })
                 
-                # Execute the orchestrator with the run config
+                # Create optimized run configuration
+                run_config = create_emotional_run_config(
+                    workflow_name="Emotional_Processing",
+                    cycle_count=self.context.cycle_count,
+                    conversation_id=conversation_id,
+                    input_text_length=len(text),
+                    pattern_analysis=self._quick_pattern_analysis(text),
+                    model=orchestrator.model,
+                    temperature=0.4,
+                    max_tokens=300
+                )
+                
+                # Execute orchestrator
                 result = await Runner.run(
                     orchestrator,
                     structured_input,
@@ -1011,28 +1072,30 @@ class EmotionalCore:
                     run_config=run_config,
                 )
                 
-                # Calculate duration and update performance metrics
+                # Update performance metrics
                 duration = (datetime.datetime.now() - start_time).total_seconds()
                 self._update_performance_metrics(duration)
                 
-                # Mark run completion
+                # Update run status
                 self.active_runs[run_id]["status"] = "completed"
                 self.active_runs[run_id]["duration"] = duration
                 self.active_runs[run_id]["output"] = result.final_output
                 
-                # Record emotional state for history
+                # Record emotional state
                 self._record_emotional_state()
                 
                 return result.final_output
-            
+                
             except Exception as e:
-                # Enhanced error handling with a custom_span
+                # Create error span
                 with custom_span(
                     "processing_error",
                     data={
                         "error_type": type(e).__name__,
                         "message": str(e),
-                        "run_id": run_id
+                        "run_id": run_id,
+                        "cycle": self.context.cycle_count,
+                        "timestamp": datetime.datetime.now().isoformat()
                     }
                 ):
                     logger.error(f"Error in process_emotional_input: {e}")
