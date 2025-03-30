@@ -8,8 +8,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     pkg-config \
-    default-libmysqlclient-dev \  # <-- Added for mysqlclient
-    libpq-dev \                  # <-- Keep if you ALSO need PostgreSQL (psycopg2)
+    default-libmysqlclient-dev \
+    libpq-dev \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
