@@ -202,42 +202,34 @@ def create_run_config(
     ...
 
 def create_run_config(
-    workflow_name: Optional[str] = None,
-    trace_id: Optional[str] = None,
+    workflow_name: str,
+    cycle_count: int,
+    conversation_id: Optional[str] = None,
+    input_text_length: Optional[int] = None,
+    pattern_analysis: Optional[str] = None,
+    model: Optional[str] = None,
     temperature: float = 0.4,
     max_tokens: int = 300,
-    include_sensitive_data: bool = True,
-    cycle_count: int = 0,
-    model: str = "o3-mini",
-    model_provider: Optional[ModelProvider] = None,
-    input_guardrails: Optional[List[InputGuardrail[Any]]] = None,
-    output_guardrails: Optional[List[OutputGuardrail[Any]]] = None,
-    context_data: Optional[Dict[str, Any]] = None,
-    handoff_input_filter: Optional[Callable] = None,
-    group_id: Optional[str] = None
+    trace_id: Optional[str] = None,
 ) -> RunConfig:
     """
-    Enhanced factory function for creating standardized run configurations
+    SDK-optimized factory for creating standardized run configurations
     
     Args:
         workflow_name: Name of the workflow
-        trace_id: Unique trace identifier
+        cycle_count: Current processing cycle count
+        conversation_id: Conversation identifier for grouping traces
+        input_text_length: Length of input text if available
+        pattern_analysis: Pattern analysis result if available
+        model: Model to use for inference (optional override)
         temperature: Model temperature setting
         max_tokens: Maximum tokens for model response
-        include_sensitive_data: Whether to include sensitive data in traces
-        cycle_count: Current processing cycle count
-        model: Model to use for inference
-        model_provider: Provider for model lookup (OpenAIProvider by default)
-        input_guardrails: Optional list of input guardrails
-        output_guardrails: Optional list of output guardrails
-        context_data: Additional context metadata
-        handoff_input_filter: Function to filter handoff inputs
-        group_id: Group ID for linking related traces
+        trace_id: Optional custom trace ID
         
     Returns:
-        Run configuration for the Agent SDK
+        Optimized run configuration
     """
-    # Generate a proper trace ID if not provided
+    # Generate a proper trace ID using SDK function if not provided
     if not trace_id:
         trace_id = gen_trace_id()
     elif not trace_id.startswith("trace_"):
@@ -251,27 +243,31 @@ def create_run_config(
         "timestamp": datetime.datetime.now().isoformat()
     }
     
-    # Add any additional context data if provided
-    if context_data:
-        metadata.update(context_data)
+    # Add optional metadata
+    if input_text_length is not None:
+        metadata["input_text_length"] = input_text_length
+    
+    if pattern_analysis:
+        metadata["pattern_analysis"] = pattern_analysis
+        
+    if conversation_id:
+        metadata["conversation_id"] = conversation_id
     
     # Create run configuration with SDK features
     return RunConfig(
-        workflow_name=workflow_name or f"Emotion_{cycle_count}",
+        workflow_name=workflow_name,
         trace_id=trace_id,
-        group_id=group_id,
+        group_id=conversation_id,
         model=model,
-        model_provider=model_provider or OpenAIProvider(),
+        model_provider=OpenAIProvider(),
         model_settings=ModelSettings(
             temperature=temperature,
             top_p=0.95,
             max_tokens=max_tokens
         ),
-        handoff_input_filter=handoff_input_filter or keep_relevant_history,
-        trace_include_sensitive_data=include_sensitive_data,
-        trace_metadata=metadata,
-        input_guardrails=input_guardrails or [],
-        output_guardrails=output_guardrails or []
+        handoff_input_filter=handoff_filters.keep_relevant_history,
+        trace_include_sensitive_data=True,
+        trace_metadata=metadata
     )
 
 def with_emotion_trace(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
