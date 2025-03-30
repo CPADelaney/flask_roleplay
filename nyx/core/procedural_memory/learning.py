@@ -838,7 +838,7 @@ class ProceduralMemoryConsolidator:
         self.max_history = 20
         self.templates = {}  # Template id -> template
         # Added fields for enhanced functionality
-        self.consolidation_lock = Lock()
+        self.consolidation_lock = asyncio.Lock()  # Using asyncio.Lock instead of threading.Lock
         self.consolidation_interval = 3600  # Seconds between auto-consolidations
         self.last_consolidation = datetime.datetime.now().timestamp()
         self.memory_threshold = 0.8  # Threshold to trigger memory consolidation
@@ -848,70 +848,68 @@ class ProceduralMemoryConsolidator:
 
     async def consolidate_procedural_memory(self) -> Dict[str, Any]:
         """Consolidate procedural memory during downtime"""
-        # Create basic concurrency protection
-        if not self.consolidation_lock.acquire(blocking=False):
-            return {
-                "status": "already_running",
-                "message": "Consolidation is already running"
-            }
-            
-        try:
-            # Check if consolidation is needed
-            now = datetime.datetime.now().timestamp()
-            if (now - self.last_consolidation < self.consolidation_interval and 
-                not self.is_memory_pressure_high()):
-                return {
-                    "consolidated_templates": 0,
-                    "procedures_updated": 0,
-                    "status": "skipped",
-                    "reason": "Too soon since last consolidation and no memory pressure"
-                }
-            
-            # Update last consolidation time
-            self.last_consolidation = now
-            
-            # Identify related procedures
-            related_procedures = self._find_related_procedures()
-            
-            # Extract common patterns
-            common_patterns = self._extract_common_patterns(related_procedures)
-            
-            # Create generalized templates
-            templates = []
-            for pattern in common_patterns:
-                template = self._create_template(pattern)
-                if template:
-                    templates.append(template)
-                    self.templates[template["id"]] = template
-            
-            # Update existing procedures with references to templates
-            updated = await self._update_procedures_with_templates(templates)
-            
-            # Record consolidation
-            self.consolidation_history.append({
-                "consolidated_templates": len(templates),
-                "procedures_updated": updated,
-                "timestamp": datetime.datetime.now().isoformat()
-            })
-            
-            # Trim history
-            if len(self.consolidation_history) > self.max_history:
-                self.consolidation_history = self.consolidation_history[-self.max_history:]
-            
-            # Perform memory optimization if needed
-            memory_stats = {}
-            if self.is_memory_pressure_high():
-                memory_stats = self.optimize_memory_usage()
+        # Create trace for this operation
+        with agents_trace("consolidate_procedural_memory"):
+            # Create basic concurrency protection
+            try:
+                await self.consolidation_lock.acquire()
                 
-            return {
-                "consolidated_templates": len(templates),
-                "procedures_updated": updated,
-                "status": "success",
-                "memory_optimization": memory_stats
-            }
-        finally:
-            # Always release the lock
-            self.consolidation_lock.release()
+                # Check if consolidation is needed
+                now = datetime.datetime.now().timestamp()
+                if (now - self.last_consolidation < self.consolidation_interval and 
+                    not self.is_memory_pressure_high()):
+                    return {
+                        "consolidated_templates": 0,
+                        "procedures_updated": 0,
+                        "status": "skipped",
+                        "reason": "Too soon since last consolidation and no memory pressure"
+                    }
+                
+                # Update last consolidation time
+                self.last_consolidation = now
+                
+                # Identify related procedures
+                related_procedures = self._find_related_procedures()
+                
+                # Extract common patterns
+                common_patterns = self._extract_common_patterns(related_procedures)
+                
+                # Create generalized templates
+                templates = []
+                for pattern in common_patterns:
+                    template = self._create_template(pattern)
+                    if template:
+                        templates.append(template)
+                        self.templates[template["id"]] = template
+                
+                # Update existing procedures with references to templates
+                updated = await self._update_procedures_with_templates(templates)
+                
+                # Record consolidation
+                self.consolidation_history.append({
+                    "consolidated_templates": len(templates),
+                    "procedures_updated": updated,
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                # Trim history
+                if len(self.consolidation_history) > self.max_history:
+                    self.consolidation_history = self.consolidation_history[-self.max_history:]
+                
+                # Perform memory optimization if needed
+                memory_stats = {}
+                if self.is_memory_pressure_high():
+                    memory_stats = self.optimize_memory_usage()
+                    
+                return {
+                    "consolidated_templates": len(templates),
+                    "procedures_updated": updated,
+                    "status": "success",
+                    "memory_optimization": memory_stats
+                }
+            finally:
+                # Always release the lock
+                self.consolidation_lock.release()
     
     def _find_related_procedures(self) -> List[Dict[str, Any]]:
         """Find procedures that might share patterns"""
