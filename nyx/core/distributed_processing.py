@@ -1,45 +1,32 @@
 # nyx/core/distributed_processing.py
 
 import asyncio
-import concurrent.futures
 import datetime
 import json
 import logging
 import time
-from typing import Dict, List, Any, Optional, Callable, Coroutine, Tuple
+from typing import Dict, List, Any, Optional, Callable, Coroutine, Tuple, Union
+from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, function_tool, RunContextWrapper, trace, handoff
+from agents import (
+    Agent, Runner, trace, function_tool, RunContextWrapper, handoff, 
+    ModelSettings, InputGuardrail, GuardrailFunctionOutput
+)
 
 logger = logging.getLogger(__name__)
 
-class SubsystemTask:
+class SubsystemTask(BaseModel):
     """Represents a parallel task for a subsystem"""
-    
-    def __init__(self, 
-               subsystem_name: str, 
-               coroutine: Coroutine, 
-               dependencies: List[str] = None,
-               priority: int = 1):
-        self.subsystem_name = subsystem_name
-        self.coroutine = coroutine
-        self.dependencies = dependencies or []
-        self.priority = priority
-        self.result = None
-        self.completed = False
-        self.started = False
-        self.start_time = None
-        self.end_time = None
-        self.task = None
-    
-    @property
-    def duration(self) -> Optional[float]:
-        """Calculate duration if task completed"""
-        if self.start_time and self.end_time:
-            return (self.end_time - self.start_time).total_seconds()
-        return None
-    
-    def __repr__(self):
-        return f"SubsystemTask({self.subsystem_name}, completed={self.completed})"
+    subsystem_name: str = Field(..., description="Name of the subsystem")
+    task_id: str = Field(..., description="Unique identifier for the task")
+    dependencies: List[str] = Field(default_factory=list, description="IDs of tasks that must complete before this one")
+    priority: int = Field(1, description="Task priority (higher = more important)")
+    started: bool = Field(False, description="Whether the task has started")
+    completed: bool = Field(False, description="Whether the task has completed")
+    result: Optional[Any] = Field(None, description="Result from task execution")
+    error: Optional[str] = Field(None, description="Error message if task failed")
+    start_time: Optional[datetime.datetime] = Field(None, description="When task started")
+    end_time: Optional[datetime.datetime] = Field(None, description="When task completed")
 
 class TaskExecutionPlan(BaseModel):
     """Model for the task execution plan"""
@@ -63,6 +50,20 @@ class DependencyAnalysisResult(BaseModel):
     bottlenecks: List[str] = Field(..., description="Identified bottleneck tasks")
     critical_path: List[str] = Field(..., description="Tasks on the critical path")
 
+class TaskContext(BaseModel):
+    """Context for task execution"""
+    user_id: Optional[str] = Field(None, description="User ID if relevant")
+    session_id: Optional[str] = Field(None, description="Session ID if relevant")
+    max_retries: int = Field(3, description="Maximum number of task retries")
+    timeout_seconds: float = Field(60.0, description="Task timeout in seconds")
+    resource_limit: float = Field(1.0, description="Resource usage limit (0.0-1.0)")
+
+class TaskValidationResult(BaseModel):
+    """Output from task validation guardrail"""
+    is_valid: bool = Field(..., description="Whether the task is valid")
+    reason: Optional[str] = Field(None, description="Reason if task is invalid")
+    recommended_priority: Optional[int] = Field(None, description="Recommended priority adjustment")
+
 class DistributedProcessingManager:
     """
     Manager for distributed parallel processing across subsystems
@@ -72,10 +73,16 @@ class DistributedProcessingManager:
     """
     
     def __init__(self, max_parallel_tasks: int = 10):
+        """
+        Initialize the distributed processing manager
+        
+        Args:
+            max_parallel_tasks: Maximum number of tasks to run in parallel
+        """
         self.max_parallel_tasks = max_parallel_tasks
-        self.task_registry = {}
-        self.subsystem_performance = {}
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel_tasks)
+        self.task_registry: Dict[str, SubsystemTask] = {}
+        self.active_tasks: Dict[str, asyncio.Task] = {}
+        self.subsystem_performance: Dict[str, Dict[str, Any]] = {}
         
         # Task groups for different cognitive processes
         self.task_groups = {
@@ -109,327 +116,364 @@ class DistributedProcessingManager:
         }
         
         # Initialize agents
-        self.task_orchestrator = self._create_task_orchestrator_agent()
-        self.resource_allocator = self._create_resource_allocator_agent()
-        self.dependency_analyzer = self._create_dependency_analyzer_agent()
-        self.performance_monitor = self._create_performance_monitor_agent()
+        self._init_agents()
         
         # Trace ID for linking traces
         self.trace_group_id = f"distributed_processing_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        logger.info("DistributedProcessingManager initialized")
     
-    def _create_task_orchestrator_agent(self) -> Agent:
-        """Create agent for orchestrating task execution"""
+    def _init_agents(self):
+        """Initialize all agent components"""
+        # Task validation agent
+        self.validation_agent = self._create_validation_agent()
+        
+        # Resource allocation agent
+        self.resource_allocator = self._create_resource_allocator()
+        
+        # Dependency analysis agent
+        self.dependency_analyzer = self._create_dependency_analyzer()
+        
+        # Performance monitoring agent
+        self.performance_monitor = self._create_performance_monitor()
+        
+        # Main orchestration agent
+        self.task_orchestrator = self._create_task_orchestrator()
+    
+    def _create_validation_agent(self) -> Agent:
+        """Create an agent for validating task configurations"""
         return Agent(
-            name="Task_Orchestrator",
+            name="Task_Validator",
             instructions="""
-            You are the task orchestration system for Nyx's distributed processing.
-            Your role is to:
-            1. Prioritize tasks based on dependencies and importance
-            2. Allocate resources efficiently across subsystems
-            3. Resolve conflicts and bottlenecks
-            4. Monitor execution and handle failures
+            You validate task configurations before they are added to the processing queue.
             
-            Focus on maximizing parallel execution while respecting dependencies.
-            Create an efficient execution plan that:
-            - Respects all task dependencies
-            - Maximizes parallel execution
-            - Optimizes resource allocation
-            - Identifies the critical path
+            Your responsibilities:
+            1. Verify task dependencies exist and don't create circular dependencies
+            2. Check that task priorities are appropriate for their importance
+            3. Validate resource requirements against available system resources
+            4. Ensure tasks have all required metadata and parameters
             
-            Your decisions should balance fast execution with thorough processing.
+            Reject tasks that would cause system issues, and suggest fixes when possible.
             """,
-            handoffs=[
-                handoff(self.resource_allocator, 
-                       tool_name_override="allocate_resources", 
-                       tool_description_override="Allocate resources for task execution"),
-                
-                handoff(self.dependency_analyzer, 
-                       tool_name_override="analyze_dependencies",
-                       tool_description_override="Analyze task dependencies and determine execution order"),
-                
-                handoff(self.performance_monitor,
-                       tool_name_override="monitor_performance",
-                       tool_description_override="Monitor execution performance and track metrics")
-            ],
             tools=[
-                function_tool(self._get_registered_tasks),
-                function_tool(self._get_task_dependencies),
-                function_tool(self._get_task_priorities),
-                function_tool(self._schedule_task),
-                function_tool(self._execute_single_task)
+                function_tool(self._check_dependency_existence),
+                function_tool(self._check_circular_dependencies),
+                function_tool(self._validate_resource_requirements)
             ],
-            model="gpt-4o",
-            output_type=TaskExecutionPlan
+            output_type=TaskValidationResult
         )
     
-    def _create_resource_allocator_agent(self) -> Agent:
-        """Create agent for resource allocation"""
+    def _create_resource_allocator(self) -> Agent:
+        """Create an agent for allocating resources to tasks"""
         return Agent(
             name="Resource_Allocator",
             instructions="""
-            You are the resource allocation system for Nyx's distributed processing.
-            Your role is to:
-            1. Allocate processing resources to tasks based on priority and requirements
-            2. Ensure efficient resource utilization
-            3. Prevent resource contention and starvation
-            4. Adapt allocation based on task complexity and importance
+            You allocate computational resources to tasks based on their priority and requirements.
             
-            Optimize the allocation of limited resources to maximize overall performance.
+            Your responsibilities:
+            1. Analyze task resource requirements
+            2. Balance resource allocation across different task types
+            3. Ensure high-priority tasks receive adequate resources
+            4. Prevent resource starvation for lower-priority tasks
+            5. Adapt allocation based on system load and performance data
+            
+            Produce an optimal resource allocation plan that maximizes throughput.
             """,
             tools=[
                 function_tool(self._get_available_resources),
                 function_tool(self._calculate_task_resource_needs),
-                function_tool(self._apply_resource_allocation)
+                function_tool(self._get_system_load)
             ],
-            model="gpt-4o",
             output_type=ResourceAllocationResult
         )
     
-    def _create_dependency_analyzer_agent(self) -> Agent:
-        """Create agent for dependency analysis"""
+    def _create_dependency_analyzer(self) -> Agent:
+        """Create an agent for analyzing task dependencies"""
         return Agent(
             name="Dependency_Analyzer",
             instructions="""
-            You are the dependency analysis system for Nyx's distributed processing.
-            Your role is to:
-            1. Analyze task dependencies to determine execution order
-            2. Identify tasks that can be executed in parallel
-            3. Detect dependency bottlenecks
-            4. Build optimal execution levels
+            You analyze dependencies between tasks to determine execution order.
             
-            Create an execution plan that respects all dependencies while maximizing parallelism.
+            Your responsibilities:
+            1. Build a dependency graph from task relationships
+            2. Identify execution levels for parallel processing
+            3. Detect bottlenecks in the execution flow
+            4. Find the critical path that determines minimum execution time
+            5. Identify opportunities to increase parallelism
+            
+            Produce a detailed analysis that enables optimal execution planning.
             """,
             tools=[
                 function_tool(self._get_task_dependencies),
                 function_tool(self._calculate_execution_levels),
                 function_tool(self._identify_bottlenecks)
             ],
-            model="gpt-4o",
             output_type=DependencyAnalysisResult
         )
     
-    def _create_performance_monitor_agent(self) -> Agent:
-        """Create agent for performance monitoring"""
+    def _create_performance_monitor(self) -> Agent:
+        """Create an agent for monitoring performance metrics"""
         return Agent(
             name="Performance_Monitor",
             instructions="""
-            You are the performance monitoring system for Nyx's distributed processing.
-            Your role is to:
-            1. Track task execution metrics
-            2. Identify performance bottlenecks
-            3. Recommend optimizations for future executions
-            4. Provide analytical insights on processing performance
+            You monitor and analyze the performance of the distributed processing system.
             
-            Focus on collecting actionable performance data and providing insights.
+            Your responsibilities:
+            1. Track execution metrics for tasks and subsystems
+            2. Identify performance bottlenecks and inefficiencies
+            3. Analyze trends in task execution times
+            4. Recommend system optimizations based on performance data
+            5. Provide insights on resource utilization patterns
+            
+            Focus on actionable insights that can improve system performance.
             """,
             tools=[
-                function_tool(self._track_task_metrics),
-                function_tool(self._calculate_performance_trends),
-                function_tool(self._update_subsystem_performance)
+                function_tool(self._get_performance_metrics),
+                function_tool(self._analyze_execution_trends),
+                function_tool(self._identify_performance_bottlenecks)
+            ]
+        )
+    
+    def _create_task_orchestrator(self) -> Agent:
+        """Create the main orchestration agent for task execution"""
+        return Agent(
+            name="Task_Orchestrator",
+            instructions="""
+            You are the main orchestrator for distributed task processing.
+            
+            Your responsibilities:
+            1. Create execution plans based on dependency analysis
+            2. Allocate resources to tasks based on priority and requirements
+            3. Monitor task execution and handle failures or delays
+            4. Optimize parallel execution while respecting dependencies
+            5. Balance system load across different subsystems
+            
+            Make intelligent decisions to maximize throughput while ensuring
+            correct execution order and handling failures gracefully.
+            """,
+            handoffs=[
+                handoff(self.validation_agent, 
+                       tool_name_override="validate_task", 
+                       tool_description_override="Validate a task before registration"),
+                
+                handoff(self.resource_allocator, 
+                       tool_name_override="allocate_resources",
+                       tool_description_override="Allocate resources for task execution"),
+                
+                handoff(self.dependency_analyzer,
+                       tool_name_override="analyze_dependencies",
+                       tool_description_override="Analyze task dependencies and determine execution order"),
+                       
+                handoff(self.performance_monitor,
+                       tool_name_override="monitor_performance",
+                       tool_description_override="Monitor execution performance and track metrics")
             ],
-            model="gpt-4o"
+            tools=[
+                function_tool(self._get_registered_tasks),
+                function_tool(self._schedule_task),
+                function_tool(self._execute_single_task),
+                function_tool(self._handle_task_failure)
+            ],
+            output_type=TaskExecutionPlan
         )
-    
-    def register_task(self, 
-                    task_id: str, 
-                    subsystem_name: str, 
-                    coroutine: Coroutine, 
-                    dependencies: List[str] = None,
-                    priority: int = 1,
-                    group: str = None) -> None:
-        """
-        Register a task for parallel execution
-        
-        Args:
-            task_id: Unique task identifier
-            subsystem_name: Name of the subsystem responsible for the task
-            coroutine: Async coroutine to execute
-            dependencies: List of task IDs that must complete before this task
-            priority: Task priority (higher = more important)
-            group: Task group for resource allocation
-        """
-        task = SubsystemTask(
-            subsystem_name=subsystem_name,
-            coroutine=coroutine,
-            dependencies=dependencies or [],
-            priority=priority
-        )
-        
-        self.task_registry[task_id] = task
-        
-        # Add to task group if specified
-        if group and group in self.task_groups:
-            self.task_groups[group].append(task_id)
-    
-    async def execute_tasks(self) -> Dict[str, Any]:
-        """
-        Execute all registered tasks with dependency resolution using Agent SDK
-        
-        Returns:
-            Dictionary of task results by task ID
-        """
-        start_time = datetime.datetime.now()
-        
-        with trace(workflow_name="Task_Execution", group_id=self.trace_group_id):
-            # Run the task orchestrator agent to create an execution plan
-            result = await Runner.run(
-                self.task_orchestrator,
-                json.dumps({
-                    "tasks": list(self.task_registry.keys()),
-                    "max_parallel_tasks": self.max_parallel_tasks,
-                    "subsystem_performance": self.subsystem_performance
-                })
-            )
-            
-            # Get the execution plan
-            execution_plan = result.final_output
-            
-            # Execute according to the plan
-            results = {}
-            
-            # Track metrics for this execution
-            execution_metrics = {
-                "start_time": start_time.isoformat(),
-                "total_tasks": len(self.task_registry),
-                "execution_plan": execution_plan.model_dump(),
-                "completed_tasks": 0,
-                "failed_tasks": 0
-            }
-            
-            # Execute tasks in parallel groups according to the plan
-            for group_index, task_group in enumerate(execution_plan.parallel_groups):
-                group_start_time = datetime.datetime.now()
-                
-                # Create tasks for this group
-                tasks = []
-                for task_id in task_group:
-                    if task_id in self.task_registry:
-                        task = self.task_registry[task_id]
-                        
-                        # Apply resource allocation if specified
-                        resource_allocation = execution_plan.resource_allocation.get(task_id, 1.0)
-                        
-                        # Create and start asyncio task
-                        task.start_time = datetime.datetime.now()
-                        task.started = True
-                        
-                        # Wrap the coroutine to catch exceptions and record completion
-                        async def execute_and_record(task_obj, task_coroutine):
-                            try:
-                                task_result = await task_coroutine
-                                task_obj.result = task_result
-                                task_obj.completed = True
-                                self.performance_metrics["tasks_completed"] += 1
-                                execution_metrics["completed_tasks"] += 1
-                                return task_result
-                            except Exception as e:
-                                logger.error(f"Error executing task: {e}")
-                                task_obj.result = {"error": str(e)}
-                                execution_metrics["failed_tasks"] += 1
-                                return {"error": str(e)}
-                            finally:
-                                task_obj.end_time = datetime.datetime.now()
-                        
-                        asyncio_task = asyncio.create_task(execute_and_record(task, task.coroutine))
-                        tasks.append(asyncio_task)
-                
-                # Wait for all tasks in this group to complete
-                if tasks:
-                    group_results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                    # Record results
-                    for i, task_id in enumerate(task_group):
-                        if i < len(group_results):
-                            results[task_id] = group_results[i]
-                
-                group_end_time = datetime.datetime.now()
-                group_duration = (group_end_time - group_start_time).total_seconds()
-                
-                # Update execution metrics
-                execution_metrics[f"group_{group_index}_duration"] = group_duration
-            
-            # Update performance metrics
-            execution_end_time = datetime.datetime.now()
-            total_duration = (execution_end_time - start_time).total_seconds()
-            
-            execution_metrics["end_time"] = execution_end_time.isoformat()
-            execution_metrics["total_duration"] = total_duration
-            
-            # Check if we've achieved a new max parallel
-            current_parallel = len(max(execution_plan.parallel_groups, key=len, default=[]))
-            self.performance_metrics["max_parallel_achieved"] = max(
-                self.performance_metrics["max_parallel_achieved"],
-                current_parallel
-            )
-            
-            # Update subsystem performance metrics
-            for task_id, task in self.task_registry.items():
-                if task.completed and task.duration is not None:
-                    subsystem = task.subsystem_name
-                    
-                    if subsystem not in self.subsystem_performance:
-                        self.subsystem_performance[subsystem] = {
-                            "tasks_completed": 0,
-                            "avg_duration": 0.0
-                        }
-                    
-                    perf = self.subsystem_performance[subsystem]
-                    perf["tasks_completed"] += 1
-                    
-                    # Update average duration
-                    perf["avg_duration"] = (
-                        (perf["tasks_completed"] - 1) * perf["avg_duration"] + task.duration
-                    ) / perf["tasks_completed"]
-            
-            # Identify bottlenecks
-            bottlenecks = {}
-            avg_duration = sum(task.duration or 0 for task in self.task_registry.values() if task.completed) / max(1, len([t for t in self.task_registry.values() if t.completed]))
-            
-            for task_id, task in self.task_registry.items():
-                if task.completed and task.duration is not None and task.duration > avg_duration * 1.5:
-                    bottlenecks[task_id] = {
-                        "subsystem": task.subsystem_name,
-                        "duration": task.duration,
-                        "relative_slowdown": task.duration / avg_duration
-                    }
-            
-            # Add performance info to results
-            results["_performance"] = {
-                "total_duration": total_duration,
-                "task_count": len(self.task_registry),
-                "max_parallel": current_parallel,
-                "bottlenecks": bottlenecks,
-                "execution_plan": execution_plan.model_dump()
-            }
-            
-            # Reset task registry for next use
-            self.task_registry = {}
-            for group in self.task_groups:
-                self.task_groups[group] = []
-            
-            return results
     
     @function_tool
-    async def _get_registered_tasks(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _check_dependency_existence(self, ctx: RunContextWrapper, dependencies: List[str]) -> Dict[str, Any]:
         """
-        Get information about all registered tasks
+        Check if all dependencies exist in the task registry
         
+        Args:
+            dependencies: List of task IDs to check
+            
         Returns:
-            Dictionary of task information
+            Dictionary with existence check results
         """
-        task_info = {}
-        
-        for task_id, task in self.task_registry.items():
-            task_info[task_id] = {
-                "subsystem": task.subsystem_name,
-                "dependencies": task.dependencies,
-                "priority": task.priority,
-                "group": next((g for g, tasks in self.task_groups.items() if task_id in tasks), None)
-            }
+        missing_dependencies = []
+        for dep_id in dependencies:
+            if dep_id not in self.task_registry:
+                missing_dependencies.append(dep_id)
         
         return {
-            "tasks": task_info,
-            "total_count": len(task_info)
+            "all_exist": len(missing_dependencies) == 0,
+            "missing_dependencies": missing_dependencies,
+            "total_dependencies": len(dependencies),
+            "existing_dependencies": len(dependencies) - len(missing_dependencies)
+        }
+    
+    @function_tool
+    async def _check_circular_dependencies(self, ctx: RunContextWrapper, task_id: str, dependencies: List[str]) -> Dict[str, Any]:
+        """
+        Check for circular dependencies in the task graph
+        
+        Args:
+            task_id: The ID of the task being checked
+            dependencies: Direct dependencies of the task
+            
+        Returns:
+            Dictionary with circular dependency check results
+        """
+        # Build dependency graph for existing tasks
+        dependency_graph = {}
+        for tid, task in self.task_registry.items():
+            dependency_graph[tid] = task.dependencies
+        
+        # Add the new task's dependencies
+        dependency_graph[task_id] = dependencies
+        
+        # Check for circular dependencies
+        visited = set()
+        path = set()
+        circular_path = []
+        
+        def dfs(node):
+            visited.add(node)
+            path.add(node)
+            
+            for neighbor in dependency_graph.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor):
+                        circular_path.append(neighbor)
+                        return True
+                elif neighbor in path:
+                    circular_path.append(neighbor)
+                    return True
+            
+            path.remove(node)
+            return False
+        
+        has_cycle = dfs(task_id)
+        
+        return {
+            "has_circular_dependency": has_cycle,
+            "circular_path": circular_path[::-1] if has_cycle else [],
+            "task_id": task_id
+        }
+    
+    @function_tool
+    async def _validate_resource_requirements(self, ctx: RunContextWrapper, task_id: str, resource_requirements: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Validate that resource requirements are within system constraints
+        
+        Args:
+            task_id: The ID of the task being checked
+            resource_requirements: Dictionary of resource requirements
+            
+        Returns:
+            Dictionary with validation results
+        """
+        # Get system resource limits
+        system_resources = {
+            "cpu": 1.0,
+            "memory": 1.0,
+            "network": 1.0,
+            "io": 1.0
+        }
+        
+        # Check requirements against limits
+        issues = []
+        for resource, required in resource_requirements.items():
+            if resource not in system_resources:
+                issues.append(f"Unknown resource: {resource}")
+            elif required > system_resources[resource]:
+                issues.append(f"Excessive {resource} requirement: {required} > {system_resources[resource]}")
+        
+        valid = len(issues) == 0
+        
+        # Calculate total resource load
+        total_load = sum(resource_requirements.values()) / len(resource_requirements) if resource_requirements else 0
+        
+        return {
+            "is_valid": valid,
+            "issues": issues,
+            "total_resource_load": total_load,
+            "resource_requirements": resource_requirements
+        }
+    
+    @function_tool
+    async def _get_available_resources(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get information about available system resources
+        
+        Returns:
+            Dictionary with resource availability information
+        """
+        # Get current resource allocation status
+        allocated_resources = sum(self.resource_allocation.values())
+        
+        # Calculate current usage from active tasks
+        active_task_count = len(self.active_tasks)
+        active_task_load = min(1.0, active_task_count / max(1, self.max_parallel_tasks))
+        
+        return {
+            "max_parallel_tasks": self.max_parallel_tasks,
+            "current_active_tasks": active_task_count,
+            "resource_allocation": self.resource_allocation,
+            "total_allocated": allocated_resources,
+            "system_load": active_task_load,
+            "available_capacity": max(0, 1.0 - active_task_load)
+        }
+    
+    @function_tool
+    async def _calculate_task_resource_needs(self, ctx: RunContextWrapper, task_ids: List[str]) -> Dict[str, float]:
+        """
+        Calculate resource needs for a set of tasks
+        
+        Args:
+            task_ids: List of task IDs to calculate resources for
+            
+        Returns:
+            Dictionary mapping task IDs to resource requirements
+        """
+        resource_needs = {}
+        
+        for task_id in task_ids:
+            if task_id in self.task_registry:
+                task = self.task_registry[task_id]
+                
+                # Calculate base resource need
+                base_need = 1.0 / self.max_parallel_tasks
+                
+                # Adjust based on priority (higher priority = more resources)
+                priority_factor = task.priority / 3.0  # Normalize priority (assuming 1-5 scale)
+                adjusted_need = base_need * (0.5 + priority_factor)
+                
+                # Find task group (if any)
+                task_group = next((g for g, tasks in self.task_groups.items() if task_id in tasks), None)
+                
+                # Apply group allocation if available
+                if task_group and task_group in self.resource_allocation:
+                    group_factor = self.resource_allocation[task_group]
+                    group_tasks = len(self.task_groups[task_group]) or 1
+                    adjusted_need = adjusted_need * group_factor / group_tasks
+                
+                resource_needs[task_id] = min(1.0, adjusted_need)  # Cap at 1.0
+        
+        return resource_needs
+    
+    @function_tool
+    async def _get_system_load(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get current system load metrics
+        
+        Returns:
+            Dictionary with system load information
+        """
+        active_task_count = len(self.active_tasks)
+        pending_task_count = len([t for t in self.task_registry.values() if not t.started and not t.completed])
+        
+        # Calculate per-subsystem load
+        subsystem_load = {}
+        for task_id, task in self.task_registry.items():
+            if task_id in self.active_tasks:
+                subsystem = task.subsystem_name
+                subsystem_load[subsystem] = subsystem_load.get(subsystem, 0) + 1
+        
+        return {
+            "active_tasks": active_task_count,
+            "pending_tasks": pending_task_count,
+            "system_capacity": self.max_parallel_tasks,
+            "load_percentage": (active_task_count / self.max_parallel_tasks) * 100 if self.max_parallel_tasks > 0 else 0,
+            "subsystem_load": subsystem_load
         }
     
     @function_tool
@@ -448,197 +492,7 @@ class DistributedProcessingManager:
         return dependencies
     
     @function_tool
-    async def _get_task_priorities(self, ctx: RunContextWrapper) -> Dict[str, int]:
-        """
-        Get priorities for all registered tasks
-        
-        Returns:
-            Dictionary mapping task IDs to their priorities
-        """
-        priorities = {}
-        
-        for task_id, task in self.task_registry.items():
-            priorities[task_id] = task.priority
-        
-        return priorities
-    
-    @function_tool
-    async def _schedule_task(self, ctx: RunContextWrapper, task_id: str, execution_time: int) -> Dict[str, Any]:
-        """
-        Schedule a task for execution at a specific time
-        
-        Args:
-            task_id: ID of the task to schedule
-            execution_time: Execution time (ms from now)
-            
-        Returns:
-            Scheduling result
-        """
-        if task_id not in self.task_registry:
-            return {
-                "success": False,
-                "error": f"Task {task_id} not found in registry"
-            }
-        
-        # This is a simulated scheduling function since we're not actually
-        # implementing delayed execution. In a real system, this would
-        # schedule the task to run at the specified time.
-        return {
-            "success": True,
-            "task_id": task_id,
-            "scheduled_time": datetime.datetime.now().isoformat(),
-            "execution_delay_ms": execution_time
-        }
-    
-    @function_tool
-    async def _execute_single_task(self, ctx: RunContextWrapper, task_id: str) -> Dict[str, Any]:
-        """
-        Execute a single task directly
-        
-        Args:
-            task_id: ID of the task to execute
-            
-        Returns:
-            Task execution result
-        """
-        if task_id not in self.task_registry:
-            return {
-                "success": False,
-                "error": f"Task {task_id} not found in registry"
-            }
-        
-        task = self.task_registry[task_id]
-        
-        try:
-            # Record start time
-            task.start_time = datetime.datetime.now()
-            task.started = True
-            
-            # Execute coroutine
-            result = await task.coroutine
-            
-            # Record completion
-            task.result = result
-            task.completed = True
-            task.end_time = datetime.datetime.now()
-            
-            # Update performance metrics
-            self.performance_metrics["tasks_completed"] += 1
-            
-            return {
-                "success": True,
-                "task_id": task_id,
-                "result": result,
-                "duration": task.duration
-            }
-        except Exception as e:
-            logger.error(f"Error executing task {task_id}: {e}")
-            
-            # Record failure
-            task.end_time = datetime.datetime.now()
-            
-            return {
-                "success": False,
-                "task_id": task_id,
-                "error": str(e),
-                "duration": task.duration
-            }
-    
-    @function_tool
-    async def _get_available_resources(self, ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Get available processing resources
-        
-        Returns:
-            Resource availability information
-        """
-        # Get current resource allocation status
-        allocated_resources = sum(self.resource_allocation.values())
-        
-        return {
-            "max_parallel_tasks": self.max_parallel_tasks,
-            "resource_allocation": self.resource_allocation,
-            "total_allocated": allocated_resources,
-            "available": max(0, 1.0 - allocated_resources)
-        }
-    
-    @function_tool
-    async def _calculate_task_resource_needs(self, 
-                                        ctx: RunContextWrapper, 
-                                        task_ids: List[str]) -> Dict[str, float]:
-        """
-        Calculate resource needs for a set of tasks
-        
-        Args:
-            task_ids: IDs of tasks to calculate resources for
-            
-        Returns:
-            Dictionary mapping task IDs to resource requirements
-        """
-        resource_needs = {}
-        
-        for task_id in task_ids:
-            if task_id in self.task_registry:
-                task = self.task_registry[task_id]
-                
-                # Calculate base resource need
-                base_need = 1.0 / self.max_parallel_tasks
-                
-                # Adjust based on priority
-                priority_factor = task.priority / 3.0  # Normalize priority (assuming 1-5 scale)
-                adjusted_need = base_need * (0.5 + priority_factor)
-                
-                # Find task group
-                task_group = next((g for g, tasks in self.task_groups.items() if task_id in tasks), None)
-                
-                # Apply group allocation if available
-                if task_group and task_group in self.resource_allocation:
-                    group_factor = self.resource_allocation[task_group]
-                    # Distribute group allocation among tasks in the group
-                    group_tasks = len(self.task_groups[task_group]) or 1
-                    adjusted_need = adjusted_need * group_factor / group_tasks
-                
-                resource_needs[task_id] = min(1.0, adjusted_need)  # Cap at 1.0
-        
-        return resource_needs
-    
-    @function_tool
-    async def _apply_resource_allocation(self, 
-                                     ctx: RunContextWrapper, 
-                                     allocation: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Apply resource allocation to tasks
-        
-        Args:
-            allocation: Dictionary mapping task IDs to resource allocations
-            
-        Returns:
-            Result of resource allocation
-        """
-        # This is a simulated function since we're not actually
-        # applying resource limitations. In a real system, this would
-        # set resource constraints on the tasks.
-        
-        valid_allocations = {}
-        total_allocated = 0.0
-        
-        for task_id, amount in allocation.items():
-            if task_id in self.task_registry:
-                # Ensure allocation is within valid range
-                valid_amount = max(0.1, min(1.0, amount))
-                valid_allocations[task_id] = valid_amount
-                total_allocated += valid_amount
-        
-        return {
-            "success": True,
-            "applied_allocations": valid_allocations,
-            "total_allocated": total_allocated
-        }
-    
-    @function_tool
-    async def _calculate_execution_levels(self, 
-                                     ctx: RunContextWrapper, 
-                                     dependencies: Dict[str, List[str]]) -> List[List[str]]:
+    async def _calculate_execution_levels(self, ctx: RunContextWrapper, dependencies: Dict[str, List[str]]) -> List[List[str]]:
         """
         Calculate execution levels based on task dependencies
         
@@ -680,9 +534,7 @@ class DistributedProcessingManager:
         return execution_levels
     
     @function_tool
-    async def _identify_bottlenecks(self, 
-                                ctx: RunContextWrapper, 
-                                execution_levels: List[List[str]]) -> Dict[str, Any]:
+    async def _identify_bottlenecks(self, ctx: RunContextWrapper, execution_levels: List[List[str]]) -> Dict[str, Any]:
         """
         Identify bottleneck tasks in execution levels
         
@@ -694,8 +546,7 @@ class DistributedProcessingManager:
         """
         bottlenecks = {
             "level_bottlenecks": [],
-            "dependency_bottlenecks": [],
-            "resource_bottlenecks": []
+            "dependency_bottlenecks": []
         }
         
         # Check for level bottlenecks (levels with only one task)
@@ -706,55 +557,260 @@ class DistributedProcessingManager:
                     "task": level[0]
                 })
         
-        # Check for dependency bottlenecks (tasks with many dependents)
-        dependents = defaultdict(list)
-        for task_id, deps in self._get_task_dependencies(ctx).items():
-            for dep in deps:
+        # Build dependency mapping
+        dependents = {}
+        for task_id, task in self.task_registry.items():
+            for dep in task.dependencies:
+                if dep not in dependents:
+                    dependents[dep] = []
                 dependents[dep].append(task_id)
         
+        # Check for dependency bottlenecks (tasks with many dependents)
         for task_id, deps in dependents.items():
-            if len(deps) > 2:  # Arbitrary threshold
+            if len(deps) > 2:  # Tasks with multiple dependents
                 bottlenecks["dependency_bottlenecks"].append({
                     "task": task_id,
                     "dependents_count": len(deps),
                     "dependents": deps
                 })
         
-        # Check for resource bottlenecks based on subsystem performance
-        slow_subsystems = []
-        for subsystem, perf in self.subsystem_performance.items():
-            if perf["tasks_completed"] > 0:
-                # Find tasks for this subsystem
-                subsystem_tasks = [
-                    task_id for task_id, task in self.task_registry.items()
-                    if task.subsystem_name == subsystem
-                ]
-                
-                if perf["avg_duration"] > 0.5:  # Arbitrary threshold
-                    slow_subsystems.append({
-                        "subsystem": subsystem,
-                        "avg_duration": perf["avg_duration"],
-                        "tasks": subsystem_tasks
-                    })
-        
-        bottlenecks["resource_bottlenecks"] = slow_subsystems
-        
         return bottlenecks
     
     @function_tool
-    async def _track_task_metrics(self, 
-                             ctx: RunContextWrapper, 
-                             task_id: str, 
-                             metrics: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_performance_metrics(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Track metrics for a specific task
+        Get current performance metrics
+        
+        Returns:
+            Dictionary with performance metrics
+        """
+        # Calculate average task duration for completed tasks
+        completed_tasks = [t for t in self.task_registry.values() if t.completed]
+        
+        avg_duration = 0.0
+        if completed_tasks:
+            durations = [
+                (t.end_time - t.start_time).total_seconds() 
+                for t in completed_tasks 
+                if t.start_time and t.end_time
+            ]
+            avg_duration = sum(durations) / len(durations) if durations else 0
+        
+        # Calculate per-subsystem metrics
+        subsystem_metrics = {}
+        for task in completed_tasks:
+            subsystem = task.subsystem_name
+            if subsystem not in subsystem_metrics:
+                subsystem_metrics[subsystem] = {
+                    "task_count": 0,
+                    "total_duration": 0,
+                    "avg_duration": 0
+                }
+            
+            if task.start_time and task.end_time:
+                duration = (task.end_time - task.start_time).total_seconds()
+                subsystem_metrics[subsystem]["task_count"] += 1
+                subsystem_metrics[subsystem]["total_duration"] += duration
+        
+        # Calculate averages
+        for metrics in subsystem_metrics.values():
+            if metrics["task_count"] > 0:
+                metrics["avg_duration"] = metrics["total_duration"] / metrics["task_count"]
+        
+        return {
+            "tasks_processed": self.performance_metrics["tasks_processed"],
+            "tasks_completed": self.performance_metrics["tasks_completed"],
+            "avg_task_duration": avg_duration,
+            "max_parallel_achieved": self.performance_metrics["max_parallel_achieved"],
+            "subsystem_metrics": subsystem_metrics,
+            "bottlenecks": self.performance_metrics.get("bottlenecks", {})
+        }
+    
+    @function_tool
+    async def _analyze_execution_trends(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Analyze trends in task execution
+        
+        Returns:
+            Dictionary with trend analysis
+        """
+        # This would be more sophisticated in a real implementation
+        completed_tasks = [t for t in self.task_registry.values() if t.completed]
+        
+        # Sort by completion time
+        sorted_tasks = sorted(
+            [t for t in completed_tasks if t.end_time], 
+            key=lambda t: t.end_time
+        )
+        
+        # Calculate running averages
+        window_size = 5
+        running_durations = []
+        
+        for i in range(len(sorted_tasks)):
+            window = sorted_tasks[max(0, i-window_size+1):i+1]
+            durations = [
+                (t.end_time - t.start_time).total_seconds() 
+                for t in window 
+                if t.start_time and t.end_time
+            ]
+            avg = sum(durations) / len(durations) if durations else 0
+            running_durations.append(avg)
+        
+        # Calculate efficiency trend
+        efficiency_trend = "stable"
+        if len(running_durations) >= 3:
+            recent_avg = running_durations[-1]
+            oldest_avg = running_durations[0]
+            
+            if recent_avg < oldest_avg * 0.8:
+                efficiency_trend = "improving"
+            elif recent_avg > oldest_avg * 1.2:
+                efficiency_trend = "degrading"
+        
+        return {
+            "total_analyzed": len(sorted_tasks),
+            "running_duration_averages": running_durations[-10:] if len(running_durations) > 10 else running_durations,
+            "efficiency_trend": efficiency_trend,
+            "has_sufficient_data": len(sorted_tasks) >= 5
+        }
+    
+    @function_tool
+    async def _identify_performance_bottlenecks(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Identify performance bottlenecks in the system
+        
+        Returns:
+            Dictionary with identified bottlenecks
+        """
+        # Get completed tasks with duration info
+        completed_tasks = [
+            t for t in self.task_registry.values() 
+            if t.completed and t.start_time and t.end_time
+        ]
+        
+        if not completed_tasks:
+            return {
+                "has_bottlenecks": False,
+                "message": "Insufficient data - no completed tasks"
+            }
+        
+        # Calculate average duration
+        durations = [(t.end_time - t.start_time).total_seconds() for t in completed_tasks]
+        avg_duration = sum(durations) / len(durations)
+        
+        # Identify slow tasks (significantly above average)
+        slow_tasks = []
+        for task in completed_tasks:
+            duration = (task.end_time - task.start_time).total_seconds()
+            if duration > avg_duration * 1.5:  # 50% slower than average
+                slow_tasks.append({
+                    "task_id": task.task_id,
+                    "subsystem": task.subsystem_name,
+                    "duration": duration,
+                    "vs_average": duration / avg_duration
+                })
+        
+        # Sort by relative slowness
+        slow_tasks.sort(key=lambda x: x["vs_average"], reverse=True)
+        
+        # Check for subsystem patterns
+        subsystem_counts = {}
+        for task in slow_tasks:
+            subsystem = task["subsystem"]
+            subsystem_counts[subsystem] = subsystem_counts.get(subsystem, 0) + 1
+        
+        # Identify bottleneck subsystems
+        bottleneck_subsystems = [
+            {
+                "subsystem": subsystem,
+                "slow_task_count": count,
+                "percentage": count / len(slow_tasks) * 100 if slow_tasks else 0
+            }
+            for subsystem, count in subsystem_counts.items()
+            if count >= 2  # At least 2 slow tasks
+        ]
+        
+        return {
+            "has_bottlenecks": len(slow_tasks) > 0,
+            "average_duration": avg_duration,
+            "slow_tasks": slow_tasks[:5],  # Top 5 slowest
+            "bottleneck_subsystems": bottleneck_subsystems,
+            "recommendation": "Investigate subsystem performance" if bottleneck_subsystems else "No clear bottlenecks"
+        }
+    
+    @function_tool
+    async def _get_registered_tasks(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get information about all registered tasks
+        
+        Returns:
+            Dictionary of task information
+        """
+        task_info = {}
+        
+        for task_id, task in self.task_registry.items():
+            task_info[task_id] = {
+                "subsystem": task.subsystem_name,
+                "dependencies": task.dependencies,
+                "priority": task.priority,
+                "started": task.started,
+                "completed": task.completed,
+                "error": task.error,
+                "start_time": task.start_time.isoformat() if task.start_time else None,
+                "end_time": task.end_time.isoformat() if task.end_time else None
+            }
+        
+        return {
+            "tasks": task_info,
+            "total_count": len(task_info),
+            "started_count": sum(1 for t in self.task_registry.values() if t.started),
+            "completed_count": sum(1 for t in self.task_registry.values() if t.completed)
+        }
+    
+    @function_tool
+    async def _schedule_task(self, ctx: RunContextWrapper, task_id: str, execution_time: int) -> Dict[str, Any]:
+        """
+        Schedule a task for execution at a specific time
         
         Args:
-            task_id: ID of the task
-            metrics: Metrics to track
+            task_id: ID of the task to schedule
+            execution_time: Execution time (ms from now)
             
         Returns:
-            Updated metrics
+            Scheduling result
+        """
+        if task_id not in self.task_registry:
+            return {
+                "success": False,
+                "error": f"Task {task_id} not found in registry"
+            }
+        
+        # Create a delayed execution task
+        async def delayed_execution():
+            await asyncio.sleep(execution_time / 1000.0)  # Convert ms to seconds
+            await self._execute_single_task(ctx, task_id)
+        
+        # Schedule the task
+        self.active_tasks[task_id] = asyncio.create_task(delayed_execution())
+        
+        return {
+            "success": True,
+            "task_id": task_id,
+            "scheduled_time": datetime.datetime.now().isoformat(),
+            "execution_delay_ms": execution_time
+        }
+    
+    @function_tool
+    async def _execute_single_task(self, ctx: RunContextWrapper, task_id: str) -> Dict[str, Any]:
+        """
+        Execute a single task directly
+        
+        Args:
+            task_id: ID of the task to execute
+            
+        Returns:
+            Task execution result
         """
         if task_id not in self.task_registry:
             return {
@@ -764,124 +820,306 @@ class DistributedProcessingManager:
         
         task = self.task_registry[task_id]
         
-        # Update task with metrics
-        if "duration" in metrics and not task.duration:
-            task.duration = metrics["duration"]
+        try:
+            # Record start time
+            task.start_time = datetime.datetime.now()
+            task.started = True
+            
+            # Get the coroutine from task
+            coroutine = task.coroutine
+            
+            # Execute the coroutine
+            result = await coroutine
+            
+            # Record completion
+            task.result = result
+            task.completed = True
+            task.end_time = datetime.datetime.now()
+            
+            # Update performance metrics
+            self.performance_metrics["tasks_completed"] += 1
+            
+            duration = (task.end_time - task.start_time).total_seconds()
+            return {
+                "success": True,
+                "task_id": task_id,
+                "result": result,
+                "duration": duration
+            }
+        except Exception as e:
+            logger.error(f"Error executing task {task_id}: {e}")
+            
+            # Record failure
+            task.error = str(e)
+            task.end_time = datetime.datetime.now()
+            
+            return {
+                "success": False,
+                "task_id": task_id,
+                "error": str(e),
+                "duration": (task.end_time - task.start_time).total_seconds() if task.start_time else None
+            }
+    
+    @function_tool
+    async def _handle_task_failure(self, ctx: RunContextWrapper, task_id: str, error: str, retry: bool = False) -> Dict[str, Any]:
+        """
+        Handle a task failure
         
-        if "result" in metrics and not task.result:
-            task.result = metrics["result"]
+        Args:
+            task_id: ID of the failed task
+            error: Error message
+            retry: Whether to retry the task
+            
+        Returns:
+            Handling result
+        """
+        if task_id not in self.task_registry:
+            return {
+                "success": False,
+                "error": f"Task {task_id} not found in registry"
+            }
         
-        if "completed" in metrics:
-            task.completed = metrics["completed"]
+        task = self.task_registry[task_id]
+        task.error = error
         
-        # Update performance metrics
-        if task.completed and task.duration is not None:
-            # Update overall average duration
-            alpha = 0.1  # Exponential moving average weight
-            self.performance_metrics["avg_task_duration"] = (
-                (1 - alpha) * self.performance_metrics["avg_task_duration"] +
-                alpha * task.duration
+        # Remove from active tasks
+        if task_id in self.active_tasks:
+            # Cancel the task if it's still running
+            self.active_tasks[task_id].cancel()
+            del self.active_tasks[task_id]
+        
+        if retry:
+            # Create a new execution task
+            result = await self._execute_single_task(ctx, task_id)
+            return {
+                "success": result.get("success", False),
+                "task_id": task_id,
+                "action": "retry",
+                "retry_result": result
+            }
+        else:
+            # Just record the failure
+            return {
+                "success": True,
+                "task_id": task_id,
+                "action": "recorded_failure",
+                "error": error
+            }
+    
+    async def register_task(self, 
+                          task_id: str,
+                          subsystem_name: str, 
+                          coroutine: Coroutine, 
+                          dependencies: List[str] = None,
+                          priority: int = 1,
+                          group: str = None) -> Dict[str, Any]:
+        """
+        Register a task for parallel execution
+        
+        Args:
+            task_id: Unique task identifier
+            subsystem_name: Name of the subsystem responsible for the task
+            coroutine: Async coroutine to execute
+            dependencies: List of task IDs that must complete before this task
+            priority: Task priority (higher = more important)
+            group: Task group for resource allocation
+            
+        Returns:
+            Registration result
+        """
+        with trace(workflow_name="RegisterTask", group_id=self.trace_group_id):
+            # Create task object
+            task = SubsystemTask(
+                task_id=task_id,
+                subsystem_name=subsystem_name,
+                dependencies=dependencies or [],
+                priority=priority
             )
             
-            # Update subsystem performance
-            subsystem = task.subsystem_name
-            if subsystem not in self.subsystem_performance:
-                self.subsystem_performance[subsystem] = {
-                    "tasks_completed": 0,
-                    "avg_duration": 0.0
+            # Store the coroutine (not part of the model)
+            task.coroutine = coroutine
+            
+            # Validate the task using the validation agent
+            validation_result = await Runner.run(
+                self.validation_agent,
+                json.dumps({
+                    "task_id": task_id,
+                    "subsystem_name": subsystem_name,
+                    "dependencies": dependencies or [],
+                    "priority": priority
+                }),
+                run_config={
+                    "workflow_name": "TaskValidation",
+                    "trace_metadata": {
+                        "task_id": task_id,
+                        "subsystem": subsystem_name
+                    }
+                }
+            )
+            
+            validation_output = validation_result.final_output
+            
+            # If task is not valid, return error
+            if not validation_output.is_valid:
+                return {
+                    "success": False,
+                    "task_id": task_id,
+                    "error": validation_output.reason,
+                    "recommended_priority": validation_output.recommended_priority
                 }
             
-            self.subsystem_performance[subsystem]["tasks_completed"] += 1
+            # Register the task
+            self.task_registry[task_id] = task
             
-            new_avg = (
-                (self.subsystem_performance[subsystem]["tasks_completed"] - 1) *
-                self.subsystem_performance[subsystem]["avg_duration"] +
-                task.duration
-            ) / self.subsystem_performance[subsystem]["tasks_completed"]
+            # Add to task group if specified
+            if group and group in self.task_groups:
+                self.task_groups[group].append(task_id)
             
-            self.subsystem_performance[subsystem]["avg_duration"] = new_avg
-        
-        return {
-            "success": True,
-            "updated_metrics": {
+            logger.info(f"Registered task {task_id} for subsystem {subsystem_name}")
+            
+            return {
+                "success": True,
                 "task_id": task_id,
-                "subsystem": task.subsystem_name,
-                "duration": task.duration,
-                "completed": task.completed,
-                "has_result": task.result is not None
+                "message": "Task registered successfully"
             }
-        }
     
-    @function_tool
-    async def _calculate_performance_trends(self, 
-                                       ctx: RunContextWrapper, 
-                                       metric_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def execute_tasks(self) -> Dict[str, Any]:
         """
-        Calculate trends in performance metrics
+        Execute all registered tasks with dependency resolution using Agent SDK
         
-        Args:
-            metric_history: History of performance metrics
-            
         Returns:
-            Trend analysis
+            Dictionary of task results by task ID
         """
-        # This would typically analyze a history of metrics
-        # But we'll use our current performance metrics for simplicity
+        start_time = datetime.datetime.now()
         
-        trends = {
-            "task_completion_rate": 0.0,
-            "avg_duration_trend": 0.0,
-            "max_parallel_trend": 0.0,
-            "bottleneck_trends": {}
-        }
-        
-        # Calculate completion rate
-        if self.performance_metrics["tasks_processed"] > 0:
-            trends["task_completion_rate"] = (
-                self.performance_metrics["tasks_completed"] / 
-                self.performance_metrics["tasks_processed"]
+        with trace(workflow_name="Task_Execution", group_id=self.trace_group_id):
+            # Run the task orchestrator agent to create an execution plan
+            result = await Runner.run(
+                self.task_orchestrator,
+                json.dumps({
+                    "tasks": list(self.task_registry.keys()),
+                    "max_parallel_tasks": self.max_parallel_tasks,
+                    "subsystem_performance": self.subsystem_performance
+                }),
+                run_config={
+                    "workflow_name": "TaskExecution",
+                    "trace_metadata": {
+                        "total_tasks": len(self.task_registry)
+                    }
+                }
             )
-        
-        # For other trends, we'd need historical data
-        # Here we're just returning the current values
-        trends["avg_duration"] = self.performance_metrics["avg_task_duration"]
-        trends["max_parallel_achieved"] = self.performance_metrics["max_parallel_achieved"]
-        
-        # Extract bottleneck information
-        for bottleneck, data in self.performance_metrics.get("bottlenecks", {}).items():
-            if isinstance(data, dict) and "relative_slowdown" in data:
-                trends["bottleneck_trends"][bottleneck] = data["relative_slowdown"]
-        
-        return trends
-    
-    @function_tool
-    async def _update_subsystem_performance(self, 
-                                       ctx: RunContextWrapper, 
-                                       subsystem: str, 
-                                       metrics: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update performance metrics for a subsystem
-        
-        Args:
-            subsystem: Name of the subsystem
-            metrics: Performance metrics to update
             
-        Returns:
-            Updated performance data
-        """
-        if subsystem not in self.subsystem_performance:
-            self.subsystem_performance[subsystem] = {
-                "tasks_completed": 0,
-                "avg_duration": 0.0
+            # Get the execution plan
+            execution_plan = result.final_output
+            
+            # Execute according to the plan
+            results = {}
+            
+            # Track metrics for this execution
+            execution_metrics = {
+                "start_time": start_time.isoformat(),
+                "total_tasks": len(self.task_registry),
+                "execution_plan": execution_plan.model_dump(),
+                "completed_tasks": 0,
+                "failed_tasks": 0
             }
-        
-        # Update metrics
-        for key, value in metrics.items():
-            if key in self.subsystem_performance[subsystem]:
-                self.subsystem_performance[subsystem][key] = value
-        
-        return {
-            "success": True,
-            "subsystem": subsystem,
-            "updated_metrics": self.subsystem_performance[subsystem]
-        }
+            
+            # Execute tasks in parallel groups according to the plan
+            for group_index, task_group in enumerate(execution_plan.parallel_groups):
+                group_start_time = datetime.datetime.now()
+                
+                # Create tasks for this group
+                tasks = []
+                for task_id in task_group:
+                    if task_id in self.task_registry:
+                        # Execute the task
+                        tasks.append(self._execute_single_task(None, task_id))
+                
+                # Wait for all tasks in this group to complete
+                if tasks:
+                    group_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Record results
+                    for i, task_id in enumerate(task_group):
+                        if i < len(group_results):
+                            results[task_id] = group_results[i]
+                            
+                            # Update metrics
+                            if isinstance(group_results[i], dict) and group_results[i].get("success", False):
+                                execution_metrics["completed_tasks"] += 1
+                            else:
+                                execution_metrics["failed_tasks"] += 1
+                
+                group_end_time = datetime.datetime.now()
+                group_duration = (group_end_time - group_start_time).total_seconds()
+                
+                # Update execution metrics
+                execution_metrics[f"group_{group_index}_duration"] = group_duration
+            
+            # Update performance metrics
+            execution_end_time = datetime.datetime.now()
+            total_duration = (execution_end_time - start_time).total_seconds()
+            
+            execution_metrics["end_time"] = execution_end_time.isoformat()
+            execution_metrics["total_duration"] = total_duration
+            
+            # Check if we've achieved a new max parallel
+            current_parallel = len(max(execution_plan.parallel_groups, key=len, default=[]))
+            self.performance_metrics["max_parallel_achieved"] = max(
+                self.performance_metrics["max_parallel_achieved"],
+                current_parallel
+            )
+            
+            # Update subsystem performance metrics
+            for task_id, task in self.task_registry.items():
+                if task.completed and task.start_time and task.end_time:
+                    subsystem = task.subsystem_name
+                    
+                    if subsystem not in self.subsystem_performance:
+                        self.subsystem_performance[subsystem] = {
+                            "tasks_completed": 0,
+                            "avg_duration": 0.0
+                        }
+                    
+                    perf = self.subsystem_performance[subsystem]
+                    perf["tasks_completed"] += 1
+                    
+                    # Update average duration
+                    duration = (task.end_time - task.start_time).total_seconds()
+                    perf["avg_duration"] = (
+                        (perf["tasks_completed"] - 1) * perf["avg_duration"] + duration
+                    ) / perf["tasks_completed"]
+            
+            # Identify bottlenecks
+            bottlenecks = {}
+            avg_duration = sum(
+                (t.end_time - t.start_time).total_seconds() 
+                for t in self.task_registry.values() 
+                if t.completed and t.start_time and t.end_time
+            ) / max(1, len([t for t in self.task_registry.values() if t.completed and t.start_time and t.end_time]))
+            
+            for task_id, task in self.task_registry.items():
+                if task.completed and task.start_time and task.end_time:
+                    duration = (task.end_time - task.start_time).total_seconds()
+                    if duration > avg_duration * 1.5:
+                        bottlenecks[task_id] = {
+                            "subsystem": task.subsystem_name,
+                            "duration": duration,
+                            "relative_slowdown": duration / avg_duration
+                        }
+            
+            # Add performance info to results
+            results["_performance"] = {
+                "total_duration": total_duration,
+                "task_count": len(self.task_registry),
+                "max_parallel": current_parallel,
+                "bottlenecks": bottlenecks,
+                "execution_plan": execution_plan.model_dump()
+            }
+            
+            # Reset task registry for next use
+            self.task_registry = {}
+            for group in self.task_groups:
+                self.task_groups[group] = []
+            
+            return results
