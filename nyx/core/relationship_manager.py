@@ -8,7 +8,8 @@ import json
 from typing import Dict, List, Any, Optional, Union, Set
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, ModelSettings, trace, function_tool
+from openai import AsyncOpenAI
+from agents import Agent, Runner, ModelSettings, trace, function_tool, GuardrailFunctionOutput, InputGuardrail
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +119,16 @@ class RelationshipManager:
             logger.error(f"Error creating trait inference agent: {e}")
             return None
 
-    def _get_or_create_relationship(self, user_id: str) -> RelationshipState:
+    @function_tool
+    async def get_or_create_relationship(self, user_id: str) -> Dict[str, Any]:
         """Gets the relationship state for a user, creating it if it doesn't exist."""
         if user_id not in self.relationships:
             logger.info(f"Creating new relationship profile for user '{user_id}'")
             self.relationships[user_id] = RelationshipState(user_id=user_id)
             self.interaction_history[user_id] = []
-        return self.relationships[user_id]
+            
+        state = self.relationships[user_id]
+        return state.model_dump()
 
     async def update_relationship_on_interaction(
         self,
@@ -136,7 +140,8 @@ class RelationshipManager:
             return {"status": "error", "message": "Missing user ID"}
 
         async with self._lock:
-            state = self._get_or_create_relationship(user_id)
+            state_dict = await self.get_or_create_relationship(user_id)
+            state = RelationshipState(**state_dict)
             now = datetime.datetime.now()
 
             # Apply time decay since last interaction
@@ -326,6 +331,9 @@ class RelationshipManager:
             self.interaction_history[user_id].append(interaction_record)
             if len(self.interaction_history[user_id]) > self.max_interactions_per_user:
                 self.interaction_history[user_id] = self.interaction_history[user_id][-self.max_interactions_per_user:]
+            
+            # Update the relationship in the dictionary
+            self.relationships[user_id] = state
 
             # Update inferred traits if enough interactions have occurred
             if state.interaction_count % 5 == 0 or "dominance" in interaction_data:
@@ -352,12 +360,14 @@ class RelationshipManager:
             logger.warning("Trait inference agent not available")
             return {"status": "error", "reason": "trait_agent_unavailable"}
             
-        state = self._get_or_create_relationship(user_id)
-        interactions = self.interaction_history.get(user_id, [])
-        
-        if not interactions:
-            return {"status": "no_interactions"}
+        async with self._lock:
+            state_dict = await self.get_or_create_relationship(user_id)
+            state = RelationshipState(**state_dict)
+            interactions = self.interaction_history.get(user_id, [])
             
+            if not interactions:
+                return {"status": "no_interactions"}
+                
         try:
             # Prepare the data for inference
             recent_interactions = interactions[-10:]  # Use the last 10 interactions at most
@@ -410,27 +420,35 @@ class RelationshipManager:
                 if not isinstance(inference, dict):
                     raise ValueError(f"Expected dict from trait agent, got {type(inference)}")
                 
-                # Update the traits
-                if "updated_traits" in inference:
-                    updated_traits = inference["updated_traits"]
-                    # Merge with existing traits
-                    for trait, value in updated_traits.items():
-                        # Smooth the update - don't change too drastically
-                        current = state.inferred_user_traits.get(trait, 0.5)
-                        # 70% weight to new value, 30% to existing
-                        state.inferred_user_traits[trait] = current * 0.3 + value * 0.7
-                        
-                # Update dominance preferences if present
-                if "dominance_preferences" in inference:
-                    dom_prefs = inference["dominance_preferences"]
+                async with self._lock:
+                    # Get current state again in case it was updated
+                    state_dict = await self.get_or_create_relationship(user_id)
+                    state = RelationshipState(**state_dict)
                     
-                    if "preferred_style" in dom_prefs and dom_prefs["preferred_style"]:
-                        state.preferred_dominance_style = dom_prefs["preferred_style"]
+                    # Update the traits
+                    if "updated_traits" in inference:
+                        updated_traits = inference["updated_traits"]
+                        # Merge with existing traits
+                        for trait, value in updated_traits.items():
+                            # Smooth the update - don't change too drastically
+                            current = state.inferred_user_traits.get(trait, 0.5)
+                            # 70% weight to new value, 30% to existing
+                            state.inferred_user_traits[trait] = current * 0.3 + value * 0.7
+                            
+                    # Update dominance preferences if present
+                    if "dominance_preferences" in inference:
+                        dom_prefs = inference["dominance_preferences"]
                         
-                    if "optimal_escalation_rate" in dom_prefs:
-                        rate = dom_prefs["optimal_escalation_rate"]
-                        if isinstance(rate, (int, float)) and 0.01 <= rate <= 0.5:
-                            state.optimal_escalation_rate = rate
+                        if "preferred_style" in dom_prefs and dom_prefs["preferred_style"]:
+                            state.preferred_dominance_style = dom_prefs["preferred_style"]
+                            
+                        if "optimal_escalation_rate" in dom_prefs:
+                            rate = dom_prefs["optimal_escalation_rate"]
+                            if isinstance(rate, (int, float)) and 0.01 <= rate <= 0.5:
+                                state.optimal_escalation_rate = rate
+                    
+                    # Update the relationship state in the dictionary
+                    self.relationships[user_id] = state
                 
                 logger.info(f"Updated trait inference for user {user_id}")
                 return {
@@ -443,13 +461,14 @@ class RelationshipManager:
             logger.error(f"Error updating inferred traits for user {user_id}: {e}")
             return {"status": "error", "reason": str(e)}
 
-    async def get_relationship_state(self, user_id: str) -> Optional[RelationshipState]:
+    @function_tool
+    async def get_relationship_state(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Gets the current relationship state for a user."""
         # Apply time decay before returning if significant time has passed
         async with self._lock:
             if user_id not in self.relationships:
                 logger.info(f"Creating new relationship for user {user_id} on first query")
-                self._get_or_create_relationship(user_id)
+                await self.get_or_create_relationship(user_id)
                 
             state = self.relationships[user_id]
             now = datetime.datetime.now()
@@ -470,14 +489,17 @@ class RelationshipManager:
                     # Don't decay conflict or dominance balance this way
                     state.last_interaction_time = now  # Update time to prevent repeated decay on consecutive gets
             
-            return state
+            return state.model_dump()
 
+    @function_tool
     async def get_relationship_summary(self, user_id: str) -> str:
         """Provides a brief textual summary of the relationship."""
-        state = await self.get_relationship_state(user_id)
-        if not state: 
+        state_dict = await self.get_relationship_state(user_id)
+        if not state_dict: 
             return "No relationship data available."
-
+        
+        state = RelationshipState(**state_dict)
+        
         summary = f"Relationship with {user_id}: "
         
         # Trust description
@@ -524,6 +546,7 @@ class RelationshipManager:
 
         return summary.strip()
     
+    @function_tool
     async def get_interaction_history(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent interaction records for a user."""
         async with self._lock:
@@ -632,7 +655,7 @@ class RelationshipManager:
                 target.user_stated_intensity_preference = source.user_stated_intensity_preference
             
             # Merge interaction history
-            if user_id in self.interaction_history:
+            if source_user_id in self.interaction_history:
                 source_interactions = self.interaction_history[source_user_id]
                 if target_user_id not in self.interaction_history:
                     self.interaction_history[target_user_id] = []
@@ -655,6 +678,7 @@ class RelationshipManager:
                     "interaction_count": target.interaction_count
                 }
             }
+
     async def track_dominance_response(self, user_id: str, dominance_data: Dict[str, Any], user_response: Dict[str, Any]) -> Dict[str, Any]:
         """
         Track user response to a dominance interaction and update relationship model accordingly.
@@ -1058,3 +1082,26 @@ class RelationshipManager:
                 "soft_limits_approached": soft_limits_approached,
                 "optimal_escalation_rate": optimal_rate
             }
+
+# Create a RelationshipManagerAgent that exposes the RelationshipManager functionality
+def create_relationship_manager_agent(relationship_manager: RelationshipManager) -> Agent:
+    """Create an agent that provides access to the relationship manager."""
+    return Agent(
+        name="Relationship Manager Agent",
+        instructions="""You manage Nyx's relationships with users. Your responsibilities include:
+        
+        1. Tracking relationship states including trust, familiarity, intimacy, and dominance
+        2. Updating relationship metrics based on interactions
+        3. Identifying trends and patterns in relationships
+        4. Providing recommendations for relationship development
+        5. Supporting dominance dynamics when appropriate
+        
+        Use the available tools to update and retrieve relationship information.
+        """,
+        tools=[
+            relationship_manager.get_or_create_relationship,
+            relationship_manager.get_relationship_state,
+            relationship_manager.get_relationship_summary,
+            relationship_manager.get_interaction_history
+        ]
+    )
