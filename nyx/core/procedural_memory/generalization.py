@@ -9,9 +9,6 @@ import numpy as np
 from functools import lru_cache
 import concurrent.futures
 from threading import Lock
-import concurrent.futures
-from functools import lru_cache
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -346,126 +343,6 @@ class ProceduralChunkLibrary:
                 if domain not in self.domain_usage_stats:
                     self.domain_usage_stats[domain] = {"templates": 0, "usages": 0}
                 self.domain_usage_stats[domain]["usages"] += 1
-    
-    def find_matching_chunks(self, 
-                           steps: List[Dict[str, Any]], 
-                           source_domain: str,
-                           target_domain: str) -> List[Dict[str, Any]]:
-        """
-        Find library chunks that match a sequence of steps
-        
-        Args:
-            steps: List of step definitions from source procedure
-            source_domain: Domain of the source procedure
-            target_domain: Domain where we want to apply the chunk
-            
-        Returns:
-            List of matching chunks with similarity scores
-        """
-        # Generate cache key
-        steps_hash = hash(str([(s.get("function"), str(s.get("parameters", {}))) for s in steps]))
-        cache_key = f"{steps_hash}_{source_domain}_{target_domain}"
-        
-        # Check cache first
-        if cache_key in self.template_cache:
-            return self.template_cache[cache_key]
-            
-        # Convert steps to action templates
-        action_sequences = self._extract_action_sequence(steps, source_domain)
-        
-        # Skip if we couldn't extract actions
-        if not action_sequences:
-            return []
-        
-        # Prepare list for multithreaded processing
-        template_items = list(self.chunk_templates.items())
-        
-        # Use threading for better performance with many templates
-        matches = []
-        
-        # Check if we should use threading based on number of templates
-        if len(template_items) > 10:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                # Submit tasks
-                future_to_template = {
-                    executor.submit(
-                        self._check_template_match, 
-                        template_id, 
-                        template, 
-                        action_sequences,
-                        source_domain,
-                        target_domain
-                    ): (template_id, template) 
-                    for template_id, template in template_items
-                }
-                
-                # Collect results
-                for future in concurrent.futures.as_completed(future_to_template):
-                    result = future.result()
-                    if result:
-                        matches.append(result)
-        else:
-            # Simple sequential processing for small template sets
-            for template_id, template in template_items:
-                match = self._check_template_match(
-                    template_id,
-                    template,
-                    action_sequences,
-                    source_domain,
-                    target_domain
-                )
-                if match:
-                    matches.append(match)
-        
-        # Sort by overall score
-        matches.sort(key=lambda x: x["overall_score"], reverse=True)
-        
-        # Cache the result
-        self.template_cache[cache_key] = matches
-        
-        return matches
-    
-    def _check_template_match(self,
-                          template_id: str,
-                          template: ChunkTemplate,
-                          action_sequences: List[ActionTemplate],
-                          source_domain: str,
-                          target_domain: str) -> Optional[Dict[str, Any]]:
-        """Check if a template matches the action sequence (helper for concurrent processing)"""
-        # Skip if template doesn't support source domain
-        if source_domain not in template.domains:
-            return None
-            
-        # Calculate similarity between template and action sequence
-        # Use vectorized version for performance if available
-        try:
-            similarity = self._calculate_sequence_similarity_vectorized(template.actions, action_sequences)
-        except Exception:
-            # Fall back to regular version
-            similarity = self._calculate_sequence_similarity(template.actions, action_sequences)
-        
-        if similarity >= self.similarity_threshold:
-            # Check if template has been applied to target domain
-            target_applicability = 0.5  # Default medium applicability
-            
-            if target_domain in template.domains:
-                # Template already used in target domain
-                target_applicability = 0.9
-                
-                # Adjust based on success rate if available
-                if target_domain in template.success_rate:
-                    target_applicability *= template.success_rate[target_domain]
-            
-            return {
-                "template_id": template_id,
-                "template_name": template.name,
-                "similarity": similarity,
-                "target_applicability": target_applicability,
-                "overall_score": similarity * 0.6 + target_applicability * 0.4,
-                "action_count": len(template.actions)
-            }
-        
-        return None
     
     def create_chunk_template_from_steps(self,
                                       chunk_id: str,
@@ -891,29 +768,6 @@ class ProceduralChunkLibrary:
         
         return similarity
     
-    @lru_cache(maxsize=128)
-    def _calculate_action_similarity(self, action1: ActionTemplate, action2: ActionTemplate) -> float:
-        """
-        Calculate similarity between two actions
-        
-        Args:
-            action1: First action
-            action2: Second action
-            
-        Returns:
-            Similarity score (0.0-1.0)
-        """
-        # Exact match on action type
-        if action1.action_type == action2.action_type:
-            return 1.0
-            
-        # Match on intent
-        if action1.intent == action2.intent:
-            return 0.8
-            
-        # Otherwise low similarity
-        return 0.2
-    
     def _map_action_to_domain(self, 
                             action: ActionTemplate, 
                             target_domain: str) -> Optional[Dict[str, Any]]:
@@ -1074,24 +928,6 @@ class ProceduralChunkLibrary:
             if key in self.template_cache:
                 del self.template_cache[key]
     
-    # New method for batch processing templates
-    def process_templates_batch(self, templates: List[ChunkTemplate]) -> None:
-        """Process multiple templates in a batch for efficiency"""
-        with self.library_lock:
-            for template in templates:
-                self.chunk_templates[template.id] = template
-                
-                # Update domain index
-                for domain in template.domains:
-                    if domain not in self.domain_chunks:
-                        self.domain_chunks[domain] = []
-                    if template.id not in self.domain_chunks[domain]:
-                        self.domain_chunks[domain].append(template.id)
-            
-            # Clear all caches since we added multiple templates
-            self.template_cache = {}
-            self.similarity_cache = {}
-    
     # New method for template search by tags
     def search_templates_by_tags(self, tags: List[str], 
                                 domain: Optional[str] = None) -> List[ChunkTemplate]:
@@ -1124,92 +960,261 @@ class ProceduralChunkLibrary:
         
         # Return just the templates
         return [item["template"] for item in matching_templates]
-    
-    # New method to optimize memory usage
-    def optimize_memory_usage(self) -> Dict[str, Any]:
-        """Optimize memory usage by cleaning up rarely used templates"""
-        start_time = datetime.datetime.now()
-        
-        with self.library_lock:
-            # Count templates before optimization
-            templates_before = len(self.chunk_templates)
-            
-            # Find rarely used templates
-            rarely_used = []
-            for template_id, template in self.chunk_templates.items():
-                # Check usage frequency
-                if template.usage_frequency < 2:
-                    # Check last used timestamp
-                    if not template.last_used:
-                        rarely_used.append(template_id)
-                    else:
-                        # Check if not used in last 30 days
-                        last_used = datetime.datetime.fromisoformat(template.last_used)
-                        days_since_use = (datetime.datetime.now() - last_used).days
-                        
-                        if days_since_use > 30:
-                            rarely_used.append(template_id)
-            
-            # Don't remove all rarely used templates, keep some headroom
-            templates_to_remove = rarely_used
-            if len(templates_to_remove) > templates_before * 0.3:  # Don't remove more than 30%
-                templates_to_remove = templates_to_remove[:int(templates_before * 0.3)]
-            
-            # Remove templates
-            removed_count = 0
-            for template_id in templates_to_remove:
-                if template_id in self.chunk_templates:
-                    template = self.chunk_templates[template_id]
-                    
-                    # Remove from domain index
-                    for domain in template.domains:
-                        if domain in self.domain_chunks and template_id in self.domain_chunks[domain]:
-                            self.domain_chunks[domain].remove(template_id)
-                    
-                    # Remove template
-                    del self.chunk_templates[template_id]
-                    removed_count += 1
-            
-            # Clear caches
-            self.template_cache = {}
-            self.similarity_cache = {}
-            
-            # Calculate time taken
-            execution_time = (datetime.datetime.now() - start_time).total_seconds()
-            
-            return {
-                "templates_before": templates_before,
-                "templates_removed": removed_count,
-                "templates_after": len(self.chunk_templates),
-                "execution_time": execution_time
+
+# Define OpenAI function tools for generalization
+
+def find_matching_chunks_definition():
+    """Define the find_matching_chunks function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "find_matching_chunks",
+            "description": "Find library chunks that match a sequence of steps",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "description": "List of step definitions from source procedure",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "source_domain": {
+                        "type": "string",
+                        "description": "Domain of the source procedure"
+                    },
+                    "target_domain": {
+                        "type": "string",
+                        "description": "Domain where we want to apply the chunk"
+                    }
+                },
+                "required": ["steps", "source_domain", "target_domain"]
             }
-    
-    # New method for getting library statistics
-    def get_library_statistics(self) -> Dict[str, Any]:
-        """Get statistics about the chunk library"""
-        stats = {
-            "templates_count": len(self.chunk_templates),
-            "actions_count": len(self.action_templates),
-            "domains_count": len(self.domain_chunks),
-            "control_mappings_count": len(self.control_mappings),
-            "transfer_records_count": len(self.transfer_records),
-            "cache_sizes": {
-                "template_cache": len(self.template_cache),
-                "similarity_cache": len(self.similarity_cache)
-            },
-            "domain_usage": self.domain_usage_stats,
-            "top_domains": [],
-            "transfer_success_rate": 0.0
         }
+    }
+
+async def find_matching_chunks(
+    steps: List[Dict[str, Any]], 
+    source_domain: str,
+    target_domain: str,
+    ctx = None
+) -> List[Dict[str, Any]]:
+    """
+    Find library chunks that match a sequence of steps
+    
+    Args:
+        steps: List of step definitions from source procedure
+        source_domain: Domain of the source procedure
+        target_domain: Domain where we want to apply the chunk
+        ctx: Function context (automatically injected)
         
-        # Calculate top domains
-        domain_templates = [(domain, len(templates)) for domain, templates in self.domain_chunks.items()]
-        domain_templates.sort(key=lambda x: x[1], reverse=True)
-        stats["top_domains"] = domain_templates[:5]  # Top 5 domains
+    Returns:
+        List of matching chunks with similarity scores
+    """
+    # Access chunk library from context
+    chunk_library = ctx.manager.chunk_library if hasattr(ctx, "manager") else None
+    
+    if not chunk_library:
+        return []
+    
+    return chunk_library.find_matching_chunks(steps, source_domain, target_domain)
+
+def create_chunk_template_definition():
+    """Define the create_chunk_template function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "create_chunk_template",
+            "description": "Create a generalizable chunk template from procedure steps",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "ID for the new chunk template"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the template"
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "Original procedure steps to generalize",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "Domain of the procedure"
+                    },
+                    "success_rate": {
+                        "type": "number",
+                        "description": "Initial success rate for this domain"
+                    }
+                },
+                "required": ["chunk_id", "name", "steps", "domain"]
+            }
+        }
+    }
+
+async def create_chunk_template(
+    chunk_id: str,
+    name: str,
+    steps: List[Dict[str, Any]],
+    domain: str,
+    success_rate: float = 0.9,
+    ctx = None
+) -> Dict[str, Any]:
+    """
+    Create a generalizable chunk template from procedure steps
+    
+    Args:
+        chunk_id: ID for the new chunk template
+        name: Name for the template
+        steps: Original procedure steps to generalize
+        domain: Domain of the procedure
+        success_rate: Initial success rate for this domain
+        ctx: Function context (automatically injected)
         
-        # Calculate transfer success rate
-        if self.transfer_records:
-            success_rates = [record.success_level for record in self.transfer_records]
-            stats["transfer_success_rate"] = sum(success_rates) / len(success_rates)
+    Returns:
+        Information about the created template
+    """
+    # Access chunk library from context
+    chunk_library = ctx.manager.chunk_library if hasattr(ctx, "manager") else None
+    
+    if not chunk_library:
+        return {
+            "success": False,
+            "error": "Chunk library not available in context"
+        }
+    
+    template = chunk_library.create_chunk_template_from_steps(
+        chunk_id=chunk_id,
+        name=name,
+        steps=steps,
+        domain=domain,
+        success_rate=success_rate
+    )
+    
+    if not template:
+        return {
+            "success": False,
+            "error": "Failed to create chunk template"
+        }
+    
+    return {
+        "success": True,
+        "template_id": template.id,
+        "name": template.name,
+        "domain": domain,
+        "actions_count": len(template.actions),
+        "semantic_tags": template.semantic_tags
+    }
+
+def map_chunk_to_domain_definition():
+    """Define the map_chunk_to_domain function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "map_chunk_to_domain",
+            "description": "Map a chunk template to a new domain",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template_id": {
+                        "type": "string",
+                        "description": "ID of the chunk template"
+                    },
+                    "target_domain": {
+                        "type": "string",
+                        "description": "Domain to map to"
+                    }
+                },
+                "required": ["template_id", "target_domain"]
+            }
+        }
+    }
+
+async def map_chunk_to_domain(
+    template_id: str, 
+    target_domain: str,
+    ctx = None
+) -> Dict[str, Any]:
+    """
+    Map a chunk template to a new domain
+    
+    Args:
+        template_id: ID of the chunk template
+        target_domain: Domain to map to
+        ctx: Function context (automatically injected)
         
-        return stats
+    Returns:
+        Information about the mapped steps
+    """
+    # Access chunk library from context
+    chunk_library = ctx.manager.chunk_library if hasattr(ctx, "manager") else None
+    
+    if not chunk_library:
+        return {
+            "success": False,
+            "error": "Chunk library not available in context"
+        }
+    
+    mapped_steps = chunk_library.map_chunk_to_new_domain(template_id, target_domain)
+    
+    if not mapped_steps:
+        return {
+            "success": False,
+            "error": f"Failed to map template {template_id} to domain {target_domain}"
+        }
+    
+    return {
+        "success": True,
+        "template_id": template_id,
+        "target_domain": target_domain,
+        "steps_count": len(mapped_steps),
+        "steps": mapped_steps
+    }
+
+def get_library_stats_definition():
+    """Define the get_library_stats function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_library_stats",
+            "description": "Get statistics about the chunk library",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+
+async def get_library_stats(ctx = None) -> Dict[str, Any]:
+    """
+    Get statistics about the chunk library
+    
+    Args:
+        ctx: Function context (automatically injected)
+        
+    Returns:
+        Library statistics
+    """
+    # Access chunk library from context
+    chunk_library = ctx.manager.chunk_library if hasattr(ctx, "manager") else None
+    
+    if not chunk_library:
+        return {
+            "success": False,
+            "error": "Chunk library not available in context"
+        }
+    
+    stats = chunk_library.get_library_statistics()
+    
+    return {
+        "success": True,
+        "stats": stats
+    }
