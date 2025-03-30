@@ -5,15 +5,17 @@ import datetime
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Set, Union
 import traceback
+import uuid
 
 # OpenAI Agents SDK imports
 from agents import (
-    Agent, Runner, ModelSettings, RunConfig,
-    handoff, function_tool, custom_span, trace,
-    input_guardrail, output_guardrail, GuardrailFunctionOutput
+    Agent, Runner, ModelSettings, RunConfig, WebSearchTool,
+    handoff, function_tool, custom_span, trace, RunHooks,
+    input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper
 )
-from agents.exceptions import UserError, MaxTurnsExceeded
-from pydantic import BaseModel, Field
+from agents.tracing import Trace, TraceProvider
+from agents.exceptions import UserError, MaxTurnsExceeded, ModelBehaviorError
+from pydantic import BaseModel, Field, create_model
 
 # Import existing components
 from .models import (
@@ -49,14 +51,16 @@ class ProcedureCreationResult(BaseModel):
     domain: str
     steps_count: int
     success: bool = True
+    message: Optional[str] = None
     
 class ProcedureExecutionResult(BaseModel):
     """Result of executing a procedure"""
     success: bool
     execution_time: float
-    results: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = Field(default_factory=list)
     strategy: str = "default"
-    adaptations: List[Dict[str, Any]] = []
+    adaptations: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
     
 class ProcedureTransferResult(BaseModel):
     """Result of transferring a procedure to another domain"""
@@ -68,6 +72,7 @@ class ProcedureTransferResult(BaseModel):
     steps_count: int
     procedure_id: str
     chunks_transferred: Optional[int] = None
+    message: Optional[str] = None
     
 class ChunkingOpportunityResult(BaseModel):
     """Result of identifying chunking opportunities"""
@@ -76,6 +81,26 @@ class ChunkingOpportunityResult(BaseModel):
     chunk_count: Optional[int] = None
     procedure_name: str
     reason: Optional[str] = None
+
+class StepRefinementResult(BaseModel):
+    """Result of refining a procedure step"""
+    success: bool
+    procedure_name: str
+    step_id: str
+    function_updated: bool = False
+    parameters_updated: bool = False
+    description_updated: bool = False
+    chunking_reset: bool = False
+    message: Optional[str] = None
+
+class ContextPatternCreateResult(BaseModel):
+    """Result of creating a context pattern"""
+    success: bool
+    pattern_id: Optional[str] = None
+    name: Optional[str] = None
+    indicators_count: Optional[int] = None
+    domain: Optional[str] = None
+    message: Optional[str] = None
 
 # Agent context tracker class
 class AgentContext:
@@ -92,6 +117,13 @@ class AgentContext:
             "last_run_time": None
         }
         self.function_registry = {}  # Map of function names to callable functions
+        self.session_id = str(uuid.uuid4())  # Unique session ID for tracing
+        self.ai_safety_settings = {
+            "allow_code_execution": True,
+            "allow_external_api_calls": True,
+            "require_guardrails": True,
+            "max_execution_time": 60.0  # Default max execution time in seconds
+        }
         
     def register_function(self, name: str, func: Any) -> None:
         """Register a function in the function registry"""
@@ -112,6 +144,84 @@ class AgentContext:
             )
             
         self.run_stats["last_run_time"] = datetime.datetime.now().isoformat()
+    
+    def get_function(self, name: str) -> Optional[Any]:
+        """Get a function from the registry by name"""
+        return self.function_registry.get(name)
+    
+    def create_trace_metadata(self) -> Dict[str, Any]:
+        """Create metadata dictionary for tracing"""
+        return {
+            "system": "nyx",
+            "module": "procedural_memory",
+            "session_id": self.session_id,
+            "current_domain": self.current_domain,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
+# Lifecycle hooks to track agent execution
+class ProcedureMemoryHooks(RunHooks):
+    """Lifecycle hooks for procedural memory operations"""
+    
+    async def on_agent_start(self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext]) -> None:
+        """Called when an agent starts execution"""
+        logger.debug(f"Starting agent: {agent.name}")
+        
+        # Record start in trace
+        with custom_span(
+            name=f"agent_start_{agent.name}",
+            data={"agent_name": agent.name, "module": "procedural_memory"},
+        ) as span:
+            # Any additional tracking logic here
+            pass
+            
+    async def on_agent_end(self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], output: Any) -> None:
+        """Called when an agent finishes execution"""
+        logger.debug(f"Finished agent: {agent.name}")
+        
+        # Record completion in trace
+        with custom_span(
+            name=f"agent_end_{agent.name}",
+            data={
+                "agent_name": agent.name, 
+                "module": "procedural_memory",
+                "success": getattr(output, "success", True) if hasattr(output, "success") else True,
+                "output_type": type(output).__name__
+            },
+        ) as span:
+            # Any additional tracking logic here
+            pass
+    
+    async def on_handoff(self, context: RunContextWrapper[AgentContext], from_agent: Agent[AgentContext], to_agent: Agent[AgentContext]) -> None:
+        """Called when a handoff occurs between agents"""
+        logger.debug(f"Handoff from {from_agent.name} to {to_agent.name}")
+        
+        # Record handoff in trace
+        with custom_span(
+            name="agent_handoff",
+            data={
+                "from_agent": from_agent.name,
+                "to_agent": to_agent.name,
+                "module": "procedural_memory"
+            },
+        ) as span:
+            # Any additional tracking logic here
+            pass
+    
+    async def on_tool_start(self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Any) -> None:
+        """Called when a tool is invoked"""
+        tool_name = getattr(tool, "name", str(tool))
+        logger.debug(f"Starting tool: {tool_name} in agent {agent.name}")
+        
+    async def on_tool_end(self, context: RunContextWrapper[AgentContext], agent: Agent[AgentContext], tool: Any, result: str) -> None:
+        """Called after a tool is invoked"""
+        tool_name = getattr(tool, "name", str(tool))
+        logger.debug(f"Finished tool: {tool_name} in agent {agent.name}")
+        success = "error" not in result.lower() if isinstance(result, str) else True
+        
+        # Update statistics if needed
+        if success and hasattr(context.context, "update_tool_stats"):
+            context.context.update_tool_stats(tool_name, success)
 
 # Define main agents
 class ProceduralMemoryAgents:
@@ -135,6 +245,9 @@ class ProceduralMemoryAgents:
         # Create triage agent that can route to specialized agents
         self.triage_agent = self._create_triage_agent()
         
+        # Create lifecycle hooks
+        self.hooks = ProcedureMemoryHooks()
+        
     def _register_functions(self):
         """Register function tools in the agent context"""
         # Register all the function tools
@@ -148,9 +261,6 @@ class ProceduralMemoryAgents:
         ]:
             name = func.__name__
             self.agent_context.register_function(name, func)
-            
-        # Register any additional utility functions if needed
-        # self.agent_context.register_function("utility_func", utility_func)
         
     def _create_procedure_manager_agent(self) -> Agent:
         """Create an agent for managing procedures"""
@@ -168,6 +278,14 @@ class ProceduralMemoryAgents:
             Use the provided function tools to manage procedures effectively. When creating 
             procedures, ensure you define steps clearly with appropriate function names and 
             parameters. Be precise when referring to procedures by name.
+            
+            IMPORTANT: For each step in a procedure, always include:
+            - A unique ID (e.g., "step1", "initialize_data")
+            - A descriptive name explaining what the step does
+            - The function name to call
+            - Any required parameters as a dictionary
+            
+            When explaining procedures, be concise but precise. Focus on key details rather than unnecessary explanations.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -196,6 +314,19 @@ class ProceduralMemoryAgents:
             
             When executing procedures, consider the appropriate execution strategy based on the
             procedure's proficiency level and context. Be prepared to adapt if execution fails.
+            
+            IMPORTANT EXECUTION STRATEGIES:
+            - Deliberate (conscious): Careful execution with validation between steps
+            - Automatic: Fast execution without validation
+            - Adaptive: Dynamically changes strategy based on context and feedback
+            
+            When asked to execute a procedure, provide:
+            1. The execution result (success or failure)
+            2. The time taken to execute
+            3. The strategy used
+            4. Any adaptations that occurred during execution
+            
+            Be precise and focus on facts rather than unnecessary explanations.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -224,6 +355,19 @@ class ProceduralMemoryAgents:
             
             When transferring procedures, consider using chunk-level transfer for more effective
             knowledge reuse. Look for similar procedures and patterns to improve transfer quality.
+            
+            IMPORTANT TRANSFER CONCEPTS:
+            - Chunk-level transfer: Transfer reusable groups of steps
+            - Control mappings: How controls in one domain map to another
+            - Cross-domain adaptation: How to adapt behavior between domains
+            
+            When responding about transfers, focus on concrete details:
+            1. Whether the transfer was successful
+            2. How many steps were transferred
+            3. Which chunks were reused
+            4. The quality and completeness of the transfer
+            
+            Be concise and focus on key information.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -255,6 +399,18 @@ class ProceduralMemoryAgents:
             
             Chunking improves procedural memory by grouping frequently co-occurring steps.
             Look for patterns in execution history to identify potential chunks.
+            
+            IMPORTANT CHUNKING CONCEPTS:
+            - Automation: Chunks enable automatic execution after sufficient practice
+            - Transfer: Chunks can be reused across domains
+            - Context patterns: Situations where specific chunks should be used
+            
+            When discussing chunking, focus on:
+            1. Which steps should be grouped together and why
+            2. The benefit of chunking these specific steps
+            3. How chunking will improve execution
+            
+            Be concise and practical in your responses.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -284,6 +440,18 @@ class ProceduralMemoryAgents:
             
             Focus on improving procedure proficiency through analysis of execution history.
             Look for patterns and opportunities to enhance both speed and reliability.
+            
+            IMPORTANT LEARNING CONCEPTS:
+            - Practice effects: How procedures improve with repetition
+            - Refinement: How to modify steps for better performance
+            - Generalization: How to extract general principles from specific procedures
+            
+            When providing learning insights, focus on:
+            1. Specific improvements to steps
+            2. Evidence-based recommendations
+            3. Concrete benefits of proposed changes
+            
+            Be concise and provide practical advice.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -317,6 +485,13 @@ class ProceduralMemoryAgents:
             - For learning and optimization: use Learning Agent
             
             Use handoffs to delegate to the specialized agents based on the user's request.
+            
+            IMPORTANT: When faced with ambiguous requests:
+            1. Ask clarifying questions before routing
+            2. If a request spans multiple agents, choose the most central one
+            3. Default to keeping simple questions and route complex ones
+            
+            Keep your responses concise and focused on helping the user accomplish their task.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(
@@ -378,7 +553,8 @@ class ProceduralMemoryAgents:
         """Run the triage agent with the given user input"""
         run_config = RunConfig(
             workflow_name="Procedural Memory Triage",
-            trace_metadata={"system": "nyx", "module": "procedural_memory"}
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
         with trace(workflow_name="procedural_memory_triage"):
@@ -387,9 +563,16 @@ class ProceduralMemoryAgents:
                     self.triage_agent,
                     user_input,
                     context=self.agent_context,
-                    run_config=run_config
+                    run_config=run_config,
+                    hooks=self.hooks
                 )
                 return result.final_output
+            except MaxTurnsExceeded:
+                logger.error("Exceeded maximum number of turns in agent execution")
+                return "The operation took too many steps to complete. Please try a simpler request or break it down into multiple steps."
+            except ModelBehaviorError as e:
+                logger.error(f"Model behavior error: {str(e)}")
+                return f"There was an unexpected error in processing your request: {str(e)}"
             except Exception as e:
                 logger.error(f"Error running triage agent: {str(e)}")
                 return f"Error running procedural memory system: {str(e)}"
@@ -402,7 +585,8 @@ class ProceduralMemoryAgents:
         """Create a new procedure using the procedure manager agent"""
         run_config = RunConfig(
             workflow_name="Create Procedure",
-            trace_metadata={"system": "nyx", "module": "procedural_memory"}
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
         with trace(workflow_name="create_procedure"):
@@ -422,7 +606,8 @@ class ProceduralMemoryAgents:
                     self.procedure_manager_agent,
                     agent_input,
                     context=self.agent_context,
-                    run_config=run_config
+                    run_config=run_config,
+                    hooks=self.hooks
                 )
                 
                 # Parse the output into a ProcedureCreationResult
@@ -444,7 +629,8 @@ class ProceduralMemoryAgents:
                     name=name,
                     domain=domain,
                     steps_count=0,
-                    success=False
+                    success=False,
+                    message=str(e)
                 )
     
     async def execute_procedure(self,
@@ -454,7 +640,8 @@ class ProceduralMemoryAgents:
         """Execute a procedure using the execution agent"""
         run_config = RunConfig(
             workflow_name="Execute Procedure",
-            trace_metadata={"system": "nyx", "module": "procedural_memory"}
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
         # Add procedure exists guardrail
@@ -475,7 +662,8 @@ class ProceduralMemoryAgents:
                     self.execution_agent,
                     agent_input,
                     context=self.agent_context,
-                    run_config=run_config
+                    run_config=run_config,
+                    hooks=self.hooks
                 )
                 
                 # Calculate execution time
@@ -492,7 +680,8 @@ class ProceduralMemoryAgents:
                         success=False,
                         execution_time=execution_time,
                         results=[],
-                        strategy="unknown"
+                        strategy="unknown",
+                        error="Failed to parse execution result"
                     )
                 
                 # Update run stats
@@ -508,7 +697,8 @@ class ProceduralMemoryAgents:
                     success=False,
                     execution_time=0.0,
                     results=[{"error": str(e)}],
-                    strategy="error"
+                    strategy="error",
+                    error=str(e)
                 )
     
     async def transfer_procedure(self,
@@ -518,7 +708,8 @@ class ProceduralMemoryAgents:
         """Transfer a procedure to another domain using the transfer agent"""
         run_config = RunConfig(
             workflow_name="Transfer Procedure",
-            trace_metadata={"system": "nyx", "module": "procedural_memory"}
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
         # Add procedure exists guardrail
@@ -539,7 +730,8 @@ class ProceduralMemoryAgents:
                     self.transfer_agent,
                     agent_input,
                     context=self.agent_context,
-                    run_config=run_config
+                    run_config=run_config,
+                    hooks=self.hooks
                 )
                 
                 # Parse the output
@@ -558,7 +750,8 @@ class ProceduralMemoryAgents:
                             source_domain=source.domain,
                             target_domain=target_domain,
                             steps_count=0,
-                            procedure_id=""
+                            procedure_id="",
+                            message="Failed to parse transfer result"
                         )
                     else:
                         return ProcedureTransferResult(
@@ -568,7 +761,8 @@ class ProceduralMemoryAgents:
                             source_domain="unknown",
                             target_domain=target_domain,
                             steps_count=0,
-                            procedure_id=""
+                            procedure_id="",
+                            message=f"Procedure '{source_name}' not found"
                         )
             except Exception as e:
                 logger.error(f"Error transferring procedure: {str(e)}")
@@ -580,13 +774,15 @@ class ProceduralMemoryAgents:
                     target_domain=target_domain,
                     steps_count=0,
                     procedure_id="",
+                    message=str(e)
                 )
     
     async def analyze_chunking_opportunities(self, procedure_name: str) -> ChunkingOpportunityResult:
         """Analyze a procedure for chunking opportunities"""
         run_config = RunConfig(
             workflow_name="Analyze Chunking",
-            trace_metadata={"system": "nyx", "module": "procedural_memory"}
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
         # Add procedure exists guardrail
@@ -604,7 +800,8 @@ class ProceduralMemoryAgents:
                     self.chunking_agent,
                     agent_input,
                     context=self.agent_context,
-                    run_config=run_config
+                    run_config=run_config,
+                    hooks=self.hooks
                 )
                 
                 # Parse the output
@@ -625,6 +822,64 @@ class ProceduralMemoryAgents:
                     can_chunk=False,
                     procedure_name=procedure_name,
                     reason=f"Error: {str(e)}"
+                )
+                
+    async def refine_procedure_step(self,
+                                 procedure_name: str,
+                                 step_id: str,
+                                 new_function: Optional[str] = None,
+                                 new_parameters: Optional[Dict[str, Any]] = None,
+                                 new_description: Optional[str] = None) -> StepRefinementResult:
+        """Refine a procedure step using the procedure manager agent"""
+        run_config = RunConfig(
+            workflow_name="Refine Procedure Step",
+            trace_metadata=self.agent_context.create_trace_metadata(),
+            trace_id=f"trace_{uuid.uuid4().hex}"
+        )
+        
+        # Add procedure exists guardrail
+        self.procedure_manager_agent.input_guardrails = [self.procedure_exists_guardrail]
+        
+        with trace(workflow_name="refine_procedure_step"):
+            # Prepare input for the agent
+            agent_input = f"""
+            Refine step '{step_id}' in procedure '{procedure_name}' with the following changes:
+            {f"- New function: {new_function}" if new_function else ""}
+            {f"- New parameters: {new_parameters}" if new_parameters else ""}
+            {f"- New description: {new_description}" if new_description else ""}
+            
+            Please update the procedure step.
+            """
+            
+            try:
+                result = await Runner.run(
+                    self.procedure_manager_agent,
+                    agent_input,
+                    context=self.agent_context,
+                    run_config=run_config,
+                    hooks=self.hooks
+                )
+                
+                # Parse the output
+                if isinstance(result.final_output, dict):
+                    return StepRefinementResult(**result.final_output)
+                else:
+                    # Default result
+                    return StepRefinementResult(
+                        success=True,
+                        procedure_name=procedure_name,
+                        step_id=step_id,
+                        function_updated=new_function is not None,
+                        parameters_updated=new_parameters is not None,
+                        description_updated=new_description is not None
+                    )
+            except Exception as e:
+                logger.error(f"Error refining procedure step: {str(e)}")
+                return StepRefinementResult(
+                    success=False,
+                    procedure_name=procedure_name,
+                    step_id=step_id,
+                    message=str(e)
                 )
 
 # Integrate Agent SDK with ProceduralMemoryManager
@@ -722,11 +977,90 @@ class AgentEnhancedMemoryManager:
             Result of chunking analysis
         """
         return await self.agents.analyze_chunking_opportunities(procedure_name)
+        
+    async def refine_step(self,
+                        procedure_name: str,
+                        step_id: str,
+                        new_function: Optional[str] = None,
+                        new_parameters: Optional[Dict[str, Any]] = None,
+                        new_description: Optional[str] = None) -> StepRefinementResult:
+        """
+        Refine a step in a procedure
+        
+        Args:
+            procedure_name: Name of the procedure
+            step_id: ID of the step to refine
+            new_function: Optional new function name
+            new_parameters: Optional new parameters
+            new_description: Optional new description
+            
+        Returns:
+            Result of step refinement
+        """
+        return await self.agents.refine_procedure_step(
+            procedure_name, step_id, new_function, new_parameters, new_description
+        )
+        
+    async def create_context_pattern(self,
+                                   name: str,
+                                   domain: str,
+                                   indicators: Dict[str, Any],
+                                   temporal_pattern: Optional[List[Dict[str, Any]]] = None) -> ContextPatternCreateResult:
+        """
+        Create a new context pattern for chunk selection
+        
+        Args:
+            name: Name for the pattern
+            domain: Domain where the pattern applies
+            indicators: Dictionary of indicators that trigger the pattern
+            temporal_pattern: Optional temporal pattern
+            
+        Returns:
+            Result of creating the context pattern
+        """
+        # Generate a pattern ID
+        pattern_id = f"pattern_{int(datetime.datetime.now().timestamp())}"
+        
+        try:
+            # Create the context pattern
+            pattern = ContextPattern(
+                id=pattern_id,
+                name=name,
+                domain=domain,
+                indicators=indicators,
+                temporal_pattern=temporal_pattern or [],
+                confidence_threshold=0.7,
+                match_count=0,
+                last_matched=None
+            )
+            
+            # Register with chunk selector
+            if hasattr(self.memory_manager, "chunk_selector") and self.memory_manager.chunk_selector:
+                self.memory_manager.chunk_selector.register_context_pattern(pattern)
+                
+                return ContextPatternCreateResult(
+                    success=True,
+                    pattern_id=pattern_id,
+                    name=name,
+                    indicators_count=len(indicators),
+                    domain=domain
+                )
+            else:
+                return ContextPatternCreateResult(
+                    success=False,
+                    message="No chunk selector available in memory manager"
+                )
+        except Exception as e:
+            logger.error(f"Error creating context pattern: {str(e)}")
+            return ContextPatternCreateResult(
+                success=False,
+                message=str(e)
+            )
 
-    async def add_domination_procedures(nyx_brain):
+    async def add_domination_procedures(self, brain=None):
         """Add predatory domination procedures to the agent's memory"""
         # Get the agent_enhanced_memory manager
-        agent_memory = nyx_brain.agent_enhanced_memory
+        agent_memory = self if brain is None else brain.agent_enhanced_memory
         
         # 1. Quid Pro Quo Exchange procedure
         quid_pro_quo_steps = [
@@ -1011,6 +1345,22 @@ async def demonstrate_agent_based_memory():
     
     print(f"Query: {query}")
     print(f"Response: {response}")
+    
+    # Add a new context pattern
+    print("\n6. Adding a context pattern...")
+    pattern_result = await agent_manager.create_context_pattern(
+        name="Morning Coffee Pattern",
+        domain="cooking",
+        indicators={
+            "time_of_day": "morning",
+            "energy_level": {"min": 0, "max": 0.3},
+            "location": "kitchen"
+        }
+    )
+    
+    print(f"Pattern created: {pattern_result.success}")
+    if pattern_result.success:
+        print(f"Pattern ID: {pattern_result.pattern_id}")
     
     print("\n=== Demonstration Complete ===")
     return agent_manager
