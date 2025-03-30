@@ -1,4 +1,4 @@
-# nyx/core/emotions/emotional_core_2.py
+# nyx/core/emotions/emotional_core.py
 
 import asyncio
 import datetime
