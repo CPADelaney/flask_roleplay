@@ -26,19 +26,25 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
     cycle_count: int = Field(default=0, description="Current processing cycle count")
     last_emotions: Dict[str, float] = Field(default_factory=dict, description="Most recent emotion intensities")
     interaction_history: List[Dict[str, Any]] = Field(default_factory=list, max_length=20, 
-                                                      description="Recent interaction data")
+                                                    description="Recent interaction data")
     temp_data: Dict[str, Any] = Field(default_factory=dict, exclude=True, 
-                                      description="Temporary runtime data that won't be serialized")
+                                    description="Temporary runtime data that won't be serialized")
     # Using a more efficient circular buffer for history tracking
     _circular_history: Dict[str, Deque] = Field(default_factory=lambda: defaultdict(lambda: deque(maxlen=20)), 
-                                               exclude=True, description="Circular buffers for various history types")
+                                              exclude=True, description="Circular buffers for various history types")
     
-    # New fields for improved SDK integration
+    # Enhanced fields for improved SDK integration
     active_agent: Optional[str] = Field(default=None, description="Currently active agent name")
     agent_metadata: Dict[str, Dict[str, Any]] = Field(default_factory=dict, 
-                                                      description="Metadata for each agent")
+                                                    description="Metadata for each agent")
     trace_metadata: Dict[str, Any] = Field(default_factory=dict, 
-                                          description="Metadata for tracing")
+                                        description="Metadata for tracing")
+    
+    # New fields for better SDK integration
+    agent_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict, 
+                                                  description="Current state of each agent")
+    sdk_metadata: Dict[str, Any] = Field(default_factory=dict,
+                                       description="SDK-specific metadata")
     
     class Config:
         """Pydantic configuration"""
@@ -87,15 +93,130 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             "intensity": intensity,
             "timestamp": datetime.datetime.now().isoformat()
         })
+
+    def prepare_agent_context(self, agent_type: str) -> Dict[str, Any]:
+        """
+        Prepare optimized context data for a specific agent type with
+        enhanced SDK integration
+        
+        Args:
+            agent_type: Type of agent to prepare for
+            
+        Returns:
+            Dictionary of agent-specific context data
+        """
+        # Start with standard context
+        context_data = self.prepare_for_agent(agent_type)
+        
+        # Add SDK-specific metadata
+        context_data["_sdk_metadata"] = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "cycle": self.cycle_count,
+            "agent_type": agent_type,
+            "execution_id": f"exec_{datetime.datetime.now().timestamp()}"
+        }
+        
+        # Add trace context for better SDK integration
+        context_data["trace_context"] = self.create_trace_metadata()
+        
+        # Add agent-specific performance data
+        timing_data = self.get_timing_data()
+        
+        # Add SDK-specific performance data
+        perf_data = {}
+        
+        # Add agent timing data if available
+        if agent_type in timing_data:
+            perf_data["avg_response_time"] = timing_data[agent_type].get("avg_time", 0)
+            perf_data["response_count"] = timing_data[agent_type].get("count", 0)
+        
+        # Add function timing data if available for this agent type
+        function_timing = self.get_value("function_timing", {})
+        if function_timing:
+            perf_data["function_timing"] = {
+                k: v for k, v in function_timing.items()
+                if k.startswith(agent_type) or agent_type.lower() in k.lower()
+            }
+        
+        # Add performance data to context if any was found
+        if perf_data:
+            context_data["_performance"] = perf_data
+        
+        # Add agent state for continuity
+        if agent_type in self.agent_states:
+            context_data["_previous_state"] = self.agent_states[agent_type]
+        
+        # Add SDK-optimized history access
+        context_data["_history"] = self.get_agent_relevant_history(agent_type)
+        
+        return context_data
+
+    def get_agent_relevant_history(self, agent_type: str) -> Dict[str, Any]:
+        """
+        Get optimized relevant history for a specific agent type
+        
+        Args:
+            agent_type: Type of agent to get history for
+            
+        Returns:
+            Dictionary of relevant history
+        """
+        history = {}
+        
+        # Add relevant circular buffer data based on agent type
+        if agent_type == "neurochemical":
+            # Add chemical updates
+            history["chemical_updates"] = self.get_circular_buffer("chemical_updates")
+            # Add chemical interactions
+            history["chemical_interactions"] = self.get_circular_buffer("chemical_interactions")
+            # Add recent decay events
+            history["decay_events"] = self.get_circular_buffer("decay_events")
+            
+        elif agent_type == "emotion_derivation":
+            # Add neurochemical history
+            history["neurochemical_history"] = self.get_circular_buffer("neurochemical_history")
+            # Add emotion transitions
+            history["emotion_transitions"] = self.get_circular_buffer("emotion_transitions")
+            
+        elif agent_type == "reflection":
+            # Add recent thoughts
+            history["recent_thoughts"] = self.get_value("recent_thoughts", [])
+            # Add emotion history
+            history["emotion_history"] = self.get_circular_buffer("emotion_history")
+            
+        elif agent_type == "learning":
+            # Add pattern history
+            history["pattern_history"] = self.get_value("pattern_history", [])
+            # Add adaptation history
+            history["adaptation_history"] = self.get_value("adaptation_history", [])
+            
+        elif agent_type == "orchestrator":
+            # Add handoff history
+            history["handoffs"] = self.get_circular_buffer("handoffs")
+            # Add agent activity
+            history["agent_activity"] = self.get_circular_buffer("agent_activity")
+        
+        # Add generic history data for all agents
+        history["interaction_history"] = self.interaction_history[-5:] if self.interaction_history else []
+        
+        return history
     
     def record_agent_state(self, agent_name: str, data: Dict[str, Any]) -> None:
         """
-        Record agent state information
+        Record enhanced agent state with SDK integration support
         
         Args:
             agent_name: Name of the agent
             data: State data to record
         """
+        # Create or update agent state
+        if agent_name not in self.agent_states:
+            self.agent_states[agent_name] = {}
+            
+        # Update with new state data
+        self.agent_states[agent_name].update(data)
+        
+        # Standard agent metadata update
         if agent_name not in self.agent_metadata:
             self.agent_metadata[agent_name] = {}
             
@@ -105,12 +226,109 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
         # Record the active agent
         self.active_agent = agent_name
         
-        # Also record in circular buffer for history
+        # Record in circular buffer for history
         self._add_to_circular_buffer("agent_state_history", {
             "agent": agent_name,
             "data": data,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat(),
+            "cycle": self.cycle_count
         })
+        
+        # Add SDK performance tracking
+        if "duration" in data:
+            timing_data = self.get_timing_data()
+            if agent_name not in timing_data:
+                timing_data[agent_name] = {"count": 0, "total_time": 0, "avg_time": 0}
+                
+            timing_data[agent_name]["count"] += 1
+            timing_data[agent_name]["total_time"] += data["duration"]
+            timing_data[agent_name]["avg_time"] = (
+                timing_data[agent_name]["total_time"] / timing_data[agent_name]["count"]
+            )
+
+    def create_trace_metadata(self) -> Dict[str, Any]:
+        """
+        Create enhanced metadata for traces with improved SDK integration
+        
+        Returns:
+            Dictionary of trace metadata
+        """
+        metadata = {
+            "system": "nyx_emotional_core",
+            "version": "1.0",
+            "cycle": self.cycle_count,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Add active agent if available
+        if self.active_agent:
+            metadata["active_agent"] = self.active_agent
+            
+        # Add dominant emotion with additional information
+        if self.last_emotions:
+            dominant = max(self.last_emotions.items(), key=lambda x: x[1])
+            metadata["dominant_emotion"] = dominant[0]
+            metadata["intensity"] = dominant[1]
+            
+            # Add all emotions above threshold for richer tracing
+            significant_emotions = {
+                emotion: intensity for emotion, intensity in self.last_emotions.items()
+                if intensity > 0.3  # Only include emotions with significant intensity
+            }
+            if significant_emotions:
+                metadata["emotions"] = significant_emotions
+                
+        # Add conversation ID if available
+        if "conversation_id" in self.temp_data:
+            metadata["conversation_id"] = self.temp_data["conversation_id"]
+            
+        # Add SDK integration timestamp
+        metadata["sdk_timestamp"] = datetime.datetime.now().isoformat()
+        
+        # Add agent stats if available
+        agent_usage = self.get_agent_usage()
+        if agent_usage:
+            metadata["agent_usage"] = agent_usage
+        
+        return metadata
+
+    
+    def get_recent_activity(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get recent activity across all circular buffers for
+        improved SDK monitoring
+        
+        Args:
+            limit: Maximum number of items to return from each buffer
+            
+        Returns:
+            Dictionary with recent activity data
+        """
+        activity = {}
+        
+        # Get recent activity from circular buffers
+        for buffer_name in self._circular_history.keys():
+            buffer_data = self.get_circular_buffer(buffer_name)
+            if buffer_data:
+                activity[buffer_name] = buffer_data[-limit:]
+        
+        # Add standard fields
+        activity["timestamp"] = datetime.datetime.now().isoformat()
+        activity["cycle"] = self.cycle_count
+        
+        # Add agent state data
+        agent_states = {}
+        for agent_name, state in self.agent_states.items():
+            # Include only the latest state info to avoid excessive data
+            agent_states[agent_name] = {
+                k: v for k, v in state.items() 
+                if k in ["status", "last_run", "duration", "last_output_type"]
+            }
+        
+        activity["agent_states"] = agent_states
+        
+        return activity
+    
     
     def add_interaction(self, data: Dict[str, Any]) -> None:
         """
@@ -416,157 +634,3 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
         context_data["trace_context"] = self.create_trace_metadata()
         
         return context_data
-    
-    def create_trace_metadata(self) -> Dict[str, Any]:
-        """
-        Create SDK-optimized metadata for traces
-        
-        Returns:
-            Dictionary of trace metadata
-        """
-        metadata = {
-            "system": "nyx_emotional_core",
-            "version": "1.0",
-            "cycle": self.cycle_count,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "sdk_timestamp": datetime.datetime.now().isoformat()
-        }
-        
-        # Add active agent if available
-        if self.active_agent:
-            metadata["active_agent"] = self.active_agent
-            
-        # Add dominant emotion with more efficient implementation
-        if self.last_emotions:
-            dominant = max(self.last_emotions.items(), key=lambda x: x[1])
-            metadata["dominant_emotion"] = dominant[0]
-            metadata["intensity"] = dominant[1]
-            
-            # Add all emotions above threshold for richer tracing
-            significant_emotions = {
-                emotion: intensity for emotion, intensity in self.last_emotions.items()
-                if intensity > 0.3  # Only include emotions with significant intensity
-            }
-            if significant_emotions:
-                metadata["emotions"] = significant_emotions
-                
-        # Add conversation ID if available
-        if "conversation_id" in self.temp_data:
-            metadata["conversation_id"] = self.temp_data["conversation_id"]
-            
-        return metadata
-        
-# Adding enhanced methods to EmotionalContext
-
-def prepare_agent_context(self, agent_type: str) -> Dict[str, Any]:
-    """
-    Prepare context data optimized for a specific agent type with
-    enhanced SDK integration
-    
-    Args:
-        agent_type: Type of agent to prepare for
-        
-    Returns:
-        Dictionary of agent-specific context data
-    """
-    # Use the existing prepare_for_agent method as a base
-    context_data = self.prepare_for_agent(agent_type)
-    
-    # Add SDK-specific optimizations
-    context_data["_sdk_metadata"] = {
-        "timestamp": datetime.datetime.now().isoformat(),
-        "cycle": self.cycle_count,
-        "agent_type": agent_type
-    }
-    
-    # Add trace context for better SDK integration
-    context_data["trace_context"] = self.create_trace_metadata()
-    
-    # Add SDK-specific performance data
-    perf_data = {}
-    
-    # Add agent timing data if available
-    agent_timing = self.get_timing_data()
-    if agent_type in agent_timing:
-        perf_data["avg_response_time"] = agent_timing[agent_type].get("avg_time", 0)
-        perf_data["response_count"] = agent_timing[agent_type].get("count", 0)
-    
-    # Add function timing data if available for this agent type
-    function_timing = self.get_value("function_timing", {})
-    if function_timing:
-        perf_data["function_timing"] = {
-            k: v for k, v in function_timing.items()
-            if k.startswith(agent_type) or agent_type.lower() in k.lower()
-        }
-    
-    # Add performance data to context if any was found
-    if perf_data:
-        context_data["_performance"] = perf_data
-    
-    return context_data
-
-def create_trace_metadata(self) -> Dict[str, Any]:
-    """
-    Create metadata for traces with enhanced SDK integration
-    
-    Returns:
-        Dictionary of trace metadata
-    """
-    metadata = {
-        "system": "nyx_emotional_core",
-        "version": "1.0",
-        "cycle": self.cycle_count,
-        "timestamp": datetime.datetime.now().isoformat()
-    }
-    
-    # Add active agent if available
-    if self.active_agent:
-        metadata["active_agent"] = self.active_agent
-        
-    # Add dominant emotion if available with additional information
-    if self.last_emotions:
-        dominant = max(self.last_emotions.items(), key=lambda x: x[1])
-        metadata["dominant_emotion"] = dominant[0]
-        metadata["intensity"] = dominant[1]
-        
-        # Add all emotions above threshold for richer tracing
-        significant_emotions = {
-            emotion: intensity for emotion, intensity in self.last_emotions.items()
-            if intensity > 0.3  # Only include emotions with significant intensity
-        }
-        if significant_emotions:
-            metadata["emotions"] = significant_emotions
-            
-    # Add conversation ID if available
-    if "conversation_id" in self.temp_data:
-        metadata["conversation_id"] = self.temp_data["conversation_id"]
-        
-    # Add SDK integration timestamp
-    metadata["sdk_timestamp"] = datetime.datetime.now().isoformat()
-    
-    return metadata
-
-def get_recent_activity(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Get recent activity across all circular buffers for
-    improved SDK monitoring
-    
-    Args:
-        limit: Maximum number of items to return from each buffer
-        
-    Returns:
-        Dictionary with recent activity data
-    """
-    activity = {}
-    
-    # Get recent activity from circular buffers
-    for buffer_name in self._circular_history.keys():
-        buffer_data = self.get_circular_buffer(buffer_name)
-        if buffer_data:
-            activity[buffer_name] = buffer_data[-limit:]
-    
-    # Add standard fields
-    activity["timestamp"] = datetime.datetime.now().isoformat()
-    activity["cycle"] = self.cycle_count
-    
-    return activity
