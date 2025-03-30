@@ -345,7 +345,7 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
     # New methods for SDK integration
     def prepare_for_agent(self, agent_type: str) -> Dict[str, Any]:
         """
-        Prepare context-specific data for an agent type
+        Prepare context-specific data for an agent type with SDK optimization
         
         Args:
             agent_type: Type of agent to prepare for
@@ -356,15 +356,27 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
         # Base context data for all agents
         context_data = {
             "cycle_count": self.cycle_count,
-            "last_emotions": self.last_emotions
+            "last_emotions": self.last_emotions,
+            "sdk_metadata": {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "agent_type": agent_type
+            }
         }
         
-        # Add agent-specific context
+        # Add agent-specific context using pattern matching for cleaner code
         if agent_type == "neurochemical":
             context_data.update({
                 "cached_chemicals": self.get_cached_neurochemicals(),
-                "decay_hours": self.get_value("decay_hours", 0.0)
+                "decay_hours": self.get_value("decay_hours", 0.0),
+                "chemical_baselines": self.get_value("cached_chemical_baselines", {})
             })
+        elif agent_type == "emotion_derivation":
+            # Include neurochemical data if available
+            if "cached_neurochemical_state" in self.temp_data:
+                context_data["chemicals"] = self.temp_data["cached_neurochemical_state"]
+            # Include emotion rule index if available
+            if "emotion_rule_index" in self.temp_data:
+                context_data["rule_index"] = self.temp_data["emotion_rule_index"]
             
         elif agent_type == "emotion_derivation":
             # Include neurochemical data if available
@@ -401,11 +413,13 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             context_data["last_handoff"] = self.get_value("last_handoff")
             context_data["current_emotional_state"] = self.get_value("current_emotional_state")
         
+        context_data["trace_context"] = self.create_trace_metadata()
+        
         return context_data
     
     def create_trace_metadata(self) -> Dict[str, Any]:
         """
-        Create metadata for traces
+        Create SDK-optimized metadata for traces
         
         Returns:
             Dictionary of trace metadata
@@ -414,24 +428,34 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             "system": "nyx_emotional_core",
             "version": "1.0",
             "cycle": self.cycle_count,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat(),
+            "sdk_timestamp": datetime.datetime.now().isoformat()
         }
         
         # Add active agent if available
         if self.active_agent:
             metadata["active_agent"] = self.active_agent
             
-        # Add dominant emotion if available
+        # Add dominant emotion with more efficient implementation
         if self.last_emotions:
             dominant = max(self.last_emotions.items(), key=lambda x: x[1])
             metadata["dominant_emotion"] = dominant[0]
             metadata["intensity"] = dominant[1]
             
+            # Add all emotions above threshold for richer tracing
+            significant_emotions = {
+                emotion: intensity for emotion, intensity in self.last_emotions.items()
+                if intensity > 0.3  # Only include emotions with significant intensity
+            }
+            if significant_emotions:
+                metadata["emotions"] = significant_emotions
+                
         # Add conversation ID if available
         if "conversation_id" in self.temp_data:
             metadata["conversation_id"] = self.temp_data["conversation_id"]
             
         return metadata
+        
 # Adding enhanced methods to EmotionalContext
 
 def prepare_agent_context(self, agent_type: str) -> Dict[str, Any]:
