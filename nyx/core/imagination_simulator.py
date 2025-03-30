@@ -227,9 +227,41 @@ class ImaginationSimulator:
         except Exception as e:
             logger.exception(f"Error setting up simulation for '{description}': {e}")
             return None
+            
 
+    self.simulation_analyst_agent = Agent(
+        name="Simulation Analyst",
+        instructions="""You analyze the results of simulations to extract insights.
+        
+        Your role is to:
+        1. Examine the simulation trajectory and identify patterns
+        2. Extract key causal relationships
+        3. Predict likely outcomes based on the simulation data
+        4. Assess confidence in these predictions
+        5. Identify emotional impacts and key dynamics
+        
+        Focus on extracting practical, actionable insights from simulation data.
+        """,
+        model="gpt-4o",
+        model_settings=ModelSettings(temperature=0.3),
+        tools=[],
+        output_type=SimulationInsights  # Define this Pydantic model
+    )
+    
+    # Add better tracing to simulation runs
     async def run_simulation(self, sim_input: SimulationInput) -> SimulationResult:
         """Runs a simulation based on the input parameters."""
+        
+        with trace(
+            workflow_name="RunSimulation", 
+            group_id=self.trace_group_id, 
+            metadata={
+                "sim_id": sim_input.simulation_id, 
+                "category": self._determine_simulation_category(sim_input),
+                "domain": sim_input.domain if hasattr(sim_input, 'domain') else "general",
+                "max_steps": sim_input.max_steps
+            }
+        ):
         logger.info(f"Starting simulation '{sim_input.simulation_id}': {sim_input.description}")
         trajectory: List[SimulationState] = []
         
