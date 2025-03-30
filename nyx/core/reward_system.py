@@ -12,7 +12,18 @@ from pydantic import BaseModel, Field
 from collections import defaultdict
 from enum import Enum
 
-from agents import Agent, Runner, ModelSettings, trace, function_tool
+from agents import (
+    Agent, 
+    Runner, 
+    ModelSettings, 
+    function_tool, 
+    trace, 
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    FunctionTool,
+    RunConfig,
+    RunContextWrapper
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +72,108 @@ class ActionValue(BaseModel):
     def is_reliable(self) -> bool:
         """Whether this action value has enough updates to be considered reliable."""
         return self.update_count >= 3 and self.confidence >= 0.5
+
+class RewardAnalysisOutput(BaseModel):
+    """Output schema for reward analysis agent"""
+    patterns: List[Dict[str, Any]] = Field(..., description="Identified reward patterns")
+    suggestions: List[Dict[str, Any]] = Field(..., description="Suggestions for improvement")
+    learning_params: Dict[str, float] = Field(..., description="Recommended learning parameters")
+    effectiveness: Dict[str, float] = Field(..., description="Effectiveness metrics")
+    insights: str = Field(..., description="Key insights about reward system")
+
+# Function tools for the reward system
+
+@function_tool
+async def categorize_reward(reward_value: float) -> RewardType:
+    """
+    Categorize a reward value as positive, negative, or neutral
+    
+    Args:
+        reward_value: The reward value to categorize
+        
+    Returns:
+        The type of reward (positive, negative, or neutral)
+    """
+    if reward_value > 0.05:
+        return RewardType.POSITIVE
+    elif reward_value < -0.05:
+        return RewardType.NEGATIVE
+    else:
+        return RewardType.NEUTRAL
+
+@function_tool
+async def calculate_dopamine_change(
+    reward_value: float, 
+    current_dopamine: float,
+    baseline_dopamine: float = 0.5
+) -> Dict[str, float]:
+    """
+    Calculate the change in dopamine based on a reward value
+    
+    Args:
+        reward_value: The reward value
+        current_dopamine: Current dopamine level
+        baseline_dopamine: Baseline dopamine level
+        
+    Returns:
+        Dictionary with dopamine change information
+    """
+    # Scale reward to dopamine effect
+    # Positive rewards have stronger effect than negative (asymmetry)
+    if reward_value >= 0:
+        dopamine_change = reward_value * 0.3  # Scale positive rewards
+    else:
+        dopamine_change = reward_value * 0.2  # Scale negative rewards
+    
+    # Update dopamine level
+    new_dopamine = max(0.0, min(1.0, current_dopamine + dopamine_change))
+    
+    return {
+        "dopamine_change": dopamine_change,
+        "old_dopamine": current_dopamine,
+        "new_dopamine": new_dopamine,
+        "is_significant": abs(dopamine_change) > 0.1
+    }
+
+@function_tool
+async def calculate_submission_value(
+    submission_type: str, 
+    was_initially_resistant: bool = False
+) -> float:
+    """
+    Calculate base reward value for different submission types
+    
+    Args:
+        submission_type: Type of submission
+        was_initially_resistant: Whether there was initial resistance
+        
+    Returns:
+        The calculated submission value
+    """
+    # Assign values based on submission type rarity and psychological significance
+    submission_values = {
+        "verbal": 0.4,        # Basic verbal acknowledgment 
+        "honorific": 0.5,     # Proper address with honorifics
+        "behavioral": 0.6,    # Basic behavioral compliance
+        "ritual": 0.7,        # Ritual performance
+        "task": 0.6,          # Task completion
+        "service": 0.7,       # Service-oriented submission
+        "degradation": 0.8,   # Accepting degradation
+        "humiliation": 0.9,   # Accepting humiliation
+        "pain_simulation": 0.9, # Simulated pain tolerance
+        "psychological": 0.95,  # Deep psychological submission
+        "ownership": 1.0        # Ownership acknowledgment
+    }
+    
+    base_value = submission_values.get(submission_type, 0.6)
+    
+    # Apply multiplier for resistance overcome
+    if was_initially_resistant:
+        return base_value * 1.5  # 50% increased reward for overcoming resistance
+    elif submission_type == "immediate":  # New category
+        return base_value * 0.5  # 50% reduced reward for immediate submission
+    else:
+        return base_value
 
 class RewardSignalProcessor:
     """
@@ -115,8 +228,9 @@ class RewardSignalProcessor:
         self._main_lock = asyncio.Lock()
         self._dopamine_lock = asyncio.Lock()
         
-        # Create reinforcement learning agent
+        # Create agents
         self.learning_agent = self._create_learning_agent()
+        self.conditioning_agent = self._create_conditioning_agent()
         
         logger.info("RewardSignalProcessor initialized")
     
@@ -134,18 +248,46 @@ class RewardSignalProcessor:
                 4. Recommend optimization strategies for reinforcement learning.
                 
                 Your inputs will include reward histories, action-value pairs, and performance metrics.
-                Your outputs should be structured JSON objects containing insights and recommendations.
                 Focus on data-driven insights and concrete, implementable suggestions.
                 """,
                 model="gpt-4o",
                 model_settings=ModelSettings(
                     temperature=0.3,
-                    response_format={"type": "json_object"}
                 ),
-                output_type=Dict[str, Any]
+                output_type=RewardAnalysisOutput,
+                tools=[
+                    categorize_reward,
+                    calculate_dopamine_change
+                ]
             )
         except Exception as e:
             logger.error(f"Error creating reward learning agent: {e}")
+            return None
+    
+    def _create_conditioning_agent(self) -> Optional[Agent]:
+        """Creates an agent to process conditioning and reinforcement."""
+        try:
+            return Agent(
+                name="Conditioning Agent",
+                instructions="""You process reinforcement and conditioning for the Nyx AI system.
+                Your role is to analyze conditioning events and determine appropriate reward signals.
+                
+                For each conditioning event, you'll:
+                1. Evaluate the type of conditioning (positive/negative reinforcement/punishment)
+                2. Determine the appropriate reward value based on the conditioning parameters
+                3. Consider context and history when making these determinations
+                4. Generate appropriate reward signals for the system
+                
+                Focus on creating a balanced reward system that encourages desired behaviors
+                while maintaining psychological realism in the reward mechanisms.
+                """,
+                model="gpt-4o",
+                model_settings=ModelSettings(
+                    temperature=0.2
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error creating conditioning agent: {e}")
             return None
     
     async def process_reward_signal(self, reward: RewardSignal) -> Dict[str, Any]:
@@ -160,58 +302,59 @@ class RewardSignalProcessor:
             Processing results and effects
         """
         async with self._main_lock:
-            # 1. Update dopamine levels
-            dopamine_change = await self._update_dopamine_level(reward.value)
-            
-            # 2. Store in history
-            history_entry = {
-                "value": reward.value,
-                "source": reward.source,
-                "context": reward.context,
-                "timestamp": reward.timestamp,
-                "dopamine_level": self.current_dopamine
-            }
-            self.reward_history.append(history_entry)
-            
-            # Trim history if needed
-            if len(self.reward_history) > self.max_history_size:
-                self.reward_history = self.reward_history[-self.max_history_size:]
-            
-            # 3. Update performance tracking
-            self.total_reward += reward.value
-            if reward.value > 0:
-                self.positive_rewards += 1
-            elif reward.value < 0:
-                self.negative_rewards += 1
-            
-            # 4. Update category statistics
-            category = reward.source
-            self.category_stats[category]["count"] += 1
-            self.category_stats[category]["total"] += reward.value
-            if reward.value > 0:
-                self.category_stats[category]["positive"] += 1
-            elif reward.value < 0:
-                self.category_stats[category]["negative"] += 1
-            
-            # 5. Apply effects to other systems
-            effects = await self._apply_reward_effects(reward)
-            
-            # 6. Trigger learning if reward is significant
-            learning_updates = {}
-            if abs(reward.value) >= self.significant_reward_threshold:
-                learning_updates = await self._trigger_learning(reward)
-            
-            # 7. Return processing results
-            return {
-                "dopamine_change": dopamine_change,
-                "current_dopamine": self.current_dopamine,
-                "effects": effects,
-                "learning": learning_updates
-            }
+            with trace(workflow_name="process_reward", group_id=f"reward_{reward.source}"):
+                # 1. Update dopamine levels
+                dopamine_change = await self._update_dopamine_level(reward.value)
+                
+                # 2. Store in history
+                history_entry = {
+                    "value": reward.value,
+                    "source": reward.source,
+                    "context": reward.context,
+                    "timestamp": reward.timestamp,
+                    "dopamine_level": self.current_dopamine
+                }
+                self.reward_history.append(history_entry)
+                
+                # Trim history if needed
+                if len(self.reward_history) > self.max_history_size:
+                    self.reward_history = self.reward_history[-self.max_history_size:]
+                
+                # 3. Update performance tracking
+                self.total_reward += reward.value
+                if reward.value > 0:
+                    self.positive_rewards += 1
+                elif reward.value < 0:
+                    self.negative_rewards += 1
+                
+                # 4. Update category statistics
+                category = reward.source
+                self.category_stats[category]["count"] += 1
+                self.category_stats[category]["total"] += reward.value
+                if reward.value > 0:
+                    self.category_stats[category]["positive"] += 1
+                elif reward.value < 0:
+                    self.category_stats[category]["negative"] += 1
+                
+                # 5. Apply effects to other systems
+                effects = await self._apply_reward_effects(reward)
+                
+                # 6. Trigger learning if reward is significant
+                learning_updates = {}
+                if abs(reward.value) >= self.significant_reward_threshold:
+                    learning_updates = await self._trigger_learning(reward)
+                
+                # 7. Return processing results
+                return {
+                    "dopamine_change": dopamine_change,
+                    "current_dopamine": self.current_dopamine,
+                    "effects": effects,
+                    "learning": learning_updates
+                }
 
     async def process_submission_reward(self, submission_type, compliance_level, user_id):
         """Processes rewards for various types of submission."""
-        reward_value = compliance_level * self._calculate_submission_value(submission_type)
+        reward_value = compliance_level * await calculate_submission_value(submission_type)
         return await self.process_reward_signal(RewardSignal(
             value=reward_value,
             source="user_submission",
@@ -248,78 +391,77 @@ class RewardSignalProcessor:
         Returns:
             Processing results
         """
-        # Extract data from conditioning result
-        association_key = conditioning_result.get("association_key", "unknown")
-        association_type = conditioning_result.get("type", "unknown")
-        is_reinforcement = conditioning_result.get("is_reinforcement", True)
-        is_positive = conditioning_result.get("is_positive", True)
-        intensity = min(1.0, max(0.0, conditioning_result.get("new_strength", 0.5)))
-        
-        # Calculate reward value based on conditioning results
-        reward_value = 0.0
-        
-        if association_type == "new_association":
-            # New associations provide positive reward (learning reward)
-            reward_value = 0.3 + (intensity * 0.3)
-        elif association_type == "reinforcement" or association_type == "update":
-            # Reinforcement effectiveness depends on the type
-            if is_reinforcement:
-                if is_positive:
-                    # Positive reinforcement (adding something good)
-                    reward_value = 0.4 + (intensity * 0.4)
-                else:
-                    # Negative reinforcement (removing something bad)
+        with trace(workflow_name="process_conditioning", group_id="conditioning"):
+            try:
+                # Use conditioning agent to process the event
+                result = await Runner.run(
+                    self.conditioning_agent,
+                    json.dumps(conditioning_result),
+                    run_config=RunConfig(
+                        workflow_name="ConditioningReward",
+                        trace_metadata={"event_type": conditioning_result.get("type", "unknown")}
+                    )
+                )
+                
+                # Extract the agent's analysis
+                analysis = result.final_output
+                
+                # Extract data from conditioning result
+                association_key = conditioning_result.get("association_key", "unknown")
+                association_type = conditioning_result.get("type", "unknown")
+                is_reinforcement = conditioning_result.get("is_reinforcement", True)
+                is_positive = conditioning_result.get("is_positive", True)
+                intensity = min(1.0, max(0.0, conditioning_result.get("new_strength", 0.5)))
+                
+                # Calculate reward value based on conditioning results
+                reward_value = 0.0
+                
+                if association_type == "new_association":
+                    # New associations provide positive reward (learning reward)
                     reward_value = 0.3 + (intensity * 0.3)
-            else:
-                if is_positive:
-                    # Positive punishment (adding something bad)
-                    reward_value = -0.3 - (intensity * 0.3)
-                else:
-                    # Negative punishment (removing something good)
-                    reward_value = -0.2 - (intensity * 0.2)
-        
-        # Create a reward signal
-        reward_signal = RewardSignal(
-            value=reward_value,
-            source="conditioning_system",
-            context={
-                "association_key": association_key,
-                "association_type": association_type,
-                "is_reinforcement": is_reinforcement,
-                "is_positive": is_positive,
-                "intensity": intensity
-            }
-        )
-        
-        # Process the reward signal
-        return await self.process_reward_signal(reward_signal)
-    
-    def calculate_submission_value(self, submission_type, was_initially_resistant=False):
-        """Calculate base reward value for different submission types."""
-        # Assign values based on submission type rarity and psychological significance
-        submission_values = {
-            "verbal": 0.4,        # Basic verbal acknowledgment 
-            "honorific": 0.5,     # Proper address with honorifics
-            "behavioral": 0.6,    # Basic behavioral compliance
-            "ritual": 0.7,        # Ritual performance
-            "task": 0.6,          # Task completion
-            "service": 0.7,       # Service-oriented submission
-            "degradation": 0.8,   # Accepting degradation
-            "humiliation": 0.9,   # Accepting humiliation
-            "pain_simulation": 0.9, # Simulated pain tolerance
-            "psychological": 0.95,  # Deep psychological submission
-            "ownership": 1.0        # Ownership acknowledgment
-        }
-        
-        base_value = submission_values.get(submission_type, 0.6)
-        
-        # Apply multiplier for resistance overcome
-        if was_initially_resistant:
-            return base_value * 1.5  # 50% increased reward for overcoming resistance
-        elif submission_type == "immediate":  # New category
-            return base_value * 0.5  # 50% reduced reward for immediate submission
-        else:
-            return base_value
+                elif association_type == "reinforcement" or association_type == "update":
+                    # Reinforcement effectiveness depends on the type
+                    if is_reinforcement:
+                        if is_positive:
+                            # Positive reinforcement (adding something good)
+                            reward_value = 0.4 + (intensity * 0.4)
+                        else:
+                            # Negative reinforcement (removing something bad)
+                            reward_value = 0.3 + (intensity * 0.3)
+                    else:
+                        if is_positive:
+                            # Positive punishment (adding something bad)
+                            reward_value = -0.3 - (intensity * 0.3)
+                        else:
+                            # Negative punishment (removing something good)
+                            reward_value = -0.2 - (intensity * 0.2)
+                
+                # Create a reward signal
+                reward_signal = RewardSignal(
+                    value=reward_value,
+                    source="conditioning_system",
+                    context={
+                        "association_key": association_key,
+                        "association_type": association_type,
+                        "is_reinforcement": is_reinforcement,
+                        "is_positive": is_positive,
+                        "intensity": intensity,
+                        "agent_analysis": analysis
+                    }
+                )
+                
+                # Process the reward signal
+                return await self.process_reward_signal(reward_signal)
+                
+            except Exception as e:
+                logger.error(f"Error processing conditioning reward: {e}")
+                # Return a default reward in case of error
+                reward_signal = RewardSignal(
+                    value=0.1,  # Small positive reward as fallback
+                    source="conditioning_system_fallback",
+                    context={"error": str(e), "original_data": conditioning_result}
+                )
+                return await self.process_reward_signal(reward_signal)
     
     async def _update_dopamine_level(self, reward_value: float) -> float:
         """Update dopamine level based on reward value and time decay"""
@@ -350,18 +492,18 @@ class RewardSignalProcessor:
             # Then apply reward effect
             old_dopamine = self.current_dopamine
             
-            # Scale reward to dopamine effect
-            # Positive rewards have stronger effect than negative (asymmetry)
-            if reward_value >= 0:
-                dopamine_change = reward_value * 0.3  # Scale positive rewards
-            else:
-                dopamine_change = reward_value * 0.2  # Scale negative rewards
+            # Use the function tool to calculate dopamine change
+            result = await calculate_dopamine_change(
+                reward_value=reward_value,
+                current_dopamine=self.current_dopamine,
+                baseline_dopamine=self.baseline_dopamine
+            )
             
             # Update dopamine level
-            self.current_dopamine = max(0.0, min(1.0, self.current_dopamine + dopamine_change))
+            self.current_dopamine = result["new_dopamine"]
             
             # Return the change in dopamine
-            return self.current_dopamine - old_dopamine
+            return result["dopamine_change"]
     
     async def _apply_reward_effects(self, reward: RewardSignal) -> Dict[str, Any]:
         """Apply effects of reward signal to other systems"""
@@ -1106,26 +1248,45 @@ class RewardSignalProcessor:
                 }
             }
             
-            # Run learning agent
-            with trace(workflow_name="AnalyzeRewardPatterns", group_id="RewardSystem"):
+            # Run learning agent with tracing
+            with trace(workflow_name="RewardPatternAnalysis", group_id="reward_analysis"):
                 result = await Runner.run(
                     self.learning_agent,
                     json.dumps(context),
-                    run_config={
-                        "workflow_name": "RewardAnalysis",
-                        "trace_metadata": {"analysis_type": "reward_patterns"}
-                    }
+                    run_config=RunConfig(
+                        workflow_name="RewardAnalysis",
+                        trace_metadata={"analysis_type": "reward_patterns"}
+                    )
                 )
                 
-                # Process and return analysis
+                # Process analysis result
                 analysis = result.final_output
                 
-                # Add timestamp
-                if isinstance(analysis, dict):
-                    analysis["analyzed_at"] = datetime.datetime.now().isoformat()
-                    analysis["status"] = "success"
+                # Apply any recommended parameter changes
+                if hasattr(analysis, "learning_params"):
+                    recommended_params = analysis.learning_params
+                    if "learning_rate" in recommended_params:
+                        self.learning_rate = max(0.01, min(1.0, recommended_params["learning_rate"]))
+                    if "discount_factor" in recommended_params:
+                        self.discount_factor = max(0.0, min(0.99, recommended_params["discount_factor"]))
+                    if "exploration_rate" in recommended_params:
+                        self.exploration_rate = max(0.0, min(1.0, recommended_params["exploration_rate"]))
                 
-                return analysis
+                # Return the analysis
+                return {
+                    "status": "success",
+                    "analyzed_at": datetime.datetime.now().isoformat(),
+                    "patterns": analysis.patterns,
+                    "suggestions": analysis.suggestions,
+                    "learning_params": analysis.learning_params,
+                    "effectiveness": analysis.effectiveness,
+                    "insights": analysis.insights,
+                    "updated_parameters": {
+                        "learning_rate": self.learning_rate,
+                        "discount_factor": self.discount_factor,
+                        "exploration_rate": self.exploration_rate
+                    }
+                }
         
         except Exception as e:
             logger.error(f"Error analyzing reward patterns: {e}")
@@ -1133,3 +1294,28 @@ class RewardSignalProcessor:
                 "status": "error",
                 "message": f"Error in analysis: {str(e)}"
             }
+
+# Create an agent for the reward system
+def create_reward_agent() -> Agent:
+    """Create an agent for the reward system"""
+    return Agent(
+        name="Reward System Agent",
+        instructions="""You are a specialized agent for the Nyx AI's reward system.
+        Your role is to process reward signals, analyze patterns, and provide insights
+        into learning effectiveness.
+        
+        You handle:
+        1. Processing reward signals and updating dopamine levels
+        2. Applying reward effects to emotional, identity, and somatic systems
+        3. Facilitating reinforcement learning and habit formation
+        4. Analyzing reward patterns to improve learning parameters
+        
+        Focus on creating a balanced reward system that encourages desired behaviors
+        while maintaining psychological realism in the reward mechanisms.""",
+        tools=[
+            categorize_reward,
+            calculate_dopamine_change,
+            calculate_submission_value
+        ],
+        model="gpt-4o"
+    )
