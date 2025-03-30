@@ -2,11 +2,13 @@
 import asyncio
 import json
 import logging
-import os
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
-from agents import Agent, Runner, function_tool, handoff, InputGuardrail, GuardrailFunctionOutput
+from agents import (
+    Agent, Runner, function_tool, handoff, InputGuardrail, GuardrailFunctionOutput, 
+    RunContextWrapper, trace
+)
 from pydantic import BaseModel, Field
 
 # Import your existing reasoning core
@@ -22,6 +24,27 @@ reasoning_core = ReasoningCore()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --------------------- Context and Type Definitions ---------------------
+
+class ReasoningContext(BaseModel):
+    """Context for all reasoning agents"""
+    knowledge_core: Optional[Any] = None
+    session_id: str = Field(..., description="Unique session identifier")
+    user_id: Optional[str] = None
+    start_time: datetime = Field(default_factory=datetime.now)
+    
+    # Tracking metrics
+    total_calls: int = 0
+    handoffs: int = 0
+    
+    # Additional context during execution
+    current_domain: Optional[str] = None
+    active_model_id: Optional[str] = None
+    active_space_id: Optional[str] = None
+    
+    # History for multi-turn conversations
+    conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
+
 # --------------------- Pydantic Models for Tool Inputs/Outputs ---------------------
 
 class CausalModelInput(BaseModel):
@@ -29,12 +52,20 @@ class CausalModelInput(BaseModel):
     domain: str = Field(..., description="Domain of the causal model")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata for the model")
 
+class CausalModelOutput(BaseModel):
+    model_id: str = Field(..., description="ID of the created causal model")
+    message: str = Field(..., description="Status message")
+
 class CausalNodeInput(BaseModel):
     model_id: str = Field(..., description="ID of the causal model")
     name: str = Field(..., description="Name of the node")
-    domain: str = Field(None, description="Domain of the node (optional)")
+    domain: Optional[str] = Field(None, description="Domain of the node (optional)")
     node_type: str = Field("variable", description="Type of node (variable, event, action, state, etc.)")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata for the node")
+
+class CausalNodeOutput(BaseModel):
+    node_id: str = Field(..., description="ID of the created node")
+    message: str = Field(..., description="Status message")
 
 class CausalRelationInput(BaseModel):
     model_id: str = Field(..., description="ID of the causal model")
@@ -44,12 +75,20 @@ class CausalRelationInput(BaseModel):
     strength: float = Field(0.5, description="Strength of the relation (0.0 to 1.0)")
     mechanism: str = Field("", description="Description of the causal mechanism")
 
+class CausalRelationOutput(BaseModel):
+    relation_id: str = Field(..., description="ID of the created relation")
+    message: str = Field(..., description="Status message")
+
 class InterventionInput(BaseModel):
     model_id: str = Field(..., description="ID of the causal model")
     target_node: str = Field(..., description="ID of the target node")
     target_value: Any = Field(..., description="Target value for the intervention")
     name: str = Field(..., description="Name of the intervention")
     description: str = Field("", description="Description of the intervention")
+
+class InterventionOutput(BaseModel):
+    intervention_id: str = Field(..., description="ID of the created intervention")
+    message: str = Field(..., description="Status message")
 
 class CounterfactualInput(BaseModel):
     model_id: str = Field(..., description="ID of the causal model")
@@ -62,10 +101,18 @@ class ConceptSpaceInput(BaseModel):
     domain: str = Field("", description="Domain of the concept space")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata")
 
+class ConceptSpaceOutput(BaseModel):
+    space_id: str = Field(..., description="ID of the created concept space")
+    message: str = Field(..., description="Status message")
+
 class ConceptInput(BaseModel):
     space_id: str = Field(..., description="ID of the concept space")
     name: str = Field(..., description="Name of the concept")
     properties: Dict[str, Any] = Field({}, description="Properties of the concept")
+
+class ConceptOutput(BaseModel):
+    concept_id: str = Field(..., description="ID of the created concept")
+    message: str = Field(..., description="Status message")
 
 class ConceptRelationInput(BaseModel):
     space_id: str = Field(..., description="ID of the concept space")
@@ -74,28 +121,61 @@ class ConceptRelationInput(BaseModel):
     relation_type: str = Field(..., description="Type of relation")
     strength: float = Field(1.0, description="Strength of the relation")
 
+class BlendInput(BaseModel):
+    space_id_1: str = Field(..., description="ID of the first concept space")
+    space_id_2: str = Field(..., description="ID of the second concept space")
+    blend_type: str = Field("composition", description="Type of blend (composition, fusion, completion, elaboration, contrast)")
+
 class CreativeInterventionInput(BaseModel):
     model_id: str = Field(..., description="ID of the causal model")
     target_node: str = Field(..., description="ID of the target node")
     description: str = Field("", description="Description of the intervention")
     use_blending: bool = Field(True, description="Whether to use conceptual blending")
 
-# --------------------- Causal Reasoning Agent ---------------------
+class IntegratedModelInput(BaseModel):
+    domain: str = Field(..., description="Domain for the integrated model")
+    base_on_causal: bool = Field(True, description="Whether to base the integration on causal models")
 
-# Create tools for the causal reasoning agent
+# Homework check for guardrails
+class HomeworkCheck(BaseModel):
+    is_homework: bool = Field(False, description="Whether the query is asking for homework help")
+    reasoning: str = Field("", description="Reasoning for the determination")
+
+# --------------------- Causal Reasoning Agent Tools ---------------------
+
 @function_tool
-async def create_causal_model(input_data: CausalModelInput) -> str:
+async def create_causal_model(
+    ctx: RunContextWrapper[ReasoningContext], 
+    input_data: CausalModelInput
+) -> CausalModelOutput:
     """Create a new causal model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     model_id = await reasoning_core.create_causal_model(
         name=input_data.name,
         domain=input_data.domain,
         metadata=input_data.metadata
     )
-    return f"Created causal model with ID: {model_id}"
+    
+    # Set active model in context
+    ctx.context.active_model_id = model_id
+    ctx.context.current_domain = input_data.domain
+    
+    return CausalModelOutput(
+        model_id=model_id,
+        message=f"Created causal model with ID: {model_id}"
+    )
 
 @function_tool
-async def add_node_to_model(input_data: CausalNodeInput) -> str:
+async def add_node_to_model(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: CausalNodeInput
+) -> CausalNodeOutput:
     """Add a node to a causal model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     node_id = await reasoning_core.add_node_to_model(
         model_id=input_data.model_id,
         name=input_data.name,
@@ -103,11 +183,21 @@ async def add_node_to_model(input_data: CausalNodeInput) -> str:
         node_type=input_data.node_type,
         metadata=input_data.metadata
     )
-    return f"Added node with ID: {node_id} to model: {input_data.model_id}"
+    
+    return CausalNodeOutput(
+        node_id=node_id,
+        message=f"Added node with ID: {node_id} to model: {input_data.model_id}"
+    )
 
 @function_tool
-async def add_relation_to_model(input_data: CausalRelationInput) -> str:
+async def add_relation_to_model(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: CausalRelationInput
+) -> CausalRelationOutput:
     """Add a causal relation to a model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     relation_id = await reasoning_core.add_relation_to_model(
         model_id=input_data.model_id,
         source_id=input_data.source_id,
@@ -116,17 +206,33 @@ async def add_relation_to_model(input_data: CausalRelationInput) -> str:
         strength=input_data.strength,
         mechanism=input_data.mechanism
     )
-    return f"Added relation with ID: {relation_id} to model: {input_data.model_id}"
+    
+    return CausalRelationOutput(
+        relation_id=relation_id,
+        message=f"Added relation with ID: {relation_id} to model: {input_data.model_id}"
+    )
 
 @function_tool
-async def get_causal_model(model_id: str) -> Dict[str, Any]:
+async def get_causal_model(
+    ctx: RunContextWrapper[ReasoningContext], 
+    model_id: str
+) -> Dict[str, Any]:
     """Get a causal model by ID."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     model = await reasoning_core.get_causal_model(model_id)
     return model
 
 @function_tool
-async def define_intervention(input_data: InterventionInput) -> str:
+async def define_intervention(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: InterventionInput
+) -> InterventionOutput:
     """Define an intervention on a causal model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     intervention_id = await reasoning_core.define_intervention(
         model_id=input_data.model_id,
         target_node=input_data.target_node,
@@ -134,11 +240,21 @@ async def define_intervention(input_data: InterventionInput) -> str:
         name=input_data.name,
         description=input_data.description
     )
-    return f"Created intervention with ID: {intervention_id}"
+    
+    return InterventionOutput(
+        intervention_id=intervention_id,
+        message=f"Created intervention with ID: {intervention_id}"
+    )
 
 @function_tool
-async def reason_counterfactually(input_data: CounterfactualInput) -> Dict[str, Any]:
+async def reason_counterfactually(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: CounterfactualInput
+) -> Dict[str, Any]:
     """Perform counterfactual reasoning using a causal model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     result = await reasoning_core.reason_counterfactually(
         model_id=input_data.model_id,
         query={
@@ -147,16 +263,219 @@ async def reason_counterfactually(input_data: CounterfactualInput) -> Dict[str, 
             "target_nodes": input_data.target_nodes
         }
     )
+    
     return result
 
 @function_tool
-async def discover_causal_relations(model_id: str) -> Dict[str, Any]:
+async def discover_causal_relations(
+    ctx: RunContextWrapper[ReasoningContext],
+    model_id: str
+) -> Dict[str, Any]:
     """Discover causal relations in a model automatically."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
     result = await reasoning_core.discover_causal_relations(model_id)
     return result
 
+# --------------------- Conceptual Reasoning Agent Tools ---------------------
+
+@function_tool
+async def create_concept_space(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: ConceptSpaceInput
+) -> ConceptSpaceOutput:
+    """Create a new conceptual space."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    space_id = await reasoning_core.create_concept_space(
+        name=input_data.name,
+        domain=input_data.domain,
+        metadata=input_data.metadata
+    )
+    
+    # Set active space in context
+    ctx.context.active_space_id = space_id
+    ctx.context.current_domain = input_data.domain
+    
+    return ConceptSpaceOutput(
+        space_id=space_id,
+        message=f"Created concept space with ID: {space_id}"
+    )
+
+@function_tool
+async def add_concept_to_space(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: ConceptInput
+) -> ConceptOutput:
+    """Add a concept to a conceptual space."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    concept_id = await reasoning_core.add_concept_to_space(
+        space_id=input_data.space_id,
+        name=input_data.name,
+        properties=input_data.properties
+    )
+    
+    return ConceptOutput(
+        concept_id=concept_id,
+        message=f"Added concept with ID: {concept_id} to space: {input_data.space_id}"
+    )
+
+@function_tool
+async def add_relation_to_space(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: ConceptRelationInput
+) -> str:
+    """Add a relation between concepts in a space."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    await reasoning_core.add_relation_to_space(
+        space_id=input_data.space_id,
+        source_id=input_data.source_id,
+        target_id=input_data.target_id,
+        relation_type=input_data.relation_type,
+        strength=input_data.strength
+    )
+    
+    return f"Added relation from {input_data.source_id} to {input_data.target_id} in space: {input_data.space_id}"
+
+@function_tool
+async def get_concept_space(
+    ctx: RunContextWrapper[ReasoningContext],
+    space_id: str
+) -> Dict[str, Any]:
+    """Get a concept space by ID."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    space = await reasoning_core.get_concept_space(space_id)
+    return space
+
+@function_tool
+async def create_blend(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: BlendInput
+) -> Dict[str, Any]:
+    """Create a blend between two conceptual spaces."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    # Find mappings between spaces (simplified)
+    mappings = []
+    blend_id = f"blend_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    return {
+        "blend_id": blend_id,
+        "blend_type": input_data.blend_type,
+        "input_spaces": [input_data.space_id_1, input_data.space_id_2],
+        "status": "created"
+    }
+
+# --------------------- Integrated Reasoning Agent Tools ---------------------
+
+@function_tool
+async def convert_blend_to_causal_model(
+    ctx: RunContextWrapper[ReasoningContext],
+    blend_id: str, 
+    name: Optional[str] = None, 
+    domain: Optional[str] = None
+) -> str:
+    """Convert a conceptual blend to a causal model."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    model_id = await reasoning_core.convert_blend_to_causal_model(
+        blend_id=blend_id,
+        name=name,
+        domain=domain
+    )
+    
+    # Update context
+    ctx.context.active_model_id = model_id
+    
+    return f"Converted blend {blend_id} to causal model {model_id}"
+
+@function_tool
+async def convert_causal_model_to_concept_space(
+    ctx: RunContextWrapper[ReasoningContext],
+    model_id: str, 
+    name: Optional[str] = None, 
+    domain: Optional[str] = None
+) -> str:
+    """Convert a causal model to a conceptual space."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    space_id = await reasoning_core.convert_causal_model_to_concept_space(
+        model_id=model_id,
+        name=name,
+        domain=domain
+    )
+    
+    # Update context
+    ctx.context.active_space_id = space_id
+    
+    return f"Converted causal model {model_id} to concept space {space_id}"
+
+@function_tool
+async def create_creative_intervention(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: CreativeInterventionInput
+) -> Dict[str, Any]:
+    """Create a creative intervention using conceptual blending and causal reasoning."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    result = await reasoning_core.create_creative_intervention(
+        model_id=input_data.model_id,
+        target_node=input_data.target_node,
+        description=input_data.description,
+        use_blending=input_data.use_blending
+    )
+    
+    return result
+
+@function_tool
+async def create_integrated_model(
+    ctx: RunContextWrapper[ReasoningContext],
+    input_data: IntegratedModelInput
+) -> Dict[str, Any]:
+    """Create an integrated model with both causal and conceptual reasoning."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    result = await reasoning_core.create_integrated_model(
+        domain=input_data.domain,
+        base_on_causal=input_data.base_on_causal
+    )
+    
+    # Update context
+    if "causal_model_id" in result:
+        ctx.context.active_model_id = result["causal_model_id"]
+    if "concept_space_id" in result:
+        ctx.context.active_space_id = result["concept_space_id"]
+    
+    return result
+
+@function_tool
+async def get_reasoning_stats(
+    ctx: RunContextWrapper[ReasoningContext]
+) -> Dict[str, Any]:
+    """Get statistics about the integrated reasoning system."""
+    # Update context stats
+    ctx.context.total_calls += 1
+    
+    stats = await reasoning_core.get_stats()
+    return stats
+
+# --------------------- Define the Agents ---------------------
+
 # Define the Causal Reasoning Agent
-causal_reasoning_agent = Agent(
+causal_reasoning_agent = Agent[ReasoningContext](
     name="Causal Reasoning Agent",
     instructions="""You are a causal reasoning specialist agent. You help users build and work with causal models.
     
@@ -181,75 +500,8 @@ When working with causal models, help the user understand the implications of di
     ]
 )
 
-# --------------------- Conceptual Reasoning Agent ---------------------
-
-# Create tools for the conceptual reasoning agent
-@function_tool
-async def create_concept_space(input_data: ConceptSpaceInput) -> str:
-    """Create a new conceptual space."""
-    space_id = await reasoning_core.create_concept_space(
-        name=input_data.name,
-        domain=input_data.domain,
-        metadata=input_data.metadata
-    )
-    return f"Created concept space with ID: {space_id}"
-
-@function_tool
-async def add_concept_to_space(input_data: ConceptInput) -> str:
-    """Add a concept to a conceptual space."""
-    concept_id = await reasoning_core.add_concept_to_space(
-        space_id=input_data.space_id,
-        name=input_data.name,
-        properties=input_data.properties
-    )
-    return f"Added concept with ID: {concept_id} to space: {input_data.space_id}"
-
-@function_tool
-async def add_relation_to_space(input_data: ConceptRelationInput) -> str:
-    """Add a relation between concepts in a space."""
-    await reasoning_core.add_relation_to_space(
-        space_id=input_data.space_id,
-        source_id=input_data.source_id,
-        target_id=input_data.target_id,
-        relation_type=input_data.relation_type,
-        strength=input_data.strength
-    )
-    return f"Added relation from {input_data.source_id} to {input_data.target_id} in space: {input_data.space_id}"
-
-@function_tool
-async def get_concept_space(space_id: str) -> Dict[str, Any]:
-    """Get a concept space by ID."""
-    space = await reasoning_core.get_concept_space(space_id)
-    return space
-
-class BlendInput(BaseModel):
-    space_id_1: str = Field(..., description="ID of the first concept space")
-    space_id_2: str = Field(..., description="ID of the second concept space")
-    blend_type: str = Field("composition", description="Type of blend (composition, fusion, completion, elaboration, contrast)")
-
-@function_tool
-async def create_blend(input_data: BlendInput) -> Dict[str, Any]:
-    """Create a blend between two conceptual spaces."""
-    # This is a simplified version - in the actual implementation,
-    # you would need to find mappings and call the appropriate blend function
-    
-    # For demonstration, we'll just pretend to create a blend
-    space1 = await reasoning_core.get_concept_space(input_data.space_id_1)
-    space2 = await reasoning_core.get_concept_space(input_data.space_id_2)
-    
-    # Find mappings between spaces (simplified)
-    mappings = []
-    blend_id = f"blend_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    
-    return {
-        "blend_id": blend_id,
-        "blend_type": input_data.blend_type,
-        "input_spaces": [input_data.space_id_1, input_data.space_id_2],
-        "status": "created"
-    }
-
 # Define the Conceptual Reasoning Agent
-conceptual_reasoning_agent = Agent(
+conceptual_reasoning_agent = Agent[ReasoningContext](
     name="Conceptual Reasoning Agent",
     instructions="""You are a conceptual reasoning specialist agent. You help users work with conceptual spaces and blending.
     
@@ -271,57 +523,8 @@ When working with conceptual blends, highlight emergent structures and novel pro
     ]
 )
 
-# --------------------- Integrated Reasoning Agent ---------------------
-
-# Create tools for the integrated reasoning agent
-@function_tool
-async def convert_blend_to_causal_model(blend_id: str, name: Optional[str] = None, domain: Optional[str] = None) -> str:
-    """Convert a conceptual blend to a causal model."""
-    model_id = await reasoning_core.convert_blend_to_causal_model(
-        blend_id=blend_id,
-        name=name,
-        domain=domain
-    )
-    return f"Converted blend {blend_id} to causal model {model_id}"
-
-@function_tool
-async def convert_causal_model_to_concept_space(model_id: str, name: Optional[str] = None, domain: Optional[str] = None) -> str:
-    """Convert a causal model to a conceptual space."""
-    space_id = await reasoning_core.convert_causal_model_to_concept_space(
-        model_id=model_id,
-        name=name,
-        domain=domain
-    )
-    return f"Converted causal model {model_id} to concept space {space_id}"
-
-@function_tool
-async def create_creative_intervention(input_data: CreativeInterventionInput) -> Dict[str, Any]:
-    """Create a creative intervention using conceptual blending and causal reasoning."""
-    result = await reasoning_core.create_creative_intervention(
-        model_id=input_data.model_id,
-        target_node=input_data.target_node,
-        description=input_data.description,
-        use_blending=input_data.use_blending
-    )
-    return result
-
-@function_tool
-async def create_integrated_model(domain: str, base_on_causal: bool = True) -> Dict[str, Any]:
-    """Create an integrated model with both causal and conceptual reasoning."""
-    result = await reasoning_core.create_integrated_model(
-        domain=domain,
-        base_on_causal=base_on_causal
-    )
-    return result
-
-@function_tool
-async def get_reasoning_stats() -> Dict[str, Any]:
-    """Get statistics about the integrated reasoning system."""
-    stats = await reasoning_core.get_stats()
-    return stats
-
 # Define the Integrated Reasoning Agent
-integrated_reasoning_agent = Agent(
+integrated_reasoning_agent = Agent[ReasoningContext](
     name="Integrated Reasoning Agent",
     instructions="""You are an integrated reasoning specialist agent that combines causal and conceptual reasoning approaches.
     
@@ -349,15 +552,10 @@ Always explain how the integration of different reasoning approaches enhances un
     ]
 )
 
-# --------------------- Triage Agent ---------------------
-
-# Define a HomeworkCheck class for guardrails
-class HomeworkCheck(BaseModel):
-    is_homework: bool = Field(False, description="Whether the query is asking for homework help")
-    reasoning: str = Field("", description="Reasoning for the determination")
+# --------------------- Define Triage Agent and Guardrails ---------------------
 
 # Create a homework detection agent
-homework_detection_agent = Agent(
+homework_detection_agent = Agent[ReasoningContext](
     name="Homework Check",
     instructions="Check if the user is asking for help with homework or academic assignments.",
     output_type=HomeworkCheck
@@ -374,7 +572,7 @@ async def homework_guardrail(ctx, agent, input_data):
     )
 
 # Define the Triage Agent that directs requests to appropriate specialists
-triage_agent = Agent(
+triage_agent = Agent[ReasoningContext](
     name="Reasoning Triage Agent",
     instructions="""You are the entry point for a reasoning system that helps users work with causal models and conceptual spaces.
 
@@ -401,18 +599,101 @@ Always help the user understand which type of reasoning would be most beneficial
 
 # --------------------- Main Entry Point ---------------------
 
-async def process_reasoning_request(user_input: str):
-    """Process a user request through the reasoning agents system."""
-    result = await Runner.run(triage_agent, user_input)
+async def process_reasoning_request(user_input: str, session_id: str, user_id: Optional[str] = None):
+    """Process a user request through the reasoning agents system with proper tracing."""
+    
+    # Create context
+    context = ReasoningContext(
+        session_id=session_id,
+        user_id=user_id,
+        knowledge_core=reasoning_core.knowledge_core,
+    )
+    
+    # Run the agent with tracing
+    with trace(workflow_name=f"reasoning_request_{session_id}", group_id=session_id):
+        result = await Runner.run(
+            triage_agent, 
+            user_input, 
+            context=context,
+            run_config={
+                "workflow_name": "reasoning_system",
+                "group_id": session_id,
+                "trace_metadata": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+        )
+    
+    # Return the final output
     return result.final_output
 
 # Run synchronously for simple use cases
-def process_reasoning_request_sync(user_input: str):
-    """Process a user request synchronously."""
-    return asyncio.run(process_reasoning_request(user_input))
+def process_reasoning_request_sync(user_input: str, session_id: str, user_id: Optional[str] = None):
+    """Process a user request synchronously with proper tracing."""
+    return asyncio.run(process_reasoning_request(user_input, session_id, user_id))
+
+# --------------------- Conversation Management ---------------------
+
+class ReasoningConversation:
+    """Manage a multi-turn conversation with the reasoning system."""
+    
+    def __init__(self, session_id: str, user_id: Optional[str] = None):
+        self.session_id = session_id
+        self.user_id = user_id
+        self.context = ReasoningContext(
+            session_id=session_id,
+            user_id=user_id,
+            knowledge_core=reasoning_core.knowledge_core,
+        )
+        self.history = []
+        self.last_agent = triage_agent
+    
+    async def process_message(self, user_input: str):
+        """Process a user message and maintain conversation context."""
+        
+        # Set up run configuration with tracing
+        run_config = {
+            "workflow_name": "reasoning_conversation",
+            "group_id": self.session_id,
+            "trace_metadata": {
+                "user_id": self.user_id,
+                "session_id": self.session_id,
+                "turn_number": len(self.history) + 1
+            }
+        }
+        
+        # Create input by appending to history
+        if self.history:
+            # Convert history to input format
+            input_list = self.history[-1].to_input_list()
+            # Add new user message
+            input_list.append({"role": "user", "content": user_input})
+            input_data = input_list
+        else:
+            input_data = user_input
+        
+        # Run the most appropriate agent (either last agent or triage)
+        with trace(workflow_name=f"reasoning_turn_{len(self.history)+1}", group_id=self.session_id):
+            result = await Runner.run(
+                self.last_agent, 
+                input_data, 
+                context=self.context,
+                run_config=run_config
+            )
+        
+        # Update history and last agent
+        self.history.append(result)
+        self.last_agent = result.last_agent
+        
+        return result.final_output
 
 # Example usage
 if __name__ == "__main__":
     user_query = "I want to build a causal model to understand climate change impacts on agriculture."
-    response = process_reasoning_request_sync(user_query)
+    response = process_reasoning_request_sync(
+        user_query, 
+        session_id=f"session_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+    )
     print(response)
