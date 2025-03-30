@@ -737,13 +737,17 @@ class Cache:
             key: Key to store under
             value: Value to store
         """
-        # If cache is full, remove least recently used item
-        if self._size >= self.max_size and key not in self._cache:
+        # Check if the key already exists to correctly manage size
+        key_exists = key in self._cache
+        
+        # If cache is full and we are adding a *new* key, remove least recently used item
+        if not key_exists and self._size >= self.max_size:
             self._remove_lru()
             
         self._cache[key] = value
         self._access_times[key] = time.time()
-        if key not in self._cache:
+        # Only increment size if it's a new key
+        if not key_exists:
             self._size += 1
             
     def delete(self, key: str) -> None:
@@ -777,3 +781,21 @@ class Cache:
     def size(self) -> int:
         """Get current cache size."""
         return self._size
+
+# Create a default instance of the simple Cache
+# This instance will be used by the top-level functions below
+_default_simple_cache = Cache()
+
+# Define top-level functions for direct import, wrapping the default cache instance
+def get(key: str) -> Any:
+    """Gets an item from the default simple cache."""
+    return _default_simple_cache.get(key)
+
+def set(key: str, value: Any) -> None:
+    """Sets an item in the default simple cache."""
+    _default_simple_cache.set(key, value)
+
+def delete(key: str) -> None:
+    """Deletes an item from the default simple cache."""
+    _default_simple_cache.delete(key)
+
