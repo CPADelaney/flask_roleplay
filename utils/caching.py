@@ -590,6 +590,16 @@ TIME_CACHE_TTL = int(environ.get("TIME_CACHE_TTL", "10"))
 COMPUTATION_CACHE_SIZE = int(environ.get("COMPUTATION_CACHE_SIZE", "50"))
 COMPUTATION_CACHE_TTL = int(environ.get("COMPUTATION_CACHE_TTL", "300"))
 
+logger.info("Attempting to initialize EnhancedCache 'npc_cache'...")
+try:
+    npc_cache = EnhancedCache(max_size_mb=50) # Line 555
+    logger.info("Successfully initialized EnhancedCache 'npc_cache'.")
+except Exception as e:
+    logger.exception(f"CRITICAL ERROR initializing EnhancedCache 'npc_cache': {e}")
+    # It's important to see this error, maybe even raise it again
+    # depending on how your top-level error handling works
+    raise # Re-raise to ensure the Gunicorn worker sees the failure
+
 # Create cache instances
 NPC_CACHE = MemoryCache(name="npc", max_size=NPC_CACHE_SIZE, default_ttl=NPC_CACHE_TTL)
 LOCATION_CACHE = MemoryCache(name="location", max_size=LOCATION_CACHE_SIZE, default_ttl=LOCATION_CACHE_TTL)
@@ -697,6 +707,10 @@ async def startup():
 async def shutdown():
     await npc_cache.stop()
 
+
+logger.info("Attempting to define class Cache...")
+
+
 class Cache:
     """
     A simple caching system for storing and retrieving data.
@@ -781,21 +795,37 @@ class Cache:
     def size(self) -> int:
         """Get current cache size."""
         return self._size
+        
+logger.info("Successfully defined class Cache.")
 
-# Create a default instance of the simple Cache
-# This instance will be used by the top-level functions below
-_default_simple_cache = Cache()
+logger.info("Attempting to initialize simple Cache '_default_simple_cache'...")
+try:
+    _default_simple_cache = Cache() # Line 590
+    logger.info("Successfully initialized simple Cache '_default_simple_cache'.")
+except Exception as e:
+    logger.exception(f"CRITICAL ERROR initializing simple Cache '_default_simple_cache': {e}")
+    raise # Re-raise
 
+logger.info("Defining top-level get, set, delete functions...")
 # Define top-level functions for direct import, wrapping the default cache instance
 def get(key: str) -> Any:
     """Gets an item from the default simple cache."""
     return _default_simple_cache.get(key)
 
+logger.info("Defined get function.")
+
+
 def set(key: str, value: Any) -> None:
     """Sets an item in the default simple cache."""
     _default_simple_cache.set(key, value)
+
+logger.info("Defined set function.")
+
 
 def delete(key: str) -> None:
     """Deletes an item from the default simple cache."""
     _default_simple_cache.delete(key)
 
+logger.info("Defined delete function.")
+
+logger.info("Finished loading utils.caching.")
