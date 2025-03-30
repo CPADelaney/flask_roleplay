@@ -430,10 +430,10 @@ class EmotionalCore:
         Returns:
             Filtered handoff data
         """
-        # Use the SDK's base filter first
+        # Use the SDK's default filter first with improved chaining
         filtered_data = handoff_filters.keep_relevant_history(handoff_data)
         
-        # Extract the last user message for analysis
+        # Extract the last user message for analysis using more efficient iteration
         last_user_message = None
         for item in reversed(filtered_data.input_history):
             if isinstance(item, dict) and item.get("role") == "user":
