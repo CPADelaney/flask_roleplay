@@ -50,7 +50,7 @@ class UserRelationshipPerspective(BaseModel):
     desires: List[str] = Field(default_factory=list, description="Desires for relationship")
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
 
-# =============== Tool Functions ===============
+# =============== Function Tools ===============
 
 @function_tool
 async def format_relationship_history(user_id: str, relationship: Dict[str, Any], 
@@ -666,14 +666,14 @@ class RelationshipReflectionSystem:
                 # Format data for reflection
                 formatted_data = await format_relationship_history(
                     user_id, 
-                    relationship.model_dump() if hasattr(relationship, "model_dump") else relationship,
+                    relationship if isinstance(relationship, dict) else relationship.model_dump(),
                     interactions,
                     perspective
                 )
                 
                 # Get identity impacts
                 identity_impacts = await identify_relationship_identity_impacts(
-                    relationship.model_dump() if hasattr(relationship, "model_dump") else relationship,
+                    relationship if isinstance(relationship, dict) else relationship.model_dump(),
                     interactions,
                     user_model
                 )
@@ -762,9 +762,9 @@ class RelationshipReflectionSystem:
                             "timestamp": datetime.datetime.now().isoformat(),
                             "milestone_id": milestone_id,
                             "relationship_metrics": {
-                                "trust": relationship.trust if hasattr(relationship, "trust") else relationship.get("trust", 0.5),
-                                "familiarity": relationship.familiarity if hasattr(relationship, "familiarity") else relationship.get("familiarity", 0.1),
-                                "intimacy": relationship.intimacy if hasattr(relationship, "intimacy") else relationship.get("intimacy", 0.1)
+                                "trust": relationship.get("trust", 0.5),
+                                "familiarity": relationship.get("familiarity", 0.1),
+                                "intimacy": relationship.get("intimacy", 0.1)
                             }
                         }
                     )
@@ -859,14 +859,11 @@ class RelationshipReflectionSystem:
             if not relationship:
                 return None
             
-            # Convert to dict if needed
-            relationship_data = relationship.model_dump() if hasattr(relationship, "model_dump") else relationship
-            
             # Get previous state for comparison
             previous_state = self.previous_relationship_states.get(user_id, {})
             
             # Detect milestone
-            milestone = await detect_relationship_milestones(relationship_data, previous_state)
+            milestone = await detect_relationship_milestones(relationship, previous_state)
             
             # If milestone detected, process it
             if milestone:
@@ -893,7 +890,7 @@ class RelationshipReflectionSystem:
                 )
                 
                 # Update previous state
-                self.previous_relationship_states[user_id] = relationship_data
+                self.previous_relationship_states[user_id] = relationship
                 
                 return {
                     "milestone": milestone_record.model_dump(),
@@ -901,7 +898,7 @@ class RelationshipReflectionSystem:
                 }
             
             # Update previous state
-            self.previous_relationship_states[user_id] = relationship_data
+            self.previous_relationship_states[user_id] = relationship
             
             return None
         
@@ -940,7 +937,7 @@ class RelationshipReflectionSystem:
             # Format data
             formatted_data = await format_relationship_history(
                 user_id,
-                relationship.model_dump() if hasattr(relationship, "model_dump") else relationship,
+                relationship,
                 interactions
             )
             
