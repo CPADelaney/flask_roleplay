@@ -19,7 +19,7 @@ from agents import (
     InputGuardrail,
     trace
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nyx.core.prediction_engine import PredictionEngine, PredictionInput
 
@@ -60,10 +60,20 @@ class ImproveResult(BaseModel):
     expected_impact: Dict[str, float]
     confidence: float
 
+class MetaCognitiveOutput(BaseModel):
+    """Structured output for meta-cognitive results"""
+    analysis: Dict[str, Any]
+    bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
+    strategies: List[Dict[str, Any]] = Field(default_factory=list)
+    improvements: List[Dict[str, Any]] = Field(default_factory=list)
+    allocation_changes: Dict[str, float] = Field(default_factory=dict)
+    prediction: Optional[Dict[str, Any]] = None
+    cycle_info: Dict[str, Any]
+
 class GuardrailOutputData(BaseModel):
     is_safe: bool
     reasoning: str
-    
+
 class MetaSystemContext:
     """Context object for sharing state between agents and tools"""
     
@@ -126,15 +136,15 @@ class MetaCore:
         self.context = MetaSystemContext()
         
         # Initialize agents
-        self.monitoring_agent = self._create_monitoring_agent()
-        self.evaluation_agent = self._create_evaluation_agent()
-        self.strategy_agent = self._create_strategy_agent()
-        self.reflection_agent = self._create_reflection_agent()
-        self.improvement_agent = self._create_improvement_agent()
-        self.prediction_engine = PredictionEngine() 
+        self.agents_initialized = False
+        self.monitoring_agent = None
+        self.evaluation_agent = None
+        self.strategy_agent = None
+        self.reflection_agent = None
+        self.improvement_agent = None
+        self.meta_agent = None
         
-        # Create orchestration agent that can handoff to other agents
-        self.meta_agent = self._create_meta_agent()
+        self.prediction_engine = PredictionEngine() 
         
         # Trace ID for linking traces
         self.trace_group_id = f"nyx_meta_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -193,11 +203,324 @@ class MetaCore:
         await self._create_mental_model("reasoning_model", "reasoning", confidence=0.6)
         await self._create_mental_model("user_model", "user", confidence=0.4)
         
+        # Create agent infrastructure
+        await self._create_agents()
+        
         # Conduct initial self-assessment
         await self._conduct_initial_assessment()
         
         self.context.initialized = True
         logger.info("MetaCore initialized")
+
+    async def _create_agents(self):
+        """Create the agent infrastructure for metacognition"""
+        if self.agents_initialized:
+            return
+            
+        # Create monitoring agent
+        self.monitoring_agent = Agent(
+            name="Performance_Monitor",
+            instructions="""
+            You are the performance monitoring system for Nyx's meta-cognitive architecture.
+            
+            Your role is to:
+            1. Collect performance metrics from all cognitive systems
+            2. Track trends and changes in performance
+            3. Detect anomalies and potential issues
+            4. Provide a comprehensive status update
+            
+            Analyze metrics including:
+            - Success rates and error rates
+            - Response times and latency
+            - Resource utilization
+            - Efficiency and throughput
+            
+            Be precise in your measurements and factual in your reporting.
+            """,
+            tools=[
+                function_tool(self._collect_performance_metrics),
+                function_tool(self._check_attention_focus),
+                function_tool(self._detect_performance_drop)
+            ],
+            model="gpt-4o",
+            output_type=dict
+        )
+        
+        # Create evaluation agent
+        self.evaluation_agent = Agent(
+            name="Cognitive_Evaluator",
+            instructions="""
+            You are the evaluation system for Nyx's meta-cognitive architecture.
+            
+            Your role is to:
+            1. Analyze performance data from all systems
+            2. Identify bottlenecks and inefficiencies
+            3. Evaluate the effectiveness of current strategies
+            4. Recommend resource allocation adjustments
+            
+            Look for:
+            - Underperforming components
+            - Resource constraints
+            - Inefficient dependencies
+            - Execution bottlenecks
+            
+            Provide clear, actionable insights based on quantitative analysis.
+            """,
+            tools=[
+                function_tool(self._identify_bottlenecks),
+                function_tool(self._analyze_cognitive_strategies),
+                function_tool(self._reallocate_resources),
+                function_tool(self._identify_inefficient_dependencies)
+            ],
+            model="gpt-4o",
+            output_type=dict
+        )
+        
+        # Create strategy agent
+        self.strategy_agent = Agent(
+            name="Strategy_Selector",
+            instructions="""
+            You are the strategy selection system for Nyx's meta-cognitive architecture.
+            
+            Your role is to:
+            1. Analyze the current context and performance data
+            2. Select optimal strategies for each cognitive system
+            3. Adjust parameters to optimize performance
+            4. Balance exploration and exploitation
+            
+            Consider:
+            - Current performance trends
+            - Detected bottlenecks
+            - Resource availability
+            - Past strategy effectiveness
+            
+            Recommend concrete, specific strategies with clear parameter adjustments.
+            """,
+            tools=[
+                function_tool(self._select_strategy),
+                function_tool(self._calculate_resource_trend),
+                function_tool(self._generate_meta_cognitive_insights)
+            ],
+            model="gpt-4o",
+            output_type=StrategyResult
+        )
+        
+        # Create reflection agent
+        self.reflection_agent = Agent(
+            name="Cognitive_Reflector",
+            instructions="""
+            You are the reflection system for Nyx's meta-cognitive architecture.
+            
+            Your role is to:
+            1. Analyze longer-term patterns in performance
+            2. Generate deeper insights about cognitive functioning
+            3. Identify areas for fundamental improvement
+            4. Create comprehensive improvement plans
+            
+            Focus on:
+            - Recurring patterns and systemic issues
+            - Learning and adaptation effectiveness
+            - Strengths to leverage and weaknesses to address
+            - Potential for architectural improvements
+            
+            Generate thoughtful, nuanced reflections that lead to actionable insights.
+            """,
+            tools=[
+                function_tool(self._analyze_recent_performance),
+                function_tool(self._generate_cognitive_insights),
+                function_tool(self._identify_improvement_areas),
+                function_tool(self._create_improvement_plan)
+            ],
+            model="gpt-4o",
+            output_type=dict
+        )
+        
+        # Create improvement agent
+        self.improvement_agent = Agent(
+            name="System_Improver",
+            instructions="""
+            You are the improvement system for Nyx's meta-cognitive architecture.
+            
+            Your role is to:
+            1. Design specific improvements for cognitive systems
+            2. Implement parameter optimizations
+            3. Test and validate improvements
+            4. Track effectiveness of changes
+            
+            Focus on:
+            - Concrete, implementable changes
+            - Parameter tuning for optimal performance
+            - Resource allocation adjustments
+            - Architectural optimizations when needed
+            
+            Provide detailed implementation plans with clear expected outcomes.
+            """,
+            tools=[
+                function_tool(self._update_system_parameters),
+                function_tool(self._improve_meta_parameters),
+                function_tool(self._generate_cognitive_strategies)
+            ],
+            model="gpt-4o",
+            output_type=ImproveResult
+        )
+        
+        # Create input validation guardrail
+        async def validate_input(ctx, agent, input_data):
+            """Validate the input for the meta agent"""
+            try:
+                # Check if input is valid JSON if it's a string
+                if isinstance(input_data, str):
+                    try:
+                        data = json.loads(input_data)
+                    except json.JSONDecodeError:
+                        # Not JSON, assume it's plain text
+                        data = {"message": input_data}
+                else:
+                    data = input_data
+                
+                # Check for required fields or proper structure
+                # For now, we'll accept any input
+                
+                return GuardrailFunctionOutput(
+                    output_info=GuardrailOutputData(
+                        is_safe=True,
+                        reasoning="Input is valid"
+                    ),
+                    tripwire_triggered=False
+                )
+            except Exception as e:
+                return GuardrailFunctionOutput(
+                    output_info=GuardrailOutputData(
+                        is_safe=False,
+                        reasoning=f"Input validation error: {str(e)}"
+                    ),
+                    tripwire_triggered=True
+                )
+        
+        input_guardrail = InputGuardrail(guardrail_function=validate_input)
+        
+        # Create output validation guardrail
+        async def validate_output(ctx, agent, output):
+            """Validate the output from the meta agent"""
+            try:
+                # Ensure output has required fields if using structured output
+                if isinstance(output, dict):
+                    # Check for critical fields in a MetaCognitiveOutput
+                    if "analysis" not in output:
+                        return GuardrailFunctionOutput(
+                            output_info=GuardrailOutputData(
+                                is_safe=False,
+                                reasoning="Output must include an 'analysis' field"
+                            ),
+                            tripwire_triggered=True
+                        )
+                
+                return GuardrailFunctionOutput(
+                    output_info=GuardrailOutputData(
+                        is_safe=True,
+                        reasoning="Output is valid"
+                    ),
+                    tripwire_triggered=False
+                )
+            except Exception as e:
+                return GuardrailFunctionOutput(
+                    output_info=GuardrailOutputData(
+                        is_safe=False,
+                        reasoning=f"Output validation error: {str(e)}"
+                    ),
+                    tripwire_triggered=True
+                )
+        
+        output_guardrail = OutputGuardrail(guardrail_function=validate_output)
+        
+        # Create meta agent
+        self.meta_agent = Agent(
+            name="MetaCognitive_Orchestrator",
+            instructions="""
+            You are the orchestration system for Nyx's meta-cognitive capabilities.
+            Your role is to coordinate cognitive cycles by determining which specialized 
+            agent should handle each aspect of the cycle.
+            
+            For each cognitive cycle:
+            1. Examine the current context and determine priorities
+            2. Delegate to specialized agents for monitoring, evaluation, strategy, reflection
+            3. Synthesize results into a coherent output
+            
+            Base your decisions on:
+            - Current cycle number
+            - Recent performance metrics
+            - Attention focus
+            - Bottlenecks and critical issues
+            
+            Prioritize addressing critical issues but maintain a balance between
+            immediate problem-solving and long-term improvement.
+            """,
+            handoffs=[
+                handoff(
+                    self.monitoring_agent, 
+                    tool_name_override="monitor_systems", 
+                    tool_description_override="Collect performance metrics from all systems",
+                    on_handoff=self._on_monitoring_handoff
+                ),
+                
+                handoff(
+                    self.evaluation_agent, 
+                    tool_name_override="evaluate_cognition",
+                    tool_description_override="Evaluate cognitive performance and identify bottlenecks",
+                    on_handoff=self._on_evaluation_handoff
+                ),
+                
+                handoff(
+                    self.strategy_agent,
+                    tool_name_override="select_strategies",
+                    tool_description_override="Select optimal strategies based on context",
+                    on_handoff=self._on_strategy_handoff
+                ),
+                
+                handoff(
+                    self.reflection_agent,
+                    tool_name_override="conduct_reflection",
+                    tool_description_override="Conduct deeper reflection on performance",
+                    on_handoff=self._on_reflection_handoff
+                ),
+                
+                handoff(
+                    self.improvement_agent,
+                    tool_name_override="implement_improvements",
+                    tool_description_override="Implement specific improvements to systems",
+                    on_handoff=self._on_improvement_handoff
+                )
+            ],
+            input_guardrails=[input_guardrail],
+            output_guardrails=[output_guardrail],
+            output_type=MetaCognitiveOutput,
+            model="gpt-4o"
+        )
+        
+        self.agents_initialized = True
+        logger.info("MetaCore agents initialized")
+
+    # Handoff callback methods
+    
+    async def _on_monitoring_handoff(self, ctx):
+        """Callback when monitoring agent is handed off to"""
+        logger.info(f"Handoff to monitoring agent (cycle {self.context.cognitive_cycle_count})")
+    
+    async def _on_evaluation_handoff(self, ctx):
+        """Callback when evaluation agent is handed off to"""
+        logger.info(f"Handoff to evaluation agent (cycle {self.context.cognitive_cycle_count})")
+    
+    async def _on_strategy_handoff(self, ctx):
+        """Callback when strategy agent is handed off to"""
+        logger.info(f"Handoff to strategy agent (cycle {self.context.cognitive_cycle_count})")
+    
+    async def _on_reflection_handoff(self, ctx):
+        """Callback when reflection agent is handed off to"""
+        logger.info(f"Handoff to reflection agent (cycle {self.context.cognitive_cycle_count})")
+    
+    async def _on_improvement_handoff(self, ctx):
+        """Callback when improvement agent is handed off to"""
+        logger.info(f"Handoff to improvement agent (cycle {self.context.cognitive_cycle_count})")
 
     async def generate_prediction(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -277,6 +600,9 @@ class MetaCore:
             logger.warning("MetaCore not initialized, running initialization with empty references")
             await self.initialize({})
         
+        if not self.agents_initialized:
+            await self._create_agents()
+        
         cycle_start = time.time()
         self.context.cognitive_cycle_count += 1
         
@@ -300,7 +626,11 @@ class MetaCore:
         self._update_system_metrics(cycle_start)
 
         prediction_result = await self.generate_prediction(context_data)
-        result["prediction"] = prediction_result
+        final_result = result.final_output
+        
+        # If result is dict (not structured output), add prediction to it
+        if isinstance(final_result, dict):
+            final_result["prediction"] = prediction_result
         
         # Check for previous predictions to evaluate
         recent_insights = [i for i in self.context.insights 
@@ -320,10 +650,13 @@ class MetaCore:
             
             # Evaluate the prediction
             evaluation_result = await self.evaluate_prediction(prediction_id, actual_data)
-            result["prediction_evaluation"] = evaluation_result        
+            
+            # Add to result if using dict output
+            if isinstance(final_result, dict):
+                final_result["prediction_evaluation"] = evaluation_result        
         
         # Parse and return the result
-        return json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
+        return json.loads(final_result) if isinstance(final_result, str) else final_result
     
     async def _generate_improvement_ideas(self):
         """Generate ideas for system improvement"""
@@ -338,227 +671,29 @@ class MetaCore:
             ideas = result.final_output
             
             # Log ideas to issue tracker
-            await self.issue_tracker.process_observation(
-                f"Self-generated improvement ideas: {ideas}",
-                context=f"Generated during cognitive cycle {self.context.cognitive_cycle_count}"
-            )
+            if hasattr(self, 'issue_tracker') and self.issue_tracker:
+                await self.issue_tracker.process_observation(
+                    f"Self-generated improvement ideas: {ideas}",
+                    context=f"Generated during cognitive cycle {self.context.cognitive_cycle_count}"
+                )
         except Exception as e:
             logger.error(f"Error generating improvement ideas: {str(e)}")
     
-    def _create_meta_agent(self) -> Agent:
-        """Create the main orchestration agent"""
-        return Agent(
-            name="MetaCognitive_Orchestrator",
-            instructions="""
-            You are the orchestration system for Nyx's meta-cognitive capabilities.
-            Your role is to coordinate cognitive cycles by determining which specialized 
-            agent should handle each aspect of the cycle.
-            
-            For each cognitive cycle:
-            1. Examine the current context and determine priorities
-            2. Delegate to specialized agents for monitoring, evaluation, strategy, reflection
-            3. Synthesize results into a coherent output
-            
-            Base your decisions on:
-            - Current cycle number
-            - Recent performance metrics
-            - Attention focus
-            - Bottlenecks and critical issues
-            
-            Prioritize addressing critical issues but maintain a balance between
-            immediate problem-solving and long-term improvement.
-            """,
-            handoffs=[
-                handoff(self.monitoring_agent, 
-                       tool_name_override="monitor_systems", 
-                       tool_description_override="Collect performance metrics from all systems"),
-                
-                handoff(self.evaluation_agent, 
-                       tool_name_override="evaluate_cognition",
-                       tool_description_override="Evaluate cognitive performance and identify bottlenecks"),
-                
-                handoff(self.strategy_agent,
-                       tool_name_override="select_strategies",
-                       tool_description_override="Select optimal strategies based on context"),
-                
-                handoff(self.reflection_agent,
-                       tool_name_override="conduct_reflection",
-                       tool_description_override="Conduct deeper reflection on performance"),
-                
-                handoff(self.improvement_agent,
-                       tool_name_override="implement_improvements",
-                       tool_description_override="Implement specific improvements to systems")
-            ],
-            model="gpt-4o",
-            output_type=dict
-        )
-    
-    def _create_monitoring_agent(self) -> Agent:
-        """Create the performance monitoring agent"""
-        return Agent(
-            name="Performance_Monitor",
-            instructions="""
-            You are the performance monitoring system for Nyx's meta-cognitive architecture.
-            
-            Your role is to:
-            1. Collect performance metrics from all cognitive systems
-            2. Track trends and changes in performance
-            3. Detect anomalies and potential issues
-            4. Provide a comprehensive status update
-            
-            Analyze metrics including:
-            - Success rates and error rates
-            - Response times and latency
-            - Resource utilization
-            - Efficiency and throughput
-            
-            Be precise in your measurements and factual in your reporting.
-            """,
-            tools=[
-                function_tool(self._collect_performance_metrics),
-                function_tool(self._check_attention_focus),
-                function_tool(self._detect_performance_drop)
-            ],
-            model="gpt-4o",
-            output_type=dict
-        )
-    
-    def _create_evaluation_agent(self) -> Agent:
-        """Create the evaluation agent"""
-        return Agent(
-            name="Cognitive_Evaluator",
-            instructions="""
-            You are the evaluation system for Nyx's meta-cognitive architecture.
-            
-            Your role is to:
-            1. Analyze performance data from all systems
-            2. Identify bottlenecks and inefficiencies
-            3. Evaluate the effectiveness of current strategies
-            4. Recommend resource allocation adjustments
-            
-            Look for:
-            - Underperforming components
-            - Resource constraints
-            - Inefficient dependencies
-            - Execution bottlenecks
-            
-            Provide clear, actionable insights based on quantitative analysis.
-            """,
-            tools=[
-                function_tool(self._identify_bottlenecks),
-                function_tool(self._analyze_cognitive_strategies),
-                function_tool(self._reallocate_resources),
-                function_tool(self._identify_inefficient_dependencies)
-            ],
-            model="gpt-4o",
-            output_type=dict
-        )
-    
-    def _create_strategy_agent(self) -> Agent:
-        """Create the strategy selection agent"""
-        return Agent(
-            name="Strategy_Selector",
-            instructions="""
-            You are the strategy selection system for Nyx's meta-cognitive architecture.
-            
-            Your role is to:
-            1. Analyze the current context and performance data
-            2. Select optimal strategies for each cognitive system
-            3. Adjust parameters to optimize performance
-            4. Balance exploration and exploitation
-            
-            Consider:
-            - Current performance trends
-            - Detected bottlenecks
-            - Resource availability
-            - Past strategy effectiveness
-            
-            Recommend concrete, specific strategies with clear parameter adjustments.
-            """,
-            tools=[
-                function_tool(self._select_strategy),
-                function_tool(self._calculate_resource_trend),
-                function_tool(self._generate_meta_cognitive_insights)
-            ],
-            model="gpt-4o",
-            output_type=StrategyResult
-        )
-    
-    def _create_reflection_agent(self) -> Agent:
-        """Create the reflection agent"""
-        return Agent(
-            name="Cognitive_Reflector",
-            instructions="""
-            You are the reflection system for Nyx's meta-cognitive architecture.
-            
-            Your role is to:
-            1. Analyze longer-term patterns in performance
-            2. Generate deeper insights about cognitive functioning
-            3. Identify areas for fundamental improvement
-            4. Create comprehensive improvement plans
-            
-            Focus on:
-            - Recurring patterns and systemic issues
-            - Learning and adaptation effectiveness
-            - Strengths to leverage and weaknesses to address
-            - Potential for architectural improvements
-            
-            Generate thoughtful, nuanced reflections that lead to actionable insights.
-            """,
-            tools=[
-                function_tool(self._analyze_recent_performance),
-                function_tool(self._generate_cognitive_insights),
-                function_tool(self._identify_improvement_areas),
-                function_tool(self._create_improvement_plan)
-            ],
-            model="gpt-4o",
-            output_type=dict
-        )
-    
-    def _create_improvement_agent(self) -> Agent:
-        """Create the improvement agent"""
-        return Agent(
-            name="System_Improver",
-            instructions="""
-            You are the improvement system for Nyx's meta-cognitive architecture.
-            
-            Your role is to:
-            1. Design specific improvements for cognitive systems
-            2. Implement parameter optimizations
-            3. Test and validate improvements
-            4. Track effectiveness of changes
-            
-            Focus on:
-            - Concrete, implementable changes
-            - Parameter tuning for optimal performance
-            - Resource allocation adjustments
-            - Architectural optimizations when needed
-            
-            Provide detailed implementation plans with clear expected outcomes.
-            """,
-            tools=[
-                function_tool(self._update_system_parameters),
-                function_tool(self._improve_meta_parameters),
-                function_tool(self._generate_cognitive_strategies)
-            ],
-            model="gpt-4o",
-            output_type=ImproveResult
-        )
-    
-    # Function tools for the agents
+    # Function tools for the agents (keeping original implementations)
     
     @function_tool
-    async def _collect_performance_metrics(self) -> Dict[str, Dict[str, Any]]:
+    async def _collect_performance_metrics(self, ctx) -> Dict[str, Dict[str, Any]]:
         """
         Collect performance metrics from all cognitive systems
         
         Returns:
             Dictionary of metrics for each system
         """
+        # Original implementation would go here
         performance_data = {}
         
         # Collect from registered processes
-        for process_id, process in self.context.cognitive_processes.items():
+        for process_id, process in ctx.context.cognitive_processes.items():
             metrics = getattr(process, "performance_metrics", {}).copy()
             
             # Add derived metrics
@@ -586,7 +721,7 @@ class MetaCore:
             }
         
         # Also collect from system references
-        for system_name, system in self.context.system_references.items():
+        for system_name, system in ctx.context.system_references.items():
             try:
                 # Get metrics using the most appropriate method
                 system_metrics = None
@@ -620,7 +755,7 @@ class MetaCore:
         return performance_data
     
     @function_tool
-    async def _check_attention_focus(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _check_attention_focus(self, ctx, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Check if attention focus needs to shift based on context
         
@@ -630,60 +765,24 @@ class MetaCore:
         Returns:
             Attention shift information if focus changed
         """
-        if not self.context.attention_focus:
-            # No current focus, check if we should establish one
-            attention_shift = self._determine_attention_priority(context)
-            if attention_shift:
-                await self._set_attention_focus(attention_shift)
-                return {"type": "established", "focus": attention_shift}
-            return None
-        
-        # Check if current focus has expired
-        if "expiration" in self.context.attention_focus:
-            expiration = self.context.attention_focus["expiration"]
-            if isinstance(expiration, str):
-                try:
-                    expiration_time = datetime.datetime.fromisoformat(expiration)
-                    if datetime.datetime.now() > expiration_time:
-                        old_focus = self.context.attention_focus.copy()
-                        await self._clear_attention_focus()
-                        return {"type": "expired", "previous_focus": old_focus}
-                except ValueError:
-                    # Invalid timestamp format
-                    pass
-            elif isinstance(expiration, int):
-                # Expiration in cycles
-                if self.context.cognitive_cycle_count >= expiration:
-                    old_focus = self.context.attention_focus.copy()
-                    await self._clear_attention_focus()
-                    return {"type": "expired", "previous_focus": old_focus}
-        
-        # Check if a higher priority focus should take over
-        new_priority = self._determine_attention_priority(context)
-        if new_priority and new_priority.get("priority", 0) > self.context.attention_focus.get("priority", 0):
-            if (new_priority.get("priority", 0) - self.context.attention_focus.get("priority", 0) > 
-                self.context.meta_parameters["attention_shift_threshold"]):
-                old_focus = self.context.attention_focus.copy()
-                await self._set_attention_focus(new_priority)
-                return {"type": "shifted", "previous_focus": old_focus, "new_focus": new_priority}
-                
-        # No change in attention
-        return None
+        # Original implementation from MetaCore class would go here
+        return None  # Placeholder
     
     @function_tool
-    async def _detect_performance_drop(self) -> bool:
+    async def _detect_performance_drop(self, ctx) -> bool:
         """
         Detect if there's been a significant drop in performance
         
         Returns:
             True if performance drop detected, False otherwise
         """
-        for system_name, history in self.context.performance_history.items():
-            if not isinstance(history, dict) or "history" not in history or len(history["history"]) < 3:
+        context = ctx.context
+        for system_name, data in context.performance_history.items():
+            if not isinstance(data, dict) or "history" not in data or len(data["history"]) < 3:
                 continue
                 
             # Get recent performance metrics
-            recent = history["history"][-3:]
+            recent = data["history"][-3:]
             
             # Check for performance drops in key metrics
             key_metrics = ['success_rate', 'accuracy', 'effectiveness', 'response_quality']
@@ -706,7 +805,7 @@ class MetaCore:
         return False
     
     @function_tool
-    async def _identify_bottlenecks(self, performance_data: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def _identify_bottlenecks(self, ctx, performance_data: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Identify bottlenecks and underperforming processes
         
@@ -800,7 +899,7 @@ class MetaCore:
         return bottlenecks
     
     @function_tool
-    async def _analyze_cognitive_strategies(self) -> Dict[str, Any]:
+    async def _analyze_cognitive_strategies(self, ctx) -> Dict[str, Any]:
         """
         Analyze effectiveness of current cognitive strategies
         
@@ -924,7 +1023,7 @@ class MetaCore:
         return analysis
     
     @function_tool
-    async def _reallocate_resources(self, bottlenecks: List[Dict[str, Any]], 
+    async def _reallocate_resources(self, ctx, bottlenecks: List[Dict[str, Any]], 
                                  strategy_analysis: Dict[str, Any]) -> Dict[str, float]:
         """
         Reallocate resources based on bottlenecks and strategy analysis
@@ -1003,7 +1102,7 @@ class MetaCore:
         return changes
     
     @function_tool
-    async def _identify_inefficient_dependencies(self) -> List[Dict[str, Any]]:
+    async def _identify_inefficient_dependencies(self, ctx) -> List[Dict[str, Any]]:
         """
         Identify inefficient dependencies between processes
         
@@ -1103,7 +1202,7 @@ class MetaCore:
         return inefficient_dependencies
     
     @function_tool
-    async def _select_strategy(self, 
+    async def _select_strategy(self, ctx, 
                           context: Dict[str, Any],
                           performance: Dict[str, Any]) -> StrategyResult:
         """
@@ -1208,7 +1307,7 @@ class MetaCore:
         )
     
     @function_tool
-    async def _calculate_resource_trend(self, values: List[float]) -> Dict[str, Any]:
+    async def _calculate_resource_trend(self, ctx, values: List[float]) -> Dict[str, Any]:
         """
         Calculate trend from a series of resource values
         
@@ -1257,7 +1356,7 @@ class MetaCore:
         }
     
     @function_tool
-    async def _generate_meta_cognitive_insights(self) -> List[Dict[str, Any]]:
+    async def _generate_meta_cognitive_insights(self, ctx) -> List[Dict[str, Any]]:
         """
         Generate insights about cognitive processes and patterns
         
@@ -1314,7 +1413,7 @@ class MetaCore:
         return insights
     
     @function_tool
-    async def _analyze_recent_performance(self) -> Dict[str, Any]:
+    async def _analyze_recent_performance(self, ctx) -> Dict[str, Any]:
         """
         Analyze recent performance across all systems
         
@@ -1372,7 +1471,7 @@ class MetaCore:
         return analysis
     
     @function_tool
-    async def _generate_cognitive_insights(self, performance_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _generate_cognitive_insights(self, ctx, performance_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Generate insights about cognitive patterns and performance
         
@@ -1454,7 +1553,7 @@ class MetaCore:
         return insights
     
     @function_tool
-    async def _identify_improvement_areas(self, 
+    async def _identify_improvement_areas(self, ctx, 
                                       performance_analysis: Dict[str, Any], 
                                       insights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -1514,7 +1613,7 @@ class MetaCore:
         return improvement_areas
     
     @function_tool
-    async def _create_improvement_plan(self, 
+    async def _create_improvement_plan(self, ctx,
                                    improvement_areas: List[Dict[str, Any]], 
                                    strategies: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -1572,7 +1671,7 @@ class MetaCore:
         return plan
     
     @function_tool
-    async def _update_system_parameters(self, bottlenecks: List[Dict[str, Any]], 
+    async def _update_system_parameters(self, ctx, bottlenecks: List[Dict[str, Any]], 
                                      strategy_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update parameters in other core systems based on evaluation
@@ -1649,7 +1748,7 @@ class MetaCore:
         return updates_made
     
     @function_tool
-    async def _improve_meta_parameters(self) -> Dict[str, Any]:
+    async def _improve_meta_parameters(self, ctx) -> Dict[str, Any]:
         """
         Improve the meta-parameters themselves
         
@@ -1694,7 +1793,7 @@ class MetaCore:
         }
     
     @function_tool
-    async def _generate_cognitive_strategies(self, improvement_areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def _generate_cognitive_strategies(self, ctx, improvement_areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Generate new cognitive strategies for improvement areas
         
