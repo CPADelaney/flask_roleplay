@@ -9,6 +9,7 @@ from nyx.core.integration.event_bus import Event, get_event_bus
 from nyx.core.integration.system_context import get_system_context
 from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel, trace_method
 
+
 logger = logging.getLogger(__name__)
 
 class IntegrationManager:
@@ -72,6 +73,7 @@ def _setup_bridges(self):
         from nyx.core.integration.tom_integration import create_tom_integrator
         from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
         from nyx.core.relationship_reflection import RelationshipReflectionSystem
+        from nyx.core.integration.spatial_integration_bridge import create_spatial_integration_bridge
         from nyx.core.integration.conditioning_integration_bridge import create_conditioning_integration_bridge
         
         # Dominance-related bridges
@@ -138,6 +140,9 @@ def _setup_bridges(self):
         # Register main dominance integration manager
         self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
                            ["dominance_reward_identity", "dominance_memory_reflection", "dominance_imagination_decision"])
+
+        self.register_bridge("spatial_integration", create_spatial_integration_bridge(self.brain), 
+                            ["memory_integration", "dynamic_attention"])
         
         # Register high-level pipeline bridges
         self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
