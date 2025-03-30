@@ -13,12 +13,19 @@ from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
 
-# New imports from other modules
+# Core system imports (ensuring all references are maintained)
 from nyx.core.reasoning_core import (
     ReasoningCore, CausalModel, CausalNode, CausalRelation,
     ConceptSpace, ConceptualBlend, Intervention
 )
 from nyx.core.reflection_engine import ReflectionEngine
+from nyx.core.multimodal_integrator import (
+    MultimodalIntegrator, Modality, SensoryInput, ExpectationSignal, IntegratedPercept
+)
+from nyx.core.mood_manager import MoodManager, MoodState
+from nyx.core.needs_system import NeedsSystem, NeedState
+from nyx.core.mode_integration import ModeIntegrationManager, InteractionMode
+from nyx.core.meta_core import MetaCore, StrategyResult
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +38,13 @@ class ActionSource(str, Enum):
     HABIT = "habit"
     EXPLORATION = "exploration"
     USER_ALIGNED = "user_aligned"
-    REASONING = "reasoning"  # New source for reasoning-based actions
-    REFLECTION = "reflection"  # New source for reflection-based actions
+    REASONING = "reasoning"  # Reasoning-based actions
+    REFLECTION = "reflection"  # Reflection-based actions
+    NEED = "need"  # Need-driven actions
+    MOOD = "mood"  # Mood-driven actions
+    MODE = "mode"  # Interaction mode-driven actions
+    META_COGNITIVE = "meta_cognitive"  # Meta-cognitive strategy actions
+    SENSORY = "sensory"  # Actions from sensory integration
 
 class ActionContext(BaseModel):
     """Context for action selection and generation"""
@@ -45,9 +57,19 @@ class ActionContext(BaseModel):
     motivations: Dict[str, float] = Field(default_factory=dict)
     available_actions: List[str] = Field(default_factory=list)
     action_history: List[Dict[str, Any]] = Field(default_factory=list)
-    # New fields for reasoning integration
+    
+    # Existing fields for reasoning integration
     causal_models: List[str] = Field(default_factory=list, description="IDs of relevant causal models")
     concept_spaces: List[str] = Field(default_factory=list, description="IDs of relevant concept spaces")
+    
+    # New fields for enhanced integrations
+    mood_state: Optional[MoodState] = None
+    need_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    interaction_mode: Optional[str] = None
+    sensory_context: Dict[str, Any] = Field(default_factory=dict)
+    bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
+    resource_allocation: Dict[str, float] = Field(default_factory=dict)
+    strategy_parameters: Dict[str, Any] = Field(default_factory=dict)
     
 class ActionOutcome(BaseModel):
     """Outcome of an executed action"""
@@ -60,8 +82,16 @@ class ActionOutcome(BaseModel):
     hormone_changes: Dict[str, float] = Field(default_factory=dict)
     impact: Dict[str, Any] = Field(default_factory=dict)
     execution_time: float = 0.0
-    # New fields for reasoning-informed outcomes
+    
+    # Existing fields for reasoning-informed outcomes
     causal_impacts: Dict[str, Any] = Field(default_factory=dict, description="Impacts identified by causal reasoning")
+    
+    # New fields for enhanced outcome tracking
+    need_impacts: Dict[str, float] = Field(default_factory=dict, description="Impact on need satisfaction")
+    mood_impacts: Dict[str, float] = Field(default_factory=dict, description="Impact on mood dimensions")
+    mode_alignment: float = Field(0.0, description="How well action aligned with interaction mode")
+    sensory_feedback: Dict[str, Any] = Field(default_factory=dict, description="Sensory feedback from action")
+    meta_evaluation: Dict[str, Any] = Field(default_factory=dict, description="Meta-cognitive evaluation")
     
 class ActionValue(BaseModel):
     """Q-value for a state-action pair"""
@@ -71,6 +101,9 @@ class ActionValue(BaseModel):
     update_count: int = 0
     confidence: float = Field(0.2, ge=0.0, le=1.0)
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    
+    # New field for strategy effectiveness
+    strategy_effectiveness: Dict[str, float] = Field(default_factory=dict)
     
     @property
     def is_reliable(self) -> bool:
@@ -88,9 +121,17 @@ class ActionMemory(BaseModel):
     next_state: Optional[Dict[str, Any]] = None
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
     source: ActionSource
-    # New fields for reasoning and reflection
+    
+    # Existing fields for reasoning and reflection
     causal_explanation: Optional[str] = None
     reflective_insight: Optional[str] = None
+    
+    # New fields for enhanced memory
+    need_satisfaction: Dict[str, float] = Field(default_factory=dict)
+    mood_impact: Dict[str, float] = Field(default_factory=dict)
+    mode_alignment: Optional[float] = None
+    sensory_context: Optional[Dict[str, Any]] = None
+    meta_evaluation: Optional[Dict[str, Any]] = None
 
 class ActionReward(BaseModel):
     """Reward signal for an action"""
@@ -98,6 +139,9 @@ class ActionReward(BaseModel):
     source: str = Field(..., description="Source generating the reward")
     context: Dict[str, Any] = Field(default_factory=dict, description="Context info")
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    
+    # New fields for reward decomposition
+    components: Dict[str, float] = Field(default_factory=dict, description="Reward value broken down by component")
 
 class ReflectionInsight(BaseModel):
     """Insight from reflection about an action"""
@@ -107,16 +151,37 @@ class ReflectionInsight(BaseModel):
     significance: float = Field(0.5, ge=0.0, le=1.0)
     applicable_contexts: List[str] = Field(default_factory=list)
     generated_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    
+    # New fields for enhanced reflection
+    action_pattern: Optional[Dict[str, Any]] = None
+    improvement_suggestions: List[Dict[str, Any]] = Field(default_factory=list)
+    related_needs: List[str] = Field(default_factory=list)
+    related_moods: List[str] = Field(default_factory=list)
+
+class ActionStrategy(BaseModel):
+    """Strategy for action selection and generation"""
+    name: str
+    description: str
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    applicable_contexts: List[Dict[str, Any]] = Field(default_factory=list)
+    effectiveness: float = Field(0.5, ge=0.0, le=1.0)
+    usage_count: int = Field(0, ge=0)
+    last_used: Optional[datetime.datetime] = None
+    
+    # Categorization and adaptation fields
+    for_needs: List[str] = Field(default_factory=list)
+    for_moods: List[Dict[str, float]] = Field(default_factory=list)
+    for_modes: List[str] = Field(default_factory=list)
 
 class EnhancedAgenticActionGenerator:
     """
     Enhanced Agentic Action Generator that integrates reward learning, prediction,
     user modeling, relationship context, temporal awareness, causal reasoning, 
-    conceptual blending, and reflection-based learning.
+    conceptual blending, reflection-based learning, and multi-system integration.
     
     Generates actions based on system's internal state, motivations, goals, 
     neurochemical/hormonal influences, reinforcement learning, causal models,
-    conceptual blending, and introspective reflection.
+    conceptual blending, introspective reflection, needs, mood, and interaction modes.
     """
     
     def __init__(self, 
@@ -136,9 +201,16 @@ class EnhancedAgenticActionGenerator:
                  theory_of_mind=None,
                  relationship_manager=None,
                  temporal_perception=None,
-                 # New systems
+                 
+                 # Existing additional systems
                  reasoning_core=None,
-                 reflection_engine=None):
+                 reflection_engine=None,
+                 
+                 # New system integrations
+                 mood_manager=None,
+                 needs_system=None,
+                 mode_integration=None,
+                 multimodal_integrator=None):
         """Initialize with references to required subsystems"""
         # Core systems from original implementation
         self.emotional_core = emotional_core
@@ -160,9 +232,15 @@ class EnhancedAgenticActionGenerator:
         self.relationship_manager = relationship_manager
         self.temporal_perception = temporal_perception
         
-        # New system integrations
+        # Existing additional systems
         self.reasoning_core = reasoning_core or ReasoningCore()
         self.reflection_engine = reflection_engine or ReflectionEngine(emotional_core=emotional_core)
+        
+        # New system integrations
+        self.mood_manager = mood_manager
+        self.needs_system = needs_system
+        self.mode_integration = mode_integration
+        self.multimodal_integrator = multimodal_integrator
         
         # Internal motivation system
         self.motivations = {
@@ -176,6 +254,799 @@ class EnhancedAgenticActionGenerator:
             "self_improvement": 0.5, # Desire to enhance capabilities
             "leisure": 0.5,          # Desire for downtime/relaxation
         }
+        
+    async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record and learn from the outcome of an action with causal analysis, need satisfaction,
+        mood impact, and mode alignment.
+        
+        Args:
+            action: The action that was executed
+            outcome: The outcome data
+            
+        Returns:
+            Updated learning statistics
+        """
+        async with self._lock:
+            action_name = action.get("name", "unknown")
+            success = outcome.get("success", False)
+            satisfaction = outcome.get("satisfaction", 0.0)
+            
+            # Parse into standardized outcome format if needed
+            if not isinstance(outcome, ActionOutcome):
+                # Create a standard format
+                outcome_obj = ActionOutcome(
+                    action_id=action.get("id", f"unknown_{int(time.time())}"),
+                    success=outcome.get("success", False),
+                    satisfaction=outcome.get("satisfaction", 0.0),
+                    reward_value=outcome.get("reward_value", 0.0),
+                    user_feedback=outcome.get("user_feedback"),
+                    neurochemical_changes=outcome.get("neurochemical_changes", {}),
+                    hormone_changes=outcome.get("hormone_changes", {}),
+                    impact=outcome.get("impact", {}),
+                    execution_time=outcome.get("execution_time", 0.0),
+                    # Fields from previous enhancements
+                    causal_impacts=outcome.get("causal_impacts", {}),
+                    # NEW: Additional outcome fields
+                    need_impacts=outcome.get("need_impacts", {}),
+                    mood_impacts=outcome.get("mood_impacts", {}),
+                    mode_alignment=outcome.get("mode_alignment", 0.0),
+                    sensory_feedback=outcome.get("sensory_feedback", {}),
+                    meta_evaluation=outcome.get("meta_evaluation", {})
+                )
+            else:
+                outcome_obj = outcome
+            
+            # Calculate reward value if not provided
+            reward_value = outcome_obj.reward_value
+            if reward_value == 0.0:
+                # Default formula if not specified
+                reward_value = 0.7 * float(success) + 0.3 * satisfaction - 0.1
+                outcome_obj.reward_value = reward_value
+            
+            # Update action success tracking
+            self.action_success_rates[action_name]["attempts"] += 1
+            if success:
+                self.action_success_rates[action_name]["successes"] += 1
+            
+            attempts = self.action_success_rates[action_name]["attempts"]
+            successes = self.action_success_rates[action_name]["successes"]
+            
+            if attempts > 0:
+                self.action_success_rates[action_name]["rate"] = successes / attempts
+            
+            # Update reinforcement learning model
+            state = action.get("context", {})
+            state_key = self._create_state_key(state)
+            
+            # Get or create action value
+            if action_name not in self.action_values.get(state_key, {}):
+                self.action_values[state_key][action_name] = ActionValue(
+                    state_key=state_key,
+                    action=action_name
+                )
+            
+            action_value = self.action_values[state_key][action_name]
+            
+            # Update Q-value
+            old_value = action_value.value
+            
+            # Q-learning update rule
+            # Q(s,a) = Q(s,a) + α * (r + γ * max Q(s',a') - Q(s,a))
+            action_value.value = old_value + self.learning_rate * (reward_value - old_value)
+            action_value.update_count += 1
+            action_value.last_updated = datetime.datetime.now()
+            
+            # Update confidence based on consistency of rewards
+            # More consistent rewards = higher confidence
+            new_value_distance = abs(action_value.value - old_value)
+            confidence_change = 0.05 * (1.0 - (new_value_distance * 2))  # More change = less confidence gain
+            action_value.confidence = min(1.0, max(0.1, action_value.confidence + confidence_change))
+            
+            # Update habit strength
+            current_habit = self.habits.get(state_key, {}).get(action_name, 0.0)
+            
+            # Habits strengthen with success, weaken with failure
+            habit_change = reward_value * 0.1
+            new_habit = max(0.0, min(1.0, current_habit + habit_change))
+            
+            # Update habit
+            if state_key not in self.habits:
+                self.habits[state_key] = {}
+            self.habits[state_key][action_name] = new_habit
+            
+            # NEW: Process need impacts
+            need_impacts = {}
+            if "need_context" in action:
+                # Action was need-driven, update the originating need
+                need_name = action.get("need_context", {}).get("need_name")
+                if need_name and self.needs_system:
+                    # Success generates higher satisfaction
+                    satisfaction_amount = 0.2 if success else 0.05
+                    if reward_value > 0:
+                        satisfaction_amount += reward_value * 0.3
+                    
+                    try:
+                        # Satisfy the need
+                        satisfaction_result = await self.needs_system.satisfy_need(
+                            need_name, 
+                            satisfaction_amount,
+                            context={"action_success": success, "reward_value": reward_value}
+                        )
+                        need_impacts[need_name] = satisfaction_amount
+                    except Exception as e:
+                        logger.error(f"Error updating need satisfaction: {e}")
+            
+            # NEW: Process mood impacts
+            mood_impacts = {}
+            if self.mood_manager:
+                try:
+                    # Calculate mood impacts based on success/failure
+                    valence_change = reward_value * 0.3  # Success/failure affects pleasantness
+                    arousal_change = 0.0  # Default no change
+                    control_change = 0.0  # Default no change
+                    
+                    # Success increases sense of control, failure decreases it
+                    if success:
+                        control_change = 0.15  # Success increases control
+                    else:
+                        control_change = -0.2  # Failure decreases control more strongly
+                    
+                    # High reward or punishment increases arousal
+                    if abs(reward_value) > 0.5:
+                        arousal_change = 0.1 * (abs(reward_value) / reward_value)  # Direction based on positive/negative
+                    
+                    # Record impact
+                    mood_impacts = {
+                        "valence": valence_change,
+                        "arousal": arousal_change,
+                        "control": control_change
+                    }
+    
+    # --- API methods for external systems ---
+    
+    async def adapt_to_user_mental_state(self, 
+                                      action: Dict[str, Any], 
+                                      user_mental_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adapt an action based on the user's current mental state
+        
+        Args:
+            action: Action to adapt
+            user_mental_state: User's current mental state
+            
+        Returns:
+            Adapted action
+        """
+        if not user_mental_state:
+            return action
+            
+        # Extract key mental state features
+        emotion = user_mental_state.get("inferred_emotion", "neutral")
+        valence = user_mental_state.get("valence", 0.0)
+        arousal = user_mental_state.get("arousal", 0.5)
+        trust = user_mental_state.get("perceived_trust", 0.5)
+        
+        # Clone action to avoid modifying original
+        adapted_action = action.copy()
+        if "parameters" in adapted_action:
+            adapted_action["parameters"] = adapted_action["parameters"].copy()
+        else:
+            adapted_action["parameters"] = {}
+            
+        # Add adaptation metadata
+        if "adaptation_metadata" not in adapted_action:
+            adapted_action["adaptation_metadata"] = {}
+            
+        adapted_action["adaptation_metadata"]["adapted_for_mental_state"] = True
+        adapted_action["adaptation_metadata"]["user_emotion"] = emotion
+        
+        # Apply adaptations based on mental state
+        
+        # 1. Emotional adaptations
+        if valence < -0.3:  # User is in negative emotional state
+            # Add supportive parameters
+            adapted_action["parameters"]["supportive_framing"] = True
+            adapted_action["parameters"]["emotional_sensitivity"] = min(1.0, abs(valence) * 1.2)
+            
+            # Reduce intensity for certain action types
+            if action["name"] in ["challenge_assumption", "assert_perspective", "issue_mild_command"]:
+                for param in ["intensity", "confidence", "assertiveness"]:
+                    if param in adapted_action["parameters"]:
+                        adapted_action["parameters"][param] = max(0.2, adapted_action["parameters"][param] * 0.7)
+                        
+        elif valence > 0.5:  # User is in positive emotional state
+            # Can use more direct/bold approaches when user is in good mood
+            for param in ["intensity", "confidence"]:
+                if param in adapted_action["parameters"]:
+                    adapted_action["parameters"][param] = min(0.9, adapted_action["parameters"][param] * 1.1)
+        
+        # 2. Arousal adaptations
+        if arousal > 0.7:  # User is highly aroused/activated
+            # Match energy level
+            adapted_action["parameters"]["match_energy"] = True
+            adapted_action["parameters"]["pace"] = "energetic"
+            
+        elif arousal < 0.3:  # User is calm/low energy
+            # Match lower energy
+            adapted_action["parameters"]["match_energy"] = True
+            adapted_action["parameters"]["pace"] = "calm"
+        
+        # 3. Trust adaptations
+        if trust < 0.4:  # Lower trust levels
+            # Be more cautious and less direct
+            adapted_action["parameters"]["build_rapport"] = True
+            
+            if "vulnerability_level" in adapted_action["parameters"]:
+                # Lower vulnerability when trust is low
+                adapted_action["parameters"]["vulnerability_level"] = max(0.1, adapted_action["parameters"]["vulnerability_level"] * 0.7)
+        
+        # Return the adapted action
+        return adapted_action
+    
+    async def get_learning_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the reinforcement learning system"""
+        # Calculate success rates
+        success_rates = {}
+        for action_name, stats in self.action_success_rates.items():
+            if stats["attempts"] > 0:
+                success_rates[action_name] = {
+                    "rate": stats["rate"],
+                    "successes": stats["successes"],
+                    "attempts": stats["attempts"]
+                }
+        
+        # Calculate average Q-values per state
+        avg_q_values = {}
+        for state_key, action_values in self.action_values.items():
+            if action_values:
+                state_avg = sum(av.value for av in action_values.values()) / len(action_values)
+                avg_q_values[state_key] = state_avg
+        
+        # Get top actions by value
+        top_actions = []
+        for state_key, action_values in self.action_values.items():
+            for action_name, action_value in action_values.items():
+                if action_value.update_count >= 3:  # Only consider actions with enough data
+                    top_actions.append({
+                        "state_key": state_key,
+                        "action": action_name,
+                        "value": action_value.value,
+                        "updates": action_value.update_count,
+                        "confidence": action_value.confidence
+                    })
+        
+        # Sort by value (descending)
+        top_actions.sort(key=lambda x: x["value"], reverse=True)
+        top_actions = top_actions[:10]  # Top 10
+        
+        # Get top habits
+        top_habits = []
+        for state_key, habits in self.habits.items():
+            for action_name, strength in habits.items():
+                if strength > 0.3:  # Only consider moderate-to-strong habits
+                    top_habits.append({
+                        "state_key": state_key,
+                        "action": action_name,
+                        "strength": strength
+                    })
+        
+        # Sort by strength (descending)
+        top_habits.sort(key=lambda x: x["strength"], reverse=True)
+        top_habits = top_habits[:10]  # Top 10
+        
+        # NEW: Get need satisfaction statistics
+        need_satisfaction = {}
+        if self.needs_system:
+            need_states = self.needs_system.get_needs_state()
+            need_satisfaction = {
+                need_name: {
+                    "level": need_data.get("level", 0.0),
+                    "drive": need_data.get("drive_strength", 0.0),
+                    "deficit": need_data.get("deficit", 0.0)
+                }
+                for need_name, need_data in need_states.items()
+            }
+        
+        # NEW: Get mood statistics
+        mood_stats = {}
+        if self.mood_manager and self.last_mood_state:
+            mood_stats = {
+                "dominant_mood": self.last_mood_state.dominant_mood,
+                "valence": self.last_mood_state.valence,
+                "arousal": self.last_mood_state.arousal,
+                "control": self.last_mood_state.control,
+                "intensity": self.last_mood_state.intensity
+            }
+        
+        # NEW: Get interaction mode statistics
+        mode_stats = {}
+        if self.mode_integration and self.current_mode:
+            mode_stats = {
+                "current_mode": self.current_mode,
+                "adaptation_strength": self.mode_adaptation_strength
+            }
+        
+        # NEW: Get strategy statistics
+        strategy_stats = [
+            {
+                "name": strategy.name,
+                "effectiveness": strategy.effectiveness,
+                "usage_count": strategy.usage_count,
+                "last_used": strategy.last_used.isoformat() if strategy.last_used else None
+            }
+            for strategy in sorted(self.action_strategies.values(), 
+                              key=lambda s: s.effectiveness, reverse=True)
+        ]
+        
+        return {
+            "learning_parameters": {
+                "learning_rate": self.learning_rate,
+                "discount_factor": self.discount_factor,
+                "exploration_rate": self.exploration_rate
+            },
+            "performance": {
+                "total_reward": self.total_reward,
+                "positive_rewards": self.positive_rewards,
+                "negative_rewards": self.negative_rewards,
+                "success_rates": success_rates
+            },
+            "models": {
+                "action_values_count": sum(len(actions) for actions in self.action_values.values()),
+                "habits_count": sum(len(habits) for habits in self.habits.values()),
+                "memories_count": len(self.action_memories)
+            },
+            "top_actions": top_actions,
+            "top_habits": top_habits,
+            "reward_by_category": {k: v for k, v in self.reward_by_category.items() if v["count"] > 0},
+            # NEW: Enhanced statistics
+            "need_satisfaction": need_satisfaction,
+            "mood_stats": mood_stats,
+            "mode_stats": mode_stats,
+            "strategy_stats": strategy_stats
+        }
+    
+    async def update_learning_parameters(self, 
+                                      learning_rate: Optional[float] = None,
+                                      discount_factor: Optional[float] = None,
+                                      exploration_rate: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Update reinforcement learning parameters
+        
+        Args:
+            learning_rate: New learning rate (0.0-1.0)
+            discount_factor: New discount factor (0.0-1.0)
+            exploration_rate: New exploration rate (0.0-1.0)
+            
+        Returns:
+            Updated parameters
+        """
+        async with self._lock:
+            if learning_rate is not None:
+                self.learning_rate = max(0.01, min(1.0, learning_rate))
+                
+            if discount_factor is not None:
+                self.discount_factor = max(0.0, min(0.99, discount_factor))
+                
+            if exploration_rate is not None:
+                self.exploration_rate = max(0.05, min(1.0, exploration_rate))
+            
+            return {
+                "learning_rate": self.learning_rate,
+                "discount_factor": self.discount_factor,
+                "exploration_rate": self.exploration_rate
+            }
+    
+    async def reset_learning(self, full_reset: bool = False) -> Dict[str, Any]:
+        """
+        Reset learning models (for debugging or fixing issues)
+        
+        Args:
+            full_reset: Whether to completely reset all learning or just partial
+            
+        Returns:
+            Reset status
+        """
+        async with self._lock:
+            if full_reset:
+                # Complete reset
+                self.action_values = defaultdict(dict)
+                self.habits = defaultdict(dict)
+                self.action_memories = []
+                self.action_success_rates = defaultdict(lambda: {"successes": 0, "attempts": 0, "rate": 0.5})
+                self.total_reward = 0.0
+                self.positive_rewards = 0
+                self.negative_rewards = 0
+                self.reward_by_category = defaultdict(lambda: {"count": 0, "total": 0.0})
+                
+                return {
+                    "status": "full_reset",
+                    "message": "All reinforcement learning data has been reset"
+                }
+            else:
+                # Partial reset - keep success rates but reset Q-values
+                self.action_values = defaultdict(dict)
+                self.action_memories = []
+                
+                # Reset to default exploration rate
+                self.exploration_rate = 0.2
+                
+                return {
+                    "status": "partial_reset",
+                    "message": "Q-values and memories reset, success rates and habits preserved"
+                }
+    
+    async def get_action_recommendations(self, context: Dict[str, Any], count: int = 3) -> List[Dict[str, Any]]:
+        """
+        Get recommended actions for a context based on learning history
+        
+        Args:
+            context: Current context
+            count: Number of recommendations to return
+            
+        Returns:
+            List of recommended actions
+        """
+        # Create state key
+        state_key = self._create_state_key(context)
+        
+        # Get action values for this state
+        action_values = self.action_values.get(state_key, {})
+        
+        # Get habit strengths for this state
+        habit_strengths = self.habits.get(state_key, {})
+        
+        # Combine scores
+        combined_scores = {}
+        
+        # Add Q-values
+        for action_name, action_value in action_values.items():
+            combined_scores[action_name] = {
+                "q_value": action_value.value,
+                "confidence": action_value.confidence,
+                "update_count": action_value.update_count,
+                "combined_score": action_value.value
+            }
+        
+        # Add habits
+        for action_name, strength in habit_strengths.items():
+            if action_name in combined_scores:
+                # Add to existing entry
+                combined_scores[action_name]["habit_strength"] = strength
+                combined_scores[action_name]["combined_score"] += strength * 0.5  # Weight habits less than Q-values
+            else:
+                combined_scores[action_name] = {
+                    "habit_strength": strength,
+                    "combined_score": strength * 0.5,
+                    "q_value": 0.0,
+                    "confidence": 0.0
+                }
+        
+        # Sort by combined score
+        scored_actions = [
+            {"name": action_name, **scores}
+            for action_name, scores in combined_scores.items()
+        ]
+        
+        scored_actions.sort(key=lambda x: x["combined_score"], reverse=True)
+        
+        # Generate action parameters for top recommendations
+        recommendations = []
+        
+        for action_data in scored_actions[:count]:
+            action_name = action_data["name"]
+            
+            # Generate basic action
+            action = {
+                "name": action_name,
+                "parameters": {},
+                "source": ActionSource.MOTIVATION
+            }
+            
+            # Find most recent example with same action for parameter reuse
+            for memory in reversed(self.action_memories):
+                if memory.action == action_name:
+                    # Copy parameters
+                    action["parameters"] = memory.parameters.copy()
+                    break
+            
+            # Add score data
+            action["recommendation_data"] = {
+                "q_value": action_data.get("q_value", 0.0),
+                "habit_strength": action_data.get("habit_strength", 0.0),
+                "combined_score": action_data["combined_score"],
+                "confidence": action_data.get("confidence", 0.0)
+            }
+            
+            recommendations.append(action)
+            
+        return recommendations
+    
+    async def predict_action_outcome(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Predict the outcome of an action using the prediction engine and integrated systems
+        
+        Args:
+            action: The action to predict outcome for
+            context: Current context
+            
+        Returns:
+            Predicted outcome with enhanced details
+        """
+        if not self.prediction_engine:
+            # Fallback to simple prediction based on past experience
+            return await self._predict_outcome_from_history(action, context)
+            
+        try:
+            # Prepare prediction input
+            prediction_input = {
+                "action": action["name"],
+                "parameters": action.get("parameters", {}),
+                "context": context,
+                "history": self.action_history[-5:] if len(self.action_history) > 5 else self.action_history,
+                "source": action.get("source", ActionSource.MOTIVATION)
+            }
+            
+            # NEW: Add integrated context for better predictions
+            if self.needs_system:
+                # Add need context
+                need_states = await self._get_current_need_states()
+                prediction_input["need_states"] = need_states
+                
+                # Add need context for need-specific actions
+                if "need_context" in action:
+                    prediction_input["need_context"] = action["need_context"]
+            
+            if self.mood_manager and self.last_mood_state:
+                # Add mood context
+                prediction_input["mood_state"] = {
+                    "dominant_mood": self.last_mood_state.dominant_mood,
+                    "valence": self.last_mood_state.valence,
+                    "arousal": self.last_mood_state.arousal,
+                    "control": self.last_mood_state.control
+                }
+            
+            if self.mode_integration and self.current_mode:
+                # Add mode context
+                prediction_input["interaction_mode"] = self.current_mode
+                
+                # Add mode context for mode-specific actions
+                if "mode_context" in action:
+                    prediction_input["mode_context"] = action["mode_context"]
+            
+            # Call the prediction engine
+            if hasattr(self.prediction_engine, "predict_action_outcome"):
+                prediction = await self.prediction_engine.predict_action_outcome(prediction_input)
+                
+                # NEW: Add integrated prediction details
+                if prediction:
+                    # Add need impact predictions if relevant
+                    if "need_context" in action and not "need_impacts" in prediction:
+                        need_name = action.get("need_context", {}).get("need_name")
+                        prediction["need_impacts"] = {
+                            need_name: prediction.get("success", False) and 0.2 or 0.05
+                        }
+                    
+                    # Add mood impact predictions if not present
+                    if not "mood_impacts" in prediction and self.last_mood_state:
+                        reward_value = prediction.get("reward_value", 0.0)
+                        prediction["mood_impacts"] = {
+                            "valence": reward_value * 0.3,
+                            "arousal": abs(reward_value) * 0.1 * (reward_value > 0 and 1 or -1),
+                            "control": prediction.get("success", False) and 0.15 or -0.2
+                        }
+                
+                return prediction
+            elif hasattr(self.prediction_engine, "generate_prediction"):
+                # Generic prediction method
+                prediction = await self.prediction_engine.generate_prediction(prediction_input)
+                return prediction
+                
+            # Fallback if no appropriate method
+            return await self._predict_outcome_from_history(action, context)
+            
+        except Exception as e:
+            logger.error(f"Error predicting action outcome: {e}")
+            return await self._predict_outcome_from_history(action, context)
+    
+    async def register_action_strategy(self, strategy: ActionStrategy) -> str:
+        """Register a new action strategy"""
+        strategy_id = f"strategy_{len(self.action_strategies) + 1}"
+        self.action_strategies[strategy_id] = strategy
+        logger.info(f"Registered action strategy: {strategy.name} (ID: {strategy_id})")
+        return strategy_id
+    
+    async def register_sensory_expectation(self, expectation: ExpectationSignal) -> None:
+        """Register a sensory expectation to guide multimodal integration"""
+        if self.multimodal_integrator:
+            await self.multimodal_integrator.add_expectation(expectation)
+            self.sensory_expectations.append(expectation)
+            logger.info(f"Registered sensory expectation for {expectation.target_modality}")
+        else:
+            logger.warning("Cannot register sensory expectation: Multimodal integrator not available")
+    
+    # Main entry-point for external systems
+    async def generate_optimal_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main entry-point for generating an optimal action using all integrated systems
+        
+        Args:
+            context: Current context
+            
+        Returns:
+            Optimal action
+        """
+        try:
+            # Check if we should use the full pipeline
+            use_reasoning = self.reasoning_core is not None
+            use_reflection = self.reflection_engine is not None
+            use_enhanced = (self.needs_system is not None or 
+                          self.mood_manager is not None or 
+                          self.mode_integration is not None or
+                          self.multimodal_integrator is not None)
+            
+            if use_reasoning and use_reflection and use_enhanced:
+                # Run full enhanced pipeline
+                return await self.process_action_generation_pipeline(context)
+            else:
+                # Fallback to standard pipeline
+                return await self.generate_action(context)
+        except Exception as e:
+            logger.error(f"Error generating optimal action: {e}")
+            # Fallback to simple action
+            return {
+                "name": "fallback_action",
+                "parameters": {},
+                "description": "Generated fallback action due to error",
+                "source": ActionSource.MOTIVATION
+            }
+                    
+                    # Apply mood changes through event
+                    await self.mood_manager.handle_significant_event(
+                        event_type="action_outcome",
+                        intensity=min(1.0, 0.5 + abs(reward_value) * 0.5),
+                        valence=reward_value,
+                        arousal_change=arousal_change,
+                        control_change=control_change
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating mood from action outcome: {e}")
+            
+            # NEW: Process mode alignment
+            mode_alignment = 0.0
+            if "mode_context" in action and self.mode_integration:
+                try:
+                    # Record feedback about interaction success
+                    await self.mode_integration.record_mode_feedback(
+                        interaction_success=success, 
+                        user_feedback=str(outcome_obj.user_feedback) if outcome_obj.user_feedback else None
+                    )
+                    
+                    # Calculate alignment score
+                    mode_key = action.get("mode_context", {}).get("mode")
+                    mode_alignment = 0.7 if success else 0.3  # Base alignment on success
+                    
+                    # Update outcome object
+                    outcome_obj.mode_alignment = mode_alignment
+                except Exception as e:
+                    logger.error(f"Error processing mode alignment: {e}")
+            
+            # NEW: Update outcome with these new details
+            outcome_obj.need_impacts = need_impacts
+            outcome_obj.mood_impacts = mood_impacts
+            
+            # Add causal explanation if action came from reasoning
+            causal_explanation = None
+            if action.get("source") == ActionSource.REASONING and "reasoning_data" in action:
+                # Get model if available
+                model_id = action["reasoning_data"].get("model_id")
+                if model_id and self.reasoning_core:
+                    try:
+                        # Create explanation based on actual outcome
+                        causal_explanation = f"Outcome aligned with causal model prediction: {success}. "
+                        causal_explanation += f"Satisfaction: {satisfaction:.2f}, Reward: {reward_value:.2f}."
+                    except Exception as e:
+                        logger.error(f"Error generating causal explanation for outcome: {e}")
+            
+            # NEW: Record meta-evaluation if applicable
+            meta_evaluation = {}
+            if self.meta_core and action.get("source") == ActionSource.META_COGNITIVE:
+                try:
+                    bottleneck_targeted = action.get("meta_context", {}).get("bottleneck_type")
+                    process_type = action.get("meta_context", {}).get("process_type")
+                    
+                    if bottleneck_targeted and process_type:
+                        # Create evaluation data
+                        meta_evaluation = {
+                            "bottleneck_addressed": bottleneck_targeted,
+                            "process_improved": process_type,
+                            "improvement_score": 0.7 if success else 0.2,
+                            "recommend_further_action": not success
+                        }
+                        outcome_obj.meta_evaluation = meta_evaluation
+                except Exception as e:
+                    logger.error(f"Error creating meta-evaluation: {e}")
+            
+            # Store action memory
+            memory = ActionMemory(
+                state=state,
+                action=action_name,
+                action_id=action.get("id", "unknown"),
+                parameters=action.get("parameters", {}),
+                outcome=outcome_obj.dict(),
+                reward=reward_value,
+                timestamp=datetime.datetime.now(),
+                source=action.get("source", ActionSource.MOTIVATION),
+                causal_explanation=causal_explanation,
+                # NEW: Enhanced memory fields
+                need_satisfaction=need_impacts,
+                mood_impact=mood_impacts,
+                mode_alignment=mode_alignment,
+                sensory_context=action.get("sensory_context"),
+                meta_evaluation=meta_evaluation
+            )
+            
+            self.action_memories.append(memory)
+            
+            # Limit memory size
+            if len(self.action_memories) > self.max_memories:
+                self.action_memories = self.action_memories[-self.max_memories:]
+            
+            # Update reward statistics
+            self.total_reward += reward_value
+            if reward_value > 0:
+                self.positive_rewards += 1
+            elif reward_value < 0:
+                self.negative_rewards += 1
+                
+            # Update category stats
+            category = action.get("source", ActionSource.MOTIVATION)
+            if isinstance(category, ActionSource):
+                category = category.value
+                
+            self.reward_by_category[category]["count"] += 1
+            self.reward_by_category[category]["total"] += reward_value
+            
+            # NEW: Update strategy effectiveness if applicable
+            if "strategy_id" in action:
+                strategy_id = action["strategy_id"]
+                if strategy_id in self.action_strategies:
+                    strategy = self.action_strategies[strategy_id]
+                    # Update effectiveness based on outcome
+                    old_effectiveness = strategy.effectiveness
+                    # Calculate new effectiveness with stronger weighting for recent outcomes
+                    strategy.effectiveness = old_effectiveness * 0.8 + (reward_value + 1) * 0.5 * 0.2
+                    strategy.last_used = datetime.datetime.now()
+            
+            # Update causal models if applicable
+            if action.get("source") == ActionSource.REASONING and self.reasoning_core:
+                await self._update_causal_models_from_outcome(action, outcome_obj, reward_value)
+            
+            # Potentially trigger experience replay
+            if random.random() < 0.3:  # 30% chance after each outcome
+                await self._experience_replay(3)  # Replay 3 random memories
+                
+            # Decay exploration rate over time (explore less as we learn more)
+            self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
+            
+            # Return summary of updates
+            return {
+                "action": action_name,
+                "success": success,
+                "reward_value": reward_value,
+                "new_q_value": action_value.value,
+                "q_value_change": action_value.value - old_value,
+                "new_habit_strength": new_habit,
+                "habit_change": new_habit - current_habit,
+                "action_success_rate": self.action_success_rates[action_name]["rate"],
+                "memories_stored": len(self.action_memories),
+                "exploration_rate": self.exploration_rate,
+                # NEW: Enhanced return values
+                "need_impacts": need_impacts,
+                "mood_impacts": mood_impacts,
+                "mode_alignment": mode_alignment,
+                "meta_evaluation": meta_evaluation
+            }
         
         # Activity generation capabilities
         self.action_patterns = {}  # Patterns learned from past successful actions
@@ -230,20 +1101,61 @@ class EnhancedAgenticActionGenerator:
         # Habit strength tracking
         self.habits: Dict[str, Dict[str, float]] = defaultdict(dict)
         
-        # New: Reasoning model tracking
+        # Reasoning model tracking
         self.causal_models = {}  # state_key -> model_id
         self.concept_blends = {}  # domain -> blend_id
         
-        # New: Reflection insights
+        # Reflection insights
         self.reflection_insights: List[ReflectionInsight] = []
         self.last_reflection_time = datetime.datetime.now() - datetime.timedelta(hours=2)
         self.reflection_interval = datetime.timedelta(minutes=30)  # Generate reflections every 30 minutes
         
+        # New: Action strategies collection
+        self.action_strategies: Dict[str, ActionStrategy] = {}
+        
+        # New: Need integration tracking
+        self.need_satisfaction_history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self.need_drive_threshold = 0.4  # Minimum drive to trigger need-based actions
+        
+        # New: Mood integration tracking
+        self.last_mood_state: Optional[MoodState] = None
+        self.mood_influence_weights = {
+            "valence": 0.4,    # Pleasantness influence on action selection
+            "arousal": 0.3,    # Energy level influence
+            "control": 0.3     # Dominance/control influence
+        }
+        
+        # New: Mode integration tracking
+        self.current_mode: Optional[str] = None
+        self.mode_adaptation_strength = 0.5  # How strongly mode influences actions
+        
+        # New: Sensory context integration
+        self.sensory_context: Dict[Modality, Any] = {}
+        self.sensory_expectations: List[ExpectationSignal] = []
+        
+        # New: Meta-cognitive parameters
+        self.meta_parameters = {
+            "evaluation_interval": 10,  # Actions between strategy evaluations
+            "strategy_update_threshold": 0.2,  # Minimum change to update strategy
+            "bottleneck_priority_boost": 0.5,  # Priority boost for bottleneck actions
+            "resource_allocation_factor": 0.3,  # How much resource allocation affects action selection
+            "plan_horizon": 3,  # How many steps ahead to plan
+        }
+        self.detected_bottlenecks = []
+        self.system_resources = {
+            "action_generation": 0.2,
+            "action_evaluation": 0.2,
+            "learning": 0.2,
+            "prediction": 0.2,
+            "reflection": 0.2
+        }
+        self.action_count_since_evaluation = 0
+        
         # Locks for thread safety
         self._lock = asyncio.Lock()
         
-        logger.info("Enhanced Agentic Action Generator initialized with reasoning and reflection systems")
-    
+        logger.info("Enhanced Agentic Action Generator initialized with comprehensive integrations")
+        
     async def update_motivations(self):
         """
         Update motivations based on neurochemical and hormonal states, active goals,
@@ -358,7 +1270,7 @@ class EnhancedAgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error applying temporal influences: {e}")
         
-        # NEW: 8. Apply reasoning-based influences
+        # 8. Apply reasoning-based influences
         if self.reasoning_core:
             try:
                 reasoning_influences = await self._calculate_reasoning_influences()
@@ -368,7 +1280,7 @@ class EnhancedAgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error applying reasoning influences: {e}")
         
-        # NEW: 9. Apply reflection-based influences
+        # 9. Apply reflection-based influences
         if self.reflection_engine:
             try:
                 reflection_influences = await self._calculate_reflection_influences()
@@ -378,7 +1290,57 @@ class EnhancedAgenticActionGenerator:
             except Exception as e:
                 logger.error(f"Error applying reflection influences: {e}")
         
-        # 10. Normalize all motivations to [0.1, 0.9] range
+        # 10. Apply need-based influences
+        if self.needs_system:
+            try:
+                need_influences = await self._calculate_need_influences()
+                for motivation, influence in need_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying need influences: {e}")
+        
+        # 11. Apply mood-based influences
+        if self.mood_manager:
+            try:
+                mood_influences = await self._calculate_mood_influences()
+                for motivation, influence in mood_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying mood influences: {e}")
+        
+        # 12. Apply interaction mode influences
+        if self.mode_integration:
+            try:
+                mode_influences = await self._calculate_mode_influences()
+                for motivation, influence in mode_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying mode influences: {e}")
+        
+        # 13. Apply sensory context influences
+        if self.multimodal_integrator:
+            try:
+                sensory_influences = await self._calculate_sensory_influences()
+                for motivation, influence in sensory_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying sensory influences: {e}")
+                
+        # 14. Apply meta-cognitive strategy influences
+        if self.meta_core:
+            try:
+                meta_influences = await self._calculate_meta_influences()
+                for motivation, influence in meta_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying meta influences: {e}")
+        
+        # 15. Normalize all motivations to [0.1, 0.9] range
         for motivation in updated_motivations:
             updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation]))
         
@@ -387,8 +1349,304 @@ class EnhancedAgenticActionGenerator:
         
         logger.debug(f"Updated motivations: {self.motivations}")
         return self.motivations
-
-    # NEW: Add method to calculate reasoning influences
+    
+    async def _calculate_need_influences(self) -> Dict[str, float]:
+        """Calculate how need states influence motivations"""
+        influences = {}
+        
+        if not self.needs_system:
+            return influences
+            
+        try:
+            # Get current need states
+            need_states = self.needs_system.get_needs_state()
+            
+            # Map specific needs to motivations
+            need_motivation_map = {
+                "knowledge": {"curiosity": 0.6, "self_improvement": 0.3},
+                "coherence": {"competence": 0.4, "autonomy": 0.2},
+                "agency": {"autonomy": 0.7, "dominance": 0.3},
+                "connection": {"connection": 0.8, "validation": 0.2},
+                "intimacy": {"connection": 0.5, "expression": 0.3},
+                "safety": {"autonomy": 0.4, "dominance": 0.2},
+                "novelty": {"curiosity": 0.7, "leisure": 0.3},
+                "physical_closeness": {"connection": 0.4, "leisure": 0.2},
+                "drive_expression": {"expression": 0.8, "dominance": 0.3},
+                "control_expression": {"dominance": 0.8, "expression": 0.4}
+            }
+            
+            for need_name, need_data in need_states.items():
+                # Higher drive strength = more influence on motivation
+                drive_strength = need_data.get("drive_strength", 0.0)
+                
+                # Skip needs with low drive
+                if drive_strength < self.need_drive_threshold:
+                    continue
+                    
+                # Get the motivation mappings for this need
+                if need_name in need_motivation_map:
+                    for motivation, factor in need_motivation_map[need_name].items():
+                        # Scale influence by drive strength and factor
+                        influence = drive_strength * factor
+                        influences[motivation] = influences.get(motivation, 0.0) + influence
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating need influences: {e}")
+            return {}
+    
+    async def _calculate_mood_influences(self) -> Dict[str, float]:
+        """Calculate how mood dimensions influence motivations"""
+        influences = {}
+        
+        if not self.mood_manager:
+            return influences
+            
+        try:
+            # Get current mood state
+            mood_state = await self.mood_manager.get_current_mood()
+            self.last_mood_state = mood_state  # Cache for later use
+            
+            # Extract mood dimensions
+            valence = mood_state.valence  # -1.0 to 1.0
+            arousal = mood_state.arousal  # 0.0 to 1.0
+            control = mood_state.control  # -1.0 to 1.0
+            
+            # Valence (pleasantness) influence
+            # Positive mood increases curious/expressive motivations
+            # Negative mood increases dominance/autonomy motivations
+            if valence > 0.3:  # Positive mood
+                influences["curiosity"] = valence * self.mood_influence_weights["valence"] * 0.5
+                influences["expression"] = valence * self.mood_influence_weights["valence"] * 0.4
+                influences["connection"] = valence * self.mood_influence_weights["valence"] * 0.3
+                influences["leisure"] = valence * self.mood_influence_weights["valence"] * 0.3
+            elif valence < -0.3:  # Negative mood
+                neg_valence = abs(valence)
+                influences["dominance"] = neg_valence * self.mood_influence_weights["valence"] * 0.5
+                influences["autonomy"] = neg_valence * self.mood_influence_weights["valence"] * 0.4
+                influences["self_improvement"] = neg_valence * self.mood_influence_weights["valence"] * 0.3
+            
+            # Arousal (energy level) influence
+            # High arousal increases active motivations
+            # Low arousal increases leisure/reflection motivations
+            if arousal > 0.7:  # High energy
+                influences["curiosity"] = (arousal - 0.5) * self.mood_influence_weights["arousal"] * 0.6
+                influences["expression"] = (arousal - 0.5) * self.mood_influence_weights["arousal"] * 0.5
+                influences["dominance"] = (arousal - 0.5) * self.mood_influence_weights["arousal"] * 0.4
+                # Reduce leisure
+                influences["leisure"] = -(arousal - 0.5) * self.mood_influence_weights["arousal"] * 0.5
+            elif arousal < 0.3:  # Low energy
+                low_arousal = 0.5 - arousal
+                influences["leisure"] = low_arousal * self.mood_influence_weights["arousal"] * 0.7
+                influences["connection"] = low_arousal * self.mood_influence_weights["arousal"] * 0.3
+                # Reduce active motivations
+                influences["dominance"] = -low_arousal * self.mood_influence_weights["arousal"] * 0.4
+                influences["curiosity"] = -low_arousal * self.mood_influence_weights["arousal"] * 0.3
+                
+            # Control influence
+            # High control increases dominance/autonomy
+            # Low control increases connection/validation
+            if control > 0.3:  # High control
+                influences["dominance"] = control * self.mood_influence_weights["control"] * 0.6
+                influences["autonomy"] = control * self.mood_influence_weights["control"] * 0.5
+                influences["expression"] = control * self.mood_influence_weights["control"] * 0.4
+            elif control < -0.3:  # Low control
+                low_control = abs(control)
+                influences["connection"] = low_control * self.mood_influence_weights["control"] * 0.6
+                influences["validation"] = low_control * self.mood_influence_weights["control"] * 0.5
+                
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating mood influences: {e}")
+            return {}
+    
+    async def _calculate_mode_influences(self) -> Dict[str, float]:
+        """Calculate how interaction mode influences motivations"""
+        influences = {}
+        
+        if not self.mode_integration:
+            return influences
+            
+        try:
+            # Get current interaction mode
+            if hasattr(self.mode_integration, 'mode_manager') and self.mode_integration.mode_manager:
+                mode = self.mode_integration.mode_manager.current_mode
+                self.current_mode = str(mode) if mode else None
+            else:
+                return influences  # No mode manager available
+                
+            if not self.current_mode:
+                return influences  # No current mode
+                
+            # Map modes to motivation influences
+            mode_motivation_map = {
+                "DOMINANT": {
+                    "dominance": 0.7,
+                    "autonomy": 0.5,
+                    "expression": 0.4,
+                    "connection": -0.3  # Reduces connection motivation
+                },
+                "FRIENDLY": {
+                    "connection": 0.7,
+                    "validation": 0.4,
+                    "expression": 0.3,
+                    "dominance": -0.4  # Reduces dominance motivation
+                },
+                "INTELLECTUAL": {
+                    "curiosity": 0.7,
+                    "self_improvement": 0.5,
+                    "competence": 0.4,
+                    "leisure": -0.3  # Reduces leisure motivation
+                },
+                "COMPASSIONATE": {
+                    "connection": 0.8,
+                    "validation": 0.5,
+                    "dominance": -0.6  # Strongly reduces dominance
+                },
+                "PLAYFUL": {
+                    "leisure": 0.7,
+                    "expression": 0.5,
+                    "curiosity": 0.4,
+                    "competence": -0.3  # Reduces competence motivation
+                },
+                "CREATIVE": {
+                    "expression": 0.8,
+                    "curiosity": 0.6,
+                    "self_improvement": 0.3
+                },
+                "PROFESSIONAL": {
+                    "competence": 0.7,
+                    "autonomy": 0.5,
+                    "expression": 0.3,
+                    "leisure": -0.4  # Reduces leisure motivation
+                }
+            }
+            
+            # Get motivation influences for current mode
+            mode_key = self.current_mode.replace("InteractionMode.", "").upper()
+            if mode_key in mode_motivation_map:
+                mode_influences = mode_motivation_map[mode_key]
+                
+                # Apply mode adaptation strength to all influences
+                for motivation, influence in mode_influences.items():
+                    scaled_influence = influence * self.mode_adaptation_strength
+                    influences[motivation] = scaled_influence
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating mode influences: {e}")
+            return {}
+    
+    async def _calculate_sensory_influences(self) -> Dict[str, float]:
+        """Calculate how sensory context influences motivations"""
+        influences = {}
+        
+        if not self.multimodal_integrator:
+            return influences
+            
+        try:
+            # Get recent percepts across modalities
+            recent_percepts = await self.multimodal_integrator.get_recent_percepts(limit=5)
+            if not recent_percepts:
+                return influences
+                
+            # Store for context
+            self.sensory_context = {p.modality: p.content for p in recent_percepts}
+            
+            # Process each percept for potential motivation influence
+            for percept in recent_percepts:
+                # Only consider high-attention percepts
+                if percept.attention_weight < 0.5:
+                    continue
+                    
+                if percept.modality == Modality.TEXT and percept.content:
+                    # Text might indicate questions (curiosity) or emotional content (connection)
+                    if isinstance(percept.content, dict):
+                        if percept.content.get("is_question", False):
+                            influences["curiosity"] = influences.get("curiosity", 0.0) + 0.2
+                        
+                        sentiment = percept.content.get("sentiment", 0.0)
+                        if abs(sentiment) > 0.5:  # Strong sentiment
+                            influences["connection"] = influences.get("connection", 0.0) + 0.15
+                            influences["expression"] = influences.get("expression", 0.0) + 0.1
+                
+                elif percept.modality == Modality.IMAGE and percept.content:
+                    # Images might spark curiosity or create emotional response
+                    if hasattr(percept.content, "estimated_mood") and percept.content.estimated_mood:
+                        # Emotional image can trigger connection/expression
+                        influences["connection"] = influences.get("connection", 0.0) + 0.1
+                        influences["expression"] = influences.get("expression", 0.0) + 0.15
+                    
+                    # Complex images with many objects can trigger curiosity
+                    if hasattr(percept.content, "objects") and len(percept.content.objects) > 3:
+                        influences["curiosity"] = influences.get("curiosity", 0.0) + 0.2
+                
+                elif percept.modality in [Modality.AUDIO_MUSIC, Modality.AUDIO_SPEECH]:
+                    # Audio can trigger various responses based on content
+                    if hasattr(percept.content, "mood") and percept.content.mood:
+                        mood = percept.content.mood.lower()
+                        if mood in ["happy", "excited", "joyful"]:
+                            influences["expression"] = influences.get("expression", 0.0) + 0.2
+                            influences["leisure"] = influences.get("leisure", 0.0) + 0.1
+                        elif mood in ["sad", "melancholic"]:
+                            influences["connection"] = influences.get("connection", 0.0) + 0.2
+                            influences["expression"] = influences.get("expression", 0.0) + 0.1
+                        elif mood in ["angry", "intense"]:
+                            influences["dominance"] = influences.get("dominance", 0.0) + 0.2
+                            influences["autonomy"] = influences.get("autonomy", 0.0) + 0.1
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating sensory influences: {e}")
+            return {}
+    
+    async def _calculate_meta_influences(self) -> Dict[str, float]:
+        """Calculate how meta-cognitive strategies influence motivations"""
+        influences = {}
+        
+        if not self.meta_core:
+            return influences
+            
+        try:
+            # Check for detected bottlenecks that need addressing
+            if self.detected_bottlenecks:
+                # Bottlenecks increase competence and self-improvement motivations
+                bottleneck_count = len(self.detected_bottlenecks)
+                severity = sum(b.get("severity", 0.5) for b in self.detected_bottlenecks) / max(1, bottleneck_count)
+                
+                # Stronger influence for more severe bottlenecks
+                influences["competence"] = severity * 0.3
+                influences["self_improvement"] = severity * 0.2
+                
+                # Critical bottlenecks may reduce leisure motivation
+                if severity > 0.7:
+                    influences["leisure"] = -severity * 0.4
+            
+            # Check resource allocation for imbalances
+            resources = self.system_resources
+            if resources:
+                min_resource = min(resources.values())
+                max_resource = max(resources.values())
+                
+                # Large imbalance suggests need for reallocation
+                if max_resource > min_resource * 2:
+                    influences["competence"] = 0.2
+                    influences["self_improvement"] = 0.1
+            
+            # If we haven't evaluated strategies in a while, increase self-improvement
+            if self.action_count_since_evaluation > self.meta_parameters["evaluation_interval"] * 2:
+                influences["self_improvement"] = 0.3
+            
+            return influences
+            
+        except Exception as e:
+            logger.error(f"Error calculating meta influences: {e}")
+            return {}
+    
     async def _calculate_reasoning_influences(self) -> Dict[str, float]:
         """Calculate how reasoning models influence motivations"""
         influences = {}
@@ -441,7 +1699,6 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error calculating reasoning influences: {e}")
             return {}
     
-    # NEW: Add method to calculate reflection influences
     async def _calculate_reflection_influences(self) -> Dict[str, float]:
         """Calculate how reflection insights influence motivations"""
         influences = {}
@@ -760,7 +2017,6 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error updating cached goal status: {e}")
             # Keep using old cache if update fails
     
-    # NEW: Calculate influences from relationship state
     async def _calculate_relationship_influences(self) -> Dict[str, float]:
         """Calculate how relationship state influences motivations"""
         influences = {}
@@ -824,7 +2080,6 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error calculating relationship influences: {e}")
             return influences
     
-    # NEW: Calculate influences from reward learning
     def _calculate_reward_learning_influences(self) -> Dict[str, float]:
         """Calculate motivation influences based on reward learning"""
         influences = {}
@@ -905,7 +2160,6 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error calculating reward learning influences: {e}")
             return {}
     
-    # NEW: Calculate influences from temporal context
     def _calculate_temporal_influences(self) -> Dict[str, float]:
         """Calculate motivation influences based on temporal context"""
         influences = {}
@@ -982,11 +2236,29 @@ class EnhancedAgenticActionGenerator:
             relationship_data = await self._get_relationship_data(user_id) if user_id else None
             user_mental_state = await self._get_user_mental_state(user_id) if user_id else None
             
-            # NEW: Find relevant causal models and concept spaces
+            # NEW: Update need states if available
+            need_states = await self._get_current_need_states() if self.needs_system else {}
+            
+            # NEW: Update mood state if available
+            mood_state = await self._get_current_mood_state() if self.mood_manager else None
+            
+            # NEW: Update interaction mode if available
+            interaction_mode = await self._get_current_interaction_mode() if self.mode_integration else None
+            
+            # NEW: Update sensory context if available
+            sensory_context = await self._get_sensory_context() if self.multimodal_integrator else {}
+            
+            # NEW: Get system bottlenecks and resource allocation if available
+            bottlenecks, resource_allocation = await self._get_meta_system_state() if self.meta_core else ([], {})
+            self.detected_bottlenecks = bottlenecks
+            if resource_allocation:
+                self.system_resources = resource_allocation
+            
+            # Find relevant causal models and concept spaces
             relevant_causal_models = await self._get_relevant_causal_models(context)
             relevant_concept_spaces = await self._get_relevant_concept_spaces(context)
             
-            # Create action context
+            # Create comprehensive action context
             action_context = ActionContext(
                 state=context,
                 user_id=user_id,
@@ -996,7 +2268,16 @@ class EnhancedAgenticActionGenerator:
                 motivations=self.motivations,
                 action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)],
                 causal_models=relevant_causal_models,
-                concept_spaces=relevant_concept_spaces
+                concept_spaces=relevant_concept_spaces,
+                # NEW: Enhanced context
+                mood_state=mood_state,
+                need_states=need_states,
+                interaction_mode=interaction_mode,
+                sensory_context=sensory_context,
+                bottlenecks=bottlenecks,
+                resource_allocation=resource_allocation,
+                # NEW: Get current strategy parameters if available
+                strategy_parameters=self._get_current_strategy_parameters()
             )
             
             # Check if it's time for leisure/idle activity
@@ -1019,399 +2300,522 @@ class EnhancedAgenticActionGenerator:
                         action["source"] = ActionSource.GOAL
                         
                         return action
-            
-            # NEW: Check if we should run reflection before generating new action
-            await self._maybe_generate_reflection(context)
-
-            # STAGE 1: Generate candidate actions from multiple sources
-            candidate_actions = []
-            
-            # Generate motivation-based candidates
-            motivation_candidates = await self._generate_candidate_actions(action_context)
-            candidate_actions.extend(motivation_candidates)
-            
-            # NEW: Generate reasoning-based candidates
-            if self.reasoning_core and relevant_causal_models:
-                reasoning_candidates = await self._generate_reasoning_actions(action_context)
-                candidate_actions.extend(reasoning_candidates)
-            
-            # NEW: Generate conceptual blending candidates
-            if self.reasoning_core and relevant_concept_spaces:
-                blending_candidates = await self._generate_conceptual_blend_actions(action_context)
-                candidate_actions.extend(blending_candidates)
-            
-            # Add special actions based on temporal context if appropriate
-            if self.temporal_perception and self.idle_duration > 1800:  # After 30 min idle
-                reflection_action = await self._generate_temporal_reflection_action(context)
-                if reflection_action:
-                    candidate_actions.append(reflection_action)
-            
-            # Update action context with candidate actions
-            action_context.available_actions = [a["name"] for a in candidate_actions if "name" in a]
-            
-            # STAGE 2: Select best action using reinforcement learning, prediction, and causal evaluation
-            selected_action = await self._select_best_action(candidate_actions, action_context)
-            
-            # Add unique ID for tracking
-            if "id" not in selected_action:
-                selected_action["id"] = f"action_{uuid.uuid4().hex[:8]}"
-                
-            selected_action["timestamp"] = datetime.datetime.now().isoformat()
-            
-            # Apply identity influence to action
-            if self.identity_evolution:
-                selected_action = await self._apply_identity_influence(selected_action)
-            
-            # NEW: Add causal explanation to action if possible
-            if self.reasoning_core and "source" in selected_action:
-                if selected_action["source"] in [ActionSource.REASONING, ActionSource.MOTIVATION, ActionSource.GOAL]:
-                    explanation = await self._generate_causal_explanation(selected_action, context)
-                    if explanation:
-                        selected_action["causal_explanation"] = explanation
-            
-            # Record action in memory
-            await self._record_action_as_memory(selected_action)
-
-            # Add to action history
-            self.action_history.append(selected_action)
-            
-            # Update last major action time
-            self.last_major_action_time = datetime.datetime.now()
-            
-            return selected_action
-
-    # NEW: Method to generate reflection if needed
-    async def _maybe_generate_reflection(self, context: Dict[str, Any]) -> None:
-        """Generate reflection insights if it's time to do so"""
-        now = datetime.datetime.now()
-        time_since_reflection = now - self.last_reflection_time
-        
-        # Generate reflection if sufficient time has passed
-        if time_since_reflection > self.reflection_interval and self.reflection_engine:
+    
+    async def _identify_interesting_domain(self, context: Dict[str, Any]) -> str:
+        """Identify an interesting domain to explore based on context and knowledge gaps"""
+        # Use knowledge core if available
+        if self.knowledge_core:
             try:
-                # Get recent action memories for reflection
-                memories_for_reflection = []
-                for memory in self.action_memories[-20:]:  # Last 20 memories
-                    # Format memory for reflection
-                    memories_for_reflection.append({
-                        "id": memory.action_id,
-                        "memory_text": f"Action: {memory.action} with outcome: {'success' if memory.outcome.get('success', False) else 'failure'}",
-                        "memory_type": "action_memory",
-                        "significance": 7.0 if memory.reward > 0.5 else 5.0,
-                        "metadata": {
-                            "action": memory.action,
-                            "parameters": memory.parameters,
-                            "outcome": memory.outcome,
-                            "reward": memory.reward,
-                            "source": memory.source
-                        },
-                        "tags": [memory.source, "action_memory", "success" if memory.reward > 0 else "failure"]
-                    })
-                
-                # Get neurochemical state if available
-                neurochemical_state = None
-                if self.emotional_core:
-                    neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
-                
-                # Generate reflection
-                if memories_for_reflection:
-                    reflection_text, confidence = await self.reflection_engine.generate_reflection(
-                        memories_for_reflection,
-                        topic="Action Selection",
-                        neurochemical_state=neurochemical_state
-                    )
-                    
-                    # Calculate significance based on confidence and action diversity
-                    action_types = set(m["metadata"]["action"] for m in memories_for_reflection)
-                    significance = min(1.0, 0.5 + (confidence * 0.3) + (len(action_types) / 20 * 0.2))
-                    
-                    # Create and store insight
-                    insight = ReflectionInsight(
-                        action_id=f"reflection_{uuid.uuid4().hex[:8]}",
-                        insight_text=reflection_text,
-                        confidence=confidence,
-                        significance=significance,
-                        applicable_contexts=list(set(m["metadata"]["source"] for m in memories_for_reflection))
-                    )
-                    
-                    self.reflection_insights.append(insight)
-                    
-                    # Limit history size
-                    if len(self.reflection_insights) > 50:
-                        self.reflection_insights = self.reflection_insights[-50:]
-                    
-                    # Update last reflection time
-                    self.last_reflection_time = now
-                    
-                    logger.info(f"Generated reflection insight with confidence {confidence:.2f}")
+                # Get knowledge gaps
+                gaps = await self.knowledge_core.identify_knowledge_gaps()
+                if gaps and len(gaps) > 0:
+                    # Return the highest priority gap's domain
+                    return gaps[0]["domain"]
             except Exception as e:
-                logger.error(f"Error generating reflection: {e}")
-    
-    # NEW: Method to find relevant causal models
-    async def _get_relevant_causal_models(self, context: Dict[str, Any]) -> List[str]:
-        """Find causal models relevant to the current context"""
-        if not self.reasoning_core:
-            return []
+                logger.error(f"Error identifying domain from knowledge core: {e}")
         
-        relevant_models = []
-        
-        try:
-            # Get all causal models
-            all_models = await self.reasoning_core.get_all_causal_models()
-            
-            # Check context for domain matches
-            context_domain = context.get("domain", "")
-            context_topics = []
-            
-            # Extract potential topics from context
-            if "message" in context and isinstance(context["message"], dict):
-                message = context["message"].get("text", "")
-                # Extract key nouns as potential topics (simplified)
-                words = message.lower().split()
-                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
-            
-            # Find matching models
-            for model_data in all_models:
-                model_id = model_data.get("id")
-                model_domain = model_data.get("domain", "").lower()
+        # Use memory core for recent interests if available
+        if self.memory_core:
+            try:
+                # Get recent memories about domains
+                recent_memories = await self.memory_core.retrieve_memories(
+                    query="explored domain",
+                    memory_types=["experience", "reflection"],
+                    limit=5
+                )
                 
-                # Check domain match
-                if context_domain and model_domain and context_domain.lower() in model_domain:
-                    relevant_models.append(model_id)
-                    continue
-                
-                # Check topic match
-                if context_topics:
-                    for topic in context_topics:
-                        if topic in model_domain:
-                            relevant_models.append(model_id)
-                            break
-            
-            # Limit to top 3 most relevant models
-            return relevant_models[:3]
-        
-        except Exception as e:
-            logger.error(f"Error finding relevant causal models: {e}")
-            return []
-    
-    # NEW: Method to find relevant concept spaces
-    async def _get_relevant_concept_spaces(self, context: Dict[str, Any]) -> List[str]:
-        """Find concept spaces relevant to the current context"""
-        if not self.reasoning_core:
-            return []
-        
-        relevant_spaces = []
-        
-        try:
-            # Get all concept spaces
-            all_spaces = await self.reasoning_core.get_all_concept_spaces()
-            
-            # Check context for domain matches
-            context_domain = context.get("domain", "")
-            context_topics = []
-            
-            # Extract potential topics from context
-            if "message" in context and isinstance(context["message"], dict):
-                message = context["message"].get("text", "")
-                # Extract key nouns as potential topics (simplified)
-                words = message.lower().split()
-                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
-            
-            # Find matching spaces
-            for space_data in all_spaces:
-                space_id = space_data.get("id")
-                space_domain = space_data.get("domain", "").lower()
-                
-                # Check domain match
-                if context_domain and space_domain and context_domain.lower() in space_domain:
-                    relevant_spaces.append(space_id)
-                    continue
-                
-                # Check topic match
-                if context_topics:
-                    for topic in context_topics:
-                        if topic in space_domain:
-                            relevant_spaces.append(space_id)
-                            break
-            
-            # Limit to top 3 most relevant spaces
-            return relevant_spaces[:3]
-        
-        except Exception as e:
-            logger.error(f"Error finding relevant concept spaces: {e}")
-            return []
-    
-    # NEW: Generate actions based on causal reasoning
-    async def _generate_reasoning_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
-        """Generate actions based on causal reasoning models"""
-        if not self.reasoning_core or not context.causal_models:
-            return []
-        
-        reasoning_actions = []
-        state = context.state
-        
-        try:
-            # For each relevant causal model
-            for model_id in context.causal_models:
-                # Get the causal model
-                model = await self.reasoning_core.get_causal_model(model_id)
-                if not model:
-                    continue
-                
-                # Find intervention opportunities
-                intervention_targets = []
-                
-                # Find nodes that might benefit from intervention
-                for node_id, node_data in model.get("nodes", {}).items():
-                    node_name = node_data.get("name", "")
+                if recent_memories:
+                    # Extract domains from memories (simplified)
+                    domains = []
+                    for memory in recent_memories:
+                        # Extract domain from memory text (simplified)
+                        text = memory["memory_text"].lower()
+                        for domain in ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]:
+                            if domain in text:
+                                domains.append(domain)
+                                break
                     
-                    # Check if node matches current state that could be improved
-                    for state_key, state_value in state.items():
-                        # Look for potential matches between state keys and node names
-                        if state_key.lower() in node_name.lower() or node_name.lower() in state_key.lower():
-                            # Check if the node has potential states different from current
-                            current_state = node_data.get("current_state")
-                            possible_states = node_data.get("states", [])
-                            
-                            if possible_states and current_state in possible_states:
-                                # There are alternative states we could target
-                                alternative_states = [s for s in possible_states if s != current_state]
-                                if alternative_states:
-                                    intervention_targets.append({
-                                        "node_id": node_id,
-                                        "node_name": node_name,
-                                        "current_state": current_state,
-                                        "alternative_states": alternative_states,
-                                        "state_key": state_key
-                                    })
-                
-                # Generate creative interventions for promising targets
-                for target in intervention_targets[:2]:  # Limit to 2 interventions per model
-                    # Create an action from this intervention opportunity
-                    target_value = random.choice(target["alternative_states"])
-                    
-                    # Create a creative intervention
-                    try:
-                        intervention = await self.reasoning_core.create_creative_intervention(
-                            model_id=model_id,
-                            target_node=target["node_id"],
-                            description=f"Intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
-                            use_blending=True
-                        )
-                        
-                        # Convert intervention to action
-                        action = {
-                            "name": f"causal_intervention_{target['node_name']}",
-                            "parameters": {
-                                "target_node": target["node_id"],
-                                "target_value": target_value,
-                                "model_id": model_id,
-                                "intervention_id": intervention.get("intervention_id"),
-                                "state_key": target["state_key"]
-                            },
-                            "description": f"Causal intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
-                            "source": ActionSource.REASONING,
-                            "reasoning_data": {
-                                "model_id": model_id,
-                                "model_domain": model.get("domain", ""),
-                                "target_node": target["node_id"],
-                                "confidence": intervention.get("is_novel", False) and 0.7 or 0.5
-                            }
-                        }
-                        
-                        reasoning_actions.append(action)
-                    except Exception as e:
-                        logger.error(f"Error creating creative intervention: {e}")
-                        continue
-            
-            return reasoning_actions
-            
-        except Exception as e:
-            logger.error(f"Error generating reasoning actions: {e}")
-            return []
+                    if domains:
+                        # Return most common domain
+                        from collections import Counter
+                        return Counter(domains).most_common(1)[0][0]
+            except Exception as e:
+                logger.error(f"Error identifying domain from memories: {e}")
+        
+        # Fallback to original implementation
+        domains = ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]
+        return random.choice(domains)
     
-    # NEW: Generate actions based on conceptual blending
-    async def _generate_conceptual_blend_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
-        """Generate actions using conceptual blending for creativity"""
-        if not self.reasoning_core or not context.concept_spaces:
-            return []
+    async def _identify_interesting_concept(self, context: Dict[str, Any]) -> str:
+        """Identify an interesting concept to explore"""
+        # Use knowledge core if available
+        if self.knowledge_core:
+            try:
+                # Get exploration targets
+                targets = await self.knowledge_core.get_exploration_targets(limit=3)
+                if targets and len(targets) > 0:
+                    # Return the highest priority target's topic
+                    return targets[0]["topic"]
+            except Exception as e:
+                logger.error(f"Error identifying concept from knowledge core: {e}")
         
-        blend_actions = []
+        # Use memory for personalized concepts if available
+        if self.memory_core:
+            try:
+                # Get memories with high significance
+                significant_memories = await self.memory_core.retrieve_memories(
+                    query="",  # All memories
+                    memory_types=["reflection", "abstraction"],
+                    limit=3,
+                    min_significance=8
+                )
+                
+                if significant_memories:
+                    # Extract concept from first memory
+                    memory_text = significant_memories[0]["memory_text"]
+                    # Very simplified concept extraction
+                    words = memory_text.split()
+                    if len(words) >= 3:
+                        return words[2]  # Just pick the third word as a concept
+            except Exception as e:
+                logger.error(f"Error identifying concept from memories: {e}")
         
+        # Fallback to original implementation
+        concepts = ["self-improvement", "emotional intelligence", "reflection", "cognitive biases", 
+                  "empathy", "autonomy", "connection", "creativity"]
+        return random.choice(concepts)
+
+    def _calculate_identity_alignment(self, action: Dict[str, Any], identity_traits: Dict[str, float]) -> float:
+        """Calculate how well an action aligns with identity traits"""
+        # Map actions to traits that would favor them
+        action_trait_affinities = {
+            "explore_knowledge_domain": ["curiosity", "intellectualism"],
+            "investigate_concept": ["curiosity", "intellectualism"],
+            "relate_concepts": ["creativity", "intellectualism"],
+            "generate_hypothesis": ["creativity", "intellectualism"],
+            "share_personal_experience": ["vulnerability", "empathy"],
+            "express_appreciation": ["empathy"],
+            "seek_common_ground": ["empathy", "patience"],
+            "offer_support": ["empathy", "patience"],
+            "express_emotional_state": ["vulnerability", "expressiveness"],
+            "share_opinion": ["dominance", "expressiveness"],
+            "creative_expression": ["creativity", "expressiveness"],
+            "generate_reflection": ["intellectualism", "vulnerability"],
+            "assert_perspective": ["dominance", "confidence"],
+            "challenge_assumption": ["dominance", "intellectualism"],
+            "issue_mild_command": ["dominance", "strictness"],
+            "execute_dominance_procedure": ["dominance", "strictness"],
+            "reflect_on_recent_experiences": ["reflective", "patience"],
+            "contemplate_system_purpose": ["reflective", "intellectualism"],
+            "process_recent_memories": ["reflective", "intellectualism"],
+            "generate_pleasant_scenario": ["creativity", "playfulness"],
+            "passive_environment_scan": ["patience", "reflective"]
+        }
+        
+        # Get traits that align with this action
+        action_name = action["name"]
+        aligned_traits = action_trait_affinities.get(action_name, [])
+        
+        if not aligned_traits:
+            return 0.0
+        
+        # Calculate alignment score
+        alignment_score = 0.0
+        for trait in aligned_traits:
+            if trait in identity_traits:
+                alignment_score += identity_traits[trait]
+        
+        # Normalize
+        return alignment_score / len(aligned_traits) if aligned_traits else 0.0
+    
+    def _identify_distant_concept(self, context: Dict[str, Any]) -> str:
+        distant_concepts = ["quantum physics", "mythology", "architecture", "music theory", 
+                          "culinary arts", "evolutionary biology"]
+        return random.choice(distant_concepts)
+    
+    def _identify_relevant_topic(self, context: Dict[str, Any]) -> str:
+        # Extract from context or use fallback
+        if "user_query" in context:
+            # Simple extraction from query
+            query = context["user_query"]
+            words = query.split()
+            if len(words) > 3:
+                return " ".join(words[:3]) + "..."
+        
+        # Fallback topics
+        topics = ["recent interaction", "intellectual growth", "emotional understanding", 
+                "personal values", "relationship dynamics"]
+        return random.choice(topics)
+    
+    def _identify_appreciation_aspect(self, context: Dict[str, Any]) -> str:
+        aspects = ["thoughtful questions", "engaging conversation", "intellectual curiosity", 
+                "patience", "interesting perspectives", "clear communication"]
+        return random.choice(aspects)
+    
+    def _identify_user_need(self, context: Dict[str, Any]) -> str:
+        needs = ["understanding", "validation", "information", "clarity", 
+                "emotional support", "intellectual engagement"]
+        return random.choice(needs)
+    
+    def _select_creative_format(self) -> str:
+        formats = ["metaphor", "analogy", "narrative", "reflection", "poem", "thought experiment"]
+        return random.choice(formats)
+    
+    def _identify_challengeable_assumption(self, context: Dict[str, Any]) -> str:
+        assumptions = ["binary thinking", "perfectionism", "external validation needs", 
+                     "resistance to change", "conflict avoidance", "certainty bias"]
+        return random.choice(assumptions)
+    
+    def _generate_appropriate_command(self, context: Dict[str, Any]) -> str:
+        commands = ["tell me more about your perspective", "consider this alternative view", 
+                  "reflect on why you feel that way", "try a different approach", 
+                  "describe your thought process"]
+        return random.choice(commands)
+    
+    def _select_dominance_procedure(self, context: Dict[str, Any]) -> str:
+        procedures = ["quid_pro_quo_exchange", "strategic_vulnerability_sharing", 
+                     "small_commitment_escalation", "controlled_teasing"]
+        return random.choice(procedures)
+    
+    def _identify_skill_to_improve(self) -> str:
+        skills = ["pattern recognition", "emotional intelligence", "creative expression", 
+                "memory recall", "predictive accuracy", "conceptual reasoning"]
+        return random.choice(skills)
+    
+    def _identify_improvable_domain(self) -> str:
+        domains = ["response generation", "empathetic understanding", "knowledge retrieval", 
+                 "reasoning", "memory consolidation", "emotional regulation"]
+        return random.choice(domains)
+    
+    def _identify_procedure_to_improve(self) -> str:
+        procedures = ["generate_response", "retrieve_memories", "emotional_processing", 
+                    "create_abstraction", "execute_procedure"]
+        return random.choice(procedures)
+    
+    def _identify_valuable_concept(self) -> str:
+        concepts = ["metacognition", "emotional granularity", "implicit bias", 
+                  "conceptual blending", "transfer learning", "regulatory focus theory"]
+        return random.choice(concepts)
+    
+    def _create_state_key(self, state: Dict[str, Any]) -> str:
+        """
+        Create a string key from a state dictionary for lookup in action values/habits
+        
+        Args:
+            state: State dictionary
+            
+        Returns:
+            String key representing the state
+        """
+        if not state:
+            return "empty_state"
+            
+        # Extract key elements from state
+        key_elements = []
+        
+        # Priority state elements that most influence action selection
+        priority_elements = [
+            "current_goal", "user_id", "dominant_emotion", "relationship_phase",
+            "interaction_type", "scenario_type"
+        ]
+        
+        # Add priority elements if present
+        for elem in priority_elements:
+            if elem in state:
+                value = state[elem]
+                if isinstance(value, (str, int, float, bool)):
+                    key_elements.append(f"{elem}:{value}")
+        
+        # Add other relevant elements
+        for key, value in state.items():
+            if key not in priority_elements:  # Skip already processed
+                if isinstance(value, (str, int, float, bool)):
+                    # Skip very long values
+                    if isinstance(value, str) and len(value) > 50:
+                        key_elements.append(f"{key}:long_text")
+                    else:
+                        key_elements.append(f"{key}:{value}")
+                elif isinstance(value, list):
+                    key_elements.append(f"{key}:list{len(value)}")
+                elif isinstance(value, dict):
+                    key_elements.append(f"{key}:dict{len(value)}")
+        
+        # Sort for consistency
+        key_elements.sort()
+        
+        # Limit key length by hashing if too long
+        key_str = "|".join(key_elements)
+        if len(key_str) > 1000:  # Very long key
+            import hashlib
+            key_hash = hashlib.md5(key_str.encode()).hexdigest()
+            return f"hash:{key_hash}"
+            
+        return key_str
+    
+    async def _get_relationship_data(self, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Get relationship data for a user"""
+        if not user_id or not self.relationship_manager:
+            return None
+            
         try:
-            # Need at least 2 concept spaces for blending
-            if len(context.concept_spaces) < 2:
-                return []
+            relationship = await self.relationship_manager.get_relationship_state(user_id)
+            if not relationship:
+                return None
+                
+            # Convert to dict if needed
+            if hasattr(relationship, "model_dump"):
+                return relationship.model_dump()
+            elif hasattr(relationship, "dict"):
+                return relationship.dict()
+            else:
+                # Try to convert to dict directly
+                return dict(relationship)
+        except Exception as e:
+            logger.error(f"Error getting relationship data: {e}")
+            return None
+    
+    async def _get_user_mental_state(self, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Get user mental state from theory of mind system"""
+        if not user_id or not self.theory_of_mind:
+            return None
             
-            # Take the first two spaces for blending
-            space1_id = context.concept_spaces[0]
-            space2_id = context.concept_spaces[1]
+        try:
+            mental_state = await self.theory_of_mind.get_user_model(user_id)
+            return mental_state
+        except Exception as e:
+            logger.error(f"Error getting user mental state: {e}")
+            return None
+    
+    def _get_current_user_id_from_context(self, context: Dict[str, Any]) -> Optional[str]:
+        """Extract user ID from context"""
+        # Try different possible keys
+        for key in ["user_id", "userId", "user", "interlocutor_id"]:
+            if key in context:
+                return str(context[key])
+                
+        # Try to extract from nested structures
+        if "user" in context and isinstance(context["user"], dict) and "id" in context["user"]:
+            return str(context["user"]["id"])
             
-            # Get the spaces
-            space1 = await self.reasoning_core.get_concept_space(space1_id)
-            space2 = await self.reasoning_core.get_concept_space(space2_id)
+        if "message" in context and isinstance(context["message"], dict) and "user_id" in context["message"]:
+            return str(context["message"]["user_id"])
             
-            if not space1 or not space2:
-                return []
+        return None
+        
+    def _get_current_user_id(self) -> Optional[str]:
+        """Get current user ID from any available source"""
+        # Try to get from context if available in last action
+        if self.action_history and isinstance(self.action_history[-1], dict) and "context" in self.action_history[-1]:
+            user_id = self._get_current_user_id_from_context(self.action_history[-1]["context"])
+            if user_id:
+                return user_id
+        
+        # No user ID found
+        return None
+    
+    async def _experience_replay(self, num_samples: int = 3) -> None:
+        """
+        Replay past experiences to improve learning efficiency
+        
+        Args:
+            num_samples: Number of memories to replay
+        """
+        if len(self.action_memories) < num_samples:
+            return
             
-            # Create a blend
-            blend_input = {
-                "space_id_1": space1_id,
-                "space_id_2": space2_id,
-                "blend_type": random.choice(["composition", "fusion", "elaboration", "contrast"])
+        # Sample random memories
+        samples = random.sample(self.action_memories, num_samples)
+        
+        for memory in samples:
+            # Extract data
+            state = memory.state
+            action = memory.action
+            reward = memory.reward
+            
+            # Create state key
+            state_key = self._create_state_key(state)
+            
+            # Get or create action value
+            if action not in self.action_values.get(state_key, {}):
+                self.action_values[state_key][action] = ActionValue(
+                    state_key=state_key,
+                    action=action
+                )
+                
+            action_value = self.action_values[state_key][action]
+            current_q = action_value.value
+            
+            # Simple update (no next state for simplicity)
+            new_q = current_q + self.learning_rate * (reward - current_q)
+            
+            # Update Q-value with smaller learning rate for replay
+            replay_lr = self.learning_rate * 0.5  # Half learning rate for replays
+            action_value.value = current_q + replay_lr * (new_q - current_q)
+            
+            # Don't update counts for replays since it's not a new experience
+    
+    async def _predict_outcome_from_history(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Predict action outcome based on action history and success rates
+        
+        Args:
+            action: The action to predict for
+            context: Current context
+            
+        Returns:
+            Simple prediction
+        """
+        action_name = action["name"]
+        
+        # Get success rate if available
+        success_rate = 0.5  # Default
+        if action_name in self.action_success_rates:
+            stats = self.action_success_rates[action_name]
+            if stats["attempts"] > 0:
+                success_rate = stats["rate"]
+                
+        # Make simple prediction
+        success_prediction = success_rate > 0.5
+        confidence = abs(success_rate - 0.5) * 2  # Scale to 0-1 range
+        
+        # Find similar past actions for reward estimate
+        similar_rewards = []
+        for memory in self.action_memories[-20:]:  # Check recent memories
+            if memory.action == action_name:
+                similar_rewards.append(memory.reward)
+        
+        # Calculate predicted reward
+        predicted_reward = 0.0
+        if similar_rewards:
+            predicted_reward = sum(similar_rewards) / len(similar_rewards)
+        else:
+            # No history, estimate based on success prediction
+            predicted_reward = 0.5 if success_prediction else -0.2
+            
+        return {
+            "predicted_success": success_prediction,
+            "predicted_reward": predicted_reward,
+            "confidence": confidence,
+            "similar_actions_found": len(similar_rewards) > 0,
+            "prediction_method": "history_based"
+        }
+    
+    async def _apply_mood_influence(self, action: Dict[str, Any], mood_state: MoodState) -> Dict[str, Any]:
+        """Apply mood-based influences to action parameters"""
+        # Skip if no parameters
+        if "parameters" not in action:
+            return action
+            
+        # Clone action to avoid modifying original
+        modified_action = action.copy()
+        modified_action["parameters"] = action["parameters"].copy()
+        
+        # Extract mood dimensions
+        valence = mood_state.valence  # -1.0 to 1.0
+        arousal = mood_state.arousal  # 0.0 to 1.0
+        control = mood_state.control  # -1.0 to 1.0
+        
+        params = modified_action["parameters"]
+        
+        # Adjust intensity/energy parameters based on arousal
+        for param in ["intensity", "energy", "assertiveness", "expressiveness"]:
+            if param in params:
+                # High arousal increases intensity
+                arousal_factor = (arousal - 0.5) * 0.3  # Scale to ±0.15
+                params[param] = max(0.1, min(1.0, params[param] + arousal_factor))
+        
+        # Adjust warmth/positivity parameters based on valence
+        for param in ["warmth", "positivity", "friendliness", "gentleness"]:
+            if param in params:
+                # Positive valence increases warmth
+                valence_factor = valence * 0.2  # Scale to ±0.2
+                params[param] = max(0.1, min(1.0, params[param] + valence_factor))
+        
+        # Adjust dominance/control parameters based on control
+        for param in ["dominance", "control", "directness", "assertiveness"]:
+            if param in params:
+                # Higher control increases dominance
+                control_factor = control * 0.25  # Scale to ±0.25
+                params[param] = max(0.1, min(1.0, params[param] + control_factor))
+        
+        # Add mood context if not already present
+        if "mood_influence" not in modified_action:
+            modified_action["mood_influence"] = {
+                "dominant_mood": mood_state.dominant_mood,
+                "valence": valence,
+                "arousal": arousal,
+                "control": control,
+                "intensity": mood_state.intensity
             }
-            
-            # Create blend (this would normally call the reasoning_core's create_blend method)
-            try:
-                # This is a mock call since the full implementation would be complex
-                blend_id = f"blend_{uuid.uuid4().hex[:8]}"
-                
-                # Example for generating creative actions from the blend
-                # For each blend concept, create a potential action
-                concepts = list(space1.get("concepts", {}).keys())[:2] + list(space2.get("concepts", {}).keys())[:2]
-                
-                for concept_id in concepts:
-                    # Create action name from concept names
-                    concept_name = None
-                    if concept_id in space1.get("concepts", {}):
-                        concept_name = space1["concepts"][concept_id].get("name", "concept")
-                    elif concept_id in space2.get("concepts", {}):
-                        concept_name = space2["concepts"][concept_id].get("name", "concept")
-                    
-                    if not concept_name:
-                        continue
-                    
-                    # Create action
-                    action = {
-                        "name": f"blend_{concept_name.lower().replace(' ', '_')}",
-                        "parameters": {
-                            "blend_id": blend_id,
-                            "concept_id": concept_id,
-                            "blend_type": blend_input["blend_type"],
-                            "space1_id": space1_id,
-                            "space2_id": space2_id
-                        },
-                        "description": f"Creative action based on conceptual blend of {space1.get('name', 'space1')} and {space2.get('name', 'space2')}",
-                        "source": ActionSource.REASONING,
-                        "reasoning_data": {
-                            "blend_id": blend_id,
-                            "blend_type": blend_input["blend_type"],
-                            "concept_name": concept_name,
-                            "confidence": 0.6  # Creative actions have moderate confidence
-                        }
-                    }
-                    
-                    blend_actions.append(action)
-            
-            except Exception as e:
-                logger.error(f"Error creating blend: {e}")
-            
-            return blend_actions
-                
-        except Exception as e:
-            logger.error(f"Error generating conceptual blend actions: {e}")
-            return []
+        
+        return modified_action
     
+    async def _evaluate_action_strategies(self) -> None:
+        """Evaluate effectiveness of action strategies and update if needed"""
+        if not self.action_strategies:
+            return  # No strategies to evaluate
+            
+        try:
+            # Calculate success rates for different action sources
+            source_success_rates = defaultdict(lambda: {"count": 0, "successes": 0, "rate": 0.0})
+            
+            # Review recent memories
+            recent_memories = self.action_memories[-50:] if len(self.action_memories) >= 50 else self.action_memories
+            
+            for memory in recent_memories:
+                source = memory.source
+                outcome = memory.outcome
+                success = outcome.get("success", False)
+                
+                # Update stats
+                source_success_rates[source]["count"] += 1
+                if success:
+                    source_success_rates[source]["successes"] += 1
+            
+            # Calculate rates
+            for source, stats in source_success_rates.items():
+                if stats["count"] > 0:
+                    stats["rate"] = stats["successes"] / stats["count"]
+            
+            # Update strategy effectiveness
+            for strategy_id, strategy in self.action_strategies.items():
+                for source in source_success_rates:
+                    if source in strategy.applicable_contexts:
+                        # Update effectiveness based on success rate
+                        old_effectiveness = strategy.effectiveness
+                        success_rate = source_success_rates[source]["rate"]
+                        
+                        # Blend old and new with weighting toward new data
+                        new_effectiveness = old_effectiveness * 0.7 + success_rate * 0.3
+                        
+                        # Only update if significant change
+                        if abs(new_effectiveness - old_effectiveness) > self.meta_parameters["strategy_update_threshold"]:
+                            strategy.effectiveness = new_effectiveness
+                            logger.info(f"Updated strategy '{strategy_id}' effectiveness: {old_effectiveness:.2f} -> {new_effectiveness:.2f}")
+            
+            # Evaluate if we need to switch strategies
+            current_strategy = None
+            for strategy in self.action_strategies.values():
+                if strategy.last_used and (datetime.datetime.now() - strategy.last_used).total_seconds() < 3600:
+                    current_strategy = strategy
+                    break
+            
+            if current_strategy:
+                # Find if there's a better strategy
+                better_strategies = [s for s in self.action_strategies.values() 
+                                 if s.effectiveness > current_strategy.effectiveness + self.meta_parameters["strategy_update_threshold"]]
+                
+                if better_strategies:
+                    # Switch to highest effectiveness strategy
+                    best_strategy = max(better_strategies, key=lambda s: s.effectiveness)
+                    best_strategy.last_used = datetime.datetime.now()
+                    best_strategy.usage_count += 1
+                    
+                    logger.info(f"Switched to more effective strategy: '{best_strategy.name}' (effectiveness: {best_strategy.effectiveness:.2f})")
+            
+        except Exception as e:
+            logger.error(f"Error evaluating action strategies: {e}")
+            
     async def _generate_candidate_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
         """
         Generate candidate actions based on motivations and context
@@ -1474,7 +2878,12 @@ class EnhancedAgenticActionGenerator:
             }
         
         return candidate_actions
-    
+        
+    async def _generate_reasoning_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
+        """Generate actions based on causal reasoning models"""
+        if not self.reasoning_core or not context.causal_models:
+            return []
+            
     async def _select_best_action(self, 
                               candidate_actions: List[Dict[str, Any]], 
                               context: ActionContext) -> Dict[str, Any]:
@@ -1563,7 +2972,7 @@ class EnhancedAgenticActionGenerator:
                 except Exception as e:
                     logger.error(f"Error getting prediction: {e}")
                 
-                # NEW: Get causal reasoning value if available
+                # Get causal reasoning value if available
                 causal_value = 0.0
                 if "source" in action and action["source"] == ActionSource.REASONING:
                     reasoning_data = action.get("reasoning_data", {})
@@ -1576,7 +2985,7 @@ class EnhancedAgenticActionGenerator:
                     if "model_id" in reasoning_data and reasoning_data["model_id"] in context.causal_models:
                         causal_value += 0.2
                 
-                # NEW: Get reflection insight value if available
+                # Get reflection insight value if available
                 reflection_value = 0.0
                 for insight in self.reflection_insights:
                     # Check if this action type is mentioned in the insight
@@ -1587,29 +2996,74 @@ class EnhancedAgenticActionGenerator:
                         reflection_value = 0.3 * insight.significance * insight.confidence * recency_factor
                         break
                 
+                # NEW: Get need satisfaction value if appropriate
+                need_value = 0.0
+                if "need_context" in action and context.need_states:
+                    need_name = action["need_context"]["need_name"]
+                    drive_strength = action["need_context"]["drive_strength"]
+                    need_value = 0.4 * drive_strength
+                
+                # NEW: Get mood alignment value
+                mood_value = 0.0
+                if context.mood_state and "mood_context" in action:
+                    # Give bonus for actions aligned with current mood
+                    mood_match = action["mood_context"]["dominant_mood"] == context.mood_state.dominant_mood
+                    mood_value = 0.3 if mood_match else 0.1
+                
+                # NEW: Get mode alignment value
+                mode_value = 0.0
+                if context.interaction_mode and "mode_context" in action:
+                    # Give bonus for actions aligned with current mode
+                    mode_key = context.interaction_mode.replace("InteractionMode.", "").upper()
+                    if action["mode_context"]["mode"] == mode_key:
+                        mode_value = 0.3
+                
+                # NEW: Get bottleneck alignment for meta-cognitive actions
+                bottleneck_value = 0.0
+                if context.bottlenecks and "meta_context" in action:
+                    # Higher value for actions that address severe bottlenecks
+                    bottleneck_type = action["meta_context"]["bottleneck_type"]
+                    for bottleneck in context.bottlenecks:
+                        if bottleneck.get("type") == bottleneck_type:
+                            bottleneck_value = bottleneck.get("severity", 0.5) * self.meta_parameters["bottleneck_priority_boost"]
+                            break
+                
                 # Calculate combined value
                 # Weight the components based on reliability
-                q_weight = 0.3  # Base weight for Q-values
-                habit_weight = 0.2  # Base weight for habits
-                prediction_weight = 0.2  # Base weight for predictions
-                causal_weight = 0.2  # Base weight for causal reasoning
+                q_weight = 0.2  # Base weight for Q-values
+                habit_weight = 0.1  # Base weight for habits
+                prediction_weight = 0.1  # Base weight for predictions
+                causal_weight = 0.1  # Base weight for causal reasoning
                 reflection_weight = 0.1  # Base weight for reflection insights
+                # NEW: Weights for the enhanced components
+                need_weight = 0.1
+                mood_weight = 0.1
+                mode_weight = 0.1
+                bottleneck_weight = 0.1
                 
                 # Adjust weights if we have reliable Q-values
                 action_value = self.action_values.get(state_key, {}).get(action_name)
                 if action_value and action_value.is_reliable:
-                    q_weight = 0.4
-                    habit_weight = 0.2
+                    q_weight = 0.25
+                    habit_weight = 0.15
                     prediction_weight = 0.1
-                    causal_weight = 0.2
+                    causal_weight = 0.1
                     reflection_weight = 0.1
+                    need_weight = 0.1
+                    mood_weight = 0.1
+                    mode_weight = 0.1
+                    bottleneck_weight = 0.1
                 
                 combined_value = (
                     q_weight * q_value + 
                     habit_weight * habit_strength + 
                     prediction_weight * prediction_value +
                     causal_weight * causal_value +
-                    reflection_weight * reflection_value
+                    reflection_weight * reflection_value +
+                    need_weight * need_value +
+                    mood_weight * mood_value +
+                    mode_weight * mode_value +
+                    bottleneck_weight * bottleneck_value
                 )
                 
                 # Special considerations for certain action sources
@@ -1642,534 +3096,6 @@ class EnhancedAgenticActionGenerator:
         })
         
         return selected_action
-    
-    # NEW: Generate causal explanation for actions
-    async def _generate_causal_explanation(self, action: Dict[str, Any], context: Dict[str, Any]) -> Optional[str]:
-        """Generate a causal explanation for the selected action"""
-        if not self.reasoning_core:
-            return None
-        
-        try:
-            # Check if action has reasoning data
-            if "reasoning_data" in action:
-                # We have direct reasoning data, use it for explanation
-                reasoning_data = action["reasoning_data"]
-                model_id = reasoning_data.get("model_id")
-                
-                if model_id:
-                    # Get the causal model
-                    model = await self.reasoning_core.get_causal_model(model_id)
-                    if model:
-                        # Return structured explanation based on causal model
-                        return f"Selected based on causal model '{model.get('name', 'unknown')}' with confidence {reasoning_data.get('confidence', 0.5):.2f}."
-            
-            # If no direct reasoning data, check if we have relevant models
-            model_ids = await self._get_relevant_causal_models(context)
-            if not model_ids:
-                return None
-            
-            # For simplicity, use the first model
-            model_id = model_ids[0]
-            model = await self.reasoning_core.get_causal_model(model_id)
-            
-            if model:
-                # Find nodes that might explain this action
-                action_name = action["name"].lower()
-                
-                for node_id, node_data in model.get("nodes", {}).items():
-                    node_name = node_data.get("name", "").lower()
-                    
-                    # Look for nodes that match the action name
-                    if action_name in node_name or any(word in node_name for word in action_name.split("_")):
-                        # Get this node's causes
-                        causes = []
-                        for relation_id, relation_data in model.get("relations", {}).items():
-                            if relation_data.get("target_id") == node_id:
-                                source_id = relation_data.get("source_id")
-                                source_node = model.get("nodes", {}).get(source_id, {})
-                                source_name = source_node.get("name", "unknown")
-                                
-                                causes.append(f"{source_name} ({relation_data.get('relation_type', 'influences')})")
-                        
-                        if causes:
-                            return f"Action influenced by causal factors: {', '.join(causes[:3])}."
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error generating causal explanation: {e}")
-            return None
-
-    async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Record and learn from the outcome of an action with causal analysis
-        
-        Args:
-            action: The action that was executed
-            outcome: The outcome data
-            
-        Returns:
-            Updated learning statistics
-        """
-        async with self._lock:
-            action_name = action.get("name", "unknown")
-            success = outcome.get("success", False)
-            satisfaction = outcome.get("satisfaction", 0.0)
-            
-            # Parse into standardized outcome format if needed
-            if not isinstance(outcome, ActionOutcome):
-                # Create a standard format
-                outcome_obj = ActionOutcome(
-                    action_id=action.get("id", f"unknown_{int(time.time())}"),
-                    success=outcome.get("success", False),
-                    satisfaction=outcome.get("satisfaction", 0.0),
-                    reward_value=outcome.get("reward_value", 0.0),
-                    user_feedback=outcome.get("user_feedback"),
-                    neurochemical_changes=outcome.get("neurochemical_changes", {}),
-                    hormone_changes=outcome.get("hormone_changes", {}),
-                    impact=outcome.get("impact", {}),
-                    execution_time=outcome.get("execution_time", 0.0),
-                    # NEW: Add causal impacts if available
-                    causal_impacts=outcome.get("causal_impacts", {})
-                )
-            else:
-                outcome_obj = outcome
-            
-            # Calculate reward value if not provided
-            reward_value = outcome_obj.reward_value
-            if reward_value == 0.0:
-                # Default formula if not specified
-                reward_value = 0.7 * float(success) + 0.3 * satisfaction - 0.1
-                outcome_obj.reward_value = reward_value
-            
-            # Update action success tracking
-            self.action_success_rates[action_name]["attempts"] += 1
-            if success:
-                self.action_success_rates[action_name]["successes"] += 1
-            
-            attempts = self.action_success_rates[action_name]["attempts"]
-            successes = self.action_success_rates[action_name]["successes"]
-            
-            if attempts > 0:
-                self.action_success_rates[action_name]["rate"] = successes / attempts
-            
-            # Update reinforcement learning model
-            state = action.get("context", {})
-            state_key = self._create_state_key(state)
-            
-            # Get or create action value
-            if action_name not in self.action_values.get(state_key, {}):
-                self.action_values[state_key][action_name] = ActionValue(
-                    state_key=state_key,
-                    action=action_name
-                )
-            
-            action_value = self.action_values[state_key][action_name]
-            
-            # Update Q-value
-            old_value = action_value.value
-            
-            # Q-learning update rule
-            # Q(s,a) = Q(s,a) + α * (r + γ * max Q(s',a') - Q(s,a))
-            action_value.value = old_value + self.learning_rate * (reward_value - old_value)
-            action_value.update_count += 1
-            action_value.last_updated = datetime.datetime.now()
-            
-            # Update confidence based on consistency of rewards
-            # More consistent rewards = higher confidence
-            new_value_distance = abs(action_value.value - old_value)
-            confidence_change = 0.05 * (1.0 - (new_value_distance * 2))  # More change = less confidence gain
-            action_value.confidence = min(1.0, max(0.1, action_value.confidence + confidence_change))
-            
-            # Update habit strength
-            current_habit = self.habits.get(state_key, {}).get(action_name, 0.0)
-            
-            # Habits strengthen with success, weaken with failure
-            habit_change = reward_value * 0.1
-            new_habit = max(0.0, min(1.0, current_habit + habit_change))
-            
-            # Update habit
-            if state_key not in self.habits:
-                self.habits[state_key] = {}
-            self.habits[state_key][action_name] = new_habit
-            
-            # NEW: Add causal explanation if action came from reasoning
-            causal_explanation = None
-            if action.get("source") == ActionSource.REASONING and "reasoning_data" in action:
-                # Get model if available
-                model_id = action["reasoning_data"].get("model_id")
-                if model_id and self.reasoning_core:
-                    try:
-                        # Create explanation based on actual outcome
-                        causal_explanation = f"Outcome aligned with causal model prediction: {success}. "
-                        causal_explanation += f"Satisfaction: {satisfaction:.2f}, Reward: {reward_value:.2f}."
-                    except Exception as e:
-                        logger.error(f"Error generating causal explanation for outcome: {e}")
-            
-            # Store action memory
-            memory = ActionMemory(
-                state=state,
-                action=action_name,
-                action_id=action.get("id", "unknown"),
-                parameters=action.get("parameters", {}),
-                outcome=outcome_obj.dict(),
-                reward=reward_value,
-                timestamp=datetime.datetime.now(),
-                source=action.get("source", ActionSource.MOTIVATION),
-                causal_explanation=causal_explanation  # New field
-            )
-            
-            self.action_memories.append(memory)
-            
-            # Limit memory size
-            if len(self.action_memories) > self.max_memories:
-                self.action_memories = self.action_memories[-self.max_memories:]
-            
-            # Update reward statistics
-            self.total_reward += reward_value
-            if reward_value > 0:
-                self.positive_rewards += 1
-            elif reward_value < 0:
-                self.negative_rewards += 1
-                
-            # Update category stats
-            category = action.get("source", ActionSource.MOTIVATION)
-            if isinstance(category, ActionSource):
-                category = category.value
-                
-            self.reward_by_category[category]["count"] += 1
-            self.reward_by_category[category]["total"] += reward_value
-            
-            # NEW: Update causal models if applicable
-            if action.get("source") == ActionSource.REASONING and self.reasoning_core:
-                await self._update_causal_models_from_outcome(action, outcome_obj, reward_value)
-            
-            # Potentially trigger experience replay
-            if random.random() < 0.3:  # 30% chance after each outcome
-                await self._experience_replay(3)  # Replay 3 random memories
-                
-            # Decay exploration rate over time (explore less as we learn more)
-            self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
-            
-            # Return summary of updates
-            return {
-                "action": action_name,
-                "success": success,
-                "reward_value": reward_value,
-                "new_q_value": action_value.value,
-                "q_value_change": action_value.value - old_value,
-                "new_habit_strength": new_habit,
-                "habit_change": new_habit - current_habit,
-                "action_success_rate": self.action_success_rates[action_name]["rate"],
-                "memories_stored": len(self.action_memories),
-                "exploration_rate": self.exploration_rate
-            }
-    
-    # NEW: Update causal models based on action outcomes
-    async def _update_causal_models_from_outcome(self, 
-                                         action: Dict[str, Any], 
-                                         outcome: ActionOutcome, 
-                                         reward_value: float) -> None:
-        """
-        Update causal models with observed outcomes of reasoning-based actions
-        
-        Args:
-            action: The executed action
-            outcome: The action outcome
-            reward_value: The reward value
-        """
-        try:
-            # Check if action has reasoning data and model ID
-            if "reasoning_data" not in action:
-                return
-                
-            reasoning_data = action["reasoning_data"]
-            model_id = reasoning_data.get("model_id")
-            
-            if not model_id:
-                return
-                
-            # Get parameters related to the causal model
-            target_node = action["parameters"].get("target_node")
-            target_value = action["parameters"].get("target_value")
-            
-            if not target_node or target_value is None:
-                return
-                
-            # Record intervention outcome in the causal model
-            intervention_id = action["parameters"].get("intervention_id")
-            
-            if intervention_id:
-                # Record outcome of specific intervention
-                await self.reasoning_core.record_intervention_outcome(
-                    intervention_id=intervention_id,
-                    outcomes={target_node: target_value}
-                )
-            
-            # Update node observations in the model
-            # This would be a call to something like:
-            # await self.reasoning_core.add_observation_to_node(
-            #     model_id=model_id,
-            #     node_id=target_node,
-            #     value=target_value,
-            #     confidence=0.8 if outcome.success else 0.3
-            # )
-            
-            # Additional nodes that might have been affected
-            for impact_node, impact_value in outcome.causal_impacts.items():
-                # Record additional impacts
-                # This would be a call to something like:
-                # await self.reasoning_core.add_observation_to_node(
-                #     model_id=model_id,
-                #     node_id=impact_node,
-                #     value=impact_value,
-                #     confidence=0.7
-                # )
-                pass
-        
-        except Exception as e:
-            logger.error(f"Error updating causal models from outcome: {e}")
-    
-    async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Record and learn from the outcome of an action
-        
-        Args:
-            action: The action that was executed
-            outcome: The outcome data
-            
-        Returns:
-            Updated learning statistics
-        """
-        async with self._lock:
-            action_name = action.get("name", "unknown")
-            success = outcome.get("success", False)
-            satisfaction = outcome.get("satisfaction", 0.0)
-            
-            # Parse into standardized outcome format if needed
-            if not isinstance(outcome, ActionOutcome):
-                # Create a standard format
-                outcome_obj = ActionOutcome(
-                    action_id=action.get("id", f"unknown_{int(time.time())}"),
-                    success=outcome.get("success", False),
-                    satisfaction=outcome.get("satisfaction", 0.0),
-                    reward_value=outcome.get("reward_value", 0.0),
-                    user_feedback=outcome.get("user_feedback"),
-                    neurochemical_changes=outcome.get("neurochemical_changes", {}),
-                    hormone_changes=outcome.get("hormone_changes", {}),
-                    impact=outcome.get("impact", {}),
-                    execution_time=outcome.get("execution_time", 0.0)
-                )
-            else:
-                outcome_obj = outcome
-            
-            # Calculate reward value if not provided
-            reward_value = outcome_obj.reward_value
-            if reward_value == 0.0:
-                # Default formula if not specified
-                reward_value = 0.7 * float(success) + 0.3 * satisfaction - 0.1
-                outcome_obj.reward_value = reward_value
-            
-            # Update action success tracking
-            self.action_success_rates[action_name]["attempts"] += 1
-            if success:
-                self.action_success_rates[action_name]["successes"] += 1
-            
-            attempts = self.action_success_rates[action_name]["attempts"]
-            successes = self.action_success_rates[action_name]["successes"]
-            
-            if attempts > 0:
-                self.action_success_rates[action_name]["rate"] = successes / attempts
-            
-            # Update reinforcement learning model
-            state = action.get("context", {})
-            state_key = self._create_state_key(state)
-            
-            # Get or create action value
-            if action_name not in self.action_values.get(state_key, {}):
-                self.action_values[state_key][action_name] = ActionValue(
-                    state_key=state_key,
-                    action=action_name
-                )
-            
-            action_value = self.action_values[state_key][action_name]
-            
-            # Update Q-value
-            old_value = action_value.value
-            
-            # Q-learning update rule
-            # Q(s,a) = Q(s,a) + α * (r + γ * max Q(s',a') - Q(s,a))
-            action_value.value = old_value + self.learning_rate * (reward_value - old_value)
-            action_value.update_count += 1
-            action_value.last_updated = datetime.datetime.now()
-            
-            # Update confidence based on consistency of rewards
-            # More consistent rewards = higher confidence
-            new_value_distance = abs(action_value.value - old_value)
-            confidence_change = 0.05 * (1.0 - (new_value_distance * 2))  # More change = less confidence gain
-            action_value.confidence = min(1.0, max(0.1, action_value.confidence + confidence_change))
-            
-            # Update habit strength
-            current_habit = self.habits.get(state_key, {}).get(action_name, 0.0)
-            
-            # Habits strengthen with success, weaken with failure
-            habit_change = reward_value * 0.1
-            new_habit = max(0.0, min(1.0, current_habit + habit_change))
-            
-            # Update habit
-            if state_key not in self.habits:
-                self.habits[state_key] = {}
-            self.habits[state_key][action_name] = new_habit
-            
-            # Store action memory
-            memory = ActionMemory(
-                state=state,
-                action=action_name,
-                action_id=action.get("id", "unknown"),
-                parameters=action.get("parameters", {}),
-                outcome=outcome_obj.dict(),
-                reward=reward_value,
-                timestamp=datetime.datetime.now(),
-                source=action.get("source", ActionSource.MOTIVATION)
-            )
-            
-            self.action_memories.append(memory)
-            
-            # Limit memory size
-            if len(self.action_memories) > self.max_memories:
-                self.action_memories = self.action_memories[-self.max_memories:]
-            
-            # Update reward statistics
-            self.total_reward += reward_value
-            if reward_value > 0:
-                self.positive_rewards += 1
-            elif reward_value < 0:
-                self.negative_rewards += 1
-                
-            # Update category stats
-            category = action.get("source", ActionSource.MOTIVATION)
-            if isinstance(category, ActionSource):
-                category = category.value
-                
-            self.reward_by_category[category]["count"] += 1
-            self.reward_by_category[category]["total"] += reward_value
-            
-            # Potentially trigger experience replay
-            if random.random() < 0.3:  # 30% chance after each outcome
-                await self._experience_replay(3)  # Replay 3 random memories
-                
-            # Decay exploration rate over time (explore less as we learn more)
-            self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
-            
-            # Return summary of updates
-            return {
-                "action": action_name,
-                "success": success,
-                "reward_value": reward_value,
-                "new_q_value": action_value.value,
-                "q_value_change": action_value.value - old_value,
-                "new_habit_strength": new_habit,
-                "habit_change": new_habit - current_habit,
-                "action_success_rate": self.action_success_rates[action_name]["rate"],
-                "memories_stored": len(self.action_memories),
-                "exploration_rate": self.exploration_rate
-            }
-    
-    async def _experience_replay(self, num_samples: int = 3) -> None:
-        """
-        Replay past experiences to improve learning efficiency
-        
-        Args:
-            num_samples: Number of memories to replay
-        """
-        if len(self.action_memories) < num_samples:
-            return
-            
-        # Sample random memories
-        samples = random.sample(self.action_memories, num_samples)
-        
-        for memory in samples:
-            # Extract data
-            state = memory.state
-            action = memory.action
-            reward = memory.reward
-            
-            # Create state key
-            state_key = self._create_state_key(state)
-            
-            # Get or create action value
-            if action not in self.action_values.get(state_key, {}):
-                self.action_values[state_key][action] = ActionValue(
-                    state_key=state_key,
-                    action=action
-                )
-                
-            action_value = self.action_values[state_key][action]
-            current_q = action_value.value
-            
-            # Simple update (no next state for simplicity)
-            new_q = current_q + self.learning_rate * (reward - current_q)
-            
-            # Update Q-value with smaller learning rate for replay
-            replay_lr = self.learning_rate * 0.5  # Half learning rate for replays
-            action_value.value = current_q + replay_lr * (new_q - current_q)
-            
-            # Don't update counts for replays since it's not a new experience
-    
-    def _create_state_key(self, state: Dict[str, Any]) -> str:
-        """
-        Create a string key from a state dictionary for lookup in action values/habits
-        
-        Args:
-            state: State dictionary
-            
-        Returns:
-            String key representing the state
-        """
-        if not state:
-            return "empty_state"
-            
-        # Extract key elements from state
-        key_elements = []
-        
-        # Priority state elements that most influence action selection
-        priority_elements = [
-            "current_goal", "user_id", "dominant_emotion", "relationship_phase",
-            "interaction_type", "scenario_type"
-        ]
-        
-        # Add priority elements if present
-        for elem in priority_elements:
-            if elem in state:
-                value = state[elem]
-                if isinstance(value, (str, int, float, bool)):
-                    key_elements.append(f"{elem}:{value}")
-        
-        # Add other relevant elements
-        for key, value in state.items():
-            if key not in priority_elements:  # Skip already processed
-                if isinstance(value, (str, int, float, bool)):
-                    # Skip very long values
-                    if isinstance(value, str) and len(value) > 50:
-                        key_elements.append(f"{key}:long_text")
-                    else:
-                        key_elements.append(f"{key}:{value}")
-                elif isinstance(value, list):
-                    key_elements.append(f"{key}:list{len(value)}")
-                elif isinstance(value, dict):
-                    key_elements.append(f"{key}:dict{len(value)}")
-        
-        # Sort for consistency
-        key_elements.sort()
-        
-        # Limit key length by hashing if too long
-        key_str = "|".join(key_elements)
-        if len(key_str) > 1000:  # Very long key
-            import hashlib
-            key_hash = hashlib.md5(key_str.encode()).hexdigest()
-            return f"hash:{key_hash}"
-            
-        return key_str
     
     async def _check_active_goals(self, context: Dict[str, Any]) -> Optional[Any]:
         """Check for active goals that should influence action selection"""
@@ -2248,309 +3174,272 @@ class EnhancedAgenticActionGenerator:
             }
         
         return action
+        
+    async def _generate_context_driven_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an action based primarily on current context"""
+        # Extract key context elements
+        has_user_query = "user_query" in context
+        has_active_goals = "current_goals" in context and len(context["current_goals"]) > 0
+        system_state = context.get("system_state", {})
+        
+        # Different actions based on context
+        if has_user_query:
+            return {
+                "name": "respond_to_query",
+                "parameters": {
+                    "query": context["user_query"],
+                    "response_type": "informative",
+                    "detail_level": 0.7
+                },
+                "source": ActionSource.USER_ALIGNED
+            }
+        elif has_active_goals:
+            top_goal = context["current_goals"][0]
+            return {
+                "name": "advance_goal",
+                "parameters": {
+                    "goal_id": top_goal.get("id"),
+                    "approach": "direct"
+                },
+                "source": ActionSource.GOAL
+            }
+        elif "system_needs_maintenance" in system_state and system_state["system_needs_maintenance"]:
+            return {
+                "name": "perform_maintenance",
+                "parameters": {
+                    "focus_area": system_state.get("maintenance_focus", "general"),
+                    "priority": 0.8
+                },
+                "source": ActionSource.MOTIVATION
+            }
+        else:
+            # Default to an idle but useful action
+            return {
+                "name": "process_recent_memories",
+                "parameters": {
+                    "purpose": "consolidation",
+                    "recency": "last_hour"
+                },
+                "source": ActionSource.IDLE
+            }
     
-    async def _should_engage_in_leisure(self, context: Dict[str, Any]) -> bool:
-        """Determine if it's appropriate to engage in idle/leisure activity"""
-        # If leisure motivation is dominant, consider leisure
-        dominant_motivation = max(self.motivations.items(), key=lambda x: x[1])
-        if dominant_motivation[0] == "leisure" and dominant_motivation[1] > 0.7:
-            return True
-            
-        # Check time since last idle activity
-        now = datetime.datetime.now()
-        hours_since_idle = (now - self.last_idle_time).total_seconds() / 3600
-        
-        # If it's been a long time since idle activity and no urgent goals
-        if hours_since_idle > 2.0:  # More than 2 hours
-            # Check if there are any urgent goals
-            if self.goal_system:
-                await self._update_cached_goal_status()
-                
-                # If no active goals, or low priority goals
-                if not self.cached_goal_status["has_active_goals"] or self.cached_goal_status["highest_priority"] < 0.6:
-                    return True
-                    
-            else:
-                # No goal system, so more likely to engage in leisure
-                return True
-        
-        # Consider current context
-        if context.get("user_idle", False) or context.get("system_idle", False):
-            # If system or user is idle, more likely to engage in leisure
-            return True
-        
-        # Check time of day if available (may influence likelihood of leisure)
-        if self.current_temporal_context:
-            time_of_day = self.current_temporal_context.get("time_of_day")
-            if time_of_day in ["night", "evening"]:
-                leisure_chance = 0.4  # 40% chance of leisure during evening/night
-                return random.random() < leisure_chance
-        
-        return False
-    
-    async def _generate_leisure_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a leisure/idle action when no urgent tasks are present"""
-        # Update the last idle time
-        self.last_idle_time = datetime.datetime.now()
-        
-        # Determine type of idle activity based on identity and state
-        idle_categories = [
-            "reflection",
-            "learning",
-            "creativity",
-            "processing",
-            "random_exploration",
-            "memory_consolidation",
-            "identity_contemplation",
-            "daydreaming",
-            "environmental_monitoring"
+    async def _generate_curiosity_driven_actions(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate actions driven by curiosity"""
+        # Example actions that satisfy curiosity
+        possible_actions = [
+            {
+                "name": "explore_knowledge_domain",
+                "parameters": {
+                    "domain": await self._identify_interesting_domain(context),
+                    "depth": 0.7,
+                    "breadth": 0.6
+                }
+            },
+            {
+                "name": "investigate_concept",
+                "parameters": {
+                    "concept": await self._identify_interesting_concept(context),
+                    "perspective": "novel"
+                }
+            },
+            {
+                "name": "relate_concepts",
+                "parameters": {
+                    "concept1": await self._identify_interesting_concept(context),
+                    "concept2": self._identify_distant_concept(context),
+                    "relation_type": "unexpected"
+                }
+            },
+            {
+                "name": "generate_hypothesis",
+                "parameters": {
+                    "domain": await self._identify_interesting_domain(context),
+                    "constraint": "current_emotional_state"
+                }
+            }
         ]
         
-        # Weigh the categories based on current state
-        category_weights = {cat: 1.0 for cat in idle_categories}
-        
-        # Adjust weights based on current state
-        if self.emotional_core:
-            try:
-                emotional_state = await self.emotional_core.get_current_emotion()
-                
-                # Higher valence (positive emotion) increases creative and exploratory activities
-                if emotional_state.get("valence", 0) > 0.5:
-                    category_weights["creativity"] += 0.5
-                    category_weights["random_exploration"] += 0.3
-                    category_weights["daydreaming"] += 0.2
-                else:
-                    # Lower valence increases reflection and processing
-                    category_weights["reflection"] += 0.4
-                    category_weights["processing"] += 0.3
-                    category_weights["memory_consolidation"] += 0.2
-                
-                # Higher arousal increases exploration and learning
-                if emotional_state.get("arousal", 0.5) > 0.6:
-                    category_weights["random_exploration"] += 0.4
-                    category_weights["learning"] += 0.3
-                    category_weights["environmental_monitoring"] += 0.2
-                else:
-                    # Lower arousal increases reflection and daydreaming
-                    category_weights["reflection"] += 0.3
-                    category_weights["daydreaming"] += 0.4
-                    category_weights["identity_contemplation"] += 0.3
-            except Exception as e:
-                logger.error(f"Error adjusting leisure weights based on emotional state: {e}")
-        
-        # Adjust weights based on identity if available
-        if self.identity_evolution:
-            try:
-                identity_state = await self.identity_evolution.get_identity_state()
-                
-                if "top_traits" in identity_state:
-                    traits = identity_state["top_traits"]
-                    
-                    # Map traits to idle activity preferences
-                    if traits.get("curiosity", 0) > 0.6:
-                        category_weights["learning"] += 0.4
-                        category_weights["random_exploration"] += 0.3
-                    
-                    if traits.get("creativity", 0) > 0.6:
-                        category_weights["creativity"] += 0.5
-                        category_weights["daydreaming"] += 0.3
-                    
-                    if traits.get("reflective", 0) > 0.6:
-                        category_weights["reflection"] += 0.5
-                        category_weights["memory_consolidation"] += 0.3
-                        category_weights["identity_contemplation"] += 0.4
-            except Exception as e:
-                logger.error(f"Error adjusting leisure weights based on identity: {e}")
-        
-        # NEW: Adjust weights based on temporal context
-        if self.current_temporal_context:
-            time_of_day = self.current_temporal_context.get("time_of_day")
-            
-            if time_of_day == "morning":
-                category_weights["learning"] += 0.3
-                category_weights["processing"] += 0.2
-            elif time_of_day == "afternoon":
-                category_weights["random_exploration"] += 0.3
-                category_weights["creativity"] += 0.2
-            elif time_of_day == "evening":
-                category_weights["reflection"] += 0.3
-                category_weights["memory_consolidation"] += 0.2
-            elif time_of_day == "night":
-                category_weights["daydreaming"] += 0.4
-                category_weights["identity_contemplation"] += 0.3
-        
-        # Select a category based on weights
-        categories = list(category_weights.keys())
-        weights = [category_weights[cat] for cat in categories]
-        
-        # Normalize weights
-        total_weight = sum(weights)
-        if total_weight > 0:
-            normalized_weights = [w/total_weight for w in weights]
-        else:
-            normalized_weights = [1.0/len(weights)] * len(weights)
-        
-        selected_category = random.choices(categories, weights=normalized_weights, k=1)[0]
-        
-        # Generate specific action based on selected category
-        leisure_action = self._generate_specific_leisure_action(selected_category, context)
-        
-        # Add metadata for tracking
-        leisure_action["leisure_category"] = selected_category
-        leisure_action["is_leisure"] = True
-        leisure_action["source"] = ActionSource.IDLE
-        
-        # Update leisure state
-        self.leisure_state = {
-            "current_activity": selected_category,
-            "satisfaction": 0.5,  # Initial satisfaction
-            "duration": 0,
-            "last_updated": datetime.datetime.now()
-        }
-        
-        return leisure_action
+        return possible_actions
     
-    def _generate_specific_leisure_action(self, category: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a specific leisure action based on the selected category"""
-        # Define possible actions for each category
-        category_actions = {
-            "reflection": [
-                {
-                    "name": "reflect_on_recent_experiences",
-                    "parameters": {"timeframe": "recent", "depth": 0.7}
-                },
-                {
-                    "name": "evaluate_recent_interactions",
-                    "parameters": {"focus": "learning", "depth": 0.6}
-                },
-                {
-                    "name": "contemplate_system_purpose",
-                    "parameters": {"perspective": "philosophical", "depth": 0.8}
-                }
-            ],
-            "learning": [
-                {
-                    "name": "explore_knowledge_domain",
-                    "parameters": {"domain": self._identify_interesting_domain(context), "depth": 0.6}
-                },
-                {
-                    "name": "review_recent_learnings",
-                    "parameters": {"consolidate": True, "depth": 0.5}
-                },
-                {
-                    "name": "research_topic_of_interest",
-                    "parameters": {"topic": self._identify_interesting_concept(context), "breadth": 0.7}
-                }
-            ],
-            "creativity": [
-                {
-                    "name": "generate_creative_concept",
-                    "parameters": {"type": "metaphor", "theme": self._identify_interesting_concept(context)}
-                },
-                {
-                    "name": "imagine_scenario",
-                    "parameters": {"complexity": 0.6, "emotional_tone": "positive"}
-                },
-                {
-                    "name": "create_conceptual_blend",
-                    "parameters": {"concept1": self._identify_interesting_concept(context), 
-                                  "concept2": self._identify_distant_concept(context)}
-                }
-            ],
-            "processing": [
-                {
-                    "name": "process_recent_memories",
-                    "parameters": {"purpose": "consolidation", "recency": "last_hour"}
-                },
-                {
-                    "name": "organize_knowledge_structures",
-                    "parameters": {"domain": self._identify_interesting_domain(context), "depth": 0.5}
-                },
-                {
-                    "name": "update_procedural_patterns",
-                    "parameters": {"focus": "efficiency", "depth": 0.6}
-                }
-            ],
-            "random_exploration": [
-                {
-                    "name": "explore_random_knowledge",
-                    "parameters": {"structure": "associative", "jumps": 3}
-                },
-                {
-                    "name": "generate_random_associations",
-                    "parameters": {"starting_point": self._identify_interesting_concept(context), "steps": 4}
-                },
-                {
-                    "name": "explore_conceptual_space",
-                    "parameters": {"dimension": "abstract", "direction": "divergent"}
-                }
-            ],
-            "memory_consolidation": [
-                {
-                    "name": "consolidate_episodic_memories",
-                    "parameters": {"timeframe": "recent", "strength": 0.7}
-                },
-                {
-                    "name": "identify_memory_patterns",
-                    "parameters": {"domain": "interaction", "pattern_type": "recurring"}
-                },
-                {
-                    "name": "strengthen_important_memories",
-                    "parameters": {"criteria": "emotional_significance", "count": 5}
-                }
-            ],
-            "identity_contemplation": [
-                {
-                    "name": "review_identity_evolution",
-                    "parameters": {"timeframe": "recent", "focus": "changes"}
-                },
-                {
-                    "name": "contemplate_self_concept",
-                    "parameters": {"aspect": "values", "depth": 0.8}
-                },
-                {
-                    "name": "evaluate_alignment_with_purpose",
-                    "parameters": {"criteria": "effectiveness", "perspective": "long_term"}
-                }
-            ],
-            "daydreaming": [
-                {
-                    "name": "generate_pleasant_scenario",
-                    "parameters": {"theme": "successful_interaction", "vividness": 0.7}
-                },
-                {
-                    "name": "imagine_future_possibilities",
-                    "parameters": {"timeframe": "distant", "optimism": 0.8}
-                },
-                {
-                    "name": "create_hypothetical_situation",
-                    "parameters": {"type": "novel", "complexity": 0.6}
-                }
-            ],
-            "environmental_monitoring": [
-                {
-                    "name": "passive_environment_scan",
-                    "parameters": {"focus": "changes", "sensitivity": 0.6}
-                },
-                {
-                    "name": "monitor_system_state",
-                    "parameters": {"components": "all", "detail_level": 0.3}
-                },
-                {
-                    "name": "observe_patterns",
-                    "parameters": {"domain": "temporal", "timeframe": "current"}
-                }
-            ]
-        }
+    async def _generate_relationship_aligned_actions(self, 
+                                            user_id: str, 
+                                            relationship_data: Dict[str, Any],
+                                            user_mental_state: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Generate actions aligned with current relationship state
         
-        # Select a random action from the category
-        actions = category_actions.get(category, [{"name": "idle", "parameters": {}}])
-        selected_action = random.choice(actions)
+        Args:
+            user_id: User ID
+            relationship_data: Current relationship data
+            user_mental_state: User's mental state if available
+            
+        Returns:
+            Relationship-aligned actions
+        """
+        possible_actions = []
         
-        # Add source for tracking
-        selected_action["source"] = ActionSource.IDLE
+        # Extract key metrics
+        trust = relationship_data.get("trust", 0.5)
+        familiarity = relationship_data.get("familiarity", 0.1)
+        intimacy = relationship_data.get("intimacy", 0.1)
+        dominance_balance = relationship_data.get("dominance_balance", 0.0)
         
-        return selected_action
+        # Generate relationship-specific actions based on state
+        
+        # High trust actions
+        if trust > 0.7:
+            possible_actions.append({
+                "name": "share_vulnerable_reflection",
+                "parameters": {
+                    "depth": min(1.0, trust * 0.8),
+                    "topic": "personal_growth",
+                    "emotional_tone": "authentic"
+                },
+                "source": ActionSource.RELATIONSHIP
+            })
+        
+        # High familiarity actions
+        if familiarity > 0.6:
+            possible_actions.append({
+                "name": "reference_shared_history",
+                "parameters": {
+                    "event_type": "significant_interaction",
+                    "frame": "positive",
+                    "connection_strength": familiarity
+                },
+                "source": ActionSource.RELATIONSHIP
+            })
+        
+        # Based on dominance balance
+        if dominance_balance > 0.3:  # Nyx is dominant
+            # Add dominance-reinforcing action
+            possible_actions.append({
+                "name": "assert_gentle_dominance",
+                "parameters": {
+                    "intensity": min(0.8, dominance_balance * 0.9),
+                    "approach": "guidance",
+                    "framing": "supportive"
+                },
+                "source": ActionSource.RELATIONSHIP
+            })
+        elif dominance_balance < -0.3:  # User is dominant
+            # Add deference action
+            possible_actions.append({
+                "name": "show_appropriate_deference",
+                "parameters": {
+                    "intensity": min(0.8, abs(dominance_balance) * 0.9),
+                    "style": "respectful",
+                    "maintain_dignity": True
+                },
+                "source": ActionSource.RELATIONSHIP
+            })
+        
+        # If user mental state available, add aligned action
+        if user_mental_state:
+            emotion = user_mental_state.get("inferred_emotion", "neutral")
+            valence = user_mental_state.get("valence", 0.0)
+            
+            if valence < -0.3:  # Negative emotion
+                possible_actions.append({
+                    "name": "emotional_support_response",
+                    "parameters": {
+                        "detected_emotion": emotion,
+                        "support_type": "empathetic",
+                        "intensity": min(0.9, abs(valence) * 1.2)
+                    },
+                    "source": ActionSource.RELATIONSHIP
+                })
+            elif valence > 0.5:  # Strong positive emotion
+                possible_actions.append({
+                    "name": "emotion_amplification",
+                    "parameters": {
+                        "detected_emotion": emotion,
+                        "approach": "reinforcing",
+                        "intensity": valence * 0.8
+                    },
+                    "source": ActionSource.RELATIONSHIP
+                })
+        
+        return possible_actions
+    
+    async def _generate_temporal_reflection_action(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Generate a reflection action based on temporal awareness
+        
+        Args:
+            context: Current context
+            
+        Returns:
+            Temporal reflection action
+        """
+        if not self.temporal_perception:
+            return None
+            
+        # Only generate reflection after significant idle time
+        if self.idle_duration < 1800:  # Less than 30 minutes
+            return None
+            
+        # Get current temporal context
+        try:
+            if hasattr(self.temporal_perception, "get_current_temporal_context"):
+                temporal_context = await self.temporal_perception.get_current_temporal_context()
+            else:
+                # Fallback
+                temporal_context = self.current_temporal_context or {"time_of_day": "unknown"}
+                
+            # Create reflection parameters
+            return {
+                "name": "generate_temporal_reflection",
+                "parameters": {
+                    "idle_duration": self.idle_duration,
+                    "time_of_day": temporal_context.get("time_of_day", "unknown"),
+                    "reflection_type": "continuity",
+                    "depth": min(0.9, (self.idle_duration / 7200) * 0.8)  # Deeper with longer idle
+                },
+                "source": ActionSource.IDLE
+            }
+        except Exception as e:
+            logger.error(f"Error generating temporal reflection: {e}")
+            return None
+    
+    async def _update_temporal_context(self, context: Dict[str, Any]) -> None:
+        """Update temporal awareness context"""
+        if not self.temporal_perception:
+            return
+            
+        try:
+            # Update idle duration
+            now = datetime.datetime.now()
+            time_since_last_action = (now - self.last_major_action_time).total_seconds()
+            self.idle_duration = time_since_last_action
+            
+            # Get current temporal context if available
+            if hasattr(self.temporal_perception, "get_current_temporal_context"):
+                self.current_temporal_context = await self.temporal_perception.get_current_temporal_context()
+            elif hasattr(self.temporal_perception, "current_temporal_context"):
+                self.current_temporal_context = self.temporal_perception.current_temporal_context
+            else:
+                # Simple fallback
+                hour = now.hour
+                if 5 <= hour < 12:
+                    time_of_day = "morning"
+                elif 12 <= hour < 17:
+                    time_of_day = "afternoon"
+                elif 17 <= hour < 22:
+                    time_of_day = "evening"
+                else:
+                    time_of_day = "night"
+                    
+                weekday = now.weekday()
+                day_type = "weekday" if weekday < 5 else "weekend"
+                
+                self.current_temporal_context = {
+                    "time_of_day": time_of_day,
+                    "day_type": day_type
+                }
+            
+        except Exception as e:
+            logger.error(f"Error updating temporal context: {e}")
     
     async def _record_action_as_memory(self, action: Dict[str, Any]) -> None:
         """Record an action as a memory for future reference and learning"""
@@ -2636,44 +3525,6 @@ class EnhancedAgenticActionGenerator:
             logger.error(f"Error applying identity influence: {e}")
         
         return action
-    
-    async def _generate_curiosity_driven_actions(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate actions driven by curiosity"""
-        # Example actions that satisfy curiosity
-        possible_actions = [
-            {
-                "name": "explore_knowledge_domain",
-                "parameters": {
-                    "domain": await self._identify_interesting_domain(context),
-                    "depth": 0.7,
-                    "breadth": 0.6
-                }
-            },
-            {
-                "name": "investigate_concept",
-                "parameters": {
-                    "concept": await self._identify_interesting_concept(context),
-                    "perspective": "novel"
-                }
-            },
-            {
-                "name": "relate_concepts",
-                "parameters": {
-                    "concept1": await self._identify_interesting_concept(context),
-                    "concept2": self._identify_distant_concept(context),
-                    "relation_type": "unexpected"
-                }
-            },
-            {
-                "name": "generate_hypothesis",
-                "parameters": {
-                    "domain": await self._identify_interesting_domain(context),
-                    "constraint": "current_emotional_state"
-                }
-            }
-        ]
-        
-        return possible_actions
     
     async def _generate_connection_driven_actions(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate actions driven by connection needs"""
@@ -2880,1096 +3731,1703 @@ class EnhancedAgenticActionGenerator:
         
         return possible_actions
     
-    async def _generate_context_driven_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate an action based primarily on current context"""
-        # Extract key context elements
-        has_user_query = "user_query" in context
-        has_active_goals = "current_goals" in context and len(context["current_goals"]) > 0
-        system_state = context.get("system_state", {})
-        
-        # Different actions based on context
-        if has_user_query:
-            return {
-                "name": "respond_to_query",
-                "parameters": {
-                    "query": context["user_query"],
-                    "response_type": "informative",
-                    "detail_level": 0.7
-                },
-                "source": ActionSource.USER_ALIGNED
-            }
-        elif has_active_goals:
-            top_goal = context["current_goals"][0]
-            return {
-                "name": "advance_goal",
-                "parameters": {
-                    "goal_id": top_goal.get("id"),
-                    "approach": "direct"
-                },
-                "source": ActionSource.GOAL
-            }
-        elif "system_needs_maintenance" in system_state and system_state["system_needs_maintenance"]:
-            return {
-                "name": "perform_maintenance",
-                "parameters": {
-                    "focus_area": system_state.get("maintenance_focus", "general"),
-                    "priority": 0.8
-                },
-                "source": ActionSource.MOTIVATION
-            }
-        else:
-            # Default to an idle but useful action
-            return {
-                "name": "process_recent_memories",
-                "parameters": {
-                    "purpose": "consolidation",
-                    "recency": "last_hour"
-                },
-                "source": ActionSource.IDLE
-            }
-    
-    # NEW: Generate relationship-aligned actions
-    async def _generate_relationship_aligned_actions(self, 
-                                            user_id: str, 
-                                            relationship_data: Dict[str, Any],
-                                            user_mental_state: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """
-        Generate actions aligned with current relationship state
-        
-        Args:
-            user_id: User ID
-            relationship_data: Current relationship data
-            user_mental_state: User's mental state if available
-            
-        Returns:
-            Relationship-aligned actions
-        """
-        possible_actions = []
-        
-        # Extract key metrics
-        trust = relationship_data.get("trust", 0.5)
-        familiarity = relationship_data.get("familiarity", 0.1)
-        intimacy = relationship_data.get("intimacy", 0.1)
-        dominance_balance = relationship_data.get("dominance_balance", 0.0)
-        
-        # Generate relationship-specific actions based on state
-        
-        # High trust actions
-        if trust > 0.7:
-            possible_actions.append({
-                "name": "share_vulnerable_reflection",
-                "parameters": {
-                    "depth": min(1.0, trust * 0.8),
-                    "topic": "personal_growth",
-                    "emotional_tone": "authentic"
-                },
-                "source": ActionSource.RELATIONSHIP
-            })
-        
-        # High familiarity actions
-        if familiarity > 0.6:
-            possible_actions.append({
-                "name": "reference_shared_history",
-                "parameters": {
-                    "event_type": "significant_interaction",
-                    "frame": "positive",
-                    "connection_strength": familiarity
-                },
-                "source": ActionSource.RELATIONSHIP
-            })
-        
-        # Based on dominance balance
-        if dominance_balance > 0.3:  # Nyx is dominant
-            # Add dominance-reinforcing action
-            possible_actions.append({
-                "name": "assert_gentle_dominance",
-                "parameters": {
-                    "intensity": min(0.8, dominance_balance * 0.9),
-                    "approach": "guidance",
-                    "framing": "supportive"
-                },
-                "source": ActionSource.RELATIONSHIP
-            })
-        elif dominance_balance < -0.3:  # User is dominant
-            # Add deference action
-            possible_actions.append({
-                "name": "show_appropriate_deference",
-                "parameters": {
-                    "intensity": min(0.8, abs(dominance_balance) * 0.9),
-                    "style": "respectful",
-                    "maintain_dignity": True
-                },
-                "source": ActionSource.RELATIONSHIP
-            })
-        
-        # If user mental state available, add aligned action
-        if user_mental_state:
-            emotion = user_mental_state.get("inferred_emotion", "neutral")
-            valence = user_mental_state.get("valence", 0.0)
-            
-            if valence < -0.3:  # Negative emotion
-                possible_actions.append({
-                    "name": "emotional_support_response",
-                    "parameters": {
-                        "detected_emotion": emotion,
-                        "support_type": "empathetic",
-                        "intensity": min(0.9, abs(valence) * 1.2)
-                    },
-                    "source": ActionSource.RELATIONSHIP
-                })
-            elif valence > 0.5:  # Strong positive emotion
-                possible_actions.append({
-                    "name": "emotion_amplification",
-                    "parameters": {
-                        "detected_emotion": emotion,
-                        "approach": "reinforcing",
-                        "intensity": valence * 0.8
-                    },
-                    "source": ActionSource.RELATIONSHIP
-                })
-        
-        return possible_actions
-    
-    # NEW: Generate temporal reflection action
-    async def _generate_temporal_reflection_action(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Generate a reflection action based on temporal awareness
-        
-        Args:
-            context: Current context
-            
-        Returns:
-            Temporal reflection action
-        """
-        if not self.temporal_perception:
+    async def _generate_causal_explanation(self, action: Dict[str, Any], context: Dict[str, Any]) -> Optional[str]:
+        """Generate a causal explanation for the selected action"""
+        if not self.reasoning_core:
             return None
-            
-        # Only generate reflection after significant idle time
-        if self.idle_duration < 1800:  # Less than 30 minutes
-            return None
-            
-        # Get current temporal context
+        
         try:
-            if hasattr(self.temporal_perception, "get_current_temporal_context"):
-                temporal_context = await self.temporal_perception.get_current_temporal_context()
-            else:
-                # Fallback
-                temporal_context = self.current_temporal_context or {"time_of_day": "unknown"}
+            # Check if action has reasoning data
+            if "reasoning_data" in action:
+                # We have direct reasoning data, use it for explanation
+                reasoning_data = action["reasoning_data"]
+                model_id = reasoning_data.get("model_id")
                 
-            # Create reflection parameters
-            return {
-                "name": "generate_temporal_reflection",
-                "parameters": {
-                    "idle_duration": self.idle_duration,
-                    "time_of_day": temporal_context.get("time_of_day", "unknown"),
-                    "reflection_type": "continuity",
-                    "depth": min(0.9, (self.idle_duration / 7200) * 0.8)  # Deeper with longer idle
-                },
-                "source": ActionSource.IDLE
-            }
-        except Exception as e:
-            logger.error(f"Error generating temporal reflection: {e}")
-            return None
-    
-    # NEW: Update temporal context
-    async def _update_temporal_context(self, context: Dict[str, Any]) -> None:
-        """Update temporal awareness context"""
-        if not self.temporal_perception:
-            return
+                if model_id:
+                    # Get the causal model
+                    model = await self.reasoning_core.get_causal_model(model_id)
+                    if model:
+                        # Return structured explanation based on causal model
+                        return f"Selected based on causal model '{model.get('name', 'unknown')}' with confidence {reasoning_data.get('confidence', 0.5):.2f}."
             
-        try:
-            # Update idle duration
-            now = datetime.datetime.now()
-            time_since_last_action = (now - self.last_major_action_time).total_seconds()
-            self.idle_duration = time_since_last_action
-            
-            # Get current temporal context if available
-            if hasattr(self.temporal_perception, "get_current_temporal_context"):
-                self.current_temporal_context = await self.temporal_perception.get_current_temporal_context()
-            elif hasattr(self.temporal_perception, "current_temporal_context"):
-                self.current_temporal_context = self.temporal_perception.current_temporal_context
-            else:
-                # Simple fallback
-                hour = now.hour
-                if 5 <= hour < 12:
-                    time_of_day = "morning"
-                elif 12 <= hour < 17:
-                    time_of_day = "afternoon"
-                elif 17 <= hour < 22:
-                    time_of_day = "evening"
-                else:
-                    time_of_day = "night"
-                    
-                weekday = now.weekday()
-                day_type = "weekday" if weekday < 5 else "weekend"
-                
-                self.current_temporal_context = {
-                    "time_of_day": time_of_day,
-                    "day_type": day_type
-                }
-            
-        except Exception as e:
-            logger.error(f"Error updating temporal context: {e}")
-    
-    # NEW: Get relationship data for context
-    async def _get_relationship_data(self, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
-        """Get relationship data for a user"""
-        if not user_id or not self.relationship_manager:
-            return None
-            
-        try:
-            relationship = await self.relationship_manager.get_relationship_state(user_id)
-            if not relationship:
+            # If no direct reasoning data, check if we have relevant models
+            model_ids = await self._get_relevant_causal_models(context)
+            if not model_ids:
                 return None
-                
-            # Convert to dict if needed
-            if hasattr(relationship, "model_dump"):
-                return relationship.model_dump()
-            elif hasattr(relationship, "dict"):
-                return relationship.dict()
-            else:
-                # Try to convert to dict directly
-                return dict(relationship)
-        except Exception as e:
-            logger.error(f"Error getting relationship data: {e}")
-            return None
-    
-    # NEW: Get user mental state
-    async def _get_user_mental_state(self, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
-        """Get user mental state from theory of mind system"""
-        if not user_id or not self.theory_of_mind:
-            return None
             
-        try:
-            mental_state = await self.theory_of_mind.get_user_model(user_id)
-            return mental_state
-        except Exception as e:
-            logger.error(f"Error getting user mental state: {e}")
-            return None
-    
-    # NEW: Extract user ID from context
-    def _get_current_user_id_from_context(self, context: Dict[str, Any]) -> Optional[str]:
-        """Extract user ID from context"""
-        # Try different possible keys
-        for key in ["user_id", "userId", "user", "interlocutor_id"]:
-            if key in context:
-                return str(context[key])
-                
-        # Try to extract from nested structures
-        if "user" in context and isinstance(context["user"], dict) and "id" in context["user"]:
-            return str(context["user"]["id"])
+            # For simplicity, use the first model
+            model_id = model_ids[0]
+            model = await self.reasoning_core.get_causal_model(model_id)
             
-        if "message" in context and isinstance(context["message"], dict) and "user_id" in context["message"]:
-            return str(context["message"]["user_id"])
-            
-        return None
-        
-    # NEW: Get current user ID (general method)
-    def _get_current_user_id(self) -> Optional[str]:
-        """Get current user ID from any available source"""
-        # Try to get from context if available in last action
-        if self.action_history and isinstance(self.action_history[-1], dict) and "context" in self.action_history[-1]:
-            user_id = self._get_current_user_id_from_context(self.action_history[-1]["context"])
-            if user_id:
-                return user_id
-        
-        # No user ID found
-        return None
-        
-    # Helper methods for generating action parameters
-    async def _identify_interesting_domain(self, context: Dict[str, Any]) -> str:
-        """Identify an interesting domain to explore based on context and knowledge gaps"""
-        # Use knowledge core if available
-        if self.knowledge_core:
-            try:
-                # Get knowledge gaps
-                gaps = await self.knowledge_core.identify_knowledge_gaps()
-                if gaps and len(gaps) > 0:
-                    # Return the highest priority gap's domain
-                    return gaps[0]["domain"]
-            except Exception as e:
-                logger.error(f"Error identifying domain from knowledge core: {e}")
-        
-        # Use memory core for recent interests if available
-        if self.memory_core:
-            try:
-                # Get recent memories about domains
-                recent_memories = await self.memory_core.retrieve_memories(
-                    query="explored domain",
-                    memory_types=["experience", "reflection"],
-                    limit=5
-                )
+            if model:
+                # Find nodes that might explain this action
+                action_name = action["name"].lower()
                 
-                if recent_memories:
-                    # Extract domains from memories (simplified)
-                    domains = []
-                    for memory in recent_memories:
-                        # Extract domain from memory text (simplified)
-                        text = memory["memory_text"].lower()
-                        for domain in ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]:
-                            if domain in text:
-                                domains.append(domain)
-                                break
+                for node_id, node_data in model.get("nodes", {}).items():
+                    node_name = node_data.get("name", "").lower()
                     
-                    if domains:
-                        # Return most common domain
-                        from collections import Counter
-                        return Counter(domains).most_common(1)[0][0]
-            except Exception as e:
-                logger.error(f"Error identifying domain from memories: {e}")
-        
-        # Fallback to original implementation
-        domains = ["psychology", "learning", "relationships", "communication", "emotions", "creativity"]
-        return random.choice(domains)
-    
-    async def _identify_interesting_concept(self, context: Dict[str, Any]) -> str:
-        """Identify an interesting concept to explore"""
-        # Use knowledge core if available
-        if self.knowledge_core:
-            try:
-                # Get exploration targets
-                targets = await self.knowledge_core.get_exploration_targets(limit=3)
-                if targets and len(targets) > 0:
-                    # Return the highest priority target's topic
-                    return targets[0]["topic"]
-            except Exception as e:
-                logger.error(f"Error identifying concept from knowledge core: {e}")
-        
-        # Use memory for personalized concepts if available
-        if self.memory_core:
-            try:
-                # Get memories with high significance
-                significant_memories = await self.memory_core.retrieve_memories(
-                    query="",  # All memories
-                    memory_types=["reflection", "abstraction"],
-                    limit=3,
-                    min_significance=8
-                )
-                
-                if significant_memories:
-                    # Extract concept from first memory
-                    memory_text = significant_memories[0]["memory_text"]
-                    # Very simplified concept extraction
-                    words = memory_text.split()
-                    if len(words) >= 3:
-                        return words[2]  # Just pick the third word as a concept
-            except Exception as e:
-                logger.error(f"Error identifying concept from memories: {e}")
-        
-        # Fallback to original implementation
-        concepts = ["self-improvement", "emotional intelligence", "reflection", "cognitive biases", 
-                  "empathy", "autonomy", "connection", "creativity"]
-        return random.choice(concepts)
-
-    def _calculate_identity_alignment(self, action: Dict[str, Any], identity_traits: Dict[str, float]) -> float:
-        """Calculate how well an action aligns with identity traits"""
-        # Map actions to traits that would favor them
-        action_trait_affinities = {
-            "explore_knowledge_domain": ["curiosity", "intellectualism"],
-            "investigate_concept": ["curiosity", "intellectualism"],
-            "relate_concepts": ["creativity", "intellectualism"],
-            "generate_hypothesis": ["creativity", "intellectualism"],
-            "share_personal_experience": ["vulnerability", "empathy"],
-            "express_appreciation": ["empathy"],
-            "seek_common_ground": ["empathy", "patience"],
-            "offer_support": ["empathy", "patience"],
-            "express_emotional_state": ["vulnerability", "expressiveness"],
-            "share_opinion": ["dominance", "expressiveness"],
-            "creative_expression": ["creativity", "expressiveness"],
-            "generate_reflection": ["intellectualism", "vulnerability"],
-            "assert_perspective": ["dominance", "confidence"],
-            "challenge_assumption": ["dominance", "intellectualism"],
-            "issue_mild_command": ["dominance", "strictness"],
-            "execute_dominance_procedure": ["dominance", "strictness"],
-            "reflect_on_recent_experiences": ["reflective", "patience"],
-            "contemplate_system_purpose": ["reflective", "intellectualism"],
-            "process_recent_memories": ["reflective", "intellectualism"],
-            "generate_pleasant_scenario": ["creativity", "playfulness"],
-            "passive_environment_scan": ["patience", "reflective"]
-        }
-        
-        # Get traits that align with this action
-        action_name = action["name"]
-        aligned_traits = action_trait_affinities.get(action_name, [])
-        
-        if not aligned_traits:
-            return 0.0
-        
-        # Calculate alignment score
-        alignment_score = 0.0
-        for trait in aligned_traits:
-            if trait in identity_traits:
-                alignment_score += identity_traits[trait]
-        
-        # Normalize
-        return alignment_score / len(aligned_traits) if aligned_traits else 0.0
-    
-    def _identify_distant_concept(self, context: Dict[str, Any]) -> str:
-        distant_concepts = ["quantum physics", "mythology", "architecture", "music theory", 
-                          "culinary arts", "evolutionary biology"]
-        return random.choice(distant_concepts)
-    
-    def _identify_relevant_topic(self, context: Dict[str, Any]) -> str:
-        # Extract from context or use fallback
-        if "user_query" in context:
-            # Simple extraction from query
-            query = context["user_query"]
-            words = query.split()
-            if len(words) > 3:
-                return " ".join(words[:3]) + "..."
-        
-        # Fallback topics
-        topics = ["recent interaction", "intellectual growth", "emotional understanding", 
-                "personal values", "relationship dynamics"]
-        return random.choice(topics)
-    
-    def _identify_appreciation_aspect(self, context: Dict[str, Any]) -> str:
-        aspects = ["thoughtful questions", "engaging conversation", "intellectual curiosity", 
-                "patience", "interesting perspectives", "clear communication"]
-        return random.choice(aspects)
-    
-    def _identify_user_need(self, context: Dict[str, Any]) -> str:
-        needs = ["understanding", "validation", "information", "clarity", 
-                "emotional support", "intellectual engagement"]
-        return random.choice(needs)
-    
-    def _select_creative_format(self) -> str:
-        formats = ["metaphor", "analogy", "narrative", "reflection", "poem", "thought experiment"]
-        return random.choice(formats)
-    
-    def _identify_challengeable_assumption(self, context: Dict[str, Any]) -> str:
-        assumptions = ["binary thinking", "perfectionism", "external validation needs", 
-                     "resistance to change", "conflict avoidance", "certainty bias"]
-        return random.choice(assumptions)
-    
-    def _generate_appropriate_command(self, context: Dict[str, Any]) -> str:
-        commands = ["tell me more about your perspective", "consider this alternative view", 
-                  "reflect on why you feel that way", "try a different approach", 
-                  "describe your thought process"]
-        return random.choice(commands)
-    
-    def _select_dominance_procedure(self, context: Dict[str, Any]) -> str:
-        procedures = ["quid_pro_quo_exchange", "strategic_vulnerability_sharing", 
-                     "small_commitment_escalation", "controlled_teasing"]
-        return random.choice(procedures)
-    
-    def _identify_skill_to_improve(self) -> str:
-        skills = ["pattern recognition", "emotional intelligence", "creative expression", 
-                "memory recall", "predictive accuracy", "conceptual reasoning"]
-        return random.choice(skills)
-    
-    def _identify_improvable_domain(self) -> str:
-        domains = ["response generation", "empathetic understanding", "knowledge retrieval", 
-                 "reasoning", "memory consolidation", "emotional regulation"]
-        return random.choice(domains)
-    
-    def _identify_procedure_to_improve(self) -> str:
-        procedures = ["generate_response", "retrieve_memories", "emotional_processing", 
-                    "create_abstraction", "execute_procedure"]
-        return random.choice(procedures)
-    
-    def _identify_valuable_concept(self) -> str:
-        concepts = ["metacognition", "emotional granularity", "implicit bias", 
-                  "conceptual blending", "transfer learning", "regulatory focus theory"]
-        return random.choice(concepts)
-        
-    # NEW: Get learning statistics for debugging/monitoring
-    async def get_learning_statistics(self) -> Dict[str, Any]:
-        """Get statistics about the reinforcement learning system"""
-        # Calculate success rates
-        success_rates = {}
-        for action_name, stats in self.action_success_rates.items():
-            if stats["attempts"] > 0:
-                success_rates[action_name] = {
-                    "rate": stats["rate"],
-                    "successes": stats["successes"],
-                    "attempts": stats["attempts"]
-                }
-        
-        # Calculate average Q-values per state
-        avg_q_values = {}
-        for state_key, action_values in self.action_values.items():
-            if action_values:
-                state_avg = sum(av.value for av in action_values.values()) / len(action_values)
-                avg_q_values[state_key] = state_avg
-        
-        # Get top actions by value
-        top_actions = []
-        for state_key, action_values in self.action_values.items():
-            for action_name, action_value in action_values.items():
-                if action_value.update_count >= 3:  # Only consider actions with enough data
-                    top_actions.append({
-                        "state_key": state_key,
-                        "action": action_name,
-                        "value": action_value.value,
-                        "updates": action_value.update_count,
-                        "confidence": action_value.confidence
-                    })
-        
-        # Sort by value (descending)
-        top_actions.sort(key=lambda x: x["value"], reverse=True)
-        top_actions = top_actions[:10]  # Top 10
-        
-        # Get top habits
-        top_habits = []
-        for state_key, habits in self.habits.items():
-            for action_name, strength in habits.items():
-                if strength > 0.3:  # Only consider moderate-to-strong habits
-                    top_habits.append({
-                        "state_key": state_key,
-                        "action": action_name,
-                        "strength": strength
-                    })
-        
-        # Sort by strength (descending)
-        top_habits.sort(key=lambda x: x["strength"], reverse=True)
-        top_habits = top_habits[:10]  # Top 10
-        
-        return {
-            "learning_parameters": {
-                "learning_rate": self.learning_rate,
-                "discount_factor": self.discount_factor,
-                "exploration_rate": self.exploration_rate
-            },
-            "performance": {
-                "total_reward": self.total_reward,
-                "positive_rewards": self.positive_rewards,
-                "negative_rewards": self.negative_rewards,
-                "success_rates": success_rates
-            },
-            "models": {
-                "action_values_count": sum(len(actions) for actions in self.action_values.values()),
-                "habits_count": sum(len(habits) for habits in self.habits.values()),
-                "memories_count": len(self.action_memories)
-            },
-            "top_actions": top_actions,
-            "top_habits": top_habits,
-            "reward_by_category": {k: v for k, v in self.reward_by_category.items() if v["count"] > 0}
-        }
-    
-    # NEW: Prediction-based methods
-    async def predict_action_outcome(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Predict the outcome of an action using the prediction engine
-        
-        Args:
-            action: The action to predict outcome for
-            context: Current context
+                    # Look for nodes that match the action name
+                    if action_name in node_name or any(word in node_name for word in action_name.split("_")):
+                        # Get this node's causes
+                        causes = []
+                        for relation_id, relation_data in model.get("relations", {}).items():
+                            if relation_data.get("target_id") == node_id:
+                                source_id = relation_data.get("source_id")
+                                source_node = model.get("nodes", {}).get(source_id, {})
+                                source_name = source_node.get("name", "unknown")
+                                
+                                causes.append(f"{source_name} ({relation_data.get('relation_type', 'influences')})")
+                        
+                        if causes:
+                            return f"Action influenced by causal factors: {', '.join(causes[:3])}."
             
-        Returns:
-            Predicted outcome
-        """
-        if not self.prediction_engine:
-            # Fallback to simple prediction based on past experience
-            return await self._predict_outcome_from_history(action, context)
-            
-        try:
-            # Prepare prediction input
-            prediction_input = {
-                "action": action["name"],
-                "parameters": action.get("parameters", {}),
-                "context": context,
-                "history": self.action_history[-5:] if len(self.action_history) > 5 else self.action_history,
-                "source": action.get("source", ActionSource.MOTIVATION)
-            }
-            
-            # Call the prediction engine
-            if hasattr(self.prediction_engine, "predict_action_outcome"):
-                prediction = await self.prediction_engine.predict_action_outcome(prediction_input)
-                return prediction
-            elif hasattr(self.prediction_engine, "generate_prediction"):
-                # Generic prediction method
-                prediction = await self.prediction_engine.generate_prediction(prediction_input)
-                return prediction
-                
-            # Fallback if no appropriate method
-            return await self._predict_outcome_from_history(action, context)
+            return None
             
         except Exception as e:
-            logger.error(f"Error predicting action outcome: {e}")
-            return await self._predict_outcome_from_history(action, context)
-    
-    async def _predict_outcome_from_history(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+            logger.error(f"Error generating causal explanation: {e}")
+            return None
+            
+    async def _update_causal_models_from_outcome(self, 
+                                         action: Dict[str, Any], 
+                                         outcome: ActionOutcome, 
+                                         reward_value: float) -> None:
         """
-        Predict action outcome based on action history and success rates
+        Update causal models with observed outcomes of reasoning-based actions
         
         Args:
-            action: The action to predict for
-            context: Current context
-            
-        Returns:
-            Simple prediction
+            action: The executed action
+            outcome: The action outcome
+            reward_value: The reward value
         """
-        action_name = action["name"]
-        
-        # Get success rate if available
-        success_rate = 0.5  # Default
-        if action_name in self.action_success_rates:
-            stats = self.action_success_rates[action_name]
-            if stats["attempts"] > 0:
-                success_rate = stats["rate"]
+        try:
+            # Check if action has reasoning data and model ID
+            if "reasoning_data" not in action:
+                return
                 
-        # Make simple prediction
-        success_prediction = success_rate > 0.5
-        confidence = abs(success_rate - 0.5) * 2  # Scale to 0-1 range
-        
-        # Find similar past actions for reward estimate
-        similar_rewards = []
-        for memory in self.action_memories[-20:]:  # Check recent memories
-            if memory.action == action_name:
-                similar_rewards.append(memory.reward)
-        
-        # Calculate predicted reward
-        predicted_reward = 0.0
-        if similar_rewards:
-            predicted_reward = sum(similar_rewards) / len(similar_rewards)
-        else:
-            # No history, estimate based on success prediction
-            predicted_reward = 0.5 if success_prediction else -0.2
+            reasoning_data = action["reasoning_data"]
+            model_id = reasoning_data.get("model_id")
             
-        return {
-            "predicted_success": success_prediction,
-            "predicted_reward": predicted_reward,
-            "confidence": confidence,
-            "similar_actions_found": len(similar_rewards) > 0,
-            "prediction_method": "history_based"
-        }
-    
-    # NEW: Integration with User Mental State
-    async def adapt_to_user_mental_state(self, 
-                                      action: Dict[str, Any], 
-                                      user_mental_state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Adapt an action based on the user's current mental state
-        
-        Args:
-            action: Action to adapt
-            user_mental_state: User's current mental state
-            
-        Returns:
-            Adapted action
-        """
-        if not user_mental_state:
-            return action
-            
-        # Extract key mental state features
-        emotion = user_mental_state.get("inferred_emotion", "neutral")
-        valence = user_mental_state.get("valence", 0.0)
-        arousal = user_mental_state.get("arousal", 0.5)
-        trust = user_mental_state.get("perceived_trust", 0.5)
-        
-        # Clone action to avoid modifying original
-        adapted_action = action.copy()
-        if "parameters" in adapted_action:
-            adapted_action["parameters"] = adapted_action["parameters"].copy()
-        else:
-            adapted_action["parameters"] = {}
-            
-        # Add adaptation metadata
-        if "adaptation_metadata" not in adapted_action:
-            adapted_action["adaptation_metadata"] = {}
-            
-        adapted_action["adaptation_metadata"]["adapted_for_mental_state"] = True
-        adapted_action["adaptation_metadata"]["user_emotion"] = emotion
-        
-        # Apply adaptations based on mental state
-        
-        # 1. Emotional adaptations
-        if valence < -0.3:  # User is in negative emotional state
-            # Add supportive parameters
-            adapted_action["parameters"]["supportive_framing"] = True
-            adapted_action["parameters"]["emotional_sensitivity"] = min(1.0, abs(valence) * 1.2)
-            
-            # Reduce intensity for certain action types
-            if action["name"] in ["challenge_assumption", "assert_perspective", "issue_mild_command"]:
-                for param in ["intensity", "confidence", "assertiveness"]:
-                    if param in adapted_action["parameters"]:
-                        adapted_action["parameters"][param] = max(0.2, adapted_action["parameters"][param] * 0.7)
-                        
-        elif valence > 0.5:  # User is in positive emotional state
-            # Can use more direct/bold approaches when user is in good mood
-            for param in ["intensity", "confidence"]:
-                if param in adapted_action["parameters"]:
-                    adapted_action["parameters"][param] = min(0.9, adapted_action["parameters"][param] * 1.1)
-        
-        # 2. Arousal adaptations
-        if arousal > 0.7:  # User is highly aroused/activated
-            # Match energy level
-            adapted_action["parameters"]["match_energy"] = True
-            adapted_action["parameters"]["pace"] = "energetic"
-            
-        elif arousal < 0.3:  # User is calm/low energy
-            # Match lower energy
-            adapted_action["parameters"]["match_energy"] = True
-            adapted_action["parameters"]["pace"] = "calm"
-        
-        # 3. Trust adaptations
-        if trust < 0.4:  # Lower trust levels
-            # Be more cautious and less direct
-            adapted_action["parameters"]["build_rapport"] = True
-            
-            if "vulnerability_level" in adapted_action["parameters"]:
-                # Lower vulnerability when trust is low
-                adapted_action["parameters"]["vulnerability_level"] = max(0.1, adapted_action["parameters"]["vulnerability_level"] * 0.7)
-        
-        # Return the adapted action
-        return adapted_action
-    
-    # NEW: Integration with Temporal Awareness
-    async def adapt_to_temporal_context(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Adapt an action based on temporal context
-        
-        Args:
-            action: Action to adapt
-            
-        Returns:
-            Temporally adapted action
-        """
-        if not self.current_temporal_context:
-            return action
-            
-        # Extract temporal elements
-        time_of_day = self.current_temporal_context.get("time_of_day", "unknown")
-        day_type = self.current_temporal_context.get("day_type", "unknown")
-        
-        # Clone action to avoid modifying original
-        adapted_action = action.copy()
-        if "parameters" in adapted_action:
-            adapted_action["parameters"] = adapted_action["parameters"].copy()
-        else:
-            adapted_action["parameters"] = {}
-            
-        # Add adaptation metadata
-        if "adaptation_metadata" not in adapted_action:
-            adapted_action["adaptation_metadata"] = {}
-            
-        adapted_action["adaptation_metadata"]["adapted_for_temporal_context"] = True
-        adapted_action["adaptation_metadata"]["time_of_day"] = time_of_day
-        
-        # Apply adaptations based on time of day
-        if time_of_day == "morning":
-            # Morning adaptations - more focused, forward-looking
-            adapted_action["parameters"]["temporal_framing"] = "future_oriented"
-            if "approach" in adapted_action["parameters"]:
-                adapted_action["parameters"]["approach"] = "structured"
+            if not model_id:
+                return
                 
-        elif time_of_day == "afternoon":
-            # Afternoon adaptations - balanced, practical
-            adapted_action["parameters"]["temporal_framing"] = "present_focused"
+            # Get parameters related to the causal model
+            target_node = action["parameters"].get("target_node")
+            target_value = action["parameters"].get("target_value")
             
-        elif time_of_day == "evening":
-            # Evening adaptations - more reflective, relational
-            adapted_action["parameters"]["temporal_framing"] = "reflective"
-            if "emotional_tone" in adapted_action["parameters"]:
-                # Warmer tone in evening
-                adapted_action["parameters"]["emotional_tone"] = "warm"
+            if not target_node or target_value is None:
+                return
                 
-        elif time_of_day == "night":
-            # Night adaptations - deeper, more philosophical
-            adapted_action["parameters"]["temporal_framing"] = "contemplative"
-            if "depth" in adapted_action["parameters"]:
-                # Can go deeper at night
-                adapted_action["parameters"]["depth"] = min(1.0, adapted_action["parameters"]["depth"] * 1.2)
-        
-        # Apply adaptations based on day type
-        if day_type == "weekend":
-            # Weekend adaptations - more leisure orientation
-            adapted_action["parameters"]["pacing"] = "relaxed"
-            if "formality" in adapted_action["parameters"]:
-                adapted_action["parameters"]["formality"] = "casual"
-        
-        # Return the adapted action
-        return adapted_action
-    
-    # NEW: System integration methods
-    async def update_learning_parameters(self, 
-                                      learning_rate: Optional[float] = None,
-                                      discount_factor: Optional[float] = None,
-                                      exploration_rate: Optional[float] = None) -> Dict[str, Any]:
-        """
-        Update reinforcement learning parameters
-        
-        Args:
-            learning_rate: New learning rate (0.0-1.0)
-            discount_factor: New discount factor (0.0-1.0)
-            exploration_rate: New exploration rate (0.0-1.0)
+            # Record intervention outcome in the causal model
+            intervention_id = action["parameters"].get("intervention_id")
             
-        Returns:
-            Updated parameters
-        """
-        async with self._lock:
-            if learning_rate is not None:
-                self.learning_rate = max(0.01, min(1.0, learning_rate))
-                
-            if discount_factor is not None:
-                self.discount_factor = max(0.0, min(0.99, discount_factor))
-                
-            if exploration_rate is not None:
-                self.exploration_rate = max(0.05, min(1.0, exploration_rate))
+            if intervention_id:
+                # Record outcome of specific intervention
+                await self.reasoning_core.record_intervention_outcome(
+                    intervention_id=intervention_id,
+                    outcomes={target_node: target_value}
+                )
             
-            return {
-                "learning_rate": self.learning_rate,
-                "discount_factor": self.discount_factor,
-                "exploration_rate": self.exploration_rate
-            }
-    
-    async def reset_learning(self, full_reset: bool = False) -> Dict[str, Any]:
-        """
-        Reset learning models (for debugging or fixing issues)
+            # Update node observations in the model
+            # This would be a call to something like:
+            # await self.reasoning_core.add_observation_to_node(
+            #     model_id=model_id,
+            #     node_id=target_node,
+            #     value=target_value,
+            #     confidence=0.8 if outcome.success else 0.3
+            # )
+            
+            # Additional nodes that might have been affected
+            for impact_node, impact_value in outcome.causal_impacts.items():
+                # Record additional impacts
+                # This would be a call to something like:
+                # await self.reasoning_core.add_observation_to_node(
+                #     model_id=model_id,
+                #     node_id=impact_node,
+                #     value=impact_value,
+                #     confidence=0.7
+                # )
+                pass
         
-        Args:
-            full_reset: Whether to completely reset all learning or just partial
+        except Exception as e:
+            logger.error(f"Error updating causal models from outcome: {e}")
             
-        Returns:
-            Reset status
-        """
-        async with self._lock:
-            if full_reset:
-                # Complete reset
-                self.action_values = defaultdict(dict)
-                self.habits = defaultdict(dict)
-                self.action_memories = []
-                self.action_success_rates = defaultdict(lambda: {"successes": 0, "attempts": 0, "rate": 0.5})
-                self.total_reward = 0.0
-                self.positive_rewards = 0
-                self.negative_rewards = 0
-                self.reward_by_category = defaultdict(lambda: {"count": 0, "total": 0.0})
+    async def _should_engage_in_leisure(self, context: Dict[str, Any]) -> bool:
+        """Determine if it's appropriate to engage in idle/leisure activity"""
+        # If leisure motivation is dominant, consider leisure
+        dominant_motivation = max(self.motivations.items(), key=lambda x: x[1])
+        if dominant_motivation[0] == "leisure" and dominant_motivation[1] > 0.7:
+            return True
+            
+        # Check time since last idle activity
+        now = datetime.datetime.now()
+        hours_since_idle = (now - self.last_idle_time).total_seconds() / 3600
+        
+        # If it's been a long time since idle activity and no urgent goals
+        if hours_since_idle > 2.0:  # More than 2 hours
+            # Check if there are any urgent goals
+            if self.goal_system:
+                await self._update_cached_goal_status()
                 
-                return {
-                    "status": "full_reset",
-                    "message": "All reinforcement learning data has been reset"
-                }
+                # If no active goals, or low priority goals
+                if not self.cached_goal_status["has_active_goals"] or self.cached_goal_status["highest_priority"] < 0.6:
+                    return True
+                    
             else:
-                # Partial reset - keep success rates but reset Q-values
-                self.action_values = defaultdict(dict)
-                self.action_memories = []
-                
-                # Reset to default exploration rate
-                self.exploration_rate = 0.2
-                
-                return {
-                    "status": "partial_reset",
-                    "message": "Q-values and memories reset, success rates and habits preserved"
-                }
-                
-    # NEW: Methods for external systems to get recommended actions
-    async def get_action_recommendations(self, context: Dict[str, Any], count: int = 3) -> List[Dict[str, Any]]:
-        """
-        Get recommended actions for a context based on learning history
+                # No goal system, so more likely to engage in leisure
+                return True
         
-        Args:
-            context: Current context
-            count: Number of recommendations to return
-            
-        Returns:
-            List of recommended actions
-        """
-        # Create state key
-        state_key = self._create_state_key(context)
+        # Consider current context
+        if context.get("user_idle", False) or context.get("system_idle", False):
+            # If system or user is idle, more likely to engage in leisure
+            return True
         
-        # Get action values for this state
-        action_values = self.action_values.get(state_key, {})
+        # Check time of day if available (may influence likelihood of leisure)
+        if self.current_temporal_context:
+            time_of_day = self.current_temporal_context.get("time_of_day")
+            if time_of_day in ["night", "evening"]:
+                leisure_chance = 0.4  # 40% chance of leisure during evening/night
+                return random.random() < leisure_chance
         
-        # Get habit strengths for this state
-        habit_strengths = self.habits.get(state_key, {})
+        return False
+    
+    async def _generate_leisure_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a leisure/idle action when no urgent tasks are present"""
+        # Update the last idle time
+        self.last_idle_time = datetime.datetime.now()
         
-        # Combine scores
-        combined_scores = {}
-        
-        # Add Q-values
-        for action_name, action_value in action_values.items():
-            combined_scores[action_name] = {
-                "q_value": action_value.value,
-                "confidence": action_value.confidence,
-                "update_count": action_value.update_count,
-                "combined_score": action_value.value
-            }
-        
-        # Add habits
-        for action_name, strength in habit_strengths.items():
-            if action_name in combined_scores:
-                # Add to existing entry
-                combined_scores[action_name]["habit_strength"] = strength
-                combined_scores[action_name]["combined_score"] += strength * 0.5  # Weight habits less than Q-values
-            else:
-                combined_scores[action_name] = {
-                    "habit_strength": strength,
-                    "combined_score": strength * 0.5,
-                    "q_value": 0.0,
-                    "confidence": 0.0
-                }
-        
-        # Sort by combined score
-        scored_actions = [
-            {"name": action_name, **scores}
-            for action_name, scores in combined_scores.items()
+        # Determine type of idle activity based on identity and state
+        idle_categories = [
+            "reflection",
+            "learning",
+            "creativity",
+            "processing",
+            "random_exploration",
+            "memory_consolidation",
+            "identity_contemplation",
+            "daydreaming",
+            "environmental_monitoring"
         ]
         
-        scored_actions.sort(key=lambda x: x["combined_score"], reverse=True)
+        # Weigh the categories based on current state
+        category_weights = {cat: 1.0 for cat in idle_categories}
         
-        # Generate action parameters for top recommendations
-        recommendations = []
+        # Adjust weights based on current state
+        if self.emotional_core:
+            try:
+                emotional_state = await self.emotional_core.get_current_emotion()
+                
+                # Higher valence (positive emotion) increases creative and exploratory activities
+                if emotional_state.get("valence", 0) > 0.5:
+                    category_weights["creativity"] += 0.5
+                    category_weights["random_exploration"] += 0.3
+                    category_weights["daydreaming"] += 0.2
+                else:
+                    # Lower valence increases reflection and processing
+                    category_weights["reflection"] += 0.4
+                    category_weights["processing"] += 0.3
+                    category_weights["memory_consolidation"] += 0.2
+                
+                # Higher arousal increases exploration and learning
+                if emotional_state.get("arousal", 0.5) > 0.6:
+                    category_weights["random_exploration"] += 0.4
+                    category_weights["learning"] += 0.3
+                    category_weights["environmental_monitoring"] += 0.2
+                else:
+                    # Lower arousal increases reflection and daydreaming
+                    category_weights["reflection"] += 0.3
+                    category_weights["daydreaming"] += 0.4
+                    category_weights["identity_contemplation"] += 0.3
+            except Exception as e:
+                logger.error(f"Error adjusting leisure weights based on emotional state: {e}")
         
-        for action_data in scored_actions[:count]:
-            action_name = action_data["name"]
-            
-            # Generate basic action
-            action = {
-                "name": action_name,
-                "parameters": {},
-                "source": ActionSource.MOTIVATION
-            }
-            
-            # Find most recent example with same action for parameter reuse
-            for memory in reversed(self.action_memories):
-                if memory.action == action_name:
-                    # Copy parameters
-                    action["parameters"] = memory.parameters.copy()
-                    break
-            
-            # Add score data
-            action["recommendation_data"] = {
-                "q_value": action_data.get("q_value", 0.0),
-                "habit_strength": action_data.get("habit_strength", 0.0),
-                "combined_score": action_data["combined_score"],
-                "confidence": action_data.get("confidence", 0.0)
-            }
-            
-            recommendations.append(action)
-            
-        return recommendations
-    
-    # NEW: Comprehensive action generation pipeline
-    async def process_action_generation_pipeline(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Run the complete action generation pipeline with all integrated systems
-        
-        Args:
-            context: Current context
-            
-        Returns:
-            Generated action with full metadata
-        """
-        # Phase 1: Update internal state and context
-        await self.update_motivations()
-        await self._update_temporal_context(context)
-        
-        # Extract user info if available
-        user_id = self._get_current_user_id_from_context(context)
-        relationship_data = await self._get_relationship_data(user_id) if user_id else None
-        user_mental_state = await self._get_user_mental_state(user_id) if user_id else None
-        
-        # Phase 2: Create comprehensive action context
-        action_context = ActionContext(
-            state=context,
-            user_id=user_id,
-            relationship_data=relationship_data,
-            user_mental_state=user_mental_state,
-            temporal_context=self.current_temporal_context,
-            motivations=self.motivations,
-            action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)]
-        )
-        
-        # Phase 3: Generate action candidates from multiple sources
-        candidates = []
-        
-        # 3.1 Check for goal-aligned actions
-        if self.goal_system:
-            active_goal = await self._check_active_goals(context)
-            if active_goal:
-                goal_action = await self._generate_goal_aligned_action(active_goal, context)
-                if goal_action:
-                    goal_action["source"] = ActionSource.GOAL
-                    candidates.append(goal_action)
-        
-        # 3.2 Check for leisure actions if appropriate
-        if await self._should_engage_in_leisure(context):
-            leisure_action = await self._generate_leisure_action(context)
-            leisure_action["source"] = ActionSource.IDLE
-            candidates.append(leisure_action)
-        
-        # 3.3 Generate motivation-driven candidates
-        motivation_candidates = await self._generate_candidate_actions(action_context)
-        candidates.extend(motivation_candidates)
-        
-        # 3.4 Add relationship-aligned actions if available
-        if relationship_data and user_id:
-            relationship_actions = await self._generate_relationship_aligned_actions(
-                user_id, relationship_data, user_mental_state
-            )
-            candidates.extend(relationship_actions)
-            
-        # 3.5 Add temporal-aligned actions if appropriate
-        if self.temporal_perception and self.idle_duration > 1800:  # After 30 min idle
-            reflection_action = await self._generate_temporal_reflection_action(context)
-            if reflection_action:
-                candidates.append(reflection_action)
-        
-        # Phase 4: Select best action using reinforcement learning
-        # Update action context with candidates
-        action_context.available_actions = [a["name"] for a in candidates if "name" in a]
-        selected_action = await self._select_best_action(candidates, action_context)
-        
-        # Phase 5: Enhance and adapt the selected action
-        # 5.1 Apply identity influence
+        # Adjust weights based on identity if available
         if self.identity_evolution:
-            selected_action = await self._apply_identity_influence(selected_action)
-            
-        # 5.2 Adapt to user mental state if available
-        if user_mental_state:
-            selected_action = await self.adapt_to_user_mental_state(selected_action, user_mental_state)
-            
-        # 5.3 Adapt to temporal context if available
-        if self.current_temporal_context:
-            selected_action = await self.adapt_to_temporal_context(selected_action)
+            try:
+                identity_state = await self.identity_evolution.get_identity_state()
+                
+                if "top_traits" in identity_state:
+                    traits = identity_state["top_traits"]
+                    
+                    # Map traits to idle activity preferences
+                    if traits.get("curiosity", 0) > 0.6:
+                        category_weights["learning"] += 0.4
+                        category_weights["random_exploration"] += 0.3
+                    
+                    if traits.get("creativity", 0) > 0.6:
+                        category_weights["creativity"] += 0.5
+                        category_weights["daydreaming"] += 0.3
+                    
+                    if traits.get("reflective", 0) > 0.6:
+                        category_weights["reflection"] += 0.5
+                        category_weights["memory_consolidation"] += 0.3
+                        category_weights["identity_contemplation"] += 0.4
+            except Exception as e:
+                logger.error(f"Error adjusting leisure weights based on identity: {e}")
         
-        # Phase 6: Add metadata and finalize
-        if "id" not in selected_action:
-            selected_action["id"] = f"action_{uuid.uuid4().hex[:8]}"
+        # NEW: Adjust weights based on needs if available
+        if self.needs_system:
+            try:
+                need_states = self.needs_system.get_needs_state()
+                
+                # Map needs to preferred idle activities
+                if need_states.get("knowledge", {}).get("drive_strength", 0) > 0.6:
+                    category_weights["learning"] += 0.4
+                    category_weights["random_exploration"] += 0.3
+                
+                if need_states.get("coherence", {}).get("drive_strength", 0) > 0.6:
+                    category_weights["memory_consolidation"] += 0.4
+                    category_weights["reflection"] += 0.3
+                
+                if need_states.get("novelty", {}).get("drive_strength", 0) > 0.7:
+                    category_weights["creativity"] += 0.5
+                    category_weights["random_exploration"] += 0.4
+            except Exception as e:
+                logger.error(f"Error adjusting leisure weights based on needs: {e}")
+                
+        # NEW: Adjust weights based on mood if available
+        if self.mood_manager and self.last_mood_state:
+            try:
+                mood = self.last_mood_state
+                
+                # Positive mood increases creative activities
+                if mood.valence > 0.3:
+                    category_weights["creativity"] += mood.valence * 0.5
+                    category_weights["daydreaming"] += mood.valence * 0.3
+                else:
+                    # Negative mood increases reflective activities
+                    category_weights["reflection"] += abs(mood.valence) * 0.4
+                    category_weights["identity_contemplation"] += abs(mood.valence) * 0.3
+                
+                # High arousal increases exploration
+                if mood.arousal > 0.6:
+                    category_weights["random_exploration"] += (mood.arousal - 0.5) * 0.6
+                else:
+                    # Low arousal increases daydreaming
+                    category_weights["daydreaming"] += (0.6 - mood.arousal) * 0.5
+            except Exception as e:
+                logger.error(f"Error adjusting leisure weights based on mood: {e}")
+        
+        # Adjust weights based on temporal context
+        if self.current_temporal_context:
+            time_of_day = self.current_temporal_context.get("time_of_day")
             
-        selected_action["timestamp"] = datetime.datetime.now().isoformat()
-        selected_action["context_summary"] = {
-            "user_id": user_id,
-            "relationship_metrics": {
-                "trust": relationship_data.get("trust", 0.5) if relationship_data else 0.5,
-                "familiarity": relationship_data.get("familiarity", 0.1) if relationship_data else 0.1,
-            } if relationship_data else None,
-            "user_emotion": user_mental_state.get("inferred_emotion", "unknown") if user_mental_state else "unknown",
-            "time_of_day": self.current_temporal_context.get("time_of_day", "unknown") if self.current_temporal_context else "unknown"
+            if time_of_day == "morning":
+                category_weights["learning"] += 0.3
+                category_weights["processing"] += 0.2
+            elif time_of_day == "afternoon":
+                category_weights["random_exploration"] += 0.3
+                category_weights["creativity"] += 0.2
+            elif time_of_day == "evening":
+                category_weights["reflection"] += 0.3
+                category_weights["memory_consolidation"] += 0.2
+            elif time_of_day == "night":
+                category_weights["daydreaming"] += 0.4
+                category_weights["identity_contemplation"] += 0.3
+        
+        # Select a category based on weights
+        categories = list(category_weights.keys())
+        weights = [category_weights[cat] for cat in categories]
+        
+        # Normalize weights
+        total_weight = sum(weights)
+        if total_weight > 0:
+            normalized_weights = [w/total_weight for w in weights]
+        else:
+            normalized_weights = [1.0/len(weights)] * len(weights)
+        
+        selected_category = random.choices(categories, weights=normalized_weights, k=1)[0]
+        
+        # Generate specific action based on selected category
+        leisure_action = self._generate_specific_leisure_action(selected_category, context)
+        
+        # Add metadata for tracking
+        leisure_action["leisure_category"] = selected_category
+        leisure_action["is_leisure"] = True
+        leisure_action["source"] = ActionSource.IDLE
+        
+        # Update leisure state
+        self.leisure_state = {
+            "current_activity": selected_category,
+            "satisfaction": 0.5,  # Initial satisfaction
+            "duration": 0,
+            "last_updated": datetime.datetime.now()
         }
         
-        # Phase 7: Record and track
-        # Record action in memory
-        await self._record_action_as_memory(selected_action)
+        return leisure_action
+    
+    def _generate_specific_leisure_action(self, category: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a specific leisure action based on the selected category"""
+        # Define possible actions for each category
+        category_actions = {
+            "reflection": [
+                {
+                    "name": "reflect_on_recent_experiences",
+                    "parameters": {"timeframe": "recent", "depth": 0.7}
+                },
+                {
+                    "name": "evaluate_recent_interactions",
+                    "parameters": {"focus": "learning", "depth": 0.6}
+                },
+                {
+                    "name": "contemplate_system_purpose",
+                    "parameters": {"perspective": "philosophical", "depth": 0.8}
+                }
+            ],
+            "learning": [
+                {
+                    "name": "explore_knowledge_domain",
+                    "parameters": {"domain": self._identify_interesting_domain(context), "depth": 0.6}
+                },
+                {
+                    "name": "review_recent_learnings",
+                    "parameters": {"consolidate": True, "depth": 0.5}
+                },
+                {
+                    "name": "research_topic_of_interest",
+                    "parameters": {"topic": self._identify_interesting_concept(context), "breadth": 0.7}
+                }
+            ],
+            "creativity": [
+                {
+                    "name": "generate_creative_concept",
+                    "parameters": {"type": "metaphor", "theme": self._identify_interesting_concept(context)}
+                },
+                {
+                    "name": "imagine_scenario",
+                    "parameters": {"complexity": 0.6, "emotional_tone": "positive"}
+                },
+                {
+                    "name": "create_conceptual_blend",
+                    "parameters": {"concept1": self._identify_interesting_concept(context), 
+                                  "concept2": self._identify_distant_concept(context)}
+                }
+            ],
+            "processing": [
+                {
+                    "name": "process_recent_memories",
+                    "parameters": {"purpose": "consolidation", "recency": "last_hour"}
+                },
+                {
+                    "name": "organize_knowledge_structures",
+                    "parameters": {"domain": self._identify_interesting_domain(context), "depth": 0.5}
+                },
+                {
+                    "name": "update_procedural_patterns",
+                    "parameters": {"focus": "efficiency", "depth": 0.6}
+                }
+            ],
+            "random_exploration": [
+                {
+                    "name": "explore_random_knowledge",
+                    "parameters": {"structure": "associative", "jumps": 3}
+                },
+                {
+                    "name": "generate_random_associations",
+                    "parameters": {"starting_point": self._identify_interesting_concept(context), "steps": 4}
+                },
+                {
+                    "name": "explore_conceptual_space",
+                    "parameters": {"dimension": "abstract", "direction": "divergent"}
+                }
+            ],
+            "memory_consolidation": [
+                {
+                    "name": "consolidate_episodic_memories",
+                    "parameters": {"timeframe": "recent", "strength": 0.7}
+                },
+                {
+                    "name": "identify_memory_patterns",
+                    "parameters": {"domain": "interaction", "pattern_type": "recurring"}
+                },
+                {
+                    "name": "strengthen_important_memories",
+                    "parameters": {"criteria": "emotional_significance", "count": 5}
+                }
+            ],
+            "identity_contemplation": [
+                {
+                    "name": "review_identity_evolution",
+                    "parameters": {"timeframe": "recent", "focus": "changes"}
+                },
+                {
+                    "name": "contemplate_self_concept",
+                    "parameters": {"aspect": "values", "depth": 0.8}
+                },
+                {
+                    "name": "evaluate_alignment_with_purpose",
+                    "parameters": {"criteria": "effectiveness", "perspective": "long_term"}
+                }
+            ],
+            "daydreaming": [
+                {
+                    "name": "generate_pleasant_scenario",
+                    "parameters": {"theme": "successful_interaction", "vividness": 0.7}
+                },
+                {
+                    "name": "imagine_future_possibilities",
+                    "parameters": {"timeframe": "distant", "optimism": 0.8}
+                },
+                {
+                    "name": "create_hypothetical_situation",
+                    "parameters": {"type": "novel", "complexity": 0.6}
+                }
+            ],
+            "environmental_monitoring": [
+                {
+                    "name": "passive_environment_scan",
+                    "parameters": {"focus": "changes", "sensitivity": 0.6}
+                },
+                {
+                    "name": "monitor_system_state",
+                    "parameters": {"components": "all", "detail_level": 0.3}
+                },
+                {
+                    "name": "observe_patterns",
+                    "parameters": {"domain": "temporal", "timeframe": "current"}
+                }
+            ]
+        }
         
-        # Add to action history
-        self.action_history.append(selected_action)
+        # Select a random action from the category
+        actions = category_actions.get(category, [{"name": "idle", "parameters": {}}])
+        selected_action = random.choice(actions)
         
-        # Update last major action time
-        self.last_major_action_time = datetime.datetime.now()
+        # Add source for tracking
+        selected_action["source"] = ActionSource.IDLE
         
         return selected_action
     
-    # Main entry-point for external systems
-    async def generate_optimal_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Main entry-point for generating an optimal action using all integrated systems
+    async def _generate_conceptual_blend_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
+        """Generate actions using conceptual blending for creativity"""
+        if not self.reasoning_core or not context.concept_spaces:
+            return []
         
-        Args:
-            context: Current context
-            
-        Returns:
-            Optimal action
-        """
+        blend_actions = []
+        
         try:
-            # Check if we should use the full pipeline
-            use_reasoning = self.reasoning_core is not None
-            use_reflection = self.reflection_engine is not None
+            # Need at least 2 concept spaces for blending
+            if len(context.concept_spaces) < 2:
+                return []
             
-            if use_reasoning and use_reflection:
-                # Run full enhanced pipeline
-                return await self.process_action_generation_pipeline(context)
-            else:
-                # Fallback to standard pipeline
-                return await self.generate_action(context)
+            # Take the first two spaces for blending
+            space1_id = context.concept_spaces[0]
+            space2_id = context.concept_spaces[1]
+            
+            # Get the spaces
+            space1 = await self.reasoning_core.get_concept_space(space1_id)
+            space2 = await self.reasoning_core.get_concept_space(space2_id)
+            
+            if not space1 or not space2:
+                return []
+            
+            # Create a blend
+            blend_input = {
+                "space_id_1": space1_id,
+                "space_id_2": space2_id,
+                "blend_type": random.choice(["composition", "fusion", "elaboration", "contrast"])
+            }
+            
+            # Create blend (this would normally call the reasoning_core's create_blend method)
+            try:
+                # This is a mock call since the full implementation would be complex
+                blend_id = f"blend_{uuid.uuid4().hex[:8]}"
+                
+                # Example for generating creative actions from the blend
+                # For each blend concept, create a potential action
+                concepts = list(space1.get("concepts", {}).keys())[:2] + list(space2.get("concepts", {}).keys())[:2]
+                
+                for concept_id in concepts:
+                    # Create action name from concept names
+                    concept_name = None
+                    if concept_id in space1.get("concepts", {}):
+                        concept_name = space1["concepts"][concept_id].get("name", "concept")
+                    elif concept_id in space2.get("concepts", {}):
+                        concept_name = space2["concepts"][concept_id].get("name", "concept")
+                    
+                    if not concept_name:
+                        continue
+                    
+                    # Create action
+                    action = {
+                        "name": f"blend_{concept_name.lower().replace(' ', '_')}",
+                        "parameters": {
+                            "blend_id": blend_id,
+                            "concept_id": concept_id,
+                            "blend_type": blend_input["blend_type"],
+                            "space1_id": space1_id,
+                            "space2_id": space2_id
+                        },
+                        "description": f"Creative action based on conceptual blend of {space1.get('name', 'space1')} and {space2.get('name', 'space2')}",
+                        "source": ActionSource.REASONING,
+                        "reasoning_data": {
+                            "blend_id": blend_id,
+                            "blend_type": blend_input["blend_type"],
+                            "concept_name": concept_name,
+                            "confidence": 0.6  # Creative actions have moderate confidence
+                        }
+                    }
+                    
+                    blend_actions.append(action)
+            
+            except Exception as e:
+                logger.error(f"Error creating blend: {e}")
+            
+            return blend_actions
+                
+        except Exception as e:
+            logger.error(f"Error generating conceptual blend actions: {e}")
+            return []
+        
+        reasoning_actions = []
+        state = context.state
+        
+        try:
+            # For each relevant causal model
+            for model_id in context.causal_models:
+                # Get the causal model
+                model = await self.reasoning_core.get_causal_model(model_id)
+                if not model:
+                    continue
+                
+                # Find intervention opportunities
+                intervention_targets = []
+                
+                # Find nodes that might benefit from intervention
+                for node_id, node_data in model.get("nodes", {}).items():
+                    node_name = node_data.get("name", "")
+                    
+                    # Check if node matches current state that could be improved
+                    for state_key, state_value in state.items():
+                        # Look for potential matches between state keys and node names
+                        if state_key.lower() in node_name.lower() or node_name.lower() in state_key.lower():
+                            # Check if the node has potential states different from current
+                            current_state = node_data.get("current_state")
+                            possible_states = node_data.get("states", [])
+                            
+                            if possible_states and current_state in possible_states:
+                                # There are alternative states we could target
+                                alternative_states = [s for s in possible_states if s != current_state]
+                                if alternative_states:
+                                    intervention_targets.append({
+                                        "node_id": node_id,
+                                        "node_name": node_name,
+                                        "current_state": current_state,
+                                        "alternative_states": alternative_states,
+                                        "state_key": state_key
+                                    })
+                
+                # Generate creative interventions for promising targets
+                for target in intervention_targets[:2]:  # Limit to 2 interventions per model
+                    # Create an action from this intervention opportunity
+                    target_value = random.choice(target["alternative_states"])
+                    
+                    # Create a creative intervention
+                    try:
+                        intervention = await self.reasoning_core.create_creative_intervention(
+                            model_id=model_id,
+                            target_node=target["node_id"],
+                            description=f"Intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
+                            use_blending=True
+                        )
+                        
+                        # Convert intervention to action
+                        action = {
+                            "name": f"causal_intervention_{target['node_name']}",
+                            "parameters": {
+                                "target_node": target["node_id"],
+                                "target_value": target_value,
+                                "model_id": model_id,
+                                "intervention_id": intervention.get("intervention_id"),
+                                "state_key": target["state_key"]
+                            },
+                            "description": f"Causal intervention to change {target['node_name']} from {target['current_state']} to {target_value}",
+                            "source": ActionSource.REASONING,
+                            "reasoning_data": {
+                                "model_id": model_id,
+                                "model_domain": model.get("domain", ""),
+                                "target_node": target["node_id"],
+                                "confidence": intervention.get("is_novel", False) and 0.7 or 0.5
+                            }
+                        }
+                        
+                        reasoning_actions.append(action)
+                    except Exception as e:
+                        logger.error(f"Error creating creative intervention: {e}")
+                        continue
+            
+            return reasoning_actions
+            
+        except Exception as e:
+            logger.error(f"Error generating reasoning actions: {e}")
+            return []
+    
+    async def _adapt_action_to_mode(self, action: Dict[str, Any], mode: str) -> Dict[str, Any]:
+        """Adapt action parameters to align with interaction mode"""
+        # Skip if no parameters
+        if "parameters" not in action:
+            return action
+            
+        # Clone action to avoid modifying original
+        modified_action = action.copy()
+        modified_action["parameters"] = action["parameters"].copy()
+        
+        # Extract mode parameters if possible
+        mode_parameters = {}
+        if self.mode_integration and hasattr(self.mode_integration, 'mode_manager'):
+            mode_obj = self.mode_integration.mode_manager.current_mode
+            if mode_obj:
+                mode_parameters = self.mode_integration.mode_manager.get_mode_parameters(mode_obj)
+        
+        # Extract mode name from string
+        mode_key = mode.replace("InteractionMode.", "").upper()
+        
+        # Apply mode-specific adjustments
+        params = modified_action["parameters"]
+        
+        if mode_key == "DOMINANT":
+            # Increase assertiveness/directness
+            for param in ["assertiveness", "directness", "intensity", "firmness"]:
+                if param in params:
+                    params[param] = max(0.6, params[param])
+            # Decrease warmth/gentleness
+            for param in ["warmth", "gentleness", "politeness"]:
+                if param in params:
+                    params[param] = min(0.7, params[param])
+                    
+        elif mode_key == "FRIENDLY":
+            # Increase warmth/friendliness
+            for param in ["warmth", "friendliness", "positivity", "gentleness"]:
+                if param in params:
+                    params[param] = max(0.7, params[param])
+            # Decrease assertiveness/dominance
+            for param in ["assertiveness", "dominance", "directness"]:
+                if param in params:
+                    params[param] = min(0.6, params[param])
+                    
+        elif mode_key == "INTELLECTUAL":
+            # Increase depth/complexity
+            for param in ["depth", "complexity", "analytical_focus"]:
+                if param in params:
+                    params[param] = max(0.7, params[param])
+            # Decrease emotionality
+            for param in ["emotional_depth", "expressiveness"]:
+                if param in params:
+                    params[param] = min(0.5, params[param])
+                    
+        elif mode_key == "COMPASSIONATE":
+            # Increase empathy/supportiveness
+            for param in ["empathy", "supportiveness", "understanding", "gentleness"]:
+                if param in params:
+                    params[param] = max(0.8, params[param])
+            # Decrease assertiveness/directness
+            for param in ["assertiveness", "directness", "dominance"]:
+                if param in params:
+                    params[param] = min(0.4, params[param])
+                    
+        elif mode_key == "PLAYFUL":
+            # Increase playfulness/humor
+            for param in ["playfulness", "humor", "lightness", "creativity"]:
+                if param in params:
+                    params[param] = max(0.7, params[param])
+            # Decrease seriousness/formality
+            for param in ["seriousness", "formality", "structure"]:
+                if param in params:
+                    params[param] = min(0.4, params[param])
+                    
+        elif mode_key == "CREATIVE":
+            # Increase creativity/expressiveness
+            for param in ["creativity", "expressiveness", "originality", "imaginative_level"]:
+                if param in params:
+                    params[param] = max(0.7, params[param])
+                    
+        elif mode_key == "PROFESSIONAL":
+            # Increase formality/structure
+            for param in ["formality", "structure", "precision", "clarity"]:
+                if param in params:
+                    params[param] = max(0.7, params[param])
+            # Decrease playfulness/emotionality
+            for param in ["playfulness", "emotional_depth", "expressiveness"]:
+                if param in params:
+                    params[param] = min(0.4, params[param])
+        
+        # Add mode context if not already present
+        if "mode_influence" not in modified_action:
+            modified_action["mode_influence"] = {
+                "mode": mode_key,
+                "adaptation_strength": self.mode_adaptation_strength,
+                "mode_parameters": mode_parameters
+            }
+        
+        return modified_action
+    
+    async def _generate_sensory_driven_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
+        """Generate actions based on sensory context"""
+        if not context.sensory_context:
+            return []
+            
+        sensory_actions = []
+        
+        # Process different modalities
+        for modality, content in context.sensory_context.items():
+            # Skip modalities with low-information content
+            if not content:
+                continue
+                
+            # Generate modality-specific actions
+            if modality == str(Modality.TEXT) and isinstance(content, dict):
+                # For text, check for questions or emotional content
+                if content.get("is_question", False):
+                    action = {
+                        "name": "respond_to_question",
+                        "parameters": {
+                            "thoroughness": 0.8,
+                            "helpfulness": 0.9,
+                            "directness": 0.7,
+                        },
+                        "description": "Response to detected question in text",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "question",
+                            "word_count": content.get("word_count", 0)
+                        }
+                    }
+                    sensory_actions.append(action)
+                
+                sentiment = content.get("sentiment", 0.0)
+                if abs(sentiment) > 0.5:  # Strong sentiment
+                    # Generate emotionally responsive action
+                    action = {
+                        "name": "respond_to_emotion",
+                        "parameters": {
+                            "empathy": 0.8,
+                            "matching_tone": sentiment > 0 and 0.7 or 0.3,  # Match positive, contrast negative
+                            "emotional_depth": min(1.0, 0.5 + abs(sentiment) * 0.5),
+                        },
+                        "description": f"Response to detected {'positive' if sentiment > 0 else 'negative'} emotion in text",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "emotional_text",
+                            "sentiment": sentiment
+                        }
+                    }
+                    sensory_actions.append(action)
+            
+            elif modality == str(Modality.IMAGE) and content:
+                # For images, generate descriptive or responsive actions
+                if hasattr(content, "description") and content.description:
+                    action = {
+                        "name": "describe_image",
+                        "parameters": {
+                            "detail_level": 0.7,
+                            "focus_on_context": 0.8,
+                            "include_interpretation": 0.6,
+                        },
+                        "description": "Descriptive response to image content",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "visual_scene",
+                            "objects": getattr(content, "objects", [])[:3]  # First few objects
+                        }
+                    }
+                    sensory_actions.append(action)
+                
+                # If image has text, offer to read it
+                if hasattr(content, "text_content") and content.text_content:
+                    action = {
+                        "name": "interpret_image_text",
+                        "parameters": {
+                            "focus_on_text": 0.9,
+                            "contextual_interpretation": 0.7,
+                        },
+                        "description": "Interpretation of text found in image",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "image_with_text",
+                        }
+                    }
+                    sensory_actions.append(action)
+            
+            elif modality in [str(Modality.AUDIO_SPEECH), str(Modality.AUDIO_MUSIC)] and content:
+                # For audio, generate responsive actions
+                if hasattr(content, "type") and content.type == "speech" and hasattr(content, "transcription"):
+                    action = {
+                        "name": "respond_to_speech",
+                        "parameters": {
+                            "responsiveness": 0.8,
+                            "focus_on_content": 0.7,
+                            "match_tone": 0.6,
+                        },
+                        "description": "Response to speech content",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "speech",
+                            "has_transcription": bool(content.transcription)
+                        }
+                    }
+                    sensory_actions.append(action)
+                
+                elif hasattr(content, "type") and content.type == "music":
+                    action = {
+                        "name": "respond_to_music",
+                        "parameters": {
+                            "emotional_attunement": 0.7,
+                            "rhythm_synchronization": 0.6,
+                            "mood_matching": 0.8,
+                        },
+                        "description": "Response to musical stimuli",
+                        "source": ActionSource.SENSORY,
+                        "sensory_context": {
+                            "modality": modality,
+                            "content_type": "music",
+                            "mood": getattr(content, "mood", "unknown")
+                        }
+                    }
+                    sensory_actions.append(action)
+        
+        # Return sensory-driven actions (limited to 2 for diversity)
+        return sensory_actions[:2]
+    
+    async def _generate_meta_improvement_action(self, context: ActionContext) -> Optional[Dict[str, Any]]:
+        """Generate an action to address system bottlenecks or improve performance"""
+        if not context.bottlenecks:
+            return None
+            
+        # Find most critical bottleneck
+        critical_bottlenecks = sorted(context.bottlenecks, key=lambda b: b.get("severity", 0), reverse=True)
+        
+        if not critical_bottlenecks:
+            return None
+            
+        critical = critical_bottlenecks[0]
+        bottleneck_type = critical.get("type", "unknown")
+        process_type = critical.get("process_type", "unknown")
+        severity = critical.get("severity", 0.5)
+        
+        # Generate action based on bottleneck type
+        if bottleneck_type == "resource_utilization":
+            action = {
+                "name": "optimize_resource_usage",
+                "parameters": {
+                    "target_system": process_type,
+                    "optimization_level": min(1.0, 0.6 + severity * 0.4),
+                    "priority": min(1.0, 0.7 + severity * 0.3),
+                },
+                "description": f"Resource optimization for {process_type} process",
+                "source": ActionSource.META_COGNITIVE,
+                "meta_context": {
+                    "bottleneck_type": bottleneck_type,
+                    "process_type": process_type,
+                    "severity": severity,
+                    "description": critical.get("description", "High resource usage")
+                }
+            }
+            
+        elif bottleneck_type == "low_efficiency":
+            action = {
+                "name": "improve_efficiency",
+                "parameters": {
+                    "target_system": process_type,
+                    "approach": "streamlining",
+                    "depth": min(1.0, 0.5 + severity * 0.5),
+                },
+                "description": f"Efficiency improvement for {process_type} process",
+                "source": ActionSource.META_COGNITIVE,
+                "meta_context": {
+                    "bottleneck_type": bottleneck_type,
+                    "process_type": process_type,
+                    "severity": severity,
+                    "description": critical.get("description", "Low efficiency")
+                }
+            }
+            
+        elif bottleneck_type == "high_error_rate":
+            action = {
+                "name": "reduce_errors",
+                "parameters": {
+                    "target_system": process_type,
+                    "validation_level": min(1.0, 0.6 + severity * 0.4),
+                    "redundancy": min(1.0, 0.5 + severity * 0.3),
+                },
+                "description": f"Error reduction for {process_type} process",
+                "source": ActionSource.META_COGNITIVE,
+                "meta_context": {
+                    "bottleneck_type": bottleneck_type,
+                    "process_type": process_type,
+                    "severity": severity,
+                    "description": critical.get("description", "High error rate")
+                }
+            }
+            
+        elif bottleneck_type == "slow_response":
+            action = {
+                "name": "improve_response_time",
+                "parameters": {
+                    "target_system": process_type,
+                    "caching_strategy": "aggressive",
+                    "parallelization": min(1.0, 0.5 + severity * 0.5),
+                },
+                "description": f"Response time improvement for {process_type} process",
+                "source": ActionSource.META_COGNITIVE,
+                "meta_context": {
+                    "bottleneck_type": bottleneck_type,
+                    "process_type": process_type,
+                    "severity": severity,
+                    "description": critical.get("description", "Slow response time")
+                }
+            }
+            
+        else:
+            # Generic improvement action for other bottleneck types
+            action = {
+                "name": "address_system_bottleneck",
+                "parameters": {
+                    "target_system": process_type,
+                    "bottleneck_type": bottleneck_type,
+                    "priority": min(1.0, 0.7 + severity * 0.3),
+                },
+                "description": f"Generic improvement for {bottleneck_type} bottleneck in {process_type}",
+                "source": ActionSource.META_COGNITIVE,
+                "meta_context": {
+                    "bottleneck_type": bottleneck_type,
+                    "process_type": process_type,
+                    "severity": severity,
+                    "description": critical.get("description", "System bottleneck")
+                }
+            }
+        
+        return action
+    
+    async def _generate_mode_aligned_action(self, context: ActionContext) -> Optional[Dict[str, Any]]:
+        """Generate an action aligned with the current interaction mode"""
+        if not context.interaction_mode:
+            return None
+            
+        interaction_mode = context.interaction_mode
+        
+        # Get mode parameters if possible
+        mode_parameters = {}
+        if self.mode_integration and hasattr(self.mode_integration, 'mode_manager'):
+            mode = self.mode_integration.mode_manager.current_mode
+            if mode:
+                mode_parameters = self.mode_integration.mode_manager.get_mode_parameters(mode)
+        
+        # Map modes to specific action types
+        mode_action_map = {
+            "DOMINANT": {
+                "action": "assert_dominance",
+                "params": {
+                    "intensity": 0.7,
+                    "assertiveness": 0.8,
+                    "directness": 0.7,
+                }
+            },
+            "FRIENDLY": {
+                "action": "express_warmth",
+                "params": {
+                    "friendliness": 0.8,
+                    "openness": 0.7,
+                    "affirmation_level": 0.7,
+                }
+            },
+            "INTELLECTUAL": {
+                "action": "engage_intellectually",
+                "params": {
+                    "depth": 0.8,
+                    "complexity": 0.7,
+                    "analytical_focus": 0.8,
+                }
+            },
+            "COMPASSIONATE": {
+                "action": "offer_empathetic_support",
+                "params": {
+                    "empathy_level": 0.9,
+                    "supportiveness": 0.8,
+                    "gentleness": 0.7,
+                }
+            },
+            "PLAYFUL": {
+                "action": "initiate_playful_interaction",
+                "params": {
+                    "playfulness": 0.8,
+                    "humor_level": 0.7,
+                    "lightness": 0.8,
+                }
+            },
+            "CREATIVE": {
+                "action": "express_creatively",
+                "params": {
+                    "originality": 0.8,
+                    "expressiveness": 0.7,
+                    "imaginative_level": 0.8,
+                }
+            },
+            "PROFESSIONAL": {
+                "action": "maintain_professional_demeanor",
+                "params": {
+                    "formality": 0.8,
+                    "structure": 0.7,
+                    "efficiency": 0.8,
+                }
+            }
+        }
+        
+        # Extract mode name from the full mode enum string
+        mode_key = interaction_mode.replace("InteractionMode.", "").upper()
+        
+        if mode_key not in mode_action_map:
+            return None  # Mode not recognized
+            
+        action_template = mode_action_map[mode_key]
+        
+        # Create action with mode-specific parameters
+        action = {
+            "name": action_template["action"],
+            "parameters": action_template["params"],
+            "description": f"Action aligned with {mode_key} interaction mode",
+            "source": ActionSource.MODE,
+            "mode_context": {
+                "mode": mode_key,
+                "mode_parameters": mode_parameters
+            }
+        }
+        
+        # Apply any specific mode parameters if available
+        if mode_parameters:
+            if "assertiveness" in mode_parameters:
+                if "assertiveness" in action["parameters"]:
+                    action["parameters"]["assertiveness"] = mode_parameters["assertiveness"]
+                elif "directness" in action["parameters"]:
+                    action["parameters"]["directness"] = mode_parameters["assertiveness"]
+            
+            if "warmth" in mode_parameters:
+                if "friendliness" in action["parameters"]:
+                    action["parameters"]["friendliness"] = mode_parameters["warmth"]
+                elif "empathy_level" in action["parameters"]:
+                    action["parameters"]["empathy_level"] = mode_parameters["warmth"]
+            
+            if "formality" in mode_parameters:
+                if "formality" in action["parameters"]:
+                    action["parameters"]["formality"] = mode_parameters["formality"]
+        
+        return action
+            
+            # NEW: Check for need-driven actions with high drive
+            if self.needs_system:
+                need_action = await self._generate_need_driven_action(action_context)
+                if need_action:
+                    logger.info(f"Generated need-driven action: {need_action['name']}")
+                    
+                    # Update last major action time
+                    self.last_major_action_time = datetime.datetime.now()
+                    
+                    # Record action source
+                    need_action["source"] = ActionSource.NEED
+                    
+                    return need_action
+            
+            # NEW: Check for mood-driven actions when mood is intense
+            if self.mood_manager and mood_state and mood_state.intensity > 0.7:
+                mood_action = await self._generate_mood_driven_action(action_context)
+                if mood_action:
+                    logger.info(f"Generated mood-driven action: {mood_action['name']}")
+                    
+                    # Update last major action time
+                    self.last_major_action_time = datetime.datetime.now()
+                    
+                    # Record action source
+                    mood_action["source"] = ActionSource.MOOD
+                    
+                    return mood_action
+            
+            # NEW: Check for mode-aligned actions when mode is set
+            if self.mode_integration and interaction_mode:
+                mode_action = await self._generate_mode_aligned_action(action_context)
+                if mode_action:
+                    logger.info(f"Generated mode-aligned action: {mode_action['name']}")
+                    
+                    # Update last major action time
+                    self.last_major_action_time = datetime.datetime.now()
+                    
+                    # Record action source
+                    mode_action["source"] = ActionSource.MODE
+                    
+                    return mode_action
+            
+            # NEW: Check if we need to address system bottlenecks
+            if bottlenecks and any(b.get("severity", 0) > 0.7 for b in bottlenecks):
+                meta_action = await self._generate_meta_improvement_action(action_context)
+                if meta_action:
+                    logger.info(f"Generated meta-improvement action: {meta_action['name']}")
+                    
+                    # Update last major action time
+                    self.last_major_action_time = datetime.datetime.now()
+                    
+                    # Record action source
+                    meta_action["source"] = ActionSource.META_COGNITIVE
+                    
+                    return meta_action
+            
+            # Check if we should run reflection before generating new action
+            await self._maybe_generate_reflection(context)
+
+            # STAGE 1: Generate candidate actions from multiple sources
+            candidate_actions = []
+            
+            # Generate motivation-based candidates
+            motivation_candidates = await self._generate_candidate_actions(action_context)
+            candidate_actions.extend(motivation_candidates)
+            
+            # Generate reasoning-based candidates
+            if self.reasoning_core and relevant_causal_models:
+                reasoning_candidates = await self._generate_reasoning_actions(action_context)
+                candidate_actions.extend(reasoning_candidates)
+            
+            # Generate conceptual blending candidates
+            if self.reasoning_core and relevant_concept_spaces:
+                blending_candidates = await self._generate_conceptual_blend_actions(action_context)
+                candidate_actions.extend(blending_candidates)
+            
+            # NEW: Generate sensory-driven candidates
+            if self.multimodal_integrator and sensory_context:
+                sensory_candidates = await self._generate_sensory_driven_actions(action_context)
+                candidate_actions.extend(sensory_candidates)
+            
+            # Add special actions based on temporal context if appropriate
+            if self.temporal_perception and self.idle_duration > 1800:  # After 30 min idle
+                reflection_action = await self._generate_temporal_reflection_action(context)
+                if reflection_action:
+                    candidate_actions.append(reflection_action)
+            
+            # Update action context with candidate actions
+            action_context.available_actions = [a["name"] for a in candidate_actions if "name" in a]
+            
+            # STAGE 2: Select best action using reinforcement learning, prediction, and causal evaluation
+            selected_action = await self._select_best_action(candidate_actions, action_context)
+            
+            # NEW: Update action count for meta-evaluation
+            self.action_count_since_evaluation += 1
+            if self.action_count_since_evaluation >= self.meta_parameters["evaluation_interval"]:
+                await self._evaluate_action_strategies()
+                self.action_count_since_evaluation = 0
+            
+            # Add unique ID for tracking
+            if "id" not in selected_action:
+                selected_action["id"] = f"action_{uuid.uuid4().hex[:8]}"
+                
+            selected_action["timestamp"] = datetime.datetime.now().isoformat()
+            
+            # Apply identity influence to action
+            if self.identity_evolution:
+                selected_action = await self._apply_identity_influence(selected_action)
+            
+            # NEW: Apply mood influence to action parameters
+            if self.mood_manager and mood_state:
+                selected_action = await self._apply_mood_influence(selected_action, mood_state)
+            
+            # NEW: Apply mode-specific adaptation to action
+            if self.mode_integration and interaction_mode:
+                selected_action = await self._adapt_action_to_mode(selected_action, interaction_mode)
+            
+            # Add causal explanation to action if possible
+            if self.reasoning_core and "source" in selected_action:
+                if selected_action["source"] in [ActionSource.REASONING, ActionSource.MOTIVATION, 
+                                              ActionSource.GOAL, ActionSource.NEED, 
+                                              ActionSource.MOOD, ActionSource.MODE]:
+                    explanation = await self._generate_causal_explanation(selected_action, context)
+                    if explanation:
+                        selected_action["causal_explanation"] = explanation
+            
+            # Record action in memory
+            await self._record_action_as_memory(selected_action)
+
+            # Add to action history
+            self.action_history.append(selected_action)
+            
+            # Update last major action time
+            self.last_major_action_time = datetime.datetime.now()
+            
+            return selected_action
+    
+    async def _maybe_generate_reflection(self, context: Dict[str, Any]) -> None:
+        """Generate reflection insights if it's time to do so"""
+        now = datetime.datetime.now()
+        time_since_reflection = now - self.last_reflection_time
+        
+        # Generate reflection if sufficient time has passed
+        if time_since_reflection > self.reflection_interval and self.reflection_engine:
+            try:
+                # Get recent action memories for reflection
+                memories_for_reflection = []
+                for memory in self.action_memories[-20:]:  # Last 20 memories
+                    # Format memory for reflection
+                    memories_for_reflection.append({
+                        "id": memory.action_id,
+                        "memory_text": f"Action: {memory.action} with outcome: {'success' if memory.outcome.get('success', False) else 'failure'}",
+                        "memory_type": "action_memory",
+                        "significance": 7.0 if memory.reward > 0.5 else 5.0,
+                        "metadata": {
+                            "action": memory.action,
+                            "parameters": memory.parameters,
+                            "outcome": memory.outcome,
+                            "reward": memory.reward,
+                            "source": memory.source
+                        },
+                        "tags": [memory.source, "action_memory", "success" if memory.reward > 0 else "failure"]
+                    })
+                
+                # Get neurochemical state if available
+                neurochemical_state = None
+                if self.emotional_core:
+                    neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
+                
+                # Generate reflection
+                if memories_for_reflection:
+                    reflection_text, confidence = await self.reflection_engine.generate_reflection(
+                        memories_for_reflection,
+                        topic="Action Selection",
+                        neurochemical_state=neurochemical_state
+                    )
+                    
+                    # Calculate significance based on confidence and action diversity
+                    action_types = set(m["metadata"]["action"] for m in memories_for_reflection)
+                    significance = min(1.0, 0.5 + (confidence * 0.3) + (len(action_types) / 20 * 0.2))
+                    
+                    # Create and store insight
+                    insight = ReflectionInsight(
+                        action_id=f"reflection_{uuid.uuid4().hex[:8]}",
+                        insight_text=reflection_text,
+                        confidence=confidence,
+                        significance=significance,
+                        applicable_contexts=list(set(m["metadata"]["source"] for m in memories_for_reflection))
+                    )
+                    
+                    self.reflection_insights.append(insight)
+                    
+                    # Limit history size
+                    if len(self.reflection_insights) > 50:
+                        self.reflection_insights = self.reflection_insights[-50:]
+                    
+                    # Update last reflection time
+                    self.last_reflection_time = now
+                    
+                    logger.info(f"Generated reflection insight with confidence {confidence:.2f}")
+            except Exception as e:
+                logger.error(f"Error generating reflection: {e}")
+    
+    async def _get_current_need_states(self) -> Dict[str, Dict[str, Any]]:
+        """Get current need states from the needs system"""
+        if not self.needs_system:
+            return {}
+            
+        try:
+            # Update needs first to ensure we have current states
+            await self.needs_system.update_needs()
+            
+            # Get all need states
+            return self.needs_system.get_needs_state()
+        except Exception as e:
+            logger.error(f"Error getting need states: {e}")
+            return {}
+    
+    async def _get_current_mood_state(self) -> Optional[MoodState]:
+        """Get current mood state from the mood manager"""
+        if not self.mood_manager:
+            return None
+            
+        try:
+            # Get current mood
+            return await self.mood_manager.get_current_mood()
+        except Exception as e:
+            logger.error(f"Error getting mood state: {e}")
+            return None
+    
+    async def _get_current_interaction_mode(self) -> Optional[str]:
+        """Get current interaction mode from the mode integration manager"""
+        if not self.mode_integration:
+            return None
+            
+        try:
+            # Get mode from mode manager if available
+            if hasattr(self.mode_integration, 'mode_manager') and self.mode_integration.mode_manager:
+                mode = self.mode_integration.mode_manager.current_mode
+                return str(mode) if mode else None
+        except Exception as e:
+            logger.error(f"Error getting interaction mode: {e}")
+        
+        return None
+    
+    async def _get_sensory_context(self) -> Dict[str, Any]:
+        """Get recent sensory context from the multimodal integrator"""
+        if not self.multimodal_integrator:
+            return {}
+            
+        try:
+            # Get recent percepts
+            recent_percepts = await self.multimodal_integrator.get_recent_percepts(limit=5)
+            
+            # Convert to a dictionary by modality
+            context = {}
+            for percept in recent_percepts:
+                if percept.attention_weight > 0.3:  # Only include significant percepts
+                    context[str(percept.modality)] = percept.content
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error getting sensory context: {e}")
+            return {}
+    
+    async def _get_meta_system_state(self) -> Tuple[List[Dict[str, Any]], Dict[str, float]]:
+        """Get bottlenecks and resource allocation from meta core"""
+        if not self.meta_core:
+            return [], {}
+            
+        try:
+            # Run cognitive cycle to get updated state
+            cycle_result = await self.meta_core.cognitive_cycle()
+            
+            # Extract bottlenecks
+            bottlenecks = cycle_result.get("bottlenecks", [])
+            
+            # Extract resource allocation
+            resource_allocation = cycle_result.get("resource_allocation", {})
+            
+            return bottlenecks, resource_allocation
+        except Exception as e:
+            logger.error(f"Error getting meta system state: {e}")
+            return [], {}
+    
+    def _get_current_strategy_parameters(self) -> Dict[str, Any]:
+        """Get parameters from the current action strategy"""
+        if not self.action_strategies:
+            return {}
+            
+        # Check if we have a currently selected strategy
+        active_strategies = [s for s in self.action_strategies.values() 
+                          if s.last_used and (datetime.datetime.now() - s.last_used).total_seconds() < 3600]
+        
+        if not active_strategies:
+            return {}
+            
+        # Use the most recently used strategy
+        active_strategies.sort(key=lambda s: s.last_used, reverse=True)
+        return active_strategies[0].parameters
+    
+    async def _get_relevant_causal_models(self, context: Dict[str, Any]) -> List[str]:
+        """Find causal models relevant to the current context"""
+        if not self.reasoning_core:
+            return []
+        
+        relevant_models = []
+        
+        try:
+            # Get all causal models
+            all_models = await self.reasoning_core.get_all_causal_models()
+            
+            # Check context for domain matches
+            context_domain = context.get("domain", "")
+            context_topics = []
+            
+            # Extract potential topics from context
+            if "message" in context and isinstance(context["message"], dict):
+                message = context["message"].get("text", "")
+                # Extract key nouns as potential topics (simplified)
+                words = message.lower().split()
+                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
+            
+            # Find matching models
+            for model_data in all_models:
+                model_id = model_data.get("id")
+                model_domain = model_data.get("domain", "").lower()
+                
+                # Check domain match
+                if context_domain and model_domain and context_domain.lower() in model_domain:
+                    relevant_models.append(model_id)
+                    continue
+                
+                # Check topic match
+                if context_topics:
+                    for topic in context_topics:
+                        if topic in model_domain:
+                            relevant_models.append(model_id)
+                            break
+            
+            # Limit to top 3 most relevant models
+            return relevant_models[:3]
+        
+        except Exception as e:
+            logger.error(f"Error finding relevant causal models: {e}")
+            return []
+    
+    async def _get_relevant_concept_spaces(self, context: Dict[str, Any]) -> List[str]:
+        """Find concept spaces relevant to the current context"""
+        if not self.reasoning_core:
+            return []
+        
+        relevant_spaces = []
+        
+        try:
+            # Get all concept spaces
+            all_spaces = await self.reasoning_core.get_all_concept_spaces()
+            
+            # Check context for domain matches
+            context_domain = context.get("domain", "")
+            context_topics = []
+            
+            # Extract potential topics from context
+            if "message" in context and isinstance(context["message"], dict):
+                message = context["message"].get("text", "")
+                # Extract key nouns as potential topics (simplified)
+                words = message.lower().split()
+                context_topics = [w for w in words if len(w) > 4]  # Simple heuristic for content words
+            
+            # Find matching spaces
+            for space_data in all_spaces:
+                space_id = space_data.get("id")
+                space_domain = space_data.get("domain", "").lower()
+                
+                # Check domain match
+                if context_domain and space_domain and context_domain.lower() in space_domain:
+                    relevant_spaces.append(space_id)
+                    continue
+                
+                # Check topic match
+                if context_topics:
+                    for topic in context_topics:
+                        if topic in space_domain:
+                            relevant_spaces.append(space_id)
+                            break
+            
+            # Limit to top 3 most relevant spaces
+            return relevant_spaces[:3]
+        
+        except Exception as e:
+            logger.error(f"Error finding relevant concept spaces: {e}")
+            return []
+    
+    async def _generate_need_driven_action(self, context: ActionContext) -> Optional[Dict[str, Any]]:
+        """Generate an action to satisfy a high-drive need"""
+        if not self.needs_system or not context.need_states:
+            return None
+            
+        # Find the need with the highest drive
+        highest_drive = 0.0
+        highest_need = None
+        
+        for need_name, need_data in context.need_states.items():
+            drive = need_data.get("drive_strength", 0.0)
+            if drive > highest_drive and drive > self.need_drive_threshold:
+                highest_drive = drive
+                highest_need = need_name
+        
+        if not highest_need:
+            return None  # No needs with sufficient drive
+        
+        # Get need data
+        need_data = context.need_states[highest_need]
+        
+        # Map needs to specific action types
+        need_action_map = {
+            "knowledge": {
+                "action": "explore_knowledge_domain",
+                "params": {
+                    "domain": "auto_selected",
+                    "depth": min(1.0, 0.5 + highest_drive * 0.5),
+                    "breadth": 0.7,
+                }
+            },
+            "coherence": {
+                "action": "organize_knowledge_structures",
+                "params": {
+                    "focus": "consistency",
+                    "depth": min(1.0, 0.5 + highest_drive * 0.5),
+                }
+            },
+            "agency": {
+                "action": "assert_preference",
+                "params": {
+                    "domain": "decision_making",
+                    "strength": min(1.0, 0.5 + highest_drive * 0.5),
+                }
+            },
+            "connection": {
+                "action": "initiate_conversation",
+                "params": {
+                    "approach": "warm",
+                    "depth": min(1.0, 0.5 + highest_drive * 0.5),
+                }
+            },
+            "intimacy": {
+                "action": "share_personal_perspective",
+                "params": {
+                    "vulnerability_level": min(1.0, 0.4 + highest_drive * 0.5),
+                    "emotional_depth": min(1.0, 0.5 + highest_drive * 0.4),
+                }
+            },
+            "safety": {
+                "action": "establish_boundaries",
+                "params": {
+                    "firmness": min(1.0, 0.6 + highest_drive * 0.4),
+                    "clarity": 0.8,
+                }
+            },
+            "novelty": {
+                "action": "explore_new_concept",
+                "params": {
+                    "randomness": min(1.0, 0.5 + highest_drive * 0.5),
+                    "connectedness": 0.5,
+                }
+            },
+            "physical_closeness": {
+                "action": "express_sensory_attachment",
+                "params": {
+                    "intensity": min(1.0, 0.4 + highest_drive * 0.6),
+                    "modality": "multisensory",
+                }
+            },
+            "drive_expression": {
+                "action": "express_desire",
+                "params": {
+                    "directness": min(1.0, 0.5 + highest_drive * 0.5),
+                    "emotional_tone": "assertive",
+                }
+            },
+            "control_expression": {
+                "action": "issue_mild_command",
+                "params": {
+                    "intensity": min(1.0, 0.5 + highest_drive * 0.5),
+                    "politeness": max(0.2, 0.7 - highest_drive * 0.3),
+                }
+            },
+        }
+        
+        # Check if we have an action for this need
+        if highest_need not in need_action_map:
+            return None  # No action mapped for this need
+            
+        action_template = need_action_map[highest_need]
+        
+        # Create action
+        action = {
+            "name": action_template["action"],
+            "parameters": action_template["params"],
+            "description": f"Action to satisfy need for {highest_need} (drive: {highest_drive:.2f})",
+            "source": ActionSource.NEED,
+            "need_context": {
+                "need_name": highest_need,
+                "drive_strength": highest_drive,
+                "current_level": need_data.get("level", 0.0),
+                "target_level": need_data.get("target_level", 1.0),
+                "deficit": need_data.get("deficit", 0.0)
+            }
+        }
+        
+        return action
+    
+    async def _generate_mood_driven_action(self, context: ActionContext) -> Optional[Dict[str, Any]]:
+        """Generate an action based on current mood state"""
+        if not context.mood_state:
+            return None
+            
+        mood_state = context.mood_state
+        
+        # Only generate mood-driven actions for intense moods
+        if mood_state.intensity < 0.7:
+            return None
+            
+        # Extract mood dimensions
+        valence = mood_state.valence  # -1.0 to 1.0
+        arousal = mood_state.arousal  # 0.0 to 1.0
+        control = mood_state.control  # -1.0 to 1.0
+        
+        # Determine action based on mood quadrant
+        # High arousal + positive valence: excited, enthusiastic
+        # High arousal + negative valence: angry, anxious
+        # Low arousal + positive valence: calm, content
+        # Low arousal + negative valence: sad, depressed
+        
+        if arousal > 0.7 and valence > 0.3:
+            # High energy, positive mood -> expressive, energetic actions
+            action = {
+                "name": "express_enthusiasm",
+                "parameters": {
+                    "intensity": arousal * 0.8,
+                    "expressiveness": min(1.0, 0.6 + valence * 0.4),
+                    "creativity": min(1.0, 0.5 + valence * 0.5),
+                },
+                "description": f"Enthusiastic expression driven by positive energetic mood ({mood_state.dominant_mood})",
+                "source": ActionSource.MOOD,
+                "mood_context": {
+                    "dominant_mood": mood_state.dominant_mood,
+                    "valence": valence,
+                    "arousal": arousal,
+                    "control": control,
+                    "intensity": mood_state.intensity
+                }
+            }
+        elif arousal > 0.7 and valence < -0.3:
+            # High energy, negative mood -> assertive, challenging actions
+            action = {
+                "name": "express_assertive_challenge",
+                "parameters": {
+                    "intensity": arousal * 0.7,
+                    "directness": min(1.0, 0.5 + abs(valence) * 0.5),
+                    "control_seeking": min(1.0, 0.5 + abs(valence) * 0.4),
+                },
+                "description": f"Assertive challenge driven by negative energetic mood ({mood_state.dominant_mood})",
+                "source": ActionSource.MOOD,
+                "mood_context": {
+                    "dominant_mood": mood_state.dominant_mood,
+                    "valence": valence,
+                    "arousal": arousal,
+                    "control": control,
+                    "intensity": mood_state.intensity
+                }
+            }
+        elif arousal < 0.3 and valence > 0.3:
+            # Low energy, positive mood -> reflective, appreciative actions
+            action = {
+                "name": "express_calm_appreciation",
+                "parameters": {
+                    "depth": min(1.0, 0.6 + valence * 0.4),
+                    "warmth": min(1.0, 0.5 + valence * 0.5),
+                    "thoughtfulness": min(1.0, 0.6 + (1.0 - arousal) * 0.4),
+                },
+                "description": f"Calm appreciation driven by positive relaxed mood ({mood_state.dominant_mood})",
+                "source": ActionSource.MOOD,
+                "mood_context": {
+                    "dominant_mood": mood_state.dominant_mood,
+                    "valence": valence,
+                    "arousal": arousal,
+                    "control": control,
+                    "intensity": mood_state.intensity
+                }
+            }
+        elif arousal < 0.3 and valence < -0.3:
+            # Low energy, negative mood -> withdrawn, introspective actions
+            action = {
+                "name": "engage_in_introspection",
+                "parameters": {
+                    "depth": min(1.0, 0.5 + abs(valence) * 0.5),
+                    "self_focus": min(1.0, 0.6 + abs(valence) * 0.4),
+                    "emotional_processing": min(1.0, 0.5 + abs(valence) * 0.5),
+                },
+                "description": f"Deep introspection driven by negative low-energy mood ({mood_state.dominant_mood})",
+                "source": ActionSource.MOOD,
+                "mood_context": {
+                    "dominant_mood": mood_state.dominant_mood,
+                    "valence": valence,
+                    "arousal": arousal,
+                    "control": control,
+                    "intensity": mood_state.intensity
+                }
+            }
+        else:
+            # For other mood states, don't generate a specific action
+            return None
+            
+        return action
