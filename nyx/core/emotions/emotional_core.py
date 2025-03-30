@@ -323,9 +323,12 @@ class EmotionalCore:
         # Create base agent for cloning
         base_agent = self._initialize_base_agent()
         
-        # Create neurochemical agent
+        # Create neurochemical agent - streamlined configuration
         self.agents["neurochemical"] = base_agent.clone(
             name="Neurochemical Agent",
+            instructions=get_dynamic_instructions("neurochemical_agent", {
+                "current_chemicals": {c: d["value"] for c, d in self.neurochemicals.items()}
+            }),
             tools=[
                 function_tool(self.neurochemical_tools.update_neurochemical),
                 function_tool(self.neurochemical_tools.apply_chemical_decay),
@@ -746,41 +749,24 @@ class EmotionalCore:
             conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
             self.context.set_value("conversation_id", conversation_id)
         
-        # Create an enhanced RunConfig using the SDK features
-        run_config = create_run_config(
+        # Simplified RunConfig creation using SDK patterns
+        run_config = RunConfig(
             workflow_name="Emotional_Processing",
             trace_id=f"emotion_trace_{self.context.cycle_count}",
             group_id=conversation_id,
             model=orchestrator.model,
-            temperature=0.4,
-            max_tokens=300,
-            cycle_count=self.context.cycle_count,
-            context_data={
+            model_settings=ModelSettings(temperature=0.4, max_tokens=300),
+            trace_metadata={
                 "input_text_length": len(text),
+                "cycle_count": self.context.cycle_count,
                 "pattern_analysis": self._quick_pattern_analysis(text)
             }
         )
         
         # Track API call start time
         start_time = datetime.datetime.now()
-
-        # --- Trigger Hormone Updates based on Strong/Sustained Emotions ---
-        if self.hormone_system and (datetime.datetime.now() - self.last_hormone_influence_check).total_seconds() > 1800: # Check every 30 mins
-            try:
-                current_neurochemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
-                ctx = RunContextWrapper(context=self.context) # Create context wrapper
         
-                # Example: Sustained high stress (Cortanyx) might slowly affect hormones
-                if current_neurochemicals.get("cortanyx", 0) > 0.75:
-                    if hasattr(self.hormone_system, "update_hormone"):
-                        await self.hormone_system.update_hormone(ctx, "endoryx", -0.02, source="sustained_stress")
-        
-                self.last_hormone_influence_check = datetime.datetime.now()
-        
-            except Exception as e:
-                logger.error(f"Error triggering hormone updates from emotional state: {e}")
-        
-        # Generate a run ID for tracking
+        # Run ID for tracking
         run_id = f"run_{datetime.datetime.now().timestamp()}"
         self.active_runs[run_id] = {
             "start_time": start_time,
@@ -800,56 +786,49 @@ class EmotionalCore:
                 "run_id": run_id
             }
         ):
-            # Use agent_span for enhanced tracing
-            with agent_span(
-                name=orchestrator.name,
-                handoffs=[h.agent_name for h in orchestrator.handoffs],
-                tools=[t.name for t in orchestrator.tools],
-                output_type="EmotionalResponseOutput"
-            ):
-                try:
-                    # Create structured input for the agent
-                    structured_input = json.dumps({
-                        "input_text": text,
-                        "current_cycle": self.context.cycle_count
-                    })
-                    
-                    # Execute the orchestrator with the run config
-                    result = await Runner.run(
-                        orchestrator,
-                        structured_input,
-                        context=self.context,
-                        run_config=run_config,
-                    )
-                    
-                    # Calculate duration and update performance metrics
-                    duration = (datetime.datetime.now() - start_time).total_seconds()
-                    self._update_performance_metrics(duration)
-                    
-                    # Mark run completion
-                    self.active_runs[run_id]["status"] = "completed"
-                    self.active_runs[run_id]["duration"] = duration
-                    self.active_runs[run_id]["output"] = result.final_output
-                    
-                    # Record emotional state for history
-                    self._record_emotional_state()
-                    
-                    return result.final_output
+            try:
+                # Create structured input for the agent
+                structured_input = json.dumps({
+                    "input_text": text,
+                    "current_cycle": self.context.cycle_count
+                })
                 
-                except Exception as e:
-                    # Enhanced error handling with a custom_span
-                    with custom_span(
-                        "processing_error",
-                        data={
-                            "error_type": type(e).__name__,
-                            "message": str(e),
-                            "run_id": run_id
-                        }
-                    ):
-                        logger.error(f"Error in process_emotional_input: {e}")
-                        self.active_runs[run_id]["status"] = "error"
-                        self.active_runs[run_id]["error"] = str(e)
-                        return {"error": f"Processing failed: {str(e)}"}
+                # Execute the orchestrator with the run config
+                result = await Runner.run(
+                    orchestrator,
+                    structured_input,
+                    context=self.context,
+                    run_config=run_config,
+                )
+                
+                # Calculate duration and update performance metrics
+                duration = (datetime.datetime.now() - start_time).total_seconds()
+                self._update_performance_metrics(duration)
+                
+                # Mark run completion
+                self.active_runs[run_id]["status"] = "completed"
+                self.active_runs[run_id]["duration"] = duration
+                self.active_runs[run_id]["output"] = result.final_output
+                
+                # Record emotional state for history
+                self._record_emotional_state()
+                
+                return result.final_output
+            
+            except Exception as e:
+                # Enhanced error handling with a custom_span
+                with custom_span(
+                    "processing_error",
+                    data={
+                        "error_type": type(e).__name__,
+                        "message": str(e),
+                        "run_id": run_id
+                    }
+                ):
+                    logger.error(f"Error in process_emotional_input: {e}")
+                    self.active_runs[run_id]["status"] = "error"
+                    self.active_runs[run_id]["error"] = str(e)
+                    return {"error": f"Processing failed: {str(e)}"}
     
     async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[StreamEvent]:
         """
