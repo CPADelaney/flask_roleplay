@@ -2,20 +2,23 @@
 
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 
-from agents import Agent, Runner, trace, function_tool, handoff
+from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
 from nyx.core.memory_system import MemoryCore
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for input/output validation
 class MemoryQuery(BaseModel):
     query: str
     memory_types: List[str] = Field(default_factory=lambda: ["observation", "reflection", "abstraction", "experience"])
     limit: int = 5
     min_significance: int = 3
+    include_archived: bool = False
+    entities: Optional[List[str]] = None
 
 class ReflectionRequest(BaseModel):
     topic: Optional[str] = None
@@ -45,124 +48,161 @@ class MemoryOrchestrator:
         # Create memory core
         self.memory_core = MemoryCore(user_id, conversation_id)
         
-        # Initialize agent dictionary
-        self._agents = {}
-        
         # Trace group ID for connecting traces
         self.trace_group_id = f"nyx-memory-{user_id}-{conversation_id}"
+        
+        # Initialize initialized flag
+        self.initialized = False
     
     async def initialize(self):
         """Initialize the memory orchestration system"""
+        if self.initialized:
+            return
+            
         logger.info(f"Initializing memory orchestration system for user {self.user_id}")
-        await self.memory_core.initialize()
-        self._init_agents()
-        logger.info("Memory orchestration system initialized")
+        with trace(workflow_name="Memory System Initialization", group_id=self.trace_group_id):
+            await self.memory_core.initialize()
+            self._init_agents()
+            self.initialized = True
+            logger.info("Memory orchestration system initialized")
     
     def _init_agents(self):
         """Initialize all the specialized agents"""
+        # Initialize retrieval agent
+        self.retrieval_agent = Agent(
+            name="Memory Retrieval Agent",
+            handoff_description="Handles searching and retrieving memories based on queries",
+            instructions="""You are specialized in retrieving memories from Nyx's memory system.
+            Use the provided tools to effectively search for and retrieve memories based on the
+            user's query parameters. Return the most relevant memories with appropriate formatting.""",
+            tools=[
+                function_tool(self.memory_core.retrieve_memories),
+                function_tool(self.memory_core.get_memory),
+                function_tool(self.memory_core.retrieve_memories_with_formatting),
+                function_tool(self.memory_core.retrieve_relevant_experiences)
+            ],
+            output_type=Dict[str, Any]
+        )
+        
+        # Initialize creation agent
+        self.creation_agent = Agent(
+            name="Memory Creation Agent",
+            handoff_description="Handles creating and storing new memories",
+            instructions="""You are specialized in creating and storing new memories for Nyx.
+            When a user wants to create a new memory, help them structure it properly with
+            appropriate metadata, tags, and significance levels. Ensure the memory is properly
+            categorized and indexed.""",
+            tools=[
+                function_tool(self.memory_core.add_memory),
+                function_tool(self.memory_core.update_memory),
+                function_tool(self.memory_core.delete_memory)
+            ],
+            output_type=Dict[str, Any]
+        )
+        
+        # Initialize reflection agent
+        self.reflection_agent = Agent(
+            name="Reflection Agent",
+            handoff_description="Creates reflections and abstractions from memories",
+            instructions="""You are specialized in generating reflections and abstractions
+            from Nyx's memories. Your role is to analyze memories, find patterns, and create
+            higher-level insights that connect individual experiences.""",
+            tools=[
+                function_tool(self.memory_core.create_reflection_from_memories),
+                function_tool(self.memory_core.create_abstraction_from_memories),
+                function_tool(self.memory_core.retrieve_memories)
+            ],
+            output_type=Dict[str, Any]
+        )
+        
+        # Initialize experience agent
+        self.experience_agent = Agent(
+            name="Experience Agent",
+            handoff_description="Manages experience recall and narrative generation",
+            instructions="""You are specialized in managing Nyx's experiences and narratives.
+            Your role is to retrieve relevant experiences, generate natural conversational
+            recalls, and construct coherent narratives from memories.""",
+            tools=[
+                function_tool(self.memory_core.retrieve_relevant_experiences),
+                function_tool(self.memory_core.generate_conversational_recall),
+                function_tool(self.memory_core.construct_narrative_from_memories)
+            ],
+            output_type=Dict[str, Any]
+        )
+        
+        # Initialize maintenance agent
+        self.maintenance_agent = Agent(
+            name="Memory Maintenance Agent",
+            handoff_description="Handles memory system maintenance, decay, and consolidation",
+            instructions="""You are specialized in maintaining the health and efficiency of
+            Nyx's memory system. Your role is to apply memory decay, consolidate similar
+            memories, archive old memories, and ensure the overall system stays optimized.""",
+            tools=[
+                function_tool(self.memory_core.run_maintenance),
+                function_tool(self.memory_core.apply_memory_decay),
+                function_tool(self.memory_core.consolidate_memory_clusters),
+                function_tool(self.memory_core.get_memory_stats)
+            ],
+            output_type=Dict[str, Any]
+        )
+        
         # Initialize the main memory orchestrator agent
-        self._agents["main"] = Agent(
+        self.main_agent = Agent(
             name="Memory Orchestrator",
             instructions="""You are the central memory orchestration system for Nyx AI.
             Your role is to coordinate memory operations, deciding which specialized
             agent to use for each memory task. Analyze the user's request and direct
             it to the appropriate specialized agent.""",
             handoffs=[
-                self._get_retrieval_agent(),
-                self._get_creation_agent(),
-                self._get_reflection_agent(),
-                self._get_experience_agent(),
-                self._get_maintenance_agent()
-            ]
+                handoff(self.retrieval_agent,
+                       tool_name_override="retrieve_memories",
+                       tool_description_override="Search and retrieve memories based on queries"),
+                handoff(self.creation_agent,
+                       tool_name_override="create_memory",
+                       tool_description_override="Create and store new memories"),
+                handoff(self.reflection_agent,
+                       tool_name_override="create_reflection",
+                       tool_description_override="Generate reflections and abstractions"),
+                handoff(self.experience_agent,
+                       tool_name_override="manage_experiences",
+                       tool_description_override="Retrieve experiences and generate narratives"),
+                handoff(self.maintenance_agent,
+                       tool_name_override="maintenance_tasks",
+                       tool_description_override="Perform memory system maintenance")
+            ],
+            output_type=Dict[str, Any]
         )
     
-    def _get_retrieval_agent(self) -> Agent:
-        """Get or create the memory retrieval agent"""
-        if "retrieval" not in self._agents:
-            self._agents["retrieval"] = Agent(
-                name="Memory Retrieval Agent",
-                handoff_description="Handles searching and retrieving memories based on queries",
-                instructions="""You are specialized in retrieving memories from Nyx's memory system.
-                Use the provided tools to effectively search for and retrieve memories based on the
-                user's query parameters. Return the most relevant memories with appropriate formatting.""",
-                tools=[
-                    function_tool(self.memory_core.retrieve_memories),
-                    function_tool(self.memory_core.get_memory),
-                    function_tool(self.memory_core.retrieve_memories_with_formatting)
-                ]
+    # Input guardrail for request validation
+    async def validate_memory_request(self, 
+                                    ctx: RunContextWrapper[Any],
+                                    agent: Agent,
+                                    input_data: Union[str, List[Dict[str, Any]]]) -> GuardrailFunctionOutput:
+        """Validate memory request input"""
+        try:
+            if isinstance(input_data, str):
+                # Simple validation for string inputs
+                if len(input_data.strip()) == 0:
+                    return GuardrailFunctionOutput(
+                        output_info={"error": "Empty request"},
+                        tripwire_triggered=True
+                    )
+                return GuardrailFunctionOutput(
+                    output_info={"request": input_data},
+                    tripwire_triggered=False
+                )
+            else:
+                # More complex validation for structured inputs
+                return GuardrailFunctionOutput(
+                    output_info={"request": input_data},
+                    tripwire_triggered=False
+                )
+        except Exception as e:
+            return GuardrailFunctionOutput(
+                output_info={"error": str(e)},
+                tripwire_triggered=True
             )
-        return self._agents["retrieval"]
     
-    def _get_creation_agent(self) -> Agent:
-        """Get or create the memory creation agent"""
-        if "creation" not in self._agents:
-            self._agents["creation"] = Agent(
-                name="Memory Creation Agent",
-                handoff_description="Handles creating and storing new memories",
-                instructions="""You are specialized in creating and storing new memories for Nyx.
-                When a user wants to create a new memory, help them structure it properly with
-                appropriate metadata, tags, and significance levels. Ensure the memory is properly
-                categorized and indexed.""",
-                tools=[
-                    function_tool(self.memory_core.add_memory),
-                    function_tool(self.memory_core.update_memory),
-                    function_tool(self.memory_core.delete_memory)
-                ]
-            )
-        return self._agents["creation"]
-    
-    def _get_reflection_agent(self) -> Agent:
-        """Get or create the reflection agent"""
-        if "reflection" not in self._agents:
-            self._agents["reflection"] = Agent(
-                name="Reflection Agent",
-                handoff_description="Creates reflections and abstractions from memories",
-                instructions="""You are specialized in generating reflections and abstractions
-                from Nyx's memories. Your role is to analyze memories, find patterns, and create
-                higher-level insights that connect individual experiences.""",
-                tools=[
-                    function_tool(self.memory_core.create_reflection_from_memories),
-                    function_tool(self.memory_core.create_abstraction_from_memories),
-                    function_tool(self.memory_core.retrieve_memories)
-                ]
-            )
-        return self._agents["reflection"]
-    
-    def _get_experience_agent(self) -> Agent:
-        """Get or create the experience agent"""
-        if "experience" not in self._agents:
-            self._agents["experience"] = Agent(
-                name="Experience Agent",
-                handoff_description="Manages experience recall and narrative generation",
-                instructions="""You are specialized in managing Nyx's experiences and narratives.
-                Your role is to retrieve relevant experiences, generate natural conversational
-                recalls, and construct coherent narratives from memories.""",
-                tools=[
-                    function_tool(self.memory_core.retrieve_relevant_experiences),
-                    function_tool(self.memory_core.generate_conversational_recall),
-                    function_tool(self.memory_core.construct_narrative_from_memories)
-                ]
-            )
-        return self._agents["experience"]
-    
-    def _get_maintenance_agent(self) -> Agent:
-        """Get or create the maintenance agent"""
-        if "maintenance" not in self._agents:
-            self._agents["maintenance"] = Agent(
-                name="Memory Maintenance Agent",
-                handoff_description="Handles memory system maintenance, decay, and consolidation",
-                instructions="""You are specialized in maintaining the health and efficiency of
-                Nyx's memory system. Your role is to apply memory decay, consolidate similar
-                memories, archive old memories, and ensure the overall system stays optimized.""",
-                tools=[
-                    function_tool(self.memory_core.run_maintenance),
-                    function_tool(self.memory_core.apply_memory_decay),
-                    function_tool(self.memory_core.consolidate_memory_clusters),
-                    function_tool(self.memory_core.get_memory_stats)
-                ]
-            )
-        return self._agents["maintenance"]
-        
     async def process_memory_request(self, request_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a memory-related request using the appropriate agent
@@ -174,10 +214,11 @@ class MemoryOrchestrator:
         Returns:
             Response from the appropriate memory agent
         """
+        # Ensure system is initialized
+        if not self.initialized:
+            await self.initialize()
+        
         with trace(workflow_name="Memory Request", group_id=self.trace_group_id):
-            if not self.memory_core.initialized:
-                await self.memory_core.initialize()
-            
             # Create the appropriate request format based on request type
             if request_type == "retrieve":
                 request = f"Retrieve memories matching this query: {params.get('query', '')}"
@@ -209,15 +250,25 @@ class MemoryOrchestrator:
             else:
                 request = f"Process this memory-related request of type {request_type} with these parameters: {params}"
             
+            # Configure run with tracing
+            run_config = RunConfig(
+                trace_id=f"memory-request-{request_type}-{self.user_id}",
+                workflow_name=f"Memory {request_type.capitalize()} Request",
+                group_id=self.trace_group_id,
+                input_guardrails=[InputGuardrail(guardrail_function=self.validate_memory_request)],
+                trace_metadata={
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id,
+                    "request_type": request_type
+                }
+            )
+            
             # Run the request through the main orchestrator agent
             result = await Runner.run(
-                self._agents["main"], 
+                self.main_agent, 
                 request,
-                run_config={
-                    "trace_id": f"memory-request-{request_type}-{self.user_id}",
-                    "workflow_name": f"Memory {request_type.capitalize()} Request",
-                    "group_id": self.trace_group_id
-                }
+                context={"user_id": self.user_id, "conversation_id": self.conversation_id},
+                run_config=run_config
             )
             
             # If the result is a string, wrap it in a dictionary
@@ -243,8 +294,8 @@ class MemoryOrchestrator:
         Returns:
             Dictionary of memories by type
         """
-        if not self.memory_core.initialized:
-            await self.memory_core.initialize()
+        if not self.initialized:
+            await self.initialize()
         
         # Default memory types if not specified
         if memory_types is None:
@@ -347,8 +398,9 @@ class MemoryOrchestrator:
             "memory_types": memory_types,
             "limit": limit
         }
-        result = await self.process_memory_request("retrieve", params)
-        return result.get("memories", [])
+        with trace(workflow_name="Retrieve Memories", group_id=self.trace_group_id):
+            result = await self.process_memory_request("retrieve", params)
+            return result.get("memories", [])
     
     async def create_memory(self, memory_text: str, memory_type: str = "observation", 
                           tags: List[str] = None, significance: int = 5) -> str:
@@ -359,13 +411,15 @@ class MemoryOrchestrator:
             "tags": tags or [],
             "significance": significance
         }
-        result = await self.process_memory_request("create", params)
-        return result.get("memory_id", "")
+        with trace(workflow_name="Create Memory", group_id=self.trace_group_id):
+            result = await self.process_memory_request("create", params)
+            return result.get("memory_id", "")
     
     async def create_reflection(self, topic: str = None) -> Dict[str, Any]:
         """Create a reflection on a topic"""
         params = {"topic": topic}
-        return await self.process_memory_request("reflect", params)
+        with trace(workflow_name="Create Reflection", group_id=self.trace_group_id):
+            return await self.process_memory_request("reflect", params)
     
     async def retrieve_experiences(self, query: str, scenario_type: str = "", 
                                  entities: List[str] = None) -> List[Dict[str, Any]]:
@@ -375,10 +429,12 @@ class MemoryOrchestrator:
             "scenario_type": scenario_type,
             "entities": entities or []
         }
-        result = await self.process_memory_request("experience", params)
-        return result.get("experiences", [])
+        with trace(workflow_name="Retrieve Experiences", group_id=self.trace_group_id):
+            result = await self.process_memory_request("experience", params)
+            return result.get("experiences", [])
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """Run memory system maintenance"""
         params = {"operation": "run_maintenance"}
-        return await self.process_memory_request("maintenance", params)
+        with trace(workflow_name="Memory Maintenance", group_id=self.trace_group_id):
+            return await self.process_memory_request("maintenance", params)
