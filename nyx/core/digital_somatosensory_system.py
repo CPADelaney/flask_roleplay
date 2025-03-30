@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 # =============== Models for Structured Output ===============
 
+# =============== Models for Structured Output ===============
+
 class BodyRegion(BaseModel):
     """Representation of a body region with sensory data"""
     name: str = Field(..., description="Name of body region")
@@ -95,6 +97,56 @@ class StimulusValidationOutput(BaseModel):
     is_valid: bool = Field(..., description="Whether the stimulus is valid")
     reasoning: str = Field(..., description="Reasoning for validation result")
     fixed_input: Optional[Dict[str, Any]] = Field(None, description="Fixed input if validation fixed issues")
+
+# =============== Context Classes ===============
+
+class SomatosensorySystemContext(BaseModel):
+    """Context for somatosensory system operations"""
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    current_operation: Optional[str] = None
+    operation_start_time: Optional[datetime.datetime] = None
+    memory_references: List[str] = Field(default_factory=list)
+    emotional_state: Dict[str, Any] = Field(default_factory=dict)
+    hormone_data: Dict[str, float] = Field(default_factory=dict)
+
+# =============== System Hooks ===============
+
+class SomatosensorySystemHooks(RunHooks):
+    """Lifecycle hooks for the somatosensory system"""
+    
+    async def on_agent_start(self, context, agent):
+        """Called before the agent is invoked"""
+        logger.debug(f"Starting agent: {agent.name}")
+        with custom_span(
+            name="somatosensory_agent_start",
+            data={"agent_name": agent.name, "context_data": str(context.context)}
+        ) as span:
+            # Update operation tracking
+            if hasattr(context.context, "operation_start_time") and context.context.operation_start_time is None:
+                context.context.operation_start_time = datetime.datetime.now()
+    
+    async def on_agent_end(self, context, agent, output):
+        """Called when the agent produces a final output"""
+        logger.debug(f"Agent {agent.name} finished with output type: {type(output).__name__}")
+        with custom_span(
+            name="somatosensory_agent_end",
+            data={"agent_name": agent.name, "output_type": type(output).__name__}
+        ) as span:
+            # Calculate execution time if we have start time
+            if hasattr(context.context, "operation_start_time") and context.context.operation_start_time:
+                execution_time = (datetime.datetime.now() - context.context.operation_start_time).total_seconds()
+                logger.debug(f"Agent execution time: {execution_time:.2f}s")
+    
+    async def on_handoff(self, context, from_agent, to_agent):
+        """Called when a handoff occurs"""
+        logger.debug(f"Handoff from {from_agent.name} to {to_agent.name}")
+        with custom_span(
+            name="somatosensory_handoff",
+            data={"from_agent": from_agent.name, "to_agent": to_agent.name}
+        ) as span:
+            # You could add additional logic here, like updating context
+            pass
 
 # =============== Main Digital Somatosensory System Class ===============
 
