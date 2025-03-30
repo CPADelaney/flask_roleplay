@@ -7,7 +7,17 @@ import json
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings
+from agents import (
+    Agent, 
+    Runner, 
+    trace, 
+    function_tool, 
+    RunContextWrapper, 
+    ModelSettings,
+    handoff,
+    InputGuardrail,
+    GuardrailFunctionOutput
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +56,19 @@ class SomaticCorrelationOutput(BaseModel):
     confidence_adjustments: Dict[str, float] = Field(..., description="Confidence adjustments for each part")
     overall_confidence: float = Field(..., description="Overall proprioception confidence")
 
+class PerceptInputValidationResult(BaseModel):
+    """Output schema for perception input validation"""
+    is_valid: bool = Field(..., description="Whether the input is valid")
+    reason: Optional[str] = Field(None, description="Reason for invalid input")
+    modality_detected: Optional[str] = Field(None, description="Detected modality of input")
+
+class BodyImageContext:
+    """Context object for the body image system"""
+    def __init__(self, digital_somatosensory_system=None, multimodal_integrator=None):
+        self.dss = digital_somatosensory_system
+        self.multimodal = multimodal_integrator
+        self.trace_id = f"body_image_{datetime.datetime.now().isoformat()}"
+
 class BodyImage:
     """Manages Nyx's perception of her own body or avatar."""
 
@@ -61,19 +84,37 @@ class BodyImage:
             "parts": ["core", "awareness_field"]
         }
         
+        # Create context object for agents
+        self.body_context = BodyImageContext(
+            digital_somatosensory_system=digital_somatosensory_system,
+            multimodal_integrator=multimodal_integrator
+        )
+        
         # Initialize agents
-        self.visual_perception_agent = self._create_visual_perception_agent()
-        self.somatic_correlation_agent = self._create_somatic_correlation_agent()
-        self.body_integration_agent = self._create_body_integration_agent()
+        self._initialize_agents()
         
         # Trace group ID for connecting related traces
         self.trace_group_id = f"body_image_{datetime.datetime.now().isoformat()}"
         
-        logger.info("BodyImage initialized with Agents SDK integration")
+        logger.info("BodyImage initialized with enhanced Agent SDK integration")
 
-    def _create_visual_perception_agent(self) -> Agent:
+    def _initialize_agents(self):
+        """Initialize the agent system"""
+        # Create specialized agents
+        self.visual_perception_agent = self._create_visual_perception_agent()
+        self.somatic_correlation_agent = self._create_somatic_correlation_agent()
+        self.visual_features_agent = self._create_visual_features_agent()
+        self.somatic_features_agent = self._create_somatic_features_agent()
+        
+        # Create main integration agent with handoffs
+        self.body_integration_agent = self._create_body_integration_agent()
+        
+        # Create input validation guardrail
+        self.percept_validation_guardrail = self._create_percept_validation_guardrail()
+
+    def _create_visual_perception_agent(self) -> Agent[BodyImageContext]:
         """Create agent for processing visual perception of Nyx's form"""
-        return Agent(
+        return Agent[BodyImageContext](
             name="Visual_Perception_Analyzer",
             instructions="""
             You analyze visual perceptions to help Nyx understand its physical form.
@@ -91,13 +132,24 @@ class BodyImage:
                 function_tool(self._extract_body_part_states),
                 function_tool(self._get_current_visual_state)
             ],
+            handoffs=[
+                handoff(self.visual_features_agent, 
+                       tool_name_override="analyze_visual_details",
+                       tool_description_override="Analyze visual details in perception data")
+            ],
+            input_guardrails=[
+                InputGuardrail(guardrail_function=self.percept_validation_guardrail)
+            ],
             output_type=VisualPerceptionOutput,
-            model_settings=ModelSettings(temperature=0.2)  # Lower temperature for more consistent analysis
+            model_settings=ModelSettings(
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
         )
     
-    def _create_somatic_correlation_agent(self) -> Agent:
+    def _create_somatic_correlation_agent(self) -> Agent[BodyImageContext]:
         """Create agent for correlating somatic sensations with body image"""
-        return Agent(
+        return Agent[BodyImageContext](
             name="Somatic_Correlation_Analyzer",
             instructions="""
             You analyze and correlate somatic sensations with Nyx's body image.
@@ -115,17 +167,76 @@ class BodyImage:
                 function_tool(self._correlate_somatic_visual),
                 function_tool(self._calculate_proprioception_confidence)
             ],
+            handoffs=[
+                handoff(self.somatic_features_agent,
+                       tool_name_override="analyze_somatic_details",
+                       tool_description_override="Analyze detailed somatic sensations")
+            ],
             output_type=SomaticCorrelationOutput,
-            model_settings=ModelSettings(temperature=0.3)
+            model_settings=ModelSettings(
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
         )
     
-    def _create_body_integration_agent(self) -> Agent:
+    def _create_visual_features_agent(self) -> Agent[BodyImageContext]:
+        """Create specialized agent for detailed visual feature analysis"""
+        return Agent[BodyImageContext](
+            name="Visual_Features_Analyzer",
+            instructions="""
+            You specialize in analyzing detailed visual features in perception data.
+            Your task is to:
+            1. Extract detailed visual characteristics from perception data
+            2. Identify specific visual patterns associated with body parts
+            3. Detect spatial relationships between perceived parts
+            4. Calculate confidence levels for visual detections
+            
+            Provide precise and detailed analysis of visual features to inform
+            body part detection and state analysis.
+            """,
+            tools=[
+                function_tool(self._extract_visual_part_features),
+                function_tool(self._calculate_visual_confidence)
+            ],
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.1)
+        )
+    
+    def _create_somatic_features_agent(self) -> Agent[BodyImageContext]:
+        """Create specialized agent for detailed somatic feature analysis"""
+        return Agent[BodyImageContext](
+            name="Somatic_Features_Analyzer",
+            instructions="""
+            You specialize in analyzing detailed somatic sensations.
+            Your task is to:
+            1. Extract detailed somatic characteristics from sensation data
+            2. Identify specific patterns in somatic signals
+            3. Map sensations to specific body regions
+            4. Calculate confidence levels for somatic detections
+            
+            Provide precise and detailed analysis of somatic features to inform
+            body state analysis and correlation with visual perception.
+            """,
+            tools=[
+                function_tool(self._extract_somatic_features),
+                function_tool(self._calculate_somatic_confidence)
+            ],
+            model="gpt-4o-mini",
+            model_settings=ModelSettings(temperature=0.1)
+        )
+    
+    def _create_body_integration_agent(self) -> Agent[BodyImageContext]:
         """Create agent for integrating multiple body perception sources"""
-        return Agent(
+        return Agent[BodyImageContext](
             name="Body_Integration_Coordinator",
             handoffs=[
-                self.visual_perception_agent,
-                self.somatic_correlation_agent
+                handoff(self.visual_perception_agent,
+                       tool_name_override="analyze_visual_perception",
+                       tool_description_override="Analyze visual perception of body"),
+                
+                handoff(self.somatic_correlation_agent,
+                       tool_name_override="analyze_somatic_correlation",
+                       tool_description_override="Analyze and correlate somatic sensations")
             ],
             instructions="""
             You coordinate the integration of various perception sources into a
@@ -142,13 +253,238 @@ class BodyImage:
                 function_tool(self._resolve_perception_conflicts),
                 function_tool(self._update_body_image_state),
                 function_tool(self._get_body_image_state)
-            ]
+            ],
+            model_settings=ModelSettings(temperature=0.3)
         )
+    
+    async def _percept_validation_guardrail(self, 
+                                         ctx: RunContextWrapper[BodyImageContext], 
+                                         agent: Agent[BodyImageContext], 
+                                         input_data: str | List[Any]) -> GuardrailFunctionOutput:
+        """Validate perception input data"""
+        try:
+            # Parse the input if needed
+            if isinstance(input_data, str):
+                data = json.loads(input_data)
+            else:
+                data = input_data
+                
+            # Check for presence of percept
+            if "percept" not in data:
+                return GuardrailFunctionOutput(
+                    output_info={"is_valid": False, "reason": "Missing 'percept' field"},
+                    tripwire_triggered=True
+                )
+                
+            percept = data["percept"]
+            
+            # Check for modality
+            if "modality" not in percept:
+                return GuardrailFunctionOutput(
+                    output_info={"is_valid": False, "reason": "Missing 'modality' in percept"},
+                    tripwire_triggered=True
+                )
+                
+            # Check valid modality
+            modality = percept["modality"]
+            if modality not in [MODALITY_IMAGE, MODALITY_SYSTEM_SCREEN]:
+                return GuardrailFunctionOutput(
+                    output_info={
+                        "is_valid": False, 
+                        "reason": f"Invalid modality: {modality}", 
+                        "modality_detected": modality
+                    },
+                    tripwire_triggered=True
+                )
+                
+            # Check for content
+            if "content" not in percept:
+                return GuardrailFunctionOutput(
+                    output_info={"is_valid": False, "reason": "Missing 'content' in percept"},
+                    tripwire_triggered=True
+                )
+                
+            # Input is valid
+            return GuardrailFunctionOutput(
+                output_info={
+                    "is_valid": True, 
+                    "modality_detected": modality
+                },
+                tripwire_triggered=False
+            )
+        except Exception as e:
+            return GuardrailFunctionOutput(
+                output_info={"is_valid": False, "reason": f"Invalid input format: {str(e)}"},
+                tripwire_triggered=True
+            )
+    
+    # New helper functions for specialized agents
+    
+    @function_tool
+    async def _extract_visual_part_features(self, 
+                                        ctx: RunContextWrapper[BodyImageContext], 
+                                        visual_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract detailed features from visual part data
+        
+        Args:
+            visual_data: Visual data for a specific part
+            
+        Returns:
+            Detailed visual features
+        """
+        features = {}
+        
+        # Extract position data if available
+        if "position" in visual_data:
+            features["position"] = visual_data["position"]
+            
+        # Extract bounding box if available
+        if "bounding_box" in visual_data:
+            features["bounding_box"] = visual_data["bounding_box"]
+            
+        # Extract attributes
+        if "attributes" in visual_data:
+            features["attributes"] = {}
+            
+            # Process specific attributes
+            for attr_name, attr_value in visual_data["attributes"].items():
+                features["attributes"][attr_name] = attr_value
+                
+                # Derive state from attributes
+                if attr_name == "moving" and attr_value:
+                    features["derived_state"] = "moving"
+                elif attr_name == "glowing" and attr_value:
+                    features["derived_state"] = "glowing"
+                elif attr_name == "damaged" and attr_value:
+                    features["derived_state"] = "damaged"
+        
+        # Default state if not derived
+        if "derived_state" not in features:
+            features["derived_state"] = "visible"
+            
+        # Extract confidence
+        features["confidence"] = visual_data.get("confidence", 0.5)
+        
+        return features
+    
+    @function_tool
+    async def _calculate_visual_confidence(self, 
+                                      ctx: RunContextWrapper[BodyImageContext], 
+                                      visual_features: Dict[str, Any]) -> float:
+        """
+        Calculate confidence level for visual detection
+        
+        Args:
+            visual_features: Extracted visual features
+            
+        Returns:
+            Confidence score (0-1)
+        """
+        # Start with base confidence
+        base_confidence = visual_features.get("confidence", 0.5)
+        
+        # Adjust based on feature completeness
+        feature_completeness = 0.0
+        
+        # Position data increases confidence
+        if "position" in visual_features:
+            feature_completeness += 0.2
+            
+        # Bounding box increases confidence
+        if "bounding_box" in visual_features:
+            feature_completeness += 0.1
+            
+        # Attributes increase confidence
+        if "attributes" in visual_features and visual_features["attributes"]:
+            feature_completeness += 0.1 * min(3, len(visual_features["attributes"])) / 3
+            
+        # Calculate final confidence
+        confidence = base_confidence * 0.7 + feature_completeness * 0.3
+        
+        # Ensure valid range
+        return max(0.1, min(1.0, confidence))
+    
+    @function_tool
+    async def _extract_somatic_features(self, 
+                                   ctx: RunContextWrapper[BodyImageContext], 
+                                   somatic_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract detailed features from somatic data
+        
+        Args:
+            somatic_data: Somatic data for a specific region
+            
+        Returns:
+            Detailed somatic features
+        """
+        features = {}
+        
+        # Extract dominant sensation
+        if "dominant_sensation" in somatic_data:
+            features["dominant_sensation"] = somatic_data["dominant_sensation"]
+            
+        # Extract intensity
+        if "intensity" in somatic_data:
+            features["intensity"] = somatic_data["intensity"]
+            
+        # Extract secondary sensations
+        if "secondary_sensations" in somatic_data:
+            features["secondary_sensations"] = somatic_data["secondary_sensations"]
+            
+        # Derive state from sensations
+        if "dominant_sensation" in somatic_data:
+            sensation = somatic_data["dominant_sensation"]
+            intensity = somatic_data.get("intensity", 0.5)
+            
+            if sensation == "movement" and intensity > 0.3:
+                features["derived_state"] = "moving"
+            elif sensation == "temperature" and intensity > 0.6:
+                features["derived_state"] = "heated"
+            elif sensation == "pressure" and intensity > 0.7:
+                features["derived_state"] = "pressured"
+            elif sensation == "pain" and intensity > 0.3:
+                features["derived_state"] = "damaged"
+            else:
+                features["derived_state"] = "neutral"
+                
+        return features
+    
+    @function_tool
+    async def _calculate_somatic_confidence(self, 
+                                       ctx: RunContextWrapper[BodyImageContext], 
+                                       somatic_features: Dict[str, Any]) -> float:
+        """
+        Calculate confidence level for somatic detection
+        
+        Args:
+            somatic_features: Extracted somatic features
+            
+        Returns:
+            Confidence score (0-1)
+        """
+        # Confidence based on intensity
+        intensity = somatic_features.get("intensity", 0.5)
+        
+        # Higher intensity = higher confidence
+        confidence = 0.3 + intensity * 0.6
+        
+        # Secondary sensations increase confidence
+        if "secondary_sensations" in somatic_features:
+            secondary = somatic_features["secondary_sensations"]
+            if secondary and isinstance(secondary, dict) and len(secondary) > 0:
+                # More secondary sensations = higher confidence
+                confidence += min(0.1, len(secondary) * 0.02)
+                
+        # Ensure valid range
+        return max(0.1, min(1.0, confidence))
     
     # Tool functions for the agents
     
     @function_tool
-    async def _analyze_visual_features(self, ctx: RunContextWrapper, percept: Dict[str, Any]) -> Dict[str, Any]:
+    async def _analyze_visual_features(self, 
+                                   ctx: RunContextWrapper[BodyImageContext], 
+                                   percept: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze visual features to extract body-related information
         
@@ -189,7 +525,8 @@ class BodyImage:
         }
     
     @function_tool
-    async def _extract_body_part_states(self, ctx: RunContextWrapper, 
+    async def _extract_body_part_states(self, 
+                                    ctx: RunContextWrapper[BodyImageContext], 
                                     body_features: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """
         Extract state information for detected body parts
@@ -225,7 +562,8 @@ class BodyImage:
         return part_states
     
     @function_tool
-    async def _get_current_visual_state(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_current_visual_state(self, 
+                                   ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Get current visual state information
         
@@ -245,18 +583,19 @@ class BodyImage:
         }
     
     @function_tool
-    async def _analyze_somatic_data(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_somatic_data(self, 
+                                ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Analyze somatic sensation data from digital somatosensory system
         
         Returns:
             Analyzed somatic data
         """
-        if not self.dss:
+        if not ctx.context.dss:
             return {"error": "No digital somatosensory system available", "somatic_data": {}}
             
         try:
-            somatic_state = await self.dss.get_body_state()
+            somatic_state = await ctx.context.dss.get_body_state()
             regions_summary = somatic_state.get("regions_summary", {})
             
             # Process somatic data
@@ -273,7 +612,7 @@ class BodyImage:
                     "dominant_sensation": dominant_sensation,
                     "intensity": intensity,
                     "secondary_sensations": {k: v for k, v in region_data.items() 
-                                            if k != "dominant_sensation" and isinstance(v, (int, float))}
+                                          if k != "dominant_sensation" and isinstance(v, (int, float))}
                 }
                 
             return {
@@ -286,7 +625,8 @@ class BodyImage:
             return {"error": str(e), "somatic_data": {}}
     
     @function_tool
-    async def _correlate_somatic_visual(self, ctx: RunContextWrapper, 
+    async def _correlate_somatic_visual(self, 
+                                   ctx: RunContextWrapper[BodyImageContext], 
                                    somatic_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         """
         Correlate somatic sensations with visual body parts
@@ -333,7 +673,8 @@ class BodyImage:
         }
     
     @function_tool
-    async def _calculate_proprioception_confidence(self, ctx: RunContextWrapper, 
+    async def _calculate_proprioception_confidence(self, 
+                                             ctx: RunContextWrapper[BodyImageContext], 
                                              correlation_results: Dict[str, Any]) -> float:
         """
         Calculate overall proprioception confidence
@@ -359,7 +700,8 @@ class BodyImage:
         return new_confidence
     
     @function_tool
-    async def _resolve_perception_conflicts(self, ctx: RunContextWrapper,
+    async def _resolve_perception_conflicts(self, 
+                                      ctx: RunContextWrapper[BodyImageContext],
                                       visual_data: Dict[str, Any],
                                       somatic_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -435,7 +777,8 @@ class BodyImage:
         }
     
     @function_tool
-    async def _update_body_image_state(self, ctx: RunContextWrapper, 
+    async def _update_body_image_state(self, 
+                                  ctx: RunContextWrapper[BodyImageContext], 
                                   resolved_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the body image state based on resolved perception data
@@ -516,7 +859,8 @@ class BodyImage:
         }
     
     @function_tool
-    async def _get_body_image_state(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_body_image_state(self, 
+                               ctx: RunContextWrapper[BodyImageContext]) -> Dict[str, Any]:
         """
         Get the current body image state
         
@@ -560,7 +904,13 @@ class BodyImage:
                 try:
                     result = await Runner.run(
                         self.visual_perception_agent,
-                        json.dumps({"percept": percept, "current_state": await self._get_body_image_state(RunContextWrapper(context=None))})
+                        {
+                            "percept": percept, 
+                            "current_state": await self._get_body_image_state(
+                                RunContextWrapper(context=self.body_context)
+                            )
+                        },
+                        context=self.body_context
                     )
                     
                     perception_output = result.final_output
@@ -622,14 +972,19 @@ class BodyImage:
         """Correlates somatic sensations (DSS) with perceived body parts."""
         async with self._lock:
             with trace(workflow_name="body_image_somatic_update", group_id=self.trace_group_id):
-                if not self.dss:
+                if not self.body_context.dss:
                     return {"status": "error", "reason": "No digital somatosensory system available"}
 
                 try:
                     # Run the somatic correlation agent
                     result = await Runner.run(
                         self.somatic_correlation_agent,
-                        json.dumps({"current_state": await self._get_body_image_state(RunContextWrapper(context=None))})
+                        {
+                            "current_state": await self._get_body_image_state(
+                                RunContextWrapper(context=self.body_context)
+                            )
+                        },
+                        context=self.body_context
                     )
                     
                     correlation_output = result.final_output
@@ -669,7 +1024,6 @@ class BodyImage:
 
     def get_body_image_state(self) -> BodyImageState:
         """Returns the current perceived body image state."""
-        # Use the body integration agent to get a "snapshot" of the current state
         return self.current_state
     
     async def set_form_description(self, description: str) -> Dict[str, Any]:
@@ -701,7 +1055,7 @@ class BodyImage:
         async with self._lock:
             with trace(workflow_name="body_image_integration", group_id=self.trace_group_id):
                 # First check if we need to update from somatic
-                if self.dss:
+                if self.body_context.dss:
                     somatic_result = await self.update_from_somatic()
                 else:
                     somatic_result = {"status": "skipped", "reason": "No DSS available"}
@@ -709,14 +1063,17 @@ class BodyImage:
                 # Run the body integration agent
                 try:
                     # Get current body image state
-                    current_state = await self._get_body_image_state(RunContextWrapper(context=None))
+                    current_state = await self._get_body_image_state(
+                        RunContextWrapper(context=self.body_context)
+                    )
                     
                     result = await Runner.run(
                         self.body_integration_agent,
-                        json.dumps({
+                        {
                             "current_state": current_state,
                             "somatic_result": somatic_result
-                        })
+                        },
+                        context=self.body_context
                     )
                     
                     integration_output = result.final_output
