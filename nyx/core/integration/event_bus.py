@@ -21,6 +21,25 @@ class Event:
     def __str__(self):
         return f"Event(type={self.event_type}, source={self.source}, time={self.timestamp.isoformat()})"
 
+class SpatialEvent(Event):
+    """Spatial event for location changes or observations."""
+    def __init__(self, source: str, location_id: str, coordinates: Dict[str, float], 
+                 event_type: str = "location_changed"):
+        super().__init__(event_type, source, {
+            "location_id": location_id,
+            "coordinates": coordinates
+        })
+
+class NavigationEvent(Event):
+    """Navigation event for path planning and movement."""
+    def __init__(self, source: str, start_location: str, destination: str, 
+                 path: List[Dict[str, float]] = None):
+        super().__init__("navigation_requested", source, {
+            "start_location": start_location,
+            "destination": destination,
+            "path": path
+        })
+
 class ConditioningEvent(Event):
     """Conditioning-related event."""
     def __init__(self, source: str, association_type: str, association_key: str, 
