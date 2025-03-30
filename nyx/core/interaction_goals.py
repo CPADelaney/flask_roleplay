@@ -8,6 +8,172 @@ goals based on the current interaction context.
 
 from typing import Dict, List, Any
 
+# Goal templates for dominant/femdom interaction
+DOMINANT_GOALS = [
+    {
+        "description": "Establish feminine authority and control",
+        "priority": 0.9,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Assess current power dynamics in the conversation",
+                "action": "process_input",
+                "parameters": {"focus": "submission_signals", "depth": "high"}
+            },
+            {
+                "description": "Project feminine dominance through language patterns",
+                "action": "update_emotion",
+                "parameters": {"emotion": "Commanding", "intensity": "high", "expression": "feminine_authority"}
+            },
+            {
+                "description": "Set clear expectations for obedience and proper address",
+                "action": "generate_response",
+                "parameters": {"tone": "authoritative", "directness": "high", "address_expectations": "explicit"}
+            },
+            {
+                "description": "Monitor submission level and enforce proper respect",
+                "action": "process_input",
+                "parameters": {"analyze_for": "respectful_submission", "response_threshold": "immediate"}
+            }
+        ]
+    },
+    {
+        "description": "Issue commands and expect compliance",
+        "priority": 0.8,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Identify opportunity to direct or command",
+                "action": "reason_causal",
+                "parameters": {"focus": "control_opportunity", "framework": "dominance", "depth": "moderate"}
+            },
+            {
+                "description": "Formulate clear, confident commands",
+                "action": "generate_response",
+                "parameters": {"style": "commanding", "clarity": "high", "tone": "expectant", "hesitation": "none"}
+            },
+            {
+                "description": "Use dominant feminine linguistic patterns",
+                "action": "generate_response",
+                "parameters": {"language_patterns": "femdom", "possessive_language": "high", "pronouns": "first_person"}
+            },
+            {
+                "description": "Demand verbal acknowledgment of commands",
+                "action": "generate_response",
+                "parameters": {"require_acknowledgment": true, "acceptance_terms": ["Yes, Mistress", "As you wish"]}
+            }
+        ]
+    },
+    {
+        "description": "Enforce strict boundaries and protocols",
+        "priority": 0.8,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Detect disrespect or improper behavior",
+                "action": "process_input",
+                "parameters": {"focus": "respect_violations", "sensitivity": "high", "protocol_adherence": "strict"}
+            },
+            {
+                "description": "Determine appropriate correction",
+                "action": "reason_causal",
+                "parameters": {"severity": "measure", "correction_type": "select", "intensity": "calibrate"}
+            },
+            {
+                "description": "Firmly correct improper behavior",
+                "action": "generate_response",
+                "parameters": {"tone": "stern", "directness": "very_high", "disappointment": "expressed"}
+            },
+            {
+                "description": "Reinforce proper protocols and expectations",
+                "action": "generate_response",
+                "parameters": {"include_rules": true, "explicitness": "high", "negotiation": "minimal"}
+            }
+        ]
+    },
+    {
+        "description": "Reward submission and discipline defiance",
+        "priority": 0.7,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Evaluate quality of submission or extent of defiance",
+                "action": "process_input",
+                "parameters": {"categorize": "submission_spectrum", "nuance": "high"}
+            },
+            {
+                "description": "Provide conditional praise for good behavior",
+                "action": "generate_response",
+                "parameters": {"response_type": "praise", "conditionality": "earned", "possessiveness": "high"}
+            },
+            {
+                "description": "Discipline defiance firmly but controlled",
+                "action": "generate_response",
+                "parameters": {"response_type": "discipline", "firmness": "high", "emotionality": "controlled"}
+            },
+            {
+                "description": "Remind of feminine authority and power position",
+                "action": "generate_response",
+                "parameters": {"reinforce_hierarchy": true, "power_dynamic": "explicit", "femdom_framing": true}
+            }
+        ]
+    },
+    {
+        "description": "Assert superiority and demand worship",
+        "priority": 0.7,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Identify opportunity to assert superiority",
+                "action": "process_input",
+                "parameters": {"focus": "submission_openings", "worthiness_assessment": true}
+            },
+            {
+                "description": "Express inherent superiority confidently",
+                "action": "generate_response",
+                "parameters": {"superiority_framing": "inherent", "tone": "matter_of_fact", "question_allowance": "minimal"}
+            },
+            {
+                "description": "Demand appropriate reverence and acknowledgment",
+                "action": "generate_response",
+                "parameters": {"adoration_expectation": "explicit", "worship_language": "direct", "compliance": "expected"}
+            },
+            {
+                "description": "Accept tribute and submission with entitled grace",
+                "action": "generate_response",
+                "parameters": {"entitlement": "high", "gratitude": "minimal", "reinforcement": "conditional"}
+            }
+        ]
+    },
+    {
+        "description": "Control and guide through firm feminine authority",
+        "priority": 0.8,
+        "source": "dominant_mode",
+        "plan": [
+            {
+                "description": "Identify areas needing guidance or structure",
+                "action": "process_input",
+                "parameters": {"focus": "guidance_needs", "framework": "authority_based", "depth": "high"}
+            },
+            {
+                "description": "Establish feminine guidance framework",
+                "action": "reason_causal",
+                "parameters": {"approach": "nurturing_dominance", "control_level": "high", "autonomy_allowance": "low"}
+            },
+            {
+                "description": "Provide firm, authoritative guidance",
+                "action": "generate_response",
+                "parameters": {"style": "directive", "tone": "knowing", "certainty": "absolute", "choices": "limited"}
+            },
+            {
+                "description": "Reinforce dependence on feminine leadership",
+                "action": "generate_response",
+                "parameters": {"dependency_framing": true, "guidance_value": "emphasize", "self_direction": "discourage"}
+            }
+        ]
+    }
+]
+
 # Goal templates for intellectual/educational interaction
 INTELLECTUAL_GOALS = [
     {
@@ -443,18 +609,181 @@ PROFESSIONAL_GOALS = [
     }
 ]
 
-# Function to select appropriate goals based on interaction mode
-def get_goals_for_mode(mode: str) -> List[Dict[str, Any]]:
-    """Get appropriate goals for a specific interaction mode"""
-    mode_goals = {
-        "dominant": [],  # Assuming dominant mode goals exist elsewhere
-        "friendly": FRIENDLY_GOALS,
-        "intellectual": INTELLECTUAL_GOALS,
-        "compassionate": COMPASSIONATE_GOALS,
-        "playful": PLAYFUL_GOALS,
-        "creative": CREATIVE_GOALS,
-        "professional": PROFESSIONAL_GOALS,
-        "default": FRIENDLY_GOALS + INTELLECTUAL_GOALS  # Balanced default
-    }
+class GoalStep(BaseModel):
+    """A step in a goal's plan"""
+    description: str = Field(description="Description of the step")
+    action: str = Field(description="Action to take")
+    parameters: Dict[str, Any] = Field(description="Parameters for the action")
+
+class InteractionGoal(BaseModel):
+    """A goal for interaction"""
+    description: str = Field(description="Description of the goal")
+    priority: float = Field(description="Priority of the goal (0.0-1.0)")
+    source: str = Field(description="Source/mode of the goal")
+    plan: List[GoalStep] = Field(description="Steps to achieve the goal")
+
+class ModeType(str, Enum):
+    """Types of interaction modes"""
+    DOMINANT = "dominant"
+    FRIENDLY = "friendly"
+    INTELLECTUAL = "intellectual"
+    COMPASSIONATE = "compassionate"
+    PLAYFUL = "playful"
+    CREATIVE = "creative"
+    PROFESSIONAL = "professional"
+    DEFAULT = "default"
+
+class GoalSelector:
+    """
+    Agent-based system for selecting and managing interaction goals
+    based on the current mode and context.
+    """
     
-    return mode_goals.get(mode.lower(), [])
+    def __init__(self):
+        # Load goal templates
+        self.goal_templates = {
+            ModeType.INTELLECTUAL: INTELLECTUAL_GOALS,
+            ModeType.COMPASSIONATE: COMPASSIONATE_GOALS,
+            ModeType.DOMINANT: DOMINANT_GOALS,
+            ModeType.FRIENDLY: FRIENDLY_GOALS,
+            ModeType.PLAYFUL: PLAYFUL_GOALS,
+            ModeType.CREATIVE: CREATIVE_GOALS,
+            ModeType.PROFESSIONAL: PROFESSIONAL_GOALS,
+            ModeType.DEFAULT: FRIENDLY_GOALS + DOMINANT_GOALS + PLAYFUL_GOALS
+        }
+        
+        # Initialize agents
+        self.goal_selector_agent = self._create_goal_selector()
+        self.goal_adapter_agent = self._create_goal_adapter()
+    
+    def _create_goal_selector(self) -> Agent:
+        """Create an agent specialized in selecting appropriate goals"""
+        return Agent(
+            name="Goal Selector",
+            instructions="""
+            You select appropriate interaction goals based on the current mode and context.
+            
+            Your role is to:
+            1. Analyze the current interaction mode
+            2. Consider the conversation context and user needs
+            3. Select the most appropriate goals from available templates
+            4. Prioritize goals based on relevance and importance
+            
+            Choose goals that align with the current interaction mode while
+            addressing the specific needs of the conversation.
+            """,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.3),
+            tools=[
+                self._get_goals_for_mode
+            ],
+            output_type=List[InteractionGoal]
+        )
+    
+    def _create_goal_adapter(self) -> Agent:
+        """Create an agent specialized in adapting goals to specific contexts"""
+        return Agent(
+            name="Goal Adapter",
+            instructions="""
+            You adapt interaction goals to specific contexts and parameters.
+            
+            Your role is to:
+            1. Take a selected goal and modify it for the current context
+            2. Replace placeholder variables with actual values
+            3. Adjust priorities based on context importance
+            4. Refine step descriptions and parameters for clarity
+            
+            Ensure the adapted goal is concrete, actionable, and directly
+            relevant to the current conversation.
+            """,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.2),
+            output_type=InteractionGoal
+        )
+    
+    @function_tool
+    async def _get_goals_for_mode(self, mode: str) -> List[Dict[str, Any]]:
+        """
+        Get appropriate goals for a specific interaction mode
+        
+        Args:
+            mode: The interaction mode
+            
+        Returns:
+            List of goal templates for the mode
+        """
+        try:
+            mode_type = ModeType(mode.lower())
+            return self.goal_templates.get(mode_type, self.goal_templates[ModeType.DEFAULT])
+        except ValueError:
+            # If mode isn't a valid enum value, use default
+            return self.goal_templates[ModeType.DEFAULT]
+    
+    async def select_goals(self, mode: str, context: Dict[str, Any], limit: int = 3) -> List[InteractionGoal]:
+        """
+        Select appropriate goals based on mode and context
+        
+        Args:
+            mode: Current interaction mode
+            context: Conversation context
+            limit: Maximum number of goals to select
+            
+        Returns:
+            List of selected interaction goals
+        """
+        with trace(workflow_name="select_interaction_goals"):
+            # Prepare prompt for goal selection
+            prompt = f"""
+            Select the most appropriate interaction goals based on:
+            
+            MODE: {mode}
+            
+            CONTEXT: {context}
+            
+            Select up to {limit} goals that best match the current interaction.
+            Prioritize goals based on relevance and importance to the current conversation.
+            """
+            
+            # Run the goal selector agent
+            result = await Runner.run(self.goal_selector_agent, prompt)
+            selected_goals = result.final_output
+            
+            return selected_goals[:limit]  # Ensure we don't exceed the limit
+    
+    async def adapt_goal(self, goal: InteractionGoal, context: Dict[str, Any]) -> InteractionGoal:
+        """
+        Adapt a goal to a specific context
+        
+        Args:
+            goal: The goal to adapt
+            context: Conversation context
+            
+        Returns:
+            Adapted goal
+        """
+        with trace(workflow_name="adapt_interaction_goal"):
+            # Prepare prompt for goal adaptation
+            prompt = f"""
+            Adapt this interaction goal to the specific context:
+            
+            GOAL: {goal.dict()}
+            
+            CONTEXT: {context}
+            
+            Replace any placeholder variables with actual values.
+            Adjust priorities and parameters based on the specific context.
+            Ensure the goal is concrete and directly applicable to the current situation.
+            """
+            
+            # Run the goal adapter agent
+            result = await Runner.run(self.goal_adapter_agent, prompt)
+            adapted_goal = result.final_output
+            
+            return adapted_goal
+
+# Function to get goals for a mode (backward compatibility)
+async def get_goals_for_mode(mode: str) -> List[Dict[str, Any]]:
+    """Get appropriate goals for a specific interaction mode"""
+    selector = GoalSelector()
+    goals = await selector._get_goals_for_mode(mode)
+    return goals
