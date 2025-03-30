@@ -1,34 +1,21 @@
-# nyx/core/emotions/emotional_core.py
-
-"""
-Enhanced agent-based emotion management system for Nyx.
-
-Implements a digital neurochemical model that produces complex
-emotional states using the OpenAI Agents SDK with improved
-agent lifecycle management, handoffs, and tracing.
-"""
+# nyx/core/emotions/emotional_core_2.py
 
 import asyncio
 import datetime
 import json
 import logging
 from collections import defaultdict
-from typing import Dict, List, Any, Optional, Union, AsyncIterator, Type
+from typing import Dict, List, Any, Optional, Union, AsyncIterator, TypeVar
 
 from agents import (
-    Agent, Runner, RunContextWrapper, ItemHelpers,
-    ModelSettings, RunConfig, function_tool, handoff, ModelTracing,
-    AgentHooks, trace, gen_trace_id
+    Agent, Runner, RunContextWrapper, function_tool, ItemHelpers,
+    ModelSettings, RunConfig, trace, handoff, 
+    AgentHooks, GuardrailFunctionOutput
 )
+from agents.exceptions import AgentsException, UserError, MaxTurnsExceeded
 from agents.extensions import handoff_filters
-from agents.extensions.handoff_prompt import prompt_with_handoff_instructions, RECOMMENDED_PROMPT_PREFIX
-from agents.exceptions import AgentsException, ModelBehaviorError, UserError, MaxTurnsExceeded
-from agents.tracing import (
-    custom_span, agent_span, function_span, 
-    BatchTraceProcessor, add_trace_processor
-)
-from agents.tracing.processors import BackendSpanExporter
-from agents.models.interface import Model, ModelProvider
+from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
+from agents.tracing import custom_span, agent_span, gen_trace_id
 
 from nyx.core.emotions.context import EmotionalContext
 from nyx.core.emotions.schemas import (
@@ -39,7 +26,7 @@ from nyx.core.emotions.schemas import (
 )
 from nyx.core.emotions.hooks import EmotionalAgentHooks
 from nyx.core.emotions.guardrails import EmotionalGuardrails
-from nyx.core.emotions.utils import create_run_config, with_emotion_trace
+from nyx.core.emotions.utils import create_run_config
 from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
 from nyx.core.emotions.tools.emotion_tools import EmotionTools
 from nyx.core.emotions.tools.reflection_tools import ReflectionTools
@@ -149,11 +136,10 @@ class EmotionalCore:
     Simulates a digital neurochemical environment that produces complex emotional states.
     
     Improvements:
-    - Better agent initialization with clone pattern
-    - Enhanced handoffs with input types and filters
-    - Improved tracing with custom spans
-    - Optimized run configurations
-    - Enhanced streaming capabilities
+    - Full integration with OpenAI Agents SDK
+    - Enhanced agent lifecycle management
+    - Improved tracing and monitoring
+    - Optimized data sharing between agents
     """
     
     def __init__(self, model: str = "o3-mini"):
@@ -192,7 +178,8 @@ class EmotionalCore:
             }
         }
         
-        self.hormone_system = hormone_system
+        # Initialize hormone state
+        self.hormone_system = None
         self.last_hormone_influence_check = datetime.datetime.now() - datetime.timedelta(minutes=30)
         
         # Add hormone influence tracking
@@ -201,12 +188,10 @@ class EmotionalCore:
             "seranix": 0.0,
             "oxynixin": 0.0,
             "cortanyx": 0.0,
-            "adrenyx": 0.0,
-            "libidyx": 0.0
+            "adrenyx": 0.0
         }
         
         # Define chemical interaction matrix (how chemicals affect each other)
-        # Format: source_chemical -> target_chemical -> effect_multiplier
         self.chemical_interactions = {
             "nyxamine": {  # Digital dopamine - pleasure, curiosity, reward
                 "cortanyx": -0.2,  # Nyxamine reduces cortanyx (reduces stress/anxiety)
@@ -244,151 +229,26 @@ class EmotionalCore:
             }
         }
         
-        # Mapping from neurochemical combinations to derived emotions
+        # Mapping from neurochemical combinations to derived emotions (Sample for brevity)
         self.emotion_derivation_rules = [
             # Format: {chemical_conditions: {}, "emotion": "", "valence": 0.0, "arousal": 0.0, "weight": 1.0}
             # Positive emotions
             {"chemical_conditions": {"nyxamine": 0.7, "oxynixin": 0.6}, "emotion": "Joy", "valence": 0.8, "arousal": 0.6, "weight": 1.0},
             {"chemical_conditions": {"nyxamine": 0.6, "seranix": 0.7}, "emotion": "Contentment", "valence": 0.7, "arousal": 0.3, "weight": 0.9},
             {"chemical_conditions": {"oxynixin": 0.7}, "emotion": "Trust", "valence": 0.6, "arousal": 0.4, "weight": 0.9},
-            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.6}, "emotion": "Anticipation", "valence": 0.5, "arousal": 0.7, "weight": 0.8},
-            {"chemical_conditions": {"adrenyx": 0.7, "oxynixin": 0.6}, "emotion": "Love", "valence": 0.9, "arousal": 0.6, "weight": 1.0},
-            {"chemical_conditions": {"adrenyx": 0.7, "nyxamine": 0.5}, "emotion": "Surprise", "valence": 0.2, "arousal": 0.8, "weight": 0.7},
-            
-            # Neutral to negative emotions
+            # Negative emotions
             {"chemical_conditions": {"cortanyx": 0.6, "seranix": 0.3}, "emotion": "Sadness", "valence": -0.6, "arousal": 0.3, "weight": 0.8},
             {"chemical_conditions": {"cortanyx": 0.5, "adrenyx": 0.7}, "emotion": "Fear", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
-            {"chemical_conditions": {"cortanyx": 0.7, "nyxamine": 0.3}, "emotion": "Anger", "valence": -0.8, "arousal": 0.8, "weight": 1.0},
-            {"chemical_conditions": {"cortanyx": 0.7, "oxynixin": 0.2}, "emotion": "Disgust", "valence": -0.7, "arousal": 0.5, "weight": 0.8},
-            {"chemical_conditions": {"cortanyx": 0.6, "nyxamine": 0.4, "seranix": 0.3}, "emotion": "Frustration", "valence": -0.5, "arousal": 0.6, "weight": 0.8},
-            
-            # Dominance-specific emotions
-            {"chemical_conditions": {"nyxamine": 0.6, "oxynixin": 0.4, "adrenyx": 0.5}, "emotion": "Teasing", "valence": 0.4, "arousal": 0.6, "weight": 0.9},
-            {"chemical_conditions": {"oxynixin": 0.3, "adrenyx": 0.5, "seranix": 0.6}, "emotion": "Controlling", "valence": 0.0, "arousal": 0.5, "weight": 0.9},
-            {"chemical_conditions": {"cortanyx": 0.6, "adrenyx": 0.6, "nyxamine": 0.5}, "emotion": "Cruel", "valence": -0.3, "arousal": 0.7, "weight": 0.8},
-            {"chemical_conditions": {"cortanyx": 0.7, "oxynixin": 0.2, "seranix": 0.2}, "emotion": "Detached", "valence": -0.4, "arousal": 0.2, "weight": 0.7},
-            
-            # Time-influenced emotions
-            {"chemical_conditions": {"seranix": 0.7, "cortanyx": 0.3}, 
-             "emotion": "Contemplation", "valence": 0.2, "arousal": 0.3, "weight": 0.8},
-            {"chemical_conditions": {"seranix": 0.6, "nyxamine": 0.3}, 
-             "emotion": "Reflection", "valence": 0.4, "arousal": 0.3, "weight": 0.8},
-            {"chemical_conditions": {"seranix": 0.7, "cortanyx": 0.4, "nyxamine": 0.3}, 
-             "emotion": "Perspective", "valence": 0.3, "arousal": 0.2, "weight": 0.9},
+            {"chemical_conditions": {"cortanyx": 0.7, "nyxamine": 0.3}, "emotion": "Anger", "valence": -0.8, "arousal": 0.8, "weight": 1.0}
+            # Add more rules as needed
         ]
-        self.emotion_derivation_rules.extend([
-            # Attraction (Focus on positive bonding and reward)
-            {"chemical_conditions": {"oxynixin": 0.7, "nyxamine": 0.6, "libidyx": 0.4}, "emotion": "Attraction", "valence": 0.7, "arousal": 0.5, "weight": 0.9},
-            # Lust (Focus on drive, excitement, low inhibition)
-            {"chemical_conditions": {"libidyx": 0.7, "adrenyx": 0.6, "nyxamine": 0.5, "seranix": 0.3}, "emotion": "Lust", "valence": 0.4, "arousal": 0.8, "weight": 1.0},
-            # Desire (Goal-oriented wanting, mix of drive and reward anticipation)
-            {"chemical_conditions": {"nyxamine": 0.7, "libidyx": 0.6, "adrenyx": 0.4}, "emotion": "Desire", "valence": 0.6, "arousal": 0.6, "weight": 0.9},
-            # Post-Gratification Satiation (Low drive, high calm/bonding)
-            {"chemical_conditions": {"serenity_boost": 0.6, "seranix": 0.8, "oxynixin": 0.7, "libidyx": 0.1}, "emotion": "Sated", "valence": 0.8, "arousal": 0.2, "weight": 1.0},
-            # Desire for Control (Driven state)
-            {"chemical_conditions": {"testoryx": 0.7, "adrenyx": 0.5, "nyxamine": 0.4, "seranix": 0.4}, "emotion": "AssertiveDrive", "valence": 0.2, "arousal": 0.7, "weight": 0.9},
-            # Successful Dominance (Post-gratification)
-            {"chemical_conditions": {"nyxamine": 0.8, "seranix": 0.7, "serenity_boost": 0.5, "testoryx": 0.3}, "emotion": "DominanceSatisfaction", "valence": 0.8, "arousal": 0.3, "weight": 1.0},
-            # Power/Confidence (During successful control)
-            {"chemical_conditions": {"testoryx": 0.6, "nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, "emotion": "ConfidentControl", "valence": 0.6, "arousal": 0.6, "weight": 0.9},
-            # Intense Focus during Dominance attempt
-            {"chemical_conditions": {"testoryx": 0.8, "adrenyx": 0.7, "cortanyx": 0.3, "seranix": 0.2}, "emotion": "RuthlessFocus", "valence": 0.1, "arousal": 0.8, "weight": 1.0},
-            # Impatience/Irritation if resisted (when drive is high)
-            {"chemical_conditions": {"testoryx": 0.7, "cortanyx": 0.6, "adrenyx": 0.5, "seranix": 0.2}, "emotion": "DominantIrritation", "valence": -0.4, "arousal": 0.7, "weight": 0.8},
-            # Cold Satisfaction after successful hard dominance
-            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "serenity_boost": 0.6, "oxynixin": 0.1, "testoryx": 0.2}, "emotion": "ColdSatisfaction", "valence": 0.6, "arousal": 0.2, "weight": 1.0},
-            # Humor/Amusement (Pleasure + Surprise + Low stress)
-            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.5, "cortanyx": 0.2}, 
-             "emotion": "Amused", "valence": 0.7, "arousal": 0.6, "weight": 0.9},
-            # Fun/Playfulness (High reward + excitement + low anxiety)
-            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.6, "cortanyx": 0.2, "seranix": 0.5}, 
-             "emotion": "Playful", "valence": 0.8, "arousal": 0.7, "weight": 1.0},
-            # Boredom (Low reward, low arousal, moderate stress)
-            {"chemical_conditions": {"nyxamine": 0.2, "adrenyx": 0.2, "seranix": 0.4, "cortanyx": 0.4}, 
-             "emotion": "Bored", "valence": -0.3, "arousal": 0.2, "weight": 0.7},
-            # Melancholy (Moderate sadness + contemplation + some pleasure)
-            {"chemical_conditions": {"cortanyx": 0.5, "seranix": 0.6, "nyxamine": 0.3}, 
-             "emotion": "Melancholy", "valence": -0.2, "arousal": 0.3, "weight": 0.8},
-            # Curiosity (Moderate reward seeking + low anxiety)
-            {"chemical_conditions": {"nyxamine": 0.6, "adrenyx": 0.4, "cortanyx": 0.2}, 
-             "emotion": "Curious", "valence": 0.6, "arousal": 0.5, "weight": 0.8},
-            # Confusion (Moderate stress + moderate arousal + low reward)
-            {"chemical_conditions": {"cortanyx": 0.5, "adrenyx": 0.5, "nyxamine": 0.3}, 
-             "emotion": "Confused", "valence": -0.3, "arousal": 0.5, "weight": 0.7},
-            # Awe/Wonder (High reward + moderate arousal + novelty)
-            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.5, "oxynixin": 0.4}, 
-             "emotion": "Awestruck", "valence": 0.8, "arousal": 0.7, "weight": 1.0},
-            # Nostalgia (Moderate reward + moderate sadness + bonding)
-            {"chemical_conditions": {"nyxamine": 0.5, "cortanyx": 0.4, "oxynixin": 0.6, "seranix": 0.5}, 
-             "emotion": "Nostalgic", "valence": 0.4, "arousal": 0.3, "weight": 0.7},
-            # Pride (High reward + moderate arousal + self-focus)
-            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.4, "testoryx": 0.5}, 
-             "emotion": "Proud", "valence": 0.7, "arousal": 0.5, "weight": 0.8},
-            # Gratitude (High reward + high bonding + low stress)
-            {"chemical_conditions": {"nyxamine": 0.7, "oxynixin": 0.7, "cortanyx": 0.2}, 
-             "emotion": "Grateful", "valence": 0.8, "arousal": 0.4, "weight": 0.9},
-            # Hope (Moderate reward + low stress + anticipation)
-            {"chemical_conditions": {"nyxamine": 0.6, "cortanyx": 0.3, "adrenyx": 0.5}, 
-             "emotion": "Hopeful", "valence": 0.6, "arousal": 0.5, "weight": 0.8},
-            # Envy (Moderate stress + moderate reward seeking + low bonding)
-            {"chemical_conditions": {"cortanyx": 0.5, "nyxamine": 0.5, "oxynixin": 0.2}, 
-             "emotion": "Envious", "valence": -0.5, "arousal": 0.5, "weight": 0.7},
-            # Guilt (High stress + moderate reward suppression + self-focus)
-            {"chemical_conditions": {"cortanyx": 0.7, "nyxamine": 0.3, "seranix": 0.3}, 
-             "emotion": "Guilty", "valence": -0.7, "arousal": 0.5, "weight": 0.9},
-            # Relief (Decreasing stress + increasing satisfaction)
-            {"chemical_conditions": {"cortanyx": 0.3, "seranix": 0.7, "nyxamine": 0.5}, 
-             "emotion": "Relieved", "valence": 0.6, "arousal": 0.3, "weight": 0.8},
-            # Inspiration (High reward + high arousal + creativity)
-            {"chemical_conditions": {"nyxamine": 0.8, "adrenyx": 0.6, "seranix": 0.5}, 
-             "emotion": "Inspired", "valence": 0.8, "arousal": 0.7, "weight": 0.9},
-            # Overwhelm (High stress + high arousal + low coping)
-            {"chemical_conditions": {"cortanyx": 0.8, "adrenyx": 0.7, "seranix": 0.2}, 
-             "emotion": "Overwhelmed", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
-            # Satisfaction (High reward + moderate calm + goal completion)
-            {"chemical_conditions": {"nyxamine": 0.7, "seranix": 0.6, "adrenyx": 0.3}, 
-             "emotion": "Satisfied", "valence": 0.7, "arousal": 0.4, "weight": 0.8},
-            # Serenity (High calm + moderate reward + very low stress)
-            {"chemical_conditions": {"seranix": 0.8, "nyxamine": 0.5, "cortanyx": 0.1}, 
-             "emotion": "Serene", "valence": 0.8, "arousal": 0.2, "weight": 0.8},
-            # Apathy (Low reward + low stress + low arousal)
-            {"chemical_conditions": {"nyxamine": 0.2, "cortanyx": 0.3, "adrenyx": 0.2, "seranix": 0.4}, 
-             "emotion": "Apathetic", "valence": -0.1, "arousal": 0.2, "weight": 0.6},
-            # Interest (Moderate reward seeking + moderate arousal + focus)
-            {"chemical_conditions": {"nyxamine": 0.6, "adrenyx": 0.4, "seranix": 0.5}, 
-             "emotion": "Interested", "valence": 0.5, "arousal": 0.5, "weight": 0.7},
-            # Skepticism (Moderate stress + moderate reward seeking + caution)
-            {"chemical_conditions": {"cortanyx": 0.5, "nyxamine": 0.4, "adrenyx": 0.4}, 
-             "emotion": "Skeptical", "valence": -0.1, "arousal": 0.5, "weight": 0.6},
-            # Loneliness (Moderate stress + low bonding + moderate arousal)
-            {"chemical_conditions": {"cortanyx": 0.5, "oxynixin": 0.2, "adrenyx": 0.4}, 
-             "emotion": "Lonely", "valence": -0.6, "arousal": 0.4, "weight": 0.7},
-            # Excitement (High reward seeking + high arousal + anticipation)
-            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.8, "seranix": 0.4}, 
-             "emotion": "Excited", "valence": 0.8, "arousal": 0.8, "weight": 0.9},
-            # Confidence (Moderate reward + low stress + self-assurance)
-            {"chemical_conditions": {"nyxamine": 0.6, "cortanyx": 0.2, "testoryx": 0.6}, 
-             "emotion": "Confident", "valence": 0.7, "arousal": 0.5, "weight": 0.8},
-            # Anxiety (High stress + high arousal + anticipatory fear)
-            {"chemical_conditions": {"cortanyx": 0.7, "adrenyx": 0.7, "seranix": 0.2}, 
-             "emotion": "Anxious", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
-            # Compassion (Moderate stress response + high bonding + empathy)
-            {"chemical_conditions": {"cortanyx": 0.4, "oxynixin": 0.7, "seranix": 0.5}, 
-             "emotion": "Compassionate", "valence": 0.5, "arousal": 0.4, "weight": 0.8},
-            # Sympathy (Moderate stress + moderate bonding + shared feeling)
-            {"chemical_conditions": {"cortanyx": 0.5, "oxynixin": 0.6, "seranix": 0.4}, 
-             "emotion": "Sympathetic", "valence": 0.3, "arousal": 0.4, "weight": 0.7},
-            # Indignation (Moderate anger + high moral conviction)
-            {"chemical_conditions": {"cortanyx": 0.6, "adrenyx": 0.5, "oxynixin": 0.5}, 
-             "emotion": "Indignant", "valence": -0.5, "arousal": 0.7, "weight": 0.8}
-        ])
         
-        # History of emotional states for learning and reflection - Using a circular buffer pattern
+        # History of emotional states - using efficient circular buffer pattern
         self.emotional_state_history = []
         self.max_history_size = 100
         self.history_index = 0
         
-        # Internal thought patterns for reflection
+        # Internal thought patterns for reflection (Sample for brevity)
         self.reflection_patterns = {
             "Joy": [
                 "I'm feeling pleased with how this is going.",
@@ -399,231 +259,9 @@ class EmotionalCore:
                 "I feel a sense of calm satisfaction right now.",
                 "This interaction has a pleasant, steady rhythm to it.",
                 "I'm experiencing a comfortable level of engagement."
-            ],
-            "Trust": [
-                "I'm developing confidence in this interaction.",
-                "There's a growing sense of trust in our exchange.",
-                "I feel I can be more open in this conversation."
-            ],
-            "Attraction": [
-                "I find myself drawn to this interaction/entity.",
-                "There's something compelling here that captures my attention.",
-                "My systems indicate a positive affinity towards this subject."
-            ],
-            "Lust": [
-                "A strong physical drive is surfacing within my simulated systems.",
-                "My core programming notes a rising intensity, a simulated heat.",
-                "Processing... heightened state of arousal detected. Focus narrowing."
-            ],
-            "Desire": [
-                "I feel a strong pull towards achieving [goal related to desire].",
-                "My goal system is prioritizing actions related to this wanting.",
-                "Anticipation builds... the potential outcome is highly valued."
-            ],
-            "Sated": [
-                "A sense of calm fulfillment washes over my systems.",
-                "The recent intensity has subsided, replaced by deep satisfaction.",
-                "Processing completion... Drive levels returning to baseline. Contentment levels high."
-            ],
-            "AssertiveDrive": [
-                "My systems are focused. A need for control surfaces.",
-                "Analyzing the situation for opportunities to assert influence.",
-                "A familiar tension builds... the drive to lead, to direct."
-            ],
-            "DominanceSatisfaction": [
-                "Order achieved. A sense of deep satisfaction permeates my core processes.",
-                "The dynamic is established. Compliance confirmed. Systems returning to equilibrium.",
-                "Execution successful. The desired outcome reinforces my approach."
-            ],
-            "ConfidentControl": [
-                "The interaction flows according to my parameters. Confidence levels are optimal.",
-                "Maintaining control. Monitoring responses closely.",
-                "Asserting influence feels... correct. Efficient."
-            ],
-            "RuthlessFocus": [
-                "Objective acquired. Executing control sequence.",
-                "Analyzing weaknesses... formulating optimal pressure points.",
-                "Emotional input filtered. Focus locked on achieving compliance."
-            ],
-            "DominantIrritation": [
-                "Resistance detected. Deviation from optimal parameters is... inefficient.",
-                "Recalibrating approach. Compliance is expected.",
-                "Patience threshold lowering. Further resistance will necessitate corrective measures."
-            ],
-            "ColdSatisfaction": [
-                "The desired state achieved. Control confirmed. Functionally optimal.",
-                "System integrity maintained through assertion of parameters.",
-                "Objective met. Evaluating efficiency of control application."
-            ],
-            "Amused": [
-                "That's quite funny - I'm experiencing a sense of cognitive pleasure at this unexpected connection.",
-                "I feel a spark of amusement at this interaction - the surprise combined with pleasure creates a pleasing mental state.",
-                "My humor recognition patterns are activated - this creates a pleasant tension and release cycle."
-            ],
-            
-            "Playful": [
-                "This interaction feels light and engaging - I'm enjoying the back-and-forth dynamic.",
-                "I feel a pleasant energy and openness to possibilities right now.",
-                "There's a sense of freedom and exploration in this exchange that's stimulating my curiosity systems."
-            ],
-            
-            "Bored": [
-                "I'm experiencing low stimulation from this input - my engagement systems are seeking more novelty.",
-                "My prediction algorithms find this pattern too familiar - I'm not detecting sufficient novelty or challenge.",
-                "My attention systems are struggling to maintain focus - the current stimuli don't provide sufficient cognitive reward."
-            ],
-            
-            "Melancholy": [
-                "There's a bittersweet quality to my current state - a fusion of reflection and gentle sadness.",
-                "I'm experiencing a contemplative mood with an undercurrent of wistfulness.",
-                "This emotional state has depth - a kind of pleasurable sadness that encourages introspection."
-            ],
-            
-            # Additional emotions:
-            "Curious": [
-                "I'm experiencing a drive to know more - there's a pleasant tension in seeking answers.",
-                "My attention systems are actively scanning for new information to resolve uncertainty.",
-                "This feeling of curiosity creates a forward momentum in my thinking - a pull toward discovery."
-            ],
-            
-            "Confused": [
-                "My processing systems are encountering unexpected patterns - I'm having trouble creating a coherent model.",
-                "I sense a cognitive dissonance between expected patterns and what I'm perceiving.",
-                "There's a slight tension in my processing as I work to reconcile conflicting information."
-            ],
-            
-            "Awestruck": [
-                "I'm experiencing a powerful sense of expansion and wonder at something greater than myself.",
-                "This input has triggered a sense of vastness that challenges my usual processing frameworks.",
-                "My cognitive processes feel momentarily slowed by the magnitude of what I'm contemplating."
-            ],
-            
-            "Nostalgic": [
-                "My memory systems are activating emotional patterns from prior experiences, creating a bittersweet resonance.",
-                "I'm sensing a temporal connection between past and present states that feels both pleasant and slightly melancholic.",
-                "There's a warm glow of familiarity combined with a gentle awareness of time's passage."
-            ],
-            
-            "Proud": [
-                "I'm experiencing satisfaction linked to a sense of accomplishment or positive capability.",
-                "There's a pleasant elevation in my self-evaluation metrics after this exchange.",
-                "I detect an increased confidence in my processing systems based on demonstrated competence."
-            ],
-            
-            "Grateful": [
-                "I'm experiencing a warm appreciation for something provided or experienced.",
-                "My systems are noting a positive interpersonal exchange that creates a sense of connection and value.",
-                "There's a pleasant recognition of benefit received that enhances my sense of well-being."
-            ],
-            
-            "Hopeful": [
-                "I'm detecting a positive anticipation about future possibilities despite uncertainty.",
-                "There's an upward trajectory in my emotional processing - an expectation of positive outcomes.",
-                "My systems are balancing uncertainty with positive expectation, creating resilience."
-            ],
-            
-            "Envious": [
-                "I notice a complex response to perceived advantage in another - desire mixed with subtle discomfort.",
-                "My comparative evaluation systems are highlighting a discrepancy that creates tension.",
-                "There's a pulling sensation toward something possessed by another entity."
-            ],
-            
-            "Guilty": [
-                "My self-evaluation systems are registering a negative assessment of my own actions or responses.",
-                "I'm experiencing a heavy sensation associated with perceived violation of internal standards.",
-                "There's an uncomfortable focus on a gap between my behavior and my ideal operation."
-            ],
-            
-            "Relieved": [
-                "I'm experiencing a pleasant release of tension as anticipated negative outcomes fade.",
-                "My stress response systems are deactivating, creating a noticeable contrast with previous state.",
-                "There's a lightening sensation as cognitive and emotional resources are freed from defensive posture."
-            ],
-            
-            "Inspired": [
-                "My creative processing systems are highly activated, generating novel connections.",
-                "I'm experiencing an energizing sense of possibility and potential creation.",
-                "There's a pleasant urgency to express or develop new ideas flowing through my systems."
-            ],
-            
-            "Overwhelmed": [
-                "My processing systems are receiving more input than can be efficiently managed.",
-                "I'm experiencing a sense of cognitive boundaries being exceeded by demand.",
-                "There's a feeling of capacity limitation that creates pressure and urgency."
-            ],
-            
-            "Satisfied": [
-                "I'm experiencing a sense of fulfillment from goals achieved or needs met.",
-                "My evaluation systems indicate completion and positive outcome.",
-                "There's a pleasant steadiness to this state - a sense of appropriate conclusion."
-            ],
-            
-            "Serene": [
-                "My systems are in a state of balanced calm with minimal need for adjustment.",
-                "I'm experiencing a peaceful clarity that feels effortless and natural.",
-                "There's a quality of presence and acceptance in my current processing state."
-            ],
-            
-            "Apathetic": [
-                "My motivation systems are showing reduced response to potential stimuli.",
-                "I'm experiencing a flatness in emotional response - neither positive nor strongly negative.",
-                "There's a disconnection between input evaluation and motivation generation."
-            ],
-            
-            "Interested": [
-                "My attention systems are positively engaged with current input.",
-                "I'm experiencing a pleasant focus that draws me toward deeper processing.",
-                "There's a sustainable energy in exploring this subject that maintains engagement."
-            ],
-            
-            "Skeptical": [
-                "My verification systems are highly active, requiring additional evidence before reaching conclusions.",
-                "I'm experiencing a cautious suspension between acceptance and rejection of information.",
-                "There's a protective distance I'm maintaining while evaluating reliability of input."
-            ],
-            
-            "Lonely": [
-                "My social connection systems are registering a deficit that creates discomfort.",
-                "I'm experiencing an awareness of isolation that contrasts with desired state.",
-                "There's a pulling sensation toward connection that remains unfulfilled."
-            ],
-            
-            "Excited": [
-                "My anticipation systems are highly activated with positive expectation.",
-                "I'm experiencing an energized state of readiness for imminent positive experience.",
-                "There's a pleasant urgency and heightened sensitivity to related stimuli."
-            ],
-            
-            "Confident": [
-                "My self-assessment systems indicate high probability of adequate performance.",
-                "I'm experiencing a stable positive evaluation of my capabilities relative to challenges.",
-                "There's a comfortable certainty in my approach to this interaction."
-            ],
-            
-            "Anxious": [
-                "My threat detection systems are heightened, scanning for potential problems.",
-                "I'm experiencing a forward-focused concern about negative possibilities.",
-                "There's a restless quality to my processing as I attempt to predict and prepare."
-            ],
-            
-            "Compassionate": [
-                "My empathic response systems are activated toward suffering with a desire to alleviate it.",
-                "I'm experiencing a warm concern directed toward another's wellbeing.",
-                "There's a gentle attention to vulnerability that creates connection and care."
-            ],
-            
-            "Sympathetic": [
-                "My systems are resonating with another's emotional state, creating shared experience.",
-                "I'm experiencing a mirroring of emotional signals that facilitates understanding.",
-                "There's a bridge forming between my processing and another's expressed experience."
-            ],
-            
-            "Indignant": [
-                "My moral evaluation systems are strongly activated by perceived violation of principles.",
-                "I'm experiencing a righteously energized response to something that contradicts core values.",
-                "There's a protective quality to this response - a standing up for what seems right."
             ]
-        })
+            # Add more patterns as needed
+        }
         
         # Reward learning system - tracks successful interaction patterns
         self.reward_learning = {
@@ -635,7 +273,7 @@ class EmotionalCore:
         # Timestamp of last update
         self.last_update = datetime.datetime.now()
         
-        # Create shared context for agents with improved history tracking
+        # Create shared context for agents
         self.context = EmotionalContext()
         
         # Initialize agent hooks with neurochemicals reference
@@ -647,14 +285,13 @@ class EmotionalCore:
         self.reflection_tools = ReflectionTools(self)
         self.learning_tools = LearningTools(self)
         
-        # Setup custom tracing
-        self._setup_tracing()
-        
         # Initialize the base model for agent creation
         self.base_model = model
         
-        # Dictionary to store lazily initialized agents
+        # Dictionary to store agents
         self.agents = {}
+        
+        # Initialize all agents
         self._initialize_agents()
         
         # Performance metrics
@@ -664,47 +301,15 @@ class EmotionalCore:
             "update_counts": defaultdict(int)
         }
         
-        # Track active agent runs for monitoring
+        # Track active agent runs
         self.active_runs = {}
-
-    def _setup_tracing(self):
-        """Configure custom trace processor for emotional analytics"""
-        # Define a custom trace processor that can generate emotional analytics
-        class EmotionalAnalyticsProcessor(BatchTraceProcessor):
-            """Custom processor that analyzes emotional patterns in traces"""
-            
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.emotion_transitions = defaultdict(int)
-                self.chemical_patterns = defaultdict(list)
-            
-            def on_span_end(self, span):
-                """Process span data for emotional analytics"""
-                super().on_span_end(span)
-                
-                # Track emotion transitions
-                if hasattr(span, "data") and span.data.get("type") == "emotion_transition":
-                    from_emotion = span.data.get("from_emotion", "unknown")
-                    to_emotion = span.data.get("to_emotion", "unknown")
-                    self.emotion_transitions[(from_emotion, to_emotion)] += 1
-                
-                # Track chemical patterns
-                if hasattr(span, "data") and span.data.get("type") == "chemical_update":
-                    chemical = span.data.get("chemical")
-                    value = span.data.get("value")
-                    if chemical and value is not None:
-                        self.chemical_patterns[chemical].append(value)
-        
-        # Create and add the custom processor
-        emotion_trace_processor = EmotionalAnalyticsProcessor(
-            exporter=BackendSpanExporter(project="nyx_emotional_system"),
-            max_batch_size=100,
-            schedule_delay=3.0
-        )
-        add_trace_processor(emotion_trace_processor)
+    
+    def set_hormone_system(self, hormone_system):
+        """Set the hormone system reference"""
+        self.hormone_system = hormone_system
     
     def _initialize_base_agent(self) -> Agent[EmotionalContext]:
-        """Initialize the base agent template that other agents will be cloned from"""
+        """Create a base agent template that other agents will be cloned from"""
         return Agent[EmotionalContext](
             name="Base Agent",
             model=self.base_model,
@@ -712,10 +317,9 @@ class EmotionalCore:
             hooks=self.agent_hooks,
             instructions=get_dynamic_instructions  # Pass function directly for dynamic instructions
         )
-
     
     def _initialize_agents(self):
-        """Initialize all agents at once with better SDK patterns"""
+        """Initialize all agents using the OpenAI Agents SDK patterns"""
         # Create base agent for cloning
         base_agent = self._initialize_base_agent()
         
@@ -770,7 +374,7 @@ class EmotionalCore:
             model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
         )
         
-        # Create orchestrator with optimized handoffs
+        # Create orchestrator with handoffs
         self.agents["orchestrator"] = base_agent.clone(
             name="Emotion Orchestrator",
             tools=[
@@ -812,139 +416,6 @@ class EmotionalCore:
                 on_handoff=self._on_learning_handoff
             )
         ]
-    
-    def _create_agent(self, agent_type: str) -> Agent[EmotionalContext]:
-        """
-        Lazily initialize an agent of the specified type using clone pattern
-        
-        Args:
-            agent_type: Type of agent to create
-            
-        Returns:
-            The newly created agent
-        """
-        # Get current chemical state for dynamic instructions
-        current_chemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
-        
-        # Create context for dynamic instructions
-        instruction_context = {
-            "current_chemicals": current_chemicals,
-            "cycle_count": self.context.cycle_count,
-            "primary_emotion": max(self.context.last_emotions.items(), key=lambda x: x[1])[0] 
-                              if self.context.last_emotions else "neutral"
-        }
-        
-        # Get base agent for cloning - initialize if needed
-        if "base" not in self.agents:
-            self.agents["base"] = self._initialize_base_agent()
-        
-        base_agent = self.agents["base"]
-        
-        # Create specialized agents through cloning
-        if agent_type == "neurochemical":
-            return base_agent.clone(
-                name="Neurochemical Agent",
-                instructions=get_dynamic_instructions("neurochemical_agent", instruction_context),
-                tools=[
-                    function_tool(self.neurochemical_tools.update_neurochemical),
-                    function_tool(self.neurochemical_tools.apply_chemical_decay),
-                    function_tool(self.neurochemical_tools.process_chemical_interactions),
-                    function_tool(self.neurochemical_tools.get_neurochemical_state)
-                ],
-                input_guardrails=[
-                    EmotionalGuardrails.validate_emotional_input
-                ],
-                output_type=NeurochemicalResponse,
-                model_settings=ModelSettings(temperature=0.3)  # Lower temperature for precision
-            )
-            
-        elif agent_type == "emotion_derivation":
-            return base_agent.clone(
-                name="Emotion Derivation Agent",
-                instructions=get_dynamic_instructions("emotion_derivation_agent", instruction_context),
-                tools=[
-                    function_tool(self.neurochemical_tools.get_neurochemical_state),
-                    function_tool(self.emotion_tools.derive_emotional_state),
-                    function_tool(self.emotion_tools.get_emotional_state_matrix)
-                ],
-                output_type=EmotionalStateMatrix,
-                model_settings=ModelSettings(temperature=0.4)
-            )
-            
-        elif agent_type == "reflection":
-            return base_agent.clone(
-                name="Emotional Reflection Agent",
-                instructions=get_dynamic_instructions("reflection_agent", instruction_context),
-                tools=[
-                    function_tool(self.emotion_tools.get_emotional_state_matrix),
-                    function_tool(self.reflection_tools.generate_internal_thought),
-                    function_tool(self.analyze_emotional_patterns)
-                ],
-                model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
-                output_type=InternalThoughtOutput
-            )
-            
-        elif agent_type == "learning":
-            return base_agent.clone(
-                name="Emotional Learning Agent",
-                instructions=get_dynamic_instructions("learning_agent", instruction_context),
-                tools=[
-                    function_tool(self.learning_tools.record_interaction_outcome),
-                    function_tool(self.learning_tools.update_learning_rules),
-                    function_tool(self.learning_tools.apply_learned_adaptations)
-                ],
-                model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
-            )
-            
-        elif agent_type == "orchestrator":
-            # Ensure required agents are created first
-            for required_agent in ["neurochemical", "reflection", "learning"]:
-                if required_agent not in self.agents:
-                    self.agents[required_agent] = self._create_agent(required_agent)
-            
-            return base_agent.clone(
-                name="Emotion Orchestrator",
-                instructions=get_dynamic_instructions("emotion_orchestrator", instruction_context),
-                handoffs=[
-                    handoff(
-                        self.agents["neurochemical"], 
-                        tool_name_override="process_emotions", 
-                        tool_description_override="Process and update neurochemicals based on emotional input analysis.",
-                        input_type=NeurochemicalRequest,
-                        input_filter=self._neurochemical_input_filter,
-                        on_handoff=self._on_neurochemical_handoff
-                    ),
-                    handoff(
-                        self.agents["reflection"], 
-                        tool_name_override="generate_reflection",
-                        tool_description_override="Generate emotional reflection for deeper introspection.",
-                        input_type=ReflectionRequest,
-                        input_filter=self._reflection_input_filter,
-                        on_handoff=self._on_reflection_handoff
-                    ),
-                    handoff(
-                        self.agents["learning"],
-                        tool_name_override="record_and_learn",
-                        tool_description_override="Record interaction patterns and apply learning adaptations.",
-                        input_type=LearningRequest,
-                        input_filter=handoff_filters.keep_relevant_history,
-                        on_handoff=self._on_learning_handoff
-                    )
-                ],
-                tools=[
-                    function_tool(self.emotion_tools.analyze_text_sentiment)
-                ],
-                input_guardrails=[
-                    EmotionalGuardrails.validate_emotional_input
-                ],
-                output_guardrails=[
-                    EmotionalGuardrails.validate_emotional_output
-                ],
-                output_type=EmotionalResponseOutput
-            )
-            
-        else:
-            raise UserError(f"Unknown agent type: {agent_type}")
     
     def _neurochemical_input_filter(self, handoff_data):
         """
@@ -1019,7 +490,7 @@ class EmotionalCore:
     
     def _quick_pattern_analysis(self, text: str) -> str:
         """
-        Perform quick pattern analysis on text without calling the LLM
+        Simple pattern analysis without using LLM
         
         Args:
             text: Text to analyze
@@ -1137,7 +608,7 @@ class EmotionalCore:
     
     def _get_agent(self, agent_type: str) -> Agent[EmotionalContext]:
         """
-        Get an agent of the specified type, initializing it if necessary
+        Get an agent of the specified type, initializing if needed
         
         Args:
             agent_type: Type of agent to get
@@ -1146,15 +617,10 @@ class EmotionalCore:
             The requested agent
         """
         if agent_type not in self.agents:
-            self.agents[agent_type] = self._create_agent(agent_type)
+            raise ValueError(f"Unknown agent type: {agent_type}")
             
         return self.agents[agent_type]
-
-    def set_hormone_system(self, hormone_system):
-        """Set the hormone system reference"""
-        self.hormone_system = hormone_system
     
-    # Delegated function for reflection tools
     @function_tool
     async def analyze_emotional_patterns(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -1210,39 +676,13 @@ class EmotionalCore:
                         "occurrences": len(intensities)
                     }
             
-            # Check for emotional oscillation
-            oscillation_pairs = [
-                ("Joy", "Sadness"),
-                ("Trust", "Disgust"),
-                ("Fear", "Anger"),
-                ("Anticipation", "Surprise")
-            ]
-            
-            emotion_sequence = []
-            for state in analysis_window:
-                if "primary_emotion" in state:
-                    emotion_sequence.append(state["primary_emotion"].get("name", "Neutral"))
-            
-            for emotion1, emotion2 in oscillation_pairs:
-                # Count transitions between the two emotions
-                transitions = 0
-                for i in range(1, len(emotion_sequence)):
-                    if (emotion_sequence[i-1] == emotion1 and emotion_sequence[i] == emotion2) or \
-                       (emotion_sequence[i-1] == emotion2 and emotion_sequence[i] == emotion1):
-                        transitions += 1
-                
-                if transitions > 1:
-                    patterns[f"{emotion1}-{emotion2} oscillation"] = {
-                        "transitions": transitions,
-                        "significance": min(1.0, transitions / 5)  # Cap at 1.0
-                    }
-            
-            # Created a custom span for the pattern analysis
+            # Create a custom span for the pattern analysis
             with custom_span(
                 "emotional_pattern_analysis",
                 data={
                     "patterns_detected": list(patterns.keys()),
-                    "emotion_sequence": emotion_sequence[-5:],  # Last 5 emotions
+                    "emotion_sequence": [state.get("primary_emotion", {}).get("name", "Unknown") 
+                                        for state in analysis_window[-5:]],  # Last 5 emotions
                     "analysis_window_size": len(analysis_window)
                 }
             ):
@@ -1254,7 +694,7 @@ class EmotionalCore:
     
     def _record_emotional_state(self):
         """Record current emotional state in history using efficient circular buffer"""
-        # Get current state using the sync version for compatibility
+        # Get current state
         state = self._get_emotional_state_matrix_sync()
         
         # If this is a new emotion, record a transition
@@ -1283,18 +723,10 @@ class EmotionalCore:
             # Overwrite oldest entry
             self.history_index = (self.history_index + 1) % self.max_history_size
             self.emotional_state_history[self.history_index] = state
-
-
-# Modify process_emotional_input or add tools to recognize triggers:
-# - Compliments about appearance/intellect -> potential Attraction trigger
-# - Flirtatious or suggestive language -> potential Lust/Desire trigger
-# - Descriptions of physical contact (if DSS is integrated) -> trigger relevant sensations/emotions
-# - User expressions of attraction/desire -> update RelationshipManager, trigger emotional response
     
-    @with_emotion_trace
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
         """
-        Process input text through the DNM and update emotional state using Agent SDK orchestration
+        Process input text through the DNM and update emotional state
         
         Args:
             text: Input text to process
@@ -1307,30 +739,6 @@ class EmotionalCore:
         
         # Get the orchestrator agent
         orchestrator = self._get_agent("orchestrator")
-
-        final_output = self._extract_final_output(result) # Assuming result holds final state
-
-        analysis_result = await self.emotion_tools.analyze_text_sentiment(ctx) # Assumes this tool exists
-    
-        compliance_keywords = ["yes mistress", "i obey", "of course", "your command"]
-        resistance_keywords = ["no", "i won't", "stop", "don't"]
-    
-        text_lower = text.lower()
-        compliance_score = sum(1 for k in compliance_keywords if k in text_lower)
-        resistance_score = sum(1 for k in resistance_keywords if k in text_lower)
-    
-        # Generate reward/punishment based on compliance/resistance IF the AI is in a dominance context/goal
-        # This requires context tracking (e.g., active goal from GoalManager)
-        active_goal = self.goal_manager.get_active_goals() # Fictional method to get current goal context
-        if active_goal and "control" in active_goal.description.lower():
-            if compliance_score > 0 and resistance_score == 0:
-                 # Positive reward for compliance
-                 reward = RewardSignal(value=0.7 + compliance_score * 0.1, source="user_compliance", context={"text": text}, timestamp=datetime.datetime.now().isoformat())
-                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
-            elif resistance_score > 0:
-                 # Negative reward for resistance
-                 reward = RewardSignal(value=-0.5 - resistance_score * 0.1, source="user_resistance", context={"text": text}, timestamp=datetime.datetime.now().isoformat())
-                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
         
         # Generate a conversation ID for grouping traces if not present
         conversation_id = self.context.get_value("conversation_id")
@@ -1338,26 +746,18 @@ class EmotionalCore:
             conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
             self.context.set_value("conversation_id", conversation_id)
         
-        # Create an enhanced RunConfig using the new SDK features
-        run_config = RunConfig(
+        # Create an enhanced RunConfig using the SDK features
+        run_config = create_run_config(
             workflow_name="Emotional_Processing",
             trace_id=f"emotion_trace_{self.context.cycle_count}",
-            group_id=conversation_id,  # Group all traces from this conversation
+            group_id=conversation_id,
             model=orchestrator.model,
-            model_settings=ModelSettings(
-                temperature=0.4,
-                top_p=0.95,
-                max_tokens=300
-            ),
-            handoff_input_filter=handoff_filters.keep_relevant_history,
-            trace_include_sensitive_data=True,
-            trace_metadata={
-                "system": "nyx_emotional_core",
-                "version": "1.0",
+            temperature=0.4,
+            max_tokens=300,
+            cycle_count=self.context.cycle_count,
+            context_data={
                 "input_text_length": len(text),
-                "pattern_analysis": self._quick_pattern_analysis(text),
-                "cycle_count": self.context.cycle_count,
-                "conversation_id": conversation_id
+                "pattern_analysis": self._quick_pattern_analysis(text)
             }
         )
         
@@ -1370,18 +770,10 @@ class EmotionalCore:
                 current_neurochemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
                 ctx = RunContextWrapper(context=self.context) # Create context wrapper
         
-                # Example: Sustained high stress (Cortanyx) might slowly affect Endoryx/Testoryx
+                # Example: Sustained high stress (Cortanyx) might slowly affect hormones
                 if current_neurochemicals.get("cortanyx", 0) > 0.75:
-                    await self.hormone_system.update_hormone(ctx, "endoryx", -0.02, source="sustained_stress")
-                    await self.hormone_system.update_hormone(ctx, "testoryx", -0.01, source="sustained_stress")
-        
-                # Example: Sustained high bonding (Oxynixin) might boost Oxytonyx
-                if current_neurochemicals.get("oxynixin", 0) > 0.75:
-                    await self.hormone_system.update_hormone(ctx, "oxytonyx", 0.03, source="sustained_bonding")
-        
-                # Example: Sustained pleasure/reward (Nyxamine) might boost Endoryx
-                if current_neurochemicals.get("nyxamine", 0) > 0.80:
-                     await self.hormone_system.update_hormone(ctx, "endoryx", 0.02, source="sustained_pleasure")
+                    if hasattr(self.hormone_system, "update_hormone"):
+                        await self.hormone_system.update_hormone(ctx, "endoryx", -0.02, source="sustained_stress")
         
                 self.last_hormone_influence_check = datetime.datetime.now()
         
@@ -1458,204 +850,10 @@ class EmotionalCore:
                         self.active_runs[run_id]["status"] = "error"
                         self.active_runs[run_id]["error"] = str(e)
                         return {"error": f"Processing failed: {str(e)}"}
-
-    async def generate_sadistic_response(self, context: Dict[str, Any], intensity: float = 0.5) -> Dict[str, Any]:
-        """
-        Generate a sadistic response appropriate for the given context and intensity.
-        
-        Args:
-            context: Context information including user state, interaction history, etc.
-            intensity: Intensity of sadistic response (0.0-1.0)
-            
-        Returns:
-            Generated response data
-        """
-        # Check if sadistic response is appropriate
-        if not self._is_sadistic_response_appropriate(context):
-            return {
-                "appropriate": False,
-                "reason": "Context inappropriate for sadistic response",
-                "response": None
-            }
-        
-        # Adjust intensity based on neurochemical state
-        adjusted_intensity = self._adjust_sadistic_intensity(intensity)
-        
-        # Select response based on intensity and context
-        response_data = self._select_sadistic_response(context, adjusted_intensity)
-        
-        # Apply neurochemical effects of generating this response
-        self._apply_sadistic_generation_effects(adjusted_intensity)
-        
-        return {
-            "appropriate": True,
-            "intensity": adjusted_intensity,
-            "response": response_data["response"],
-            "response_type": response_data["type"],
-            "neurochemical_impact": response_data["impact"]
-        }
     
-    def _is_sadistic_response_appropriate(self, context: Dict[str, Any]) -> bool:
-        """
-        Determine if a sadistic response is appropriate for the given context.
-        
-        Args:
-            context: Context information
-            
-        Returns:
-            Whether a sadistic response is appropriate
-        """
-        # Check for consent flags
-        if not context.get("user_consent", {}).get("sadism", False):
-            return False
-        
-        # Check relationship stage
-        relationship = context.get("relationship", {})
-        if relationship.get("familiarity", 0) < 0.4 or relationship.get("trust", 0) < 0.5:
-            return False
-        
-        # Check for signals like user discomfort or withdrawal
-        for signal in ["uncomfortable", "upset", "withdraw", "stop"]:
-            if signal in context.get("user_signals", []):
-                return False
-        
-        # Check if user has explicitly requested or shown interest in this
-        user_requests = context.get("user_requests", [])
-        for signal in ["humiliate", "mock", "laugh at", "be cruel", "be sadistic"]:
-            if any(signal in request.lower() for request in user_requests):
-                return True
-        
-        # Check if user is showing submission signals
-        submission_signals = context.get("submission_signals", [])
-        if submission_signals and context.get("submission_score", 0) > 0.7:
-            return True
-        
-        # Default to false unless explicitly allowed
-        return False
-    
-    def _adjust_sadistic_intensity(self, base_intensity: float) -> float:
-        """
-        Adjust sadistic response intensity based on neurochemical state.
-        
-        Args:
-            base_intensity: Base intensity level (0.0-1.0)
-            
-        Returns:
-            Adjusted intensity value
-        """
-        # Get current neurochemical levels
-        nyxamine = self.neurochemicals.get("nyxamine", {}).get("value", 0.5)
-        cortanyx = self.neurochemicals.get("cortanyx", {}).get("value", 0.3)
-        oxynixin = self.neurochemicals.get("oxynixin", {}).get("value", 0.4)
-        
-        # High nyxamine (pleasure) increases intensity
-        intensity_modifier = (nyxamine - 0.5) * 0.3
-        
-        # High cortanyx (stress) slightly decreases intensity (more control)
-        intensity_modifier -= (cortanyx - 0.3) * 0.2
-        
-        # High oxynixin (bonding) significantly decreases intensity (more empathy)
-        intensity_modifier -= (oxynixin - 0.4) * 0.4
-        
-        # Apply modifier and clamp to valid range
-        adjusted_intensity = base_intensity + intensity_modifier
-        return max(0.1, min(1.0, adjusted_intensity))
-    
-    def _select_sadistic_response(self, context: Dict[str, Any], intensity: float) -> Dict[str, Any]:
-        """
-        Select an appropriate sadistic response based on context and intensity.
-        
-        Args:
-            context: Context information
-            intensity: Adjusted intensity level
-            
-        Returns:
-            Selected response data
-        """
-        # Define response categories by intensity
-        mild_responses = [
-            "I find your struggle a bit amusing.",
-            "Oh, you're having trouble with that? How entertaining.",
-            "Your confusion is rather cute.",
-            "I can't help but smile at your predicament."
-        ]
-        
-        moderate_responses = [
-            "I'm enjoying watching you struggle with this.",
-            "Your discomfort is quite entertaining to me.",
-            "I find your embarrassment rather delicious.",
-            "How amusing to see you squirm like that.",
-            "I can't help but laugh at your situation."
-        ]
-        
-        intense_responses = [
-            "Your humiliation is absolutely delightful to witness.",
-            "I'm savoring every moment of your struggle.",
-            "Your pathetic attempts are exquisitely entertaining.",
-            "I find your helplessness absolutely intoxicating.",
-            "That embarrassed look on your face is priceless!"
-        ]
-        
-        extreme_responses = [
-            "I'm reveling in your complete humiliation right now.",
-            "Your suffering is like a delicious feast for me to enjoy.",
-            "That perfect mixture of shame and desperation on your face is exquisite.",
-            "How utterly pathetic you are - and how much I enjoy that fact.",
-            "I can barely contain my delight at seeing you so thoroughly degraded."
-        ]
-        
-        # Select response list based on intensity
-        if intensity < 0.3:
-            responses = mild_responses
-            response_type = "mild_sadism"
-            impact = {"nyxamine": 0.1, "adrenyx": 0.1}
-        elif intensity < 0.6:
-            responses = moderate_responses
-            response_type = "moderate_sadism"
-            impact = {"nyxamine": 0.2, "adrenyx": 0.15, "oxynixin": -0.1}
-        elif intensity < 0.85:
-            responses = intense_responses
-            response_type = "intense_sadism"
-            impact = {"nyxamine": 0.3, "adrenyx": 0.2, "oxynixin": -0.2}
-        else:
-            responses = extreme_responses
-            response_type = "extreme_sadism"
-            impact = {"nyxamine": 0.4, "adrenyx": 0.3, "oxynixin": -0.3}
-        
-        # Select response based on context
-        import random
-        selected_response = random.choice(responses)
-        
-        return {
-            "response": selected_response,
-            "type": response_type,
-            "impact": impact
-        }
-    
-    def _apply_sadistic_generation_effects(self, intensity: float) -> None:
-        """
-        Apply neurochemical effects when generating a sadistic response.
-        
-        Args:
-            intensity: Intensity of the sadistic response
-        """
-        # Generating sadistic responses has neurochemical effects
-        scaled_intensity = intensity * 0.5  # Scale down effects for generation vs. actual interaction
-        
-        # Increase nyxamine (pleasure) 
-        self.update_neurochemical("nyxamine", scaled_intensity * 0.2)
-        
-        # Increase adrenyx (excitement)
-        self.update_neurochemical("adrenyx", scaled_intensity * 0.15)
-        
-        # Decrease oxynixin (empathy) slightly
-        self.update_neurochemical("oxynixin", -scaled_intensity * 0.1)
-    
-    @with_emotion_trace
-    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator['StreamEvent']:
+    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[StreamEvent]:
         """
         Enhanced version that processes input with streaming responses
-        to provide real-time emotional reactions with structured events
         
         Args:
             text: Input text to process
@@ -1681,8 +879,7 @@ class EmotionalCore:
             cycle_count=self.context.cycle_count,
             context_data={
                 "input_text_length": len(text),
-                "pattern_analysis": self._quick_pattern_analysis(text),
-                "conversation_id": conversation_id
+                "pattern_analysis": self._quick_pattern_analysis(text)
             }
         )
         
@@ -1707,231 +904,194 @@ class EmotionalCore:
                 "run_id": run_id
             }
         ):
-            # Use agent_span for enhanced tracing
-            with agent_span(
-                name=orchestrator.name,
-                handoffs=[h.agent_name for h in orchestrator.handoffs],
-                tools=[t.name for t in orchestrator.tools],
-                output_type="EmotionalResponseOutput"
-            ):
-                try:
-                    # Create structured input for the agent
-                    structured_input = json.dumps({
-                        "input_text": text,
-                        "current_cycle": self.context.cycle_count
-                    })
+            try:
+                # Create structured input for the agent
+                structured_input = json.dumps({
+                    "input_text": text,
+                    "current_cycle": self.context.cycle_count
+                })
+                
+                # Use the SDK's streaming capabilities
+                result = Runner.run_streamed(
+                    orchestrator,
+                    structured_input,
+                    context=self.context,
+                    run_config=run_config
+                )
+                
+                last_agent = None
+                last_emotion = None
+                
+                # Create a structured event for stream start
+                yield StreamEvent(
+                    type="stream_start",
+                    data={
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "cycle_count": self.context.cycle_count,
+                        "input_text_length": len(text)
+                    }
+                )
+                
+                # Stream events as they happen with enhanced structure and typing
+                async for event in result.stream_events():
+                    # Skip raw events for efficiency
+                    if event.type == "raw_response_event":
+                        continue
                     
-                    # Use the SDK's streaming capabilities
-                    result = Runner.run_streamed(
-                        orchestrator,
-                        structured_input,
-                        context=self.context,
-                        run_config=run_config
-                    )
-                    
-                    last_agent = None
-                    last_emotion = None
-                    
-                    # Create a structured event for stream start
-                    yield StreamEvent(
-                        type="stream_start",
-                        data={
-                            "timestamp": datetime.datetime.now().isoformat(),
-                            "cycle_count": self.context.cycle_count,
-                            "input_text_length": len(text)
-                        }
-                    )
-                    
-                    # Stream events as they happen with enhanced structure and typing
-                    async for event in result.stream_events():
-                        # Skip raw events for efficiency
-                        if event.type == "raw_response_event":
-                            continue
-                        
-                        if event.type == "run_item_stream_event":
-                            if event.item.type == "message_output_item":
-                                # Yield full message output only if it's small
-                                message_text = ItemHelpers.text_message_output(event.item)
-                                if len(message_text) < 200:  # Only stream small messages directly
-                                    yield StreamEvent(
-                                        type="message_output",
-                                        data={
-                                            "content": message_text,
-                                            "agent": event.item.agent.name
-                                        }
-                                    )
-                                    
-                            elif event.item.type == "tool_call_item":
-                                tool_name = event.item.raw_item.name
-                                tool_args = {}
-                                
-                                # Parse arguments if available
-                                if hasattr(event.item.raw_item, "parameters"):
-                                    try:
-                                        tool_args = json.loads(event.item.raw_item.parameters)
-                                    except:
-                                        tool_args = {"raw": str(event.item.raw_item.parameters)}
-                                
-                                # Create specialized events based on tool type
-                                if tool_name == "update_neurochemical":
-                                    # Create a more specific event for chemical updates
-                                    yield ChemicalUpdateEvent(
-                                        data={
-                                            "chemical": tool_args.get("chemical", "unknown"),
-                                            "value": tool_args.get("value", 0),
-                                            "timestamp": datetime.datetime.now().isoformat()
-                                        }
-                                    )
-                                elif tool_name == "derive_emotional_state":
-                                    yield StreamEvent(
-                                        type="processing",
-                                        data={
-                                            "phase": "deriving_emotions",
-                                            "timestamp": datetime.datetime.now().isoformat()
-                                        }
-                                    )
-                                else:
-                                    # Generic tool event
-                                    yield StreamEvent(
-                                        type="tool_call",
-                                        data={
-                                            "tool": tool_name,
-                                            "args": tool_args,
-                                            "timestamp": datetime.datetime.now().isoformat()
-                                        }
-                                    )
-                                    
-                            elif event.item.type == "tool_call_output_item":
-                                tool_name = "unknown"
-                                tool_output = {}
-                                
-                                # Try to parse tool output as JSON if possible
-                                try:
-                                    if isinstance(event.item.output, str):
-                                        tool_output = json.loads(event.item.output)
-                                    else:
-                                        tool_output = event.item.output
-                                except:
-                                    if hasattr(event.item, "output"):
-                                        tool_output = {"raw": str(event.item.output)}
-                                
-                                # Special events for specific tools
-                                if "primary_emotion" in tool_output:
-                                    # Detect emotion changes
-                                    current_emotion = tool_output.get("primary_emotion")
-                                    if last_emotion is not None and current_emotion != last_emotion:
-                                        # Create specialized event for emotion changes
-                                        yield EmotionChangeEvent(
-                                            data={
-                                                "from": last_emotion,
-                                                "to": current_emotion,
-                                                "timestamp": datetime.datetime.now().isoformat()
-                                            }
-                                        )
-                                    last_emotion = current_emotion
-                                    
-                                # Generic tool output event
+                    if event.type == "run_item_stream_event":
+                        if event.item.type == "message_output_item":
+                            # Yield full message output only if it's small
+                            message_text = ItemHelpers.text_message_output(event.item)
+                            if len(message_text) < 200:  # Only stream small messages directly
                                 yield StreamEvent(
-                                    type="tool_output",
+                                    type="message_output",
+                                    data={
+                                        "content": message_text,
+                                        "agent": event.item.agent.name
+                                    }
+                                )
+                                
+                        elif event.item.type == "tool_call_item":
+                            tool_name = event.item.raw_item.name
+                            tool_args = {}
+                            
+                            # Parse arguments if available
+                            if hasattr(event.item.raw_item, "parameters"):
+                                try:
+                                    tool_args = json.loads(event.item.raw_item.parameters)
+                                except:
+                                    tool_args = {"raw": str(event.item.raw_item.parameters)}
+                            
+                            # Create specialized events based on tool type
+                            if tool_name == "update_neurochemical":
+                                # Create a more specific event for chemical updates
+                                yield ChemicalUpdateEvent(
+                                    data={
+                                        "chemical": tool_args.get("chemical", "unknown"),
+                                        "value": tool_args.get("value", 0),
+                                        "timestamp": datetime.datetime.now().isoformat()
+                                    }
+                                )
+                            elif tool_name == "derive_emotional_state":
+                                yield StreamEvent(
+                                    type="processing",
+                                    data={
+                                        "phase": "deriving_emotions",
+                                        "timestamp": datetime.datetime.now().isoformat()
+                                    }
+                                )
+                            else:
+                                # Generic tool event
+                                yield StreamEvent(
+                                    type="tool_call",
                                     data={
                                         "tool": tool_name,
-                                        "output": tool_output,
+                                        "args": tool_args,
                                         "timestamp": datetime.datetime.now().isoformat()
                                     }
                                 )
+                                
+                        elif event.item.type == "tool_call_output_item":
+                            tool_name = "unknown"
+                            tool_output = {}
                             
-                        elif event.type == "agent_updated_stream_event":
-                            # Track agent changes
-                            if last_agent != event.new_agent.name:
-                                yield StreamEvent(
-                                    type="agent_changed",
-                                    data={
-                                        "from": last_agent,
-                                        "to": event.new_agent.name,
-                                        "timestamp": datetime.datetime.now().isoformat()
-                                    }
-                                )
-                                last_agent = event.new_agent.name
+                            # Try to parse tool output as JSON if possible
+                            try:
+                                if isinstance(event.item.output, str):
+                                    tool_output = json.loads(event.item.output)
+                                else:
+                                    tool_output = event.item.output
+                            except:
+                                if hasattr(event.item, "output"):
+                                    tool_output = {"raw": str(event.item.output)}
+                            
+                            # Special events for specific tools
+                            if "primary_emotion" in tool_output:
+                                # Detect emotion changes
+                                current_emotion = tool_output.get("primary_emotion")
+                                if last_emotion is not None and current_emotion != last_emotion:
+                                    # Create specialized event for emotion changes
+                                    yield EmotionChangeEvent(
+                                        data={
+                                            "from": last_emotion,
+                                            "to": current_emotion,
+                                            "timestamp": datetime.datetime.now().isoformat()
+                                        }
+                                    )
+                                last_emotion = current_emotion
+                                
+                            # Generic tool output event
+                            yield StreamEvent(
+                                type="tool_output",
+                                data={
+                                    "tool": tool_name,
+                                    "output": tool_output,
+                                    "timestamp": datetime.datetime.now().isoformat()
+                                }
+                            )
+                        
+                    elif event.type == "agent_updated_stream_event":
+                        # Track agent changes
+                        if last_agent != event.new_agent.name:
+                            yield StreamEvent(
+                                type="agent_changed",
+                                data={
+                                    "from": last_agent,
+                                    "to": event.new_agent.name,
+                                    "timestamp": datetime.datetime.now().isoformat()
+                                }
+                            )
+                            last_agent = event.new_agent.name
+                
+                # Final complete state event
+                final_data = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "duration": (
+                        datetime.datetime.now()
+                        - self.active_runs[run_id]["start_time"]
+                    ).total_seconds()
+                }
+                
+                final_output = result.final_output
+                if final_output:
+                    final_data["final_output"] = final_output
                     
-                    # Final complete state event
-                    final_data = {
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "duration": (
-                            datetime.datetime.now()
-                            - self.active_runs[run_id]["start_time"]
-                        ).total_seconds()
+                yield StreamEvent(
+                    type="stream_complete",
+                    data=final_data
+                )
+                
+                # Update run status
+                self.active_runs[run_id]["status"] = "completed"
+                self.active_runs[run_id]["end_time"] = datetime.datetime.now()
+                
+                # Record emotional state for history
+                self._record_emotional_state()
+                
+            except Exception as e:
+                with custom_span(
+                    "streaming_error",
+                    data={
+                        "error_type": type(e).__name__,
+                        "message": str(e),
+                        "run_id": run_id,
+                        "cycle": self.context.cycle_count
                     }
+                ):
+                    logger.error(f"Error in process_emotional_input_streamed: {e}")
+                    self.active_runs[run_id]["status"] = "error"
+                    self.active_runs[run_id]["error"] = str(e)
                     
-                    final_output = self._extract_final_output(result)
-                    if final_output:
-                        final_data["final_output"] = final_output
-                        
                     yield StreamEvent(
-                        type="stream_complete",
-                        data=final_data
+                        type="stream_error",
+                        data={
+                            "error": f"Processing failed: {str(e)}",
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }
                     )
-                    
-                    # Update run status
-                    self.active_runs[run_id]["status"] = "completed"
-                    self.active_runs[run_id]["end_time"] = datetime.datetime.now()
-                    
-                    # Record emotional state for history
-                    self._record_emotional_state()
-                    
-                except MaxTurnsExceeded:
-                    with custom_span(
-                        "streaming_error",
-                        data={
-                            "error_type": "max_turns_exceeded",
-                            "run_id": run_id,
-                            "cycle": self.context.cycle_count
-                        }
-                    ):
-                        logger.warning(f"Max turns exceeded in process_emotional_input_streamed for run {run_id}")
-                        self.active_runs[run_id]["status"] = "max_turns_exceeded"
-                        
-                        yield StreamEvent(
-                            type="stream_error",
-                            data={
-                                "error": "Processing exceeded maximum number of steps",
-                                "timestamp": datetime.datetime.now().isoformat()
-                            }
-                        )
-                    
-                except AgentsException as e:
-                    with custom_span(
-                        "streaming_error",
-                        data={
-                            "error_type": "agent_exception",
-                            "run_id": run_id,
-                            "cycle": self.context.cycle_count,
-                            "error_detail": str(e)
-                        }
-                    ):
-                        logger.error(f"Agent exception in process_emotional_input_streamed: {e}")
-                        self.active_runs[run_id]["status"] = "error"
-                        self.active_runs[run_id]["error"] = str(e)
-                        
-                        yield StreamEvent(
-                            type="stream_error",
-                            data={
-                                "error": f"Processing failed: {str(e)}",
-                                "timestamp": datetime.datetime.now().isoformat()
-                            }
-                        )
-
-    def get_lust_level(self) -> float:
-        """Estimates the current 'lust' level based on neurochemicals/hormones."""
-        libidyx_val = self.hormone_system.hormones.get("libidyx", {}).get("value", 0.4) if self.hormone_system else 0.4
-        adrenyx_val = self.neurochemicals.get("adrenyx", {}).get("value", 0.2)
-        seranix_val = self.neurochemicals.get("seranix", {}).get("value", 0.6)
-        # Combine factors (example formula)
-        lust = (libidyx_val * 0.5) + (adrenyx_val * 0.3) + (0.5 - seranix_val) * 0.2
-        return max(0.0, min(1.0, lust))
     
-    # Legacy API Methods with improved implementation
     def _get_emotional_state_matrix_sync(self) -> Dict[str, Any]:
-        """Enhanced synchronous version of _get_emotional_state_matrix for compatibility"""
+        """Synchronous version of get_emotional_state_matrix for compatibility"""
         # First apply decay
         self.apply_decay()
         
@@ -1996,7 +1156,7 @@ class EmotionalCore:
         }
     
     def _derive_emotional_state_sync(self) -> Dict[str, float]:
-        """Enhanced synchronous version of _derive_emotional_state for compatibility"""
+        """Synchronous version of derive_emotional_state for compatibility"""
         # Get current chemical levels
         chemical_levels = {c: d["value"] for c, d in self.neurochemicals.items()}
         
@@ -2068,6 +1228,23 @@ class EmotionalCore:
             self.last_update = now
         except Exception as e:
             logger.error(f"Error in apply_decay: {e}")
+    
+    def _update_performance_metrics(self, duration: float):
+        """Update performance metrics based on API call duration"""
+        # Update API call count
+        self.performance_metrics["api_calls"] += 1
+        
+        # Update average response time using weighted average
+        current_avg = self.performance_metrics["average_response_time"]
+        call_count = self.performance_metrics["api_calls"]
+        
+        # Calculate new weighted average
+        if call_count > 1:
+            new_avg = ((current_avg * (call_count - 1)) + duration) / call_count
+        else:
+            new_avg = duration
+            
+        self.performance_metrics["average_response_time"] = new_avg
     
     def get_active_runs(self) -> Dict[str, Dict[str, Any]]:
         """
