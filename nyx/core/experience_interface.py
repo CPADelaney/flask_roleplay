@@ -5,15 +5,16 @@ import asyncio
 from datetime import datetime
 import random
 import math
+import os
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 from pydantic import BaseModel, Field
 
-# Import OpenAI Agents SDK components
+# Update imports to use OpenAI Agents SDK
 from agents import (
     Agent, Runner, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail,
     function_tool, handoff, trace, RunContextWrapper, FunctionTool, RunConfig,
-    RunHooks, ModelSettings
+    RunHooks, ModelSettings, set_default_openai_key
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class ExperienceOutput(BaseModel):
     source_id: Optional[str] = Field(None, description="Source memory ID")
     relevance_score: float = Field(..., description="Relevance score (0.0-1.0)")
     emotional_context: Optional[Dict[str, Any]] = Field(None, description="Emotional context data")
+
 
 class ReflectionOutput(BaseModel):
     """Schema for reflection output"""
