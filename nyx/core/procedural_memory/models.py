@@ -9,7 +9,13 @@ import random
 from collections import Counter
 from functools import lru_cache
 
+# Import OpenAI SDK for client integration
+from openai import OpenAI
+
 logger = logging.getLogger(__name__)
+
+# Initialize OpenAI client (will use environment variables for API key)
+client = OpenAI()
 
 class ActionTemplate(BaseModel):
     """Generic template for an action that can be mapped across domains"""
@@ -167,38 +173,6 @@ class Procedure(BaseModel):
             self.context_history = self.context_history[-keep_count:]
             return saved_contexts * 200  # Approximate bytes saved
         return 0
-
-    def estimate_memory_usage(self) -> int:
-        """Estimate memory usage of this procedure in bytes"""
-        # Base size
-        memory = 1000  # Base object overhead
-        
-        # Add size for steps
-        memory += len(self.steps) * 500  # Approximate size per step
-        
-        # Add size for context history
-        memory += len(self.context_history) * 200  # Approximate size per context entry
-        
-        # Add size for other lists and dicts
-        memory += len(self.chunked_steps) * 100
-        memory += len(self.generalized_chunks) * 100
-        memory += len(self.refinement_opportunities) * 200
-        memory += len(self.optimization_history) * 200
-        
-        # Add size for semantic embedding if present
-        if self.semantic_embedding:
-            memory += len(self.semantic_embedding) * 8  # 8 bytes per float
-        
-        return memory
-    
-    def cleanup_history(self, keep_count: int = 10) -> int:
-        """Clean up history to reduce memory usage, returns bytes saved"""
-        original_size = len(self.context_history)
-        if len(self.context_history) > keep_count:
-            saved_contexts = len(self.context_history) - keep_count
-            self.context_history = self.context_history[-keep_count:]
-            return saved_contexts * 200  # Approximate bytes saved
-        return 0
     
 class StepResult(BaseModel):
     """Result from executing a step"""
@@ -312,7 +286,7 @@ class HierarchicalProcedure(BaseModel):
         self.last_updated = datetime.datetime.now().isoformat()
         
     # Added method for hierarchical optimization
-    def optimize_hierarchy(self) -> Dict[str, Any]:
+    async def optimize_hierarchy(self) -> Dict[str, Any]:
         """Optimize hierarchical structure based on execution history"""
         if self.execution_count < 5:
             return {"optimized": False, "reason": "Insufficient execution data"}
@@ -394,7 +368,7 @@ class CausalModel(BaseModel):
     error_history: List[Dict[str, Any]] = Field(default_factory=list)
     max_history: int = 50
 
-    def identify_likely_causes(self, error: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def identify_likely_causes(self, error: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Identify likely causes of an error based on causal model"""
         error_type = error.get("type", "execution_failure")
         error_message = error.get("message", "Unknown error")
@@ -468,7 +442,7 @@ class CausalModel(BaseModel):
         
         return scored_causes
     
-    def suggest_interventions(self, causes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def suggest_interventions(self, causes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Suggest interventions for the likely causes"""
         suggested_interventions = []
         
@@ -504,7 +478,7 @@ class CausalModel(BaseModel):
         
         return suggested_interventions
     
-    def learn_from_intervention(self, error: Dict[str, Any], intervention: Dict[str, Any], success: bool) -> None:
+    async def learn_from_intervention(self, error: Dict[str, Any], intervention: Dict[str, Any], success: bool) -> None:
         """Learn from intervention attempts to improve future suggestions"""
         cause_id = intervention.get("for_cause")
         intervention_type = intervention.get("intervention_type")
@@ -561,7 +535,7 @@ class WorkingMemoryController:
         self.prioritization_strategy = "recency"  # Default strategy
         self.context_switching_penalty = 0.2  # Penalty when switching contexts
 
-    def update(self, context: Dict[str, Any], procedure: Procedure) -> None:
+    async def update(self, context: Dict[str, Any], procedure: Procedure) -> None:
         """Update working memory based on context and current procedure"""
         # Apply decay to existing items
         for item in self.items:
@@ -680,7 +654,7 @@ class WorkingMemoryController:
         return base_priority
     
     # Added method for memory diagnostics
-    def get_memory_diagnostics(self) -> Dict[str, Any]:
+    async def get_memory_diagnostics(self) -> Dict[str, Any]:
         """Get diagnostics about the working memory state"""
         if not self.items:
             return {
@@ -782,7 +756,7 @@ class ParameterOptimizer:
                 test_params = {param_id: self.bounds[param_id][0] for param_id in param_space}
             else:
                 # Use optimization to suggest next parameters
-                test_params = self._suggest_next_parameters(
+                test_params = await self._suggest_next_parameters(
                     procedure.id, 
                     param_space, 
                     results
@@ -819,7 +793,7 @@ class ParameterOptimizer:
                 break
             
             # Update models
-            self._update_parameter_models(procedure.id, results)
+            await self._update_parameter_models(procedure.id, results)
         
         # Return best parameters
         return {
@@ -867,7 +841,7 @@ class ParameterOptimizer:
             # Default bounds
             return (0, 10)
     
-    def _suggest_next_parameters(
+    async def _suggest_next_parameters(
         self, 
         procedure_id: str, 
         param_space: Dict[str, Tuple[float, float]], 
@@ -1023,7 +997,7 @@ class ParameterOptimizer:
                         else:
                             step["parameters"][param_key] = value
     
-    def _update_parameter_models(self, procedure_id: str, results: List[Dict[str, Any]]) -> None:
+    async def _update_parameter_models(self, procedure_id: str, results: List[Dict[str, Any]]) -> None:
         """Update internal parameter models based on results"""
         try:
             from sklearn.gaussian_process import GaussianProcessRegressor
@@ -1164,33 +1138,42 @@ class TransferLearningOptimizer:
         if not domains_to_generate:
             return {d: self.domain_embeddings[d] for d in domains}
         
-        # Try to use a pre-trained model via HuggingFace
+        # Try to use OpenAI Embeddings API
         try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
+            embeddings_dict = {}
             
-            # Load model (only once)
-            if self.embedding_tokenizer is None or self.embedding_model is None:
-                self.embedding_tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-                self.embedding_model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+            # Process domains in smaller batches to avoid token limits
+            batch_size = 10
+            for i in range(0, len(domains_to_generate), batch_size):
+                batch = domains_to_generate[i:i+batch_size]
+                
+                # Create domain descriptions
+                domain_descriptions = [
+                    f"Domain for {d} related procedures and actions" for d in batch
+                ]
+                
+                # Get embeddings from OpenAI API
+                response = client.embeddings.create(
+                    model="text-embedding-ada-002",
+                    input=domain_descriptions
+                )
+                
+                # Process results
+                for j, domain in enumerate(batch):
+                    embedding = response.data[j].embedding
+                    embeddings_dict[domain] = embedding
+                    self.domain_embeddings[domain] = embedding
             
-            # Tokenize domains (or domain descriptions)
-            domain_descriptions = [f"Domain for {d} related procedures and actions" for d in domains_to_generate]
-            inputs = self.embedding_tokenizer(domain_descriptions, padding=True, truncation=True, return_tensors="pt")
+            # Add existing embeddings
+            for domain in domains:
+                if domain not in embeddings_dict and domain in self.domain_embeddings:
+                    embeddings_dict[domain] = self.domain_embeddings[domain]
+                    
+            return embeddings_dict
             
-            # Generate embeddings
-            with torch.no_grad():
-                outputs = self.embedding_model(**inputs)
-                embeddings = outputs.last_hidden_state[:, 0].numpy()  # Use [CLS] token embedding
-            
-            # Store embeddings
-            for i, domain in enumerate(domains_to_generate):
-                self.domain_embeddings[domain] = embeddings[i].tolist()
-            
-            return {d: self.domain_embeddings[d] for d in domains}
-            
-        except ImportError:
-            # Fallback if transformers not available
+        except Exception as e:
+            logger.warning(f"Error using OpenAI Embeddings API: {str(e)}, falling back to basic embeddings")
+            # Fallback to simple embeddings
             for domain in domains_to_generate:
                 self.domain_embeddings[domain] = [random.uniform(-1, 1) for _ in range(10)]
             
@@ -1203,17 +1186,7 @@ class TransferLearningOptimizer:
             return self.domain_embeddings[domain]
         
         try:
-            # Try to use a pre-trained model for better embeddings
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-            
-            # Load model (only once)
-            if self.embedding_tokenizer is None or self.embedding_model is None:
-                # Use a sentence transformer model
-                self.embedding_tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-                self.embedding_model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-            
-            # Create a rich description of the domain for better embedding
+            # Try to use OpenAI Embeddings API
             domain_description = f"Domain related to {domain} activities, procedures, and actions."
             
             # Add domain-specific context if available
@@ -1228,23 +1201,19 @@ class TransferLearningOptimizer:
             if domain in domain_contexts:
                 domain_description += domain_contexts[domain]
             
-            # Generate embedding
-            inputs = self.embedding_tokenizer(domain_description, return_tensors="pt", padding=True, truncation=True)
-            with torch.no_grad():
-                outputs = self.embedding_model(**inputs)
-                # Use mean pooling
-                token_embeddings = outputs.last_hidden_state
-                attention_mask = inputs['attention_mask']
-                input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-                sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
-                sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-                embedding = (sum_embeddings / sum_mask).numpy()[0]
+            # Get embedding from OpenAI API
+            response = client.embeddings.create(
+                model="text-embedding-ada-002",
+                input=[domain_description]
+            )
             
-            self.domain_embeddings[domain] = embedding.tolist()
-            return embedding.tolist()
-        
-        except ImportError:
-            # Fallback to simple embedding if transformers not available
+            embedding = response.data[0].embedding
+            self.domain_embeddings[domain] = embedding
+            return embedding
+            
+        except Exception as e:
+            logger.warning(f"Error using OpenAI Embeddings API: {str(e)}, falling back to basic embedding")
+            # Fallback to simple embedding
             embedding = [random.uniform(-1, 1) for _ in range(10)]
             self.domain_embeddings[domain] = embedding
             return embedding
@@ -1708,7 +1677,7 @@ class TransferLearningOptimizer:
         
         return validation_steps
         
-    def update_from_transfer_result(
+    async def update_from_transfer_result(
         self,
         source_domain: str,
         target_domain: str,
@@ -1796,3 +1765,95 @@ class TransferLearningOptimizer:
             
         # Rebuild transfer model with new data
         _ = self._build_statistical_mapping_model(source_domain, target_domain)
+
+# Define function tools for models
+
+def create_model_definition(model_type: str):
+    """Define a function for creating a model"""
+    type_descriptions = {
+        "procedure": "a procedure to be executed",
+        "context_pattern": "a pattern for recognizing a specific context",
+        "chunk_template": "a generalizable template for a procedural chunk",
+        "control_mapping": "a mapping between control schemes across different domains"
+    }
+    
+    description = f"Create {type_descriptions.get(model_type, 'a new model')}"
+    
+    return {
+        "type": "function",
+        "function": {
+            "name": f"create_{model_type}",
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Unique identifier for the model"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the model"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the model"
+                    },
+                    # Add other properties based on model type
+                },
+                "required": ["id", "name"]
+            }
+        }
+    }
+
+def optimize_parameters_definition():
+    """Define the optimize_parameters function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "optimize_parameters",
+            "description": "Optimize parameters for a procedure",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "procedure_id": {
+                        "type": "string",
+                        "description": "ID of the procedure to optimize"
+                    },
+                    "iterations": {
+                        "type": "integer",
+                        "description": "Number of optimization iterations to run"
+                    },
+                    "objective": {
+                        "type": "string",
+                        "description": "Optimization objective (success, speed, or balanced)"
+                    }
+                },
+                "required": ["procedure_id"]
+            }
+        }
+    }
+
+def optimize_transfer_definition():
+    """Define the optimize_transfer function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "optimize_transfer",
+            "description": "Optimize transfer of a procedure to a new domain",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_procedure_id": {
+                        "type": "string",
+                        "description": "ID of the source procedure"
+                    },
+                    "target_domain": {
+                        "type": "string",
+                        "description": "Target domain for transfer"
+                    }
+                },
+                "required": ["source_procedure_id", "target_domain"]
+            }
+        }
+    }
