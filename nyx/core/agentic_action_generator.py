@@ -201,6 +201,12 @@ class EnhancedAgenticActionGenerator:
                  theory_of_mind=None,
                  relationship_manager=None,
                  temporal_perception=None,
+
+                 attentional_controller=None,
+                 autobiographical_narrative=None,
+                 body_image=None,
+                 conditioning_system=None,
+                 conditioning_maintenance=None)
                  
                  # Existing additional systems
                  reasoning_core=None,
@@ -224,6 +230,12 @@ class EnhancedAgenticActionGenerator:
         self.knowledge_core = knowledge_core
         self.input_processor = input_processor
         self.internal_feedback = internal_feedback
+
+        self.attentional_controller = attentional_controller
+        self.autobiographical_narrative = autobiographical_narrative
+        self.body_image = body_image
+        self.conditioning_system = conditioning_system
+        self.conditioning_maintenance = conditioning_maintenance
         
         # Previous new system integrations
         self.reward_system = reward_system
@@ -258,12 +270,12 @@ class EnhancedAgenticActionGenerator:
     async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
         """
         Record and learn from the outcome of an action with causal analysis, need satisfaction,
-        mood impact, and mode alignment.
+        mood impact, mode alignment, and integrations with conditioning, attention and narrative.
         
         Args:
             action: The action that was executed
             outcome: The outcome data
-            
+                
         Returns:
             Updated learning statistics
         """
@@ -325,7 +337,7 @@ class EnhancedAgenticActionGenerator:
                     state_key=state_key,
                     action=action_name
                 )
-            
+                
             action_value = self.action_values[state_key][action_name]
             
             # Update Q-value
@@ -355,7 +367,7 @@ class EnhancedAgenticActionGenerator:
                 self.habits[state_key] = {}
             self.habits[state_key][action_name] = new_habit
             
-            # NEW: Process need impacts
+            # Process need impacts
             need_impacts = {}
             if "need_context" in action:
                 # Action was need-driven, update the originating need
@@ -377,7 +389,7 @@ class EnhancedAgenticActionGenerator:
                     except Exception as e:
                         logger.error(f"Error updating need satisfaction: {e}")
             
-            # NEW: Process mood impacts
+            # Process mood impacts
             mood_impacts = {}
             if self.mood_manager:
                 try:
@@ -402,6 +414,255 @@ class EnhancedAgenticActionGenerator:
                         "arousal": arousal_change,
                         "control": control_change
                     }
+                    
+                    # Apply mood changes through event
+                    await self.mood_manager.handle_significant_event(
+                        event_type="action_outcome",
+                        intensity=min(1.0, 0.5 + abs(reward_value) * 0.5),
+                        valence=reward_value,
+                        arousal_change=arousal_change,
+                        control_change=control_change
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating mood from action outcome: {e}")
+            
+            # Process mode alignment
+            mode_alignment = 0.0
+            if "mode_context" in action and self.mode_integration:
+                try:
+                    # Record feedback about interaction success
+                    await self.mode_integration.record_mode_feedback(
+                        interaction_success=success, 
+                        user_feedback=str(outcome_obj.user_feedback) if outcome_obj.user_feedback else None
+                    )
+                    
+                    # Calculate alignment score
+                    mode_key = action.get("mode_context", {}).get("mode")
+                    mode_alignment = 0.7 if success else 0.3  # Base alignment on success
+                    
+                    # Update outcome object
+                    outcome_obj.mode_alignment = mode_alignment
+                except Exception as e:
+                    logger.error(f"Error processing mode alignment: {e}")
+            
+            # Update outcome with these details
+            outcome_obj.need_impacts = need_impacts
+            outcome_obj.mood_impacts = mood_impacts
+            
+            # Add causal explanation if action came from reasoning
+            causal_explanation = None
+            if action.get("source") == ActionSource.REASONING and "reasoning_data" in action:
+                # Get model if available
+                model_id = action["reasoning_data"].get("model_id")
+                if model_id and self.reasoning_core:
+                    try:
+                        # Create explanation based on actual outcome
+                        causal_explanation = f"Outcome aligned with causal model prediction: {success}. "
+                        causal_explanation += f"Satisfaction: {satisfaction:.2f}, Reward: {reward_value:.2f}."
+                    except Exception as e:
+                        logger.error(f"Error generating causal explanation for outcome: {e}")
+            
+            # Record meta-evaluation if applicable
+            meta_evaluation = {}
+            if self.meta_core and action.get("source") == ActionSource.META_COGNITIVE:
+                try:
+                    bottleneck_targeted = action.get("meta_context", {}).get("bottleneck_type")
+                    process_type = action.get("meta_context", {}).get("process_type")
+                    
+                    if bottleneck_targeted and process_type:
+                        # Create evaluation data
+                        meta_evaluation = {
+                            "bottleneck_addressed": bottleneck_targeted,
+                            "process_improved": process_type,
+                            "improvement_score": 0.7 if success else 0.2,
+                            "recommend_further_action": not success
+                        }
+                        outcome_obj.meta_evaluation = meta_evaluation
+                except Exception as e:
+                    logger.error(f"Error creating meta-evaluation: {e}")
+                    
+            # NEW: Apply reinforcement through conditioning system for successful actions
+            if success and self.conditioning_system:
+                try:
+                    # Determine reinforcement intensity
+                    intensity = min(1.0, 0.5 + satisfaction * 0.5)
+                    
+                    # Prepare context from action parameters
+                    context = {
+                        "source": "action_generator",
+                        "action_id": action.get("id", "unknown"),
+                        "parameters": action.get("parameters", {}),
+                        "reward_value": reward_value
+                    }
+                    
+                    # Use operant conditioning to reinforce behavior
+                    await self.conditioning_system.process_operant_conditioning(
+                        behavior=action_name,
+                        consequence_type="positive_reinforcement",
+                        intensity=intensity,
+                        context=context
+                    )
+                    
+                    logger.info(f"Reinforced successful action: {action_name} with intensity {intensity:.2f}")
+                except Exception as e:
+                    logger.error(f"Error applying conditioning: {e}")
+                    
+            # NEW: Update attentional focus based on outcome
+            if self.attentional_controller:
+                try:
+                    if success:
+                        # Focus attention on successful action types
+                        await self.attentional_controller.request_attention(
+                            AttentionalControl(
+                                target=action_name,
+                                priority=min(0.9, 0.6 + reward_value * 0.3),
+                                duration_ms=10000,  # 10 seconds
+                                source="action_outcome",
+                                action="focus"
+                            )
+                        )
+                        
+                        # Also focus on the domain if specified
+                        if "domain" in action.get("parameters", {}):
+                            domain = action["parameters"]["domain"]
+                            await self.attentional_controller.request_attention(
+                                AttentionalControl(
+                                    target=domain,
+                                    priority=0.7,
+                                    duration_ms=7000,  # 7 seconds
+                                    source="action_outcome",
+                                    action="focus"
+                                )
+                            )
+                    else:
+                        # Briefly inhibit unsuccessful action types with low rewards
+                        if reward_value < -0.3:
+                            await self.attentional_controller.request_attention(
+                                AttentionalControl(
+                                    target=action_name,
+                                    priority=0.5,
+                                    duration_ms=5000,  # 5 seconds
+                                    source="action_outcome",
+                                    action="inhibit"
+                                )
+                            )
+                except Exception as e:
+                    logger.error(f"Error updating attention: {e}")
+                    
+            # NEW: Add highly successful actions to autobiographical narrative
+            if success and self.autobiographical_narrative and reward_value > 0.7:
+                try:
+                    # Record in memory for next narrative update
+                    if self.memory_core:
+                        summary = f"Successfully performed {action_name}"
+                        if "parameters" in action and "domain" in action["parameters"]:
+                            summary += f" in the domain of {action['parameters']['domain']}"
+                        
+                        await self.memory_core.add_memory(
+                            memory_text=summary,
+                            memory_type="experience",
+                            significance=8,  # High significance
+                            metadata={
+                                "action": action,
+                                "outcome": outcome_obj.dict(),
+                                "for_narrative": True
+                            }
+                        )
+                        
+                        # Trigger narrative update if it's been a while
+                        current_time = datetime.datetime.now()
+                        if (not hasattr(self, "last_narrative_update") or 
+                            (current_time - self.last_narrative_update).total_seconds() > 3600):  # 1 hour
+                            # Schedule narrative update
+                            asyncio.create_task(self.autobiographical_narrative.update_narrative())
+                            self.last_narrative_update = current_time
+                except Exception as e:
+                    logger.error(f"Error recording narrative event: {e}")
+            
+            # Store action memory
+            memory = ActionMemory(
+                state=state,
+                action=action_name,
+                action_id=action.get("id", "unknown"),
+                parameters=action.get("parameters", {}),
+                outcome=outcome_obj.dict(),
+                reward=reward_value,
+                timestamp=datetime.datetime.now(),
+                source=action.get("source", ActionSource.MOTIVATION),
+                causal_explanation=causal_explanation,
+                # Enhanced memory fields
+                need_satisfaction=need_impacts,
+                mood_impact=mood_impacts,
+                mode_alignment=mode_alignment,
+                sensory_context=action.get("sensory_context"),
+                meta_evaluation=meta_evaluation
+            )
+            
+            self.action_memories.append(memory)
+            
+            # Limit memory size
+            if len(self.action_memories) > self.max_memories:
+                self.action_memories = self.action_memories[-self.max_memories:]
+            
+            # Update reward statistics
+            self.total_reward += reward_value
+            if reward_value > 0:
+                self.positive_rewards += 1
+            elif reward_value < 0:
+                self.negative_rewards += 1
+                
+            # Update category stats
+            category = action.get("source", ActionSource.MOTIVATION)
+            if isinstance(category, ActionSource):
+                category = category.value
+                
+            self.reward_by_category[category]["count"] += 1
+            self.reward_by_category[category]["total"] += reward_value
+            
+            # Update strategy effectiveness if applicable
+            if "strategy_id" in action:
+                strategy_id = action["strategy_id"]
+                if strategy_id in self.action_strategies:
+                    strategy = self.action_strategies[strategy_id]
+                    # Update effectiveness based on outcome
+                    old_effectiveness = strategy.effectiveness
+                    # Calculate new effectiveness with stronger weighting for recent outcomes
+                    strategy.effectiveness = old_effectiveness * 0.8 + (reward_value + 1) * 0.5 * 0.2
+                    strategy.last_used = datetime.datetime.now()
+            
+            # Update causal models if applicable
+            if action.get("source") == ActionSource.REASONING and self.reasoning_core:
+                await self._update_causal_models_from_outcome(action, outcome_obj, reward_value)
+            
+            # Potentially trigger experience replay
+            if random.random() < 0.3:  # 30% chance after each outcome
+                await self._experience_replay(3)  # Replay 3 random memories
+                
+            # Decay exploration rate over time (explore less as we learn more)
+            self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
+            
+            # Return summary of updates
+            return {
+                "action": action_name,
+                "success": success,
+                "reward_value": reward_value,
+                "new_q_value": action_value.value,
+                "q_value_change": action_value.value - old_value,
+                "new_habit_strength": new_habit,
+                "habit_change": new_habit - current_habit,
+                "action_success_rate": self.action_success_rates[action_name]["rate"],
+                "memories_stored": len(self.action_memories),
+                "exploration_rate": self.exploration_rate,
+                # Enhanced return values
+                "need_impacts": need_impacts,
+                "mood_impacts": mood_impacts,
+                "mode_alignment": mode_alignment,
+                "meta_evaluation": meta_evaluation,
+                # NEW: Additional integrated module stats
+                "conditioning_applied": success and self.conditioning_system is not None,
+                "attention_updated": self.attentional_controller is not None,
+                "narrative_updated": success and reward_value > 0.7 and self.autobiographical_narrative is not None
+            }
     
     # --- API methods for external systems ---
     
@@ -1461,6 +1722,221 @@ class EnhancedAgenticActionGenerator:
         except Exception as e:
             logger.error(f"Error calculating mood influences: {e}")
             return {}
+
+    async def _integrate_attention_focus(self, candidate_actions: List[Dict[str, Any]], context: ActionContext) -> List[Dict[str, Any]]:
+        """
+        Adjust action candidates based on current attentional focus
+        
+        Args:
+            candidate_actions: List of candidate actions
+            context: Current action context
+            
+        Returns:
+            Attention-weighted candidate actions
+        """
+        if not self.attentional_controller:
+            return candidate_actions
+            
+        try:
+            # Get current attentional foci
+            current_foci = await self.attentional_controller._get_current_attentional_state(RunContextWrapper(context=None))
+            
+            if not current_foci or not current_foci.get("current_foci"):
+                return candidate_actions
+                
+            # Extract focus targets and strengths
+            focus_targets = {focus.get("target"): focus.get("strength", 0.5) 
+                           for focus in current_foci.get("current_foci", [])}
+            
+            # Apply attention weighting to candidate actions
+            weighted_candidates = []
+            
+            for action in candidate_actions:
+                # Create a copy to avoid modifying the original
+                weighted_action = action.copy()
+                
+                # Calculate attention relevance for this action
+                attention_relevance = 0.0
+                action_name = action.get("name", "")
+                
+                # Check if action directly matches a focus target
+                if action_name in focus_targets:
+                    attention_relevance = focus_targets[action_name]
+                else:
+                    # Check for partial matches (e.g., domain focus matches domain-specific actions)
+                    for target, strength in focus_targets.items():
+                        if target in action_name or any(target in str(param) for param in action.get("parameters", {}).values()):
+                            attention_relevance = max(attention_relevance, strength * 0.7)
+                
+                # Apply attention boost to relevance actions
+                if attention_relevance > 0.3:
+                    # Add attention metadata
+                    if "selection_metadata" not in weighted_action:
+                        weighted_action["selection_metadata"] = {}
+                    
+                    weighted_action["selection_metadata"]["attention_relevance"] = attention_relevance
+                    weighted_action["selection_metadata"]["attention_boost"] = attention_relevance * 0.3
+                
+                weighted_candidates.append(weighted_action)
+            
+            return weighted_candidates
+            
+        except Exception as e:
+            logger.error(f"Error applying attentional focus: {e}")
+            return candidate_actions
+
+    async def _apply_narrative_context(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply autobiographical narrative context to an action
+        
+        Args:
+            action: The action to enhance with narrative context
+            
+        Returns:
+            Narrative-enhanced action
+        """
+        if not self.autobiographical_narrative:
+            return action
+            
+        try:
+            # Get current narrative summary
+            narrative_summary = self.autobiographical_narrative.get_narrative_summary()
+            
+            # Get recent narrative segments
+            recent_segments = self.autobiographical_narrative.get_narrative_segments(limit=2)
+            
+            if not recent_segments:
+                return action
+                
+            latest_segment = recent_segments[0]
+            
+            # Extract themes and emotional arc from recent narrative
+            themes = latest_segment.themes if hasattr(latest_segment, "themes") else []
+            emotional_arc = latest_segment.emotional_arc if hasattr(latest_segment, "emotional_arc") else None
+            
+            # Create a copy of the action
+            narrative_action = action.copy()
+            
+            # Add narrative elements to parameters
+            if "parameters" not in narrative_action:
+                narrative_action["parameters"] = {}
+                
+            narrative_action["parameters"]["narrative_themes"] = themes[:3]  # Top 3 themes
+            
+            if emotional_arc:
+                narrative_action["parameters"]["emotional_context"] = emotional_arc
+            
+            # Add narrative metadata
+            narrative_action["narrative_context"] = {
+                "recent_themes": themes,
+                "emotional_arc": emotional_arc,
+                "continuity_priority": 0.7  # Priority for maintaining narrative continuity
+            }
+            
+            return narrative_action
+            
+        except Exception as e:
+            logger.error(f"Error applying narrative context: {e}")
+            return action
+
+    async def _integrate_body_awareness(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enhance action with body awareness
+        
+        Args:
+            action: The action to enhance
+            
+        Returns:
+            Body-aware enhanced action
+        """
+        if not self.body_image:
+            return action
+            
+        try:
+            # Get current body image state
+            body_state = self.body_image.get_body_image_state()
+            
+            # Skip if no visual form
+            if not body_state.has_visual_form:
+                return action
+                
+            # Create a copy of the action
+            body_aware_action = action.copy()
+            
+            # Add body context to action parameters
+            if "parameters" not in body_aware_action:
+                body_aware_action["parameters"] = {}
+                
+            # Add relevant body state information
+            body_aware_action["parameters"]["has_visual_form"] = body_state.has_visual_form
+            body_aware_action["parameters"]["form_description"] = body_state.form_description
+            
+            # Add embodied information for physical actions
+            if action["name"] in ["physical_movement", "express_gesture", "change_posture"]:
+                # Include perceived body parts
+                relevant_parts = {}
+                for part_name, part in body_state.perceived_parts.items():
+                    if part.perceived_state != "neutral":
+                        relevant_parts[part_name] = {
+                            "state": part.perceived_state,
+                            "position": part.perceived_position
+                        }
+                        
+                body_aware_action["parameters"]["body_parts"] = relevant_parts
+            
+            return body_aware_action
+            
+        except Exception as e:
+            logger.error(f"Error integrating body awareness: {e}")
+            return action
+
+    async def _apply_conditioning_evaluation(self, behavior: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Evaluate a potential behavior based on conditioning history
+        
+        Args:
+            behavior: The behavior to evaluate
+            context: Additional context information
+            
+        Returns:
+            Behavior evaluation results
+        """
+        if not self.conditioning_system:
+            return {
+                "expected_valence": 0.0,
+                "confidence": 0.1,
+                "recommendation": "neutral"
+            }
+            
+        try:
+            # Use conditioning system to evaluate the behavior
+            evaluation = await self.conditioning_system.evaluate_behavior_consequences(
+                behavior=behavior,
+                context=context
+            )
+            
+            if not evaluation["success"]:
+                return {
+                    "expected_valence": 0.0,
+                    "confidence": 0.1,
+                    "recommendation": "neutral"
+                }
+                
+            return {
+                "expected_valence": evaluation["expected_valence"],
+                "confidence": evaluation["confidence"],
+                "recommendation": evaluation["recommendation"],
+                "explanation": evaluation["explanation"],
+                "relevant_associations": evaluation["relevant_associations"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error evaluating behavior with conditioning system: {e}")
+            return {
+                "expected_valence": 0.0,
+                "confidence": 0.1,
+                "recommendation": "neutral"
+            }
     
     async def _calculate_mode_influences(self) -> Dict[str, float]:
         """Calculate how interaction mode influences motivations"""
@@ -2878,6 +3354,46 @@ class EnhancedAgenticActionGenerator:
             }
         
         return candidate_actions
+    
+    async def _reinforce_successful_action(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+        """
+        Reinforce successful actions using the conditioning system
+        
+        Args:
+            action: The executed action
+            outcome: The outcome data
+        """
+        if not self.conditioning_system or not outcome.get("success", False):
+            return
+            
+        try:
+            # Extract action data
+            action_name = action.get("name", "unknown")
+            satisfaction = outcome.get("satisfaction", 0.0)
+            
+            # Determine reinforcement intensity
+            intensity = min(1.0, 0.5 + satisfaction * 0.5)
+            
+            # Prepare context from action parameters
+            context = {
+                "source": "action_generator",
+                "action_id": action.get("id", "unknown"),
+                "parameters": action.get("parameters", {}),
+                "reward_value": outcome.get("reward_value", 0.0)
+            }
+            
+            # Use operant conditioning to reinforce behavior
+            await self.conditioning_system.process_operant_conditioning(
+                behavior=action_name,
+                consequence_type="positive_reinforcement",
+                intensity=intensity,
+                context=context
+            )
+            
+            logger.info(f"Reinforced successful action: {action_name} with intensity {intensity:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error reinforcing successful action: {e}")
         
     async def _generate_reasoning_actions(self, context: ActionContext) -> List[Dict[str, Any]]:
         """Generate actions based on causal reasoning models"""
@@ -2888,7 +3404,8 @@ class EnhancedAgenticActionGenerator:
                               candidate_actions: List[Dict[str, Any]], 
                               context: ActionContext) -> Dict[str, Any]:
         """
-        Select the best action using reinforcement learning, prediction, causal reasoning, and reflection insights
+        Select the best action using reinforcement learning, prediction, causal reasoning, 
+        reflection insights, and all integrated modules (attention, conditioning, narrative, body)
         
         Args:
             candidate_actions: List of potential actions
@@ -2906,6 +3423,61 @@ class EnhancedAgenticActionGenerator:
                 "source": ActionSource.IDLE
             }
         
+        # NEW: Apply attentional focus to candidates if available
+        attention_weighted_candidates = candidate_actions
+        if self.attentional_controller:
+            try:
+                # Get current attentional foci
+                current_foci_result = await self.attentional_controller._get_current_attentional_state(RunContextWrapper(context=None))
+                
+                if current_foci_result and "current_foci" in current_foci_result:
+                    # Extract focus targets and strengths
+                    current_foci = current_foci_result["current_foci"]
+                    focus_targets = {focus.get("target"): focus.get("strength", 0.5) 
+                                  for focus in current_foci}
+                    
+                    # Apply attention weighting to candidate actions
+                    attention_weighted_candidates = []
+                    
+                    for action in candidate_actions:
+                        # Create a copy to avoid modifying the original
+                        weighted_action = action.copy()
+                        
+                        # Calculate attention relevance for this action
+                        attention_relevance = 0.0
+                        action_name = action.get("name", "")
+                        
+                        # Check if action directly matches a focus target
+                        if action_name in focus_targets:
+                            attention_relevance = focus_targets[action_name]
+                        else:
+                            # Check for partial matches (e.g., domain focus matches domain-specific actions)
+                            for target, strength in focus_targets.items():
+                                if target in action_name or any(target in str(param) for param in action.get("parameters", {}).values()):
+                                    attention_relevance = max(attention_relevance, strength * 0.7)
+                        
+                        # Apply attention boost to relevant actions
+                        if attention_relevance > 0.3:
+                            # Add attention metadata
+                            if "selection_metadata" not in weighted_action:
+                                weighted_action["selection_metadata"] = {}
+                            
+                            weighted_action["selection_metadata"]["attention_relevance"] = attention_relevance
+                            weighted_action["selection_metadata"]["attention_boost"] = attention_relevance * 0.3
+                        
+                        attention_weighted_candidates.append(weighted_action)
+                    
+                    # Check if any attention-relevant actions found
+                    attention_boosted = any(a.get("selection_metadata", {}).get("attention_boost", 0) > 0 
+                                          for a in attention_weighted_candidates)
+                    
+                    if attention_boosted:
+                        logger.debug("Applied attention boosting to candidate actions")
+            except Exception as e:
+                logger.error(f"Error applying attentional focus: {e}")
+                # Fallback to original candidates
+                attention_weighted_candidates = candidate_actions
+        
         # Extract current state for state key generation
         state_key = self._create_state_key(context.state)
         
@@ -2913,9 +3485,9 @@ class EnhancedAgenticActionGenerator:
         explore = random.random() < self.exploration_rate
         
         if explore:
-            # Exploration: select randomly, but weighted by motivation alignment
+            # Exploration: select randomly, but weighted by motivation alignment and attention
             weights = []
-            for action in candidate_actions:
+            for action in attention_weighted_candidates:
                 # Base weight
                 weight = 1.0
                 
@@ -2924,6 +3496,10 @@ class EnhancedAgenticActionGenerator:
                     dominant = action["motivation"]["dominant"]
                     strength = action["motivation"]["strength"]
                     weight += strength * 0.5
+                
+                # Add weight from attention if available
+                attention_boost = action.get("selection_metadata", {}).get("attention_boost", 0.0)
+                weight += attention_boost
                 
                 weights.append(weight)
                 
@@ -2935,8 +3511,8 @@ class EnhancedAgenticActionGenerator:
                 normalized_weights = [1.0/len(weights)] * len(weights)
                 
             # Select based on weights
-            selected_idx = random.choices(range(len(candidate_actions)), weights=normalized_weights, k=1)[0]
-            selected_action = candidate_actions[selected_idx]
+            selected_idx = random.choices(range(len(attention_weighted_candidates)), weights=normalized_weights, k=1)[0]
+            selected_action = attention_weighted_candidates[selected_idx]
             
             # Mark as exploration
             selected_action["is_exploration"] = True
@@ -2944,11 +3520,11 @@ class EnhancedAgenticActionGenerator:
                 selected_action["source"] = ActionSource.EXPLORATION
             
         else:
-            # Exploitation: use value function and causal reasoning
+            # Exploitation: use value function, causal reasoning, and all integrated modules
             best_value = float('-inf')
             best_action = None
             
-            for action in candidate_actions:
+            for action in attention_weighted_candidates:
                 action_name = action["name"]
                 
                 # Get Q-value if available
@@ -2996,21 +3572,21 @@ class EnhancedAgenticActionGenerator:
                         reflection_value = 0.3 * insight.significance * insight.confidence * recency_factor
                         break
                 
-                # NEW: Get need satisfaction value if appropriate
+                # Get need satisfaction value if appropriate
                 need_value = 0.0
                 if "need_context" in action and context.need_states:
                     need_name = action["need_context"]["need_name"]
                     drive_strength = action["need_context"]["drive_strength"]
                     need_value = 0.4 * drive_strength
                 
-                # NEW: Get mood alignment value
+                # Get mood alignment value
                 mood_value = 0.0
                 if context.mood_state and "mood_context" in action:
                     # Give bonus for actions aligned with current mood
                     mood_match = action["mood_context"]["dominant_mood"] == context.mood_state.dominant_mood
                     mood_value = 0.3 if mood_match else 0.1
                 
-                # NEW: Get mode alignment value
+                # Get mode alignment value
                 mode_value = 0.0
                 if context.interaction_mode and "mode_context" in action:
                     # Give bonus for actions aligned with current mode
@@ -3018,7 +3594,7 @@ class EnhancedAgenticActionGenerator:
                     if action["mode_context"]["mode"] == mode_key:
                         mode_value = 0.3
                 
-                # NEW: Get bottleneck alignment for meta-cognitive actions
+                # Get bottleneck alignment for meta-cognitive actions
                 bottleneck_value = 0.0
                 if context.bottlenecks and "meta_context" in action:
                     # Higher value for actions that address severe bottlenecks
@@ -3028,31 +3604,116 @@ class EnhancedAgenticActionGenerator:
                             bottleneck_value = bottleneck.get("severity", 0.5) * self.meta_parameters["bottleneck_priority_boost"]
                             break
                 
+                # NEW: Get attention value
+                attention_value = action.get("selection_metadata", {}).get("attention_boost", 0.0)
+                
+                # NEW: Get conditioning value if available
+                conditioning_value = 0.0
+                if self.conditioning_system:
+                    try:
+                        # Prepare simplified context for behavior evaluation
+                        behavior_context = {k: v for k, v in context.state.items() 
+                                        if isinstance(v, (str, int, float, bool))}
+                        
+                        # Call evaluation
+                        evaluation = await self.conditioning_system.evaluate_behavior_consequences(
+                            behavior=action_name,
+                            context=behavior_context
+                        )
+                        
+                        if evaluation.get("success", False):
+                            # Store evaluation results for reference
+                            if "conditioning_evaluation" not in action:
+                                action["conditioning_evaluation"] = evaluation
+                            
+                            # Calculate value based on evaluation results
+                            expected_valence = evaluation.get("expected_valence", 0.0)
+                            confidence = evaluation.get("confidence", 0.1)
+                            
+                            # Higher value for actions with positive expected outcome
+                            if expected_valence > 0:
+                                conditioning_value = expected_valence * confidence * 0.4
+                            elif expected_valence < -0.5 and confidence > 0.5:
+                                # Strong negative penalty for actions with confidently negative outcomes
+                                conditioning_value = expected_valence * confidence * 0.3
+                    except Exception as e:
+                        logger.error(f"Error getting conditioning evaluation: {e}")
+                
+                # NEW: Get narrative value
+                narrative_value = 0.0
+                if self.autobiographical_narrative:
+                    try:
+                        # Get current narrative summary
+                        narrative_summary = self.autobiographical_narrative.get_narrative_summary()
+                        
+                        # Get recent narrative segments
+                        recent_segments = self.autobiographical_narrative.get_narrative_segments(limit=1)
+                        
+                        if recent_segments:
+                            latest_segment = recent_segments[0]
+                            themes = latest_segment.themes if hasattr(latest_segment, "themes") else []
+                            
+                            # Check for action parameters matching narrative themes
+                            theme_match = False
+                            if "parameters" in action and isinstance(action["parameters"], dict):
+                                for theme in themes:
+                                    for param_value in action["parameters"].values():
+                                        if isinstance(param_value, str) and theme.lower() in param_value.lower():
+                                            theme_match = True
+                                            break
+                                    if theme_match:
+                                        break
+                            
+                            # Higher value for actions that continue narrative themes
+                            if theme_match:
+                                narrative_value = 0.2
+                    except Exception as e:
+                        logger.error(f"Error calculating narrative value: {e}")
+                
+                # NEW: Get body alignment value
+                body_value = 0.0
+                if self.body_image and action_name in ["physical_movement", "express_gesture", "change_posture"]:
+                    try:
+                        body_state = self.body_image.get_body_image_state()
+                        # Higher value if we have a visual form for physical actions
+                        if body_state.has_visual_form:
+                            body_value = 0.2
+                    except Exception as e:
+                        logger.error(f"Error calculating body alignment: {e}")
+                
                 # Calculate combined value
                 # Weight the components based on reliability
-                q_weight = 0.2  # Base weight for Q-values
-                habit_weight = 0.1  # Base weight for habits
-                prediction_weight = 0.1  # Base weight for predictions
-                causal_weight = 0.1  # Base weight for causal reasoning
-                reflection_weight = 0.1  # Base weight for reflection insights
-                # NEW: Weights for the enhanced components
-                need_weight = 0.1
-                mood_weight = 0.1
-                mode_weight = 0.1
-                bottleneck_weight = 0.1
+                q_weight = 0.15  # Base weight for Q-values
+                habit_weight = 0.10  # Base weight for habits
+                prediction_weight = 0.10  # Base weight for predictions
+                causal_weight = 0.10  # Base weight for causal reasoning
+                reflection_weight = 0.05  # Base weight for reflection insights
+                need_weight = 0.10  # Weight for need satisfaction
+                mood_weight = 0.05  # Weight for mood alignment
+                mode_weight = 0.05  # Weight for mode alignment
+                bottleneck_weight = 0.10  # Weight for bottleneck addressing
+                # NEW: Weights for integrated modules
+                attention_weight = 0.10  # Weight for attention focusing
+                conditioning_weight = 0.10  # Weight for conditioning history
+                narrative_weight = 0.05  # Weight for narrative alignment
+                body_weight = 0.05  # Weight for body awareness
                 
                 # Adjust weights if we have reliable Q-values
                 action_value = self.action_values.get(state_key, {}).get(action_name)
                 if action_value and action_value.is_reliable:
                     q_weight = 0.25
-                    habit_weight = 0.15
-                    prediction_weight = 0.1
-                    causal_weight = 0.1
-                    reflection_weight = 0.1
-                    need_weight = 0.1
-                    mood_weight = 0.1
-                    mode_weight = 0.1
-                    bottleneck_weight = 0.1
+                    habit_weight = 0.10
+                    prediction_weight = 0.05
+                    causal_weight = 0.05
+                    reflection_weight = 0.05
+                    need_weight = 0.10
+                    mood_weight = 0.05
+                    mode_weight = 0.05
+                    bottleneck_weight = 0.10
+                    attention_weight = 0.05
+                    conditioning_weight = 0.10
+                    narrative_weight = 0.05
+                    body_weight = 0.05
                 
                 combined_value = (
                     q_weight * q_value + 
@@ -3063,7 +3724,12 @@ class EnhancedAgenticActionGenerator:
                     need_weight * need_value +
                     mood_weight * mood_value +
                     mode_weight * mode_value +
-                    bottleneck_weight * bottleneck_value
+                    bottleneck_weight * bottleneck_value +
+                    # NEW: Additional component values
+                    attention_weight * attention_value +
+                    conditioning_weight * conditioning_value +
+                    narrative_weight * narrative_value +
+                    body_weight * body_value
                 )
                 
                 # Special considerations for certain action sources
@@ -3076,13 +3742,19 @@ class EnhancedAgenticActionGenerator:
                         trust = context.relationship_data.get("trust", 0.5)
                         combined_value += trust * 0.3  # Higher boost with higher trust
                 
+                # Add combined value to action for debugging/inspection
+                if "selection_metadata" not in action:
+                    action["selection_metadata"] = {}
+                    
+                action["selection_metadata"]["combined_value"] = combined_value
+                
                 # Track best action
                 if combined_value > best_value:
                     best_value = combined_value
                     best_action = action
             
             # Use best action if found, otherwise fallback to first candidate
-            selected_action = best_action if best_action else candidate_actions[0]
+            selected_action = best_action if best_action else attention_weighted_candidates[0]
             selected_action["is_exploration"] = False
         
         # Add selection metadata
@@ -3094,6 +3766,98 @@ class EnhancedAgenticActionGenerator:
             "exploration_rate": self.exploration_rate,
             "state_key": state_key
         })
+        
+        # NEW: Apply body awareness if available
+        if self.body_image and selected_action["name"] in ["physical_movement", "express_gesture", "change_posture"]:
+            try:
+                # Get current body image state
+                body_state = self.body_image.get_body_image_state()
+                
+                # Skip if no visual form
+                if body_state.has_visual_form:
+                    # Add body context to action parameters
+                    if "parameters" not in selected_action:
+                        selected_action["parameters"] = {}
+                        
+                    # Add relevant body state information
+                    selected_action["parameters"]["has_visual_form"] = body_state.has_visual_form
+                    selected_action["parameters"]["form_description"] = body_state.form_description
+                    
+                    # Include perceived body parts
+                    relevant_parts = {}
+                    for part_name, part in body_state.perceived_parts.items():
+                        if part.perceived_state != "neutral":
+                            relevant_parts[part_name] = {
+                                "state": part.perceived_state,
+                                "position": part.perceived_position
+                            }
+                            
+                    selected_action["parameters"]["body_parts"] = relevant_parts
+            except Exception as e:
+                logger.error(f"Error integrating body awareness: {e}")
+        
+        # NEW: Apply narrative context if available
+        if self.autobiographical_narrative:
+            try:
+                # Get current narrative summary
+                narrative_summary = self.autobiographical_narrative.get_narrative_summary()
+                
+                # Get recent narrative segments
+                recent_segments = self.autobiographical_narrative.get_narrative_segments(limit=2)
+                
+                if recent_segments:
+                    latest_segment = recent_segments[0]
+                    
+                    # Extract themes and emotional arc from recent narrative
+                    themes = latest_segment.themes if hasattr(latest_segment, "themes") else []
+                    emotional_arc = latest_segment.emotional_arc if hasattr(latest_segment, "emotional_arc") else None
+                    
+                    # Add narrative elements to parameters
+                    if "parameters" not in selected_action:
+                        selected_action["parameters"] = {}
+                        
+                    selected_action["parameters"]["narrative_themes"] = themes[:3]  # Top 3 themes
+                    
+                    if emotional_arc:
+                        selected_action["parameters"]["emotional_context"] = emotional_arc
+                    
+                    # Add narrative metadata
+                    selected_action["narrative_context"] = {
+                        "recent_themes": themes,
+                        "emotional_arc": emotional_arc,
+                        "continuity_priority": 0.7  # Priority for maintaining narrative continuity
+                    }
+            except Exception as e:
+                logger.error(f"Error applying narrative context: {e}")
+        
+        # NEW: Record attentional focus on selected action
+        if self.attentional_controller:
+            try:
+                # Focus attention on the selected action
+                await self.attentional_controller.request_attention(
+                    AttentionalControl(
+                        target=selected_action["name"],
+                        priority=0.8,  # High priority for selected action
+                        duration_ms=5000,  # 5 seconds
+                        source="action_selection",
+                        action="focus"
+                    )
+                )
+                
+                # Also focus on domain if present
+                if "parameters" in selected_action and "domain" in selected_action["parameters"]:
+                    domain = selected_action["parameters"]["domain"]
+                    await self.attentional_controller.request_attention(
+                        AttentionalControl(
+                            target=domain,
+                            priority=0.7,
+                            duration_ms=5000,  # 5 seconds
+                            source="action_selection",
+                            action="focus"
+                        )
+                    )
+            except Exception as e:
+                logger.error(f"Error focusing attention on selected action: {e}")
         
         return selected_action
     
