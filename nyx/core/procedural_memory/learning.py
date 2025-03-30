@@ -21,7 +21,7 @@ class ObservationLearner:
         self.pattern_detection_threshold = 0.7
         self.max_history = 100
         # Added fields for enhanced functionality
-        self.learning_lock = Lock()
+        self.learning_lock = asyncio.Lock()  # Using asyncio.Lock instead of threading.Lock
         self.model_cache = {}
         self.confidence_thresholds = {
             "pattern_recognition": 0.6,
@@ -42,25 +42,27 @@ class ObservationLearner:
         domain: str
     ) -> Dict[str, Any]:
         """Learn a procedure from a sequence of observed actions"""
-        # Create a timeout for this operation
-        try:
-            return await asyncio.wait_for(
-                self._learn_from_demonstration_impl(observation_sequence, domain),
-                timeout=self.timeout
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"Learning from demonstration timed out after {self.timeout} seconds")
-            # Return partial results if available
-            return {
-                "name": f"partial_learned_procedure_{int(datetime.datetime.now().timestamp())}",
-                "steps": self._generate_steps_from_partial_observations(observation_sequence[:10]), # Use first 10 observations
-                "description": "Partially learned procedure (learning timed out)",
-                "domain": domain,
-                "created_from_observations": True,
-                "observation_count": len(observation_sequence),
-                "confidence": 0.3,  # Low confidence for partial learning
-                "timeout_occurred": True
-            }
+        with agents_trace("learn_from_demonstration"):
+            # Create a timeout for this operation
+            try:
+                return await asyncio.wait_for(
+                    self._learn_from_demonstration_impl(observation_sequence, domain),
+                    timeout=self.timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Learning from demonstration timed out after {self.timeout} seconds")
+                # Return partial results if available
+                return {
+                    "name": f"partial_learned_procedure_{int(datetime.datetime.now().timestamp())}",
+                    "steps": self._generate_steps_from_partial_observations(observation_sequence[:10]), # Use first 10 observations
+                    "description": "Partially learned procedure (learning timed out)",
+                    "domain": domain,
+                    "created_from_observations": True,
+                    "observation_count": len(observation_sequence),
+                    "confidence": 0.3,  # Low confidence for partial learning
+                    "timeout_occurred": True
+                }
+    
     
     async def _learn_from_demonstration_impl(
         self, 
@@ -69,7 +71,7 @@ class ObservationLearner:
     ) -> Dict[str, Any]:
         """Implementation of learning from demonstration"""
         # Use a lock to prevent concurrent learning operations
-        async with self._async_lock():
+        async with self.learning_lock:
             # Store observations in history
             self.observation_history.extend(observation_sequence)
             if len(self.observation_history) > self.max_history:
@@ -108,7 +110,7 @@ class ObservationLearner:
             }
             
             return procedure_data
-    
+            
     async def learn_with_transformers(
         self, 
         observation_sequence: List[Dict[str, Any]], 
@@ -350,36 +352,37 @@ class ObservationLearner:
     
     def _extract_action_patterns(self, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract recurring action patterns from observations"""
-        # Count action frequencies
-        action_counts = Counter()
-        action_sequences = []
-        
-        for i in range(len(observations) - 1):
-            current = observations[i]
-            next_obs = observations[i + 1]
+        with custom_span("extract_action_patterns", {"observations_count": len(observations)}):
+            # Count action frequencies
+            action_counts = Counter()
+            action_sequences = []
             
-            # Create action pair key
-            if "action" in current and "action" in next_obs:
-                action_pair = f"{current['action']}→{next_obs['action']}"
-                action_counts[action_pair] += 1
-        
-        # Find common sequences using adaptive threshold
-        threshold = max(0.3, self.confidence_thresholds["action_sequence"] - 0.1 * (len(observations) // 10))
-        common_sequences = [pair for pair, count in action_counts.items() 
-                          if count >= len(observations) * threshold]
-        
-        # Convert to structured patterns
-        patterns = []
-        for seq in common_sequences:
-            actions = seq.split("→")
-            patterns.append({
-                "sequence": actions,
-                "frequency": action_counts[seq] / (len(observations) - 1),
-                "action_types": actions,
-                "confidence": min(1.0, action_counts[seq] / (len(observations) - 1) + 0.2)
-            })
-        
-        return patterns
+            for i in range(len(observations) - 1):
+                current = observations[i]
+                next_obs = observations[i + 1]
+                
+                # Create action pair key
+                if "action" in current and "action" in next_obs:
+                    action_pair = f"{current['action']}→{next_obs['action']}"
+                    action_counts[action_pair] += 1
+            
+            # Find common sequences using adaptive threshold
+            threshold = max(0.3, self.confidence_thresholds["action_sequence"] - 0.1 * (len(observations) // 10))
+            common_sequences = [pair for pair, count in action_counts.items() 
+                            if count >= len(observations) * threshold]
+            
+            # Convert to structured patterns
+            patterns = []
+            for seq in common_sequences:
+                actions = seq.split("→")
+                patterns.append({
+                    "sequence": actions,
+                    "frequency": action_counts[seq] / (len(observations) - 1),
+                    "action_types": actions,
+                    "confidence": min(1.0, action_counts[seq] / (len(observations) - 1) + 0.2)
+                })
+            
+            return patterns
     
     def _identify_significant_state_changes(self, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Identify significant state changes in observations"""
