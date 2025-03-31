@@ -488,4 +488,4 @@ def enhance_npc_with_belief_system(npc_agent: NPCAgent) -> NPCAgent:
     npc_agent.form_narrative_about = form_narrative_about
     npc_agent.form_cultural_belief_about = form_cultural_belief_about
     
-    return npc_agent 
+    return npc_agent
