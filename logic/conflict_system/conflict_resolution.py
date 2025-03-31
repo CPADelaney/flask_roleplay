@@ -15,6 +15,7 @@ from agents import function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from db.connection import get_db_connection_context
 
 from logic.conflict_system.conflict_tools import (
     get_active_conflicts, get_conflict_details, get_conflict_stakeholders,
@@ -1532,4 +1533,4 @@ class ConflictResolutionSystem:
             
         except Exception as e:
             logger.error(f"Error calculating manipulation resources: {e}")
-            return {} 
+            return {}
