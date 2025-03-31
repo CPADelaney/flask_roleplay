@@ -11,12 +11,11 @@ import asyncio
 import random
 from typing import List, Dict, Any, Optional
 import os
-import asyncpg
 
 from agents import Agent, Runner, function_tool
 from pydantic import BaseModel, Field
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from logic.activities_logic import get_all_activities, filter_activities_for_npc
 from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManager
@@ -179,8 +178,7 @@ class NPCHandler:
             player_input: Player's input
             response: NPC's response
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             memory_text = f"Interaction with player: {player_input} - Response: {response}"
             
             # Add memory to NPCStats
@@ -217,8 +215,6 @@ class NPCHandler:
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """, "npc", npc_id, self.user_id, self.conversation_id, memory_text, "interaction", 3, 30)
-        finally:
-            await conn.close()
 
     async def _apply_stat_changes(self, npc_id: int, stat_changes: Dict[str, int]) -> None:
         """
@@ -228,8 +224,7 @@ class NPCHandler:
             npc_id: ID of the NPC
             stat_changes: Dictionary of stat changes
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             for stat, change in stat_changes.items():
                 if stat in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
                     # Get current value
@@ -249,8 +244,6 @@ class NPCHandler:
                             SET {stat} = $1
                             WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                         """, new_value, self.user_id, self.conversation_id, npc_id)
-        finally:
-            await conn.close()
 
     async def get_npc_details(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -262,8 +255,7 @@ class NPCHandler:
         Returns:
             Dictionary with NPC details
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
                 SELECT npc_id, npc_name, introduced, archetypes, archetype_summary, 
                        archetype_extras_summary, physical_description, relationships,
@@ -384,8 +376,6 @@ class NPCHandler:
                 "sex": row["sex"],
                 "age": row["age"]
             }
-        finally:
-            await conn.close()
 
     async def get_npc_memory(self, npc_id: int) -> List[Dict[str, Any]]:
         """
@@ -397,8 +387,7 @@ class NPCHandler:
         Returns:
             List of memory objects
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             # First check if the NPC has memories in the NPCStats table
             row = await conn.fetchrow("""
                 SELECT memory
@@ -460,8 +449,6 @@ class NPCHandler:
                 })
             
             return memories
-        finally:
-            await conn.close()
 
     async def get_relationship_details(
         self,
@@ -482,8 +469,7 @@ class NPCHandler:
         Returns:
             Dictionary with relationship details
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             # Try both orientations of the relationship
             for e1t, e1i, e2t, e2i in [(entity1_type, entity1_id, entity2_type, entity2_id),
                                        (entity2_type, entity2_id, entity1_type, entity1_id)]:
@@ -570,8 +556,6 @@ class NPCHandler:
                 "experienced_crossroads": {},
                 "experienced_rituals": {}
             }
-        finally:
-            await conn.close()
 
     async def get_nearby_npcs(self, location: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -583,8 +567,7 @@ class NPCHandler:
         Returns:
             List of nearby NPCs
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             if location:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, current_location, dominance, cruelty
@@ -614,8 +597,6 @@ class NPCHandler:
                 })
             
             return nearby_npcs
-        finally:
-            await conn.close()
 
     async def process_daily_npc_activities(self) -> Dict[str, Any]:
         """
@@ -625,8 +606,7 @@ class NPCHandler:
         Returns:
             Dictionary with processing results
         """
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             year, month, day, time_of_day = 1, 1, 1, "Morning"
             
             for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
@@ -794,8 +774,6 @@ class NPCHandler:
                 "day_of_week": day_of_week,
                 "results": results
             }
-        finally:
-            await conn.close()
 
     async def _update_npc_relationship(self, npc1_id: int, npc2_id: int) -> None:
         """
@@ -806,8 +784,7 @@ class NPCHandler:
             npc2_id: ID of the second NPC
         """
         # Simple implementation - in a full refactor, this would call into npc_relationship.py
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        async with get_db_connection_context() as conn:
             # Check if relationship exists
             row = await conn.fetchrow("""
                 SELECT link_id, link_level
@@ -845,8 +822,6 @@ class NPCHandler:
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """, self.user_id, self.conversation_id, "npc", npc1_id, "npc", npc2_id, link_type, link_level)
-        finally:
-            await conn.close()
 
     async def _record_interaction_for_learning(
         self, 
