@@ -1,8 +1,10 @@
 import logging
-from flask import Blueprint, request, jsonify, session
-from db.connection import get_db_connection
-import random
+import asyncio
+import asyncpg
 import json
+import random
+from typing import Dict, Any, List
+from db.connection import get_db_connection_context
 from logic.social_links import add_link_event  # We'll import or define these from your social_links
 
 stats_bp = Blueprint('stats_bp', __name__)
@@ -563,26 +565,33 @@ def init_stats_system():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def update_player_stats(user_id, conversation_id, player_name, stat_key, value):
+async def update_player_stats(user_id, conversation_id, player_name, stat_key, value):
     """
     Updates a specific stat for a given player in the PlayerStats table.
-    (No user_id or conversation_id used here, so it updates the global row if it exists)
-    If you want scoping, just add user_id, conversation_id to the WHERE clause.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(f"""
-            UPDATE PlayerStats
-            SET {stat_key} = %s
-            WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-        """, (value, player_name))
-        conn.commit()
+        async with get_db_connection_context() as conn:
+            # Note: Using parameterized SQL dynamically with column names requires special handling
+            # This is a simplistic approach - ideally validate stat_key against allowed column names
+            query = f"UPDATE PlayerStats SET {stat_key} = $1 WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4"
+            result = await conn.execute(query, value, user_id, conversation_id, player_name)
+            
+            # Parse the result string (e.g., "UPDATE 1")
+            affected = 0
+            if result and result.startswith("UPDATE"):
+                try:
+                    affected = int(result.split()[1])
+                except (IndexError, ValueError):
+                    pass
+                    
+            return {"success": affected > 0, "affected_rows": affected}
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error updating player stats: {db_err}", exc_info=True)
+        return {"success": False, "error": str(db_err)}
     except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+        logging.error(f"Error updating player stats: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 def check_social_link_milestones():
     """
@@ -769,31 +778,32 @@ def check_for_combination_triggers(user_id, conversation_id):
         cursor.close()
         conn.close()
 
-def record_stat_change_event(user_id, conversation_id, stat_name, old_value, new_value, cause=""):
+async def record_stat_change_event(user_id, conversation_id, stat_name, old_value, new_value, cause=""):
     """
     Record significant stat changes in a new StatsHistory table
     """
     # Only record significant changes (more than 5 points)
     if abs(new_value - old_value) < 5:
-        return
+        return {"success": True, "recorded": False, "reason": "Change too small"}
         
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            INSERT INTO StatsHistory 
-            (user_id, conversation_id, player_name, stat_name, old_value, new_value, cause, timestamp)
-            VALUES (%s, %s, 'Chase', %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        """, (user_id, conversation_id, stat_name, old_value, new_value, cause))
-        conn.commit()
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO StatsHistory 
+                (user_id, conversation_id, player_name, stat_name, old_value, new_value, cause, timestamp)
+                VALUES ($1, $2, 'Chase', $3, $4, $5, $6, CURRENT_TIMESTAMP)
+            """, user_id, conversation_id, stat_name, old_value, new_value, cause)
+            
+            return {"success": True, "recorded": True}
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error recording stat change: {db_err}", exc_info=True)
+        return {"success": False, "error": str(db_err)}
     except Exception as e:
-        conn.rollback()
-        logging.error(f"Error recording stat change: {e}")
-    finally:
-        cursor.close()
-        conn.close()
-
-def apply_stat_change(user_id, conversation_id, changes, cause=""):
+        logging.error(f"Error recording stat change: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+        
+async def apply_stat_change(user_id, conversation_id, changes, cause=""):
     """
     Apply multiple stat changes at once and record the history
     
@@ -804,67 +814,55 @@ def apply_stat_change(user_id, conversation_id, changes, cause=""):
         "confidence": -2
     }
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        # First get current values
-        cursor.execute("""
-            SELECT corruption, confidence, willpower, obedience, dependency, 
-                   lust, mental_resilience, physical_endurance
-            FROM PlayerStats
-            WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-        """, (user_id, conversation_id))
-        row = cursor.fetchone()
-        if not row:
-            return False
+        async with get_db_connection_context() as conn:
+            # First get current values
+            row = await conn.fetchrow("""
+                SELECT corruption, confidence, willpower, obedience, dependency, 
+                       lust, mental_resilience, physical_endurance
+                FROM PlayerStats
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+            """, user_id, conversation_id)
             
-        current_stats = {
-            "corruption": row[0],
-            "confidence": row[1],
-            "willpower": row[2],
-            "obedience": row[3],
-            "dependency": row[4],
-            "lust": row[5],
-            "mental_resilience": row[6],
-            "physical_endurance": row[7]
-        }
-        
-        # Prepare updates
-        updates = []
-        values = []
-        
-        for stat_name, change in changes.items():
-            if stat_name not in current_stats:
-                continue
+            if not row:
+                return {"success": False, "error": "Player stats not found"}
                 
-            old_value = current_stats[stat_name]
-            new_value = max(0, min(100, old_value + change))  # Clamp between 0-100
+            current_stats = {
+                "corruption": row['corruption'],
+                "confidence": row['confidence'],
+                "willpower": row['willpower'],
+                "obedience": row['obedience'],
+                "dependency": row['dependency'],
+                "lust": row['lust'],
+                "mental_resilience": row['mental_resilience'],
+                "physical_endurance": row['physical_endurance']
+            }
             
-            updates.append(f"{stat_name} = %s")
-            values.append(new_value)
+            # Process each stat change
+            for stat_name, change in changes.items():
+                if stat_name not in current_stats:
+                    continue
+                    
+                old_value = current_stats[stat_name]
+                new_value = max(0, min(100, old_value + change))  # Clamp between 0-100
+                
+                # Update the stat
+                # Note: Using parameterized SQL dynamically with column names requires special handling
+                # This is a simplistic approach - ideally validate stat_name against allowed column names
+                query = f"UPDATE PlayerStats SET {stat_name} = $1 WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'"
+                await conn.execute(query, new_value, user_id, conversation_id)
+                
+                # Record the change
+                await record_stat_change_event(user_id, conversation_id, stat_name, old_value, new_value, cause)
             
-            # Record the change
-            record_stat_change_event(user_id, conversation_id, stat_name, old_value, new_value, cause)
-        
-        if not updates:
-            return False
+            return {"success": True, "changes_applied": len(changes)}
             
-        # Apply the updates
-        sql = "UPDATE PlayerStats SET " + ", ".join(updates)
-        sql += " WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'"
-        values.extend([user_id, conversation_id])
-        
-        cursor.execute(sql, values)
-        conn.commit()
-        
-        return True
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error applying stat changes: {db_err}", exc_info=True)
+        return {"success": False, "error": str(db_err)}
     except Exception as e:
-        conn.rollback()
-        logging.error(f"Error applying stat changes: {e}")
-        return False
-    finally:
-        cursor.close()
-        conn.close()
+        logging.error(f"Error applying stat changes: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 # Define specific activities that modify stats
 ACTIVITY_EFFECTS = {
