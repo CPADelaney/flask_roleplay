@@ -16,6 +16,8 @@ from logic.nyx_memory import NyxMemoryManager, perform_memory_maintenance
 from nyx.nyx_memory_system import initialize_nyx_memory_tables
 from nyx.nyx_model_manager import initialize_user_model_tables
 from npcs.npc_learning_adaptation import NPCLearningManager
+from db.connection import get_db_connection_context
+import asyncpg
 
 async def initialize_nyx_memory_system():
     """
@@ -48,40 +50,33 @@ def nyx_memory_maintenance_task():
     Should be scheduled to run daily.
     """
     import asyncio
-    import asyncpg
     
     async def process_all_conversations():
-        conn = None
         try:
-            dsn = os.getenv("DB_DSN", "postgresql://user:pass@localhost:5432/yourdb")
-            conn = await asyncpg.connect(dsn)
-            
-            # Get active conversations
-            rows = await conn.fetch("""
-                SELECT DISTINCT user_id, conversation_id
-                FROM NyxMemories
-                WHERE is_archived = FALSE
-                AND timestamp > NOW() - INTERVAL '30 days'
-            """)
-            
-            for row in rows:
-                user_id = row["user_id"]
-                conversation_id = row["conversation_id"]
+            async with get_db_connection_context() as conn:
+                # Get active conversations
+                rows = await conn.fetch("""
+                    SELECT DISTINCT user_id, conversation_id
+                    FROM NyxMemories
+                    WHERE is_archived = FALSE
+                    AND timestamp > NOW() - INTERVAL '30 days'
+                """)
                 
-                try:
-                    await perform_memory_maintenance(user_id, conversation_id)
-                    logger.info(f"Memory maintenance completed for user_id={user_id}, conversation_id={conversation_id}")
-                except Exception as e:
-                    logger.error(f"Error in memory maintenance for user_id={user_id}, conversation_id={conversation_id}: {str(e)}")
+                for row in rows:
+                    user_id = row["user_id"]
+                    conversation_id = row["conversation_id"]
                     
-                # Brief pause between processing to avoid overloading the database
-                await asyncio.sleep(0.5)
-                
+                    try:
+                        await perform_memory_maintenance(user_id, conversation_id)
+                        logger.info(f"Memory maintenance completed for user_id={user_id}, conversation_id={conversation_id}")
+                    except Exception as e:
+                        logger.error(f"Error in memory maintenance for user_id={user_id}, conversation_id={conversation_id}: {str(e)}")
+                        
+                    # Brief pause between processing to avoid overloading the database
+                    await asyncio.sleep(0.5)
+                    
         except Exception as e:
             logger.error(f"Error in nyx_memory_maintenance_task: {str(e)}")
-        finally:
-            if conn:
-                await conn.close()
                 
     asyncio.run(process_all_conversations())
     return {"status": "Memory maintenance completed"}
@@ -104,23 +99,19 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
     try:
         # Get user_id if not provided
         if user_id is None:
-            from db.connection import get_db_connection
-            conn = None
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT user_id FROM conversations WHERE id=%s", 
-                    (conversation_id,)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    logging.error(f"No conversation found with id {conversation_id}")
-                    return
-                user_id = row[0]
-            finally:
-                if conn:
-                    conn.close()
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT user_id FROM conversations WHERE id=$1", 
+                        conversation_id
+                    )
+                    if not row:
+                        logging.error(f"No conversation found with id {conversation_id}")
+                        return
+                    user_id = row["user_id"]
+            except Exception as e:
+                logging.error(f"Error fetching user_id for conversation {conversation_id}: {e}")
+                return
         
         # Initialize Nyx agent and NPCLearningManager
         nyx_agent = NyxAgent(user_id, conversation_id)
@@ -140,21 +131,15 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
             universal_update["user_id"] = user_id
             universal_update["conversation_id"] = conversation_id
             
-            # Use DSN from environment
-            import os
-            import asyncpg
-            dsn = os.getenv("DB_DSN")
-            
             try:
                 # Apply updates with proper async context
-                async with asyncpg.create_pool(dsn=dsn) as pool:
-                    async with pool.acquire() as conn:
-                        await apply_universal_updates_async(
-                            user_id, 
-                            conversation_id, 
-                            universal_update,
-                            conn
-                        )
+                async with get_db_connection_context() as conn:
+                    await apply_universal_updates_async(
+                        user_id, 
+                        conversation_id, 
+                        universal_update,
+                        conn
+                    )
                 
                 # Refresh context after updates
                 aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
@@ -201,22 +186,15 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                 logging.error(f"Error in NPC learning processing: {learn_err}", exc_info=True)
         
         # Store Nyx response in database with proper error handling
-        from db.connection import get_db_connection
-        conn = None
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                (conversation_id, "Nyx", ai_response)
-            )
-            conn.commit()
-            logging.info(f"Stored Nyx response in database for conversation {conversation_id}")
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
+                    conversation_id, "Nyx", ai_response
+                )
+                logging.info(f"Stored Nyx response in database for conversation {conversation_id}")
         except Exception as db_error:
             logging.error(f"Database error storing Nyx response: {str(db_error)}", exc_info=True)
-        finally:
-            if conn:
-                conn.close()
         
         # Emit response to client via SocketIO with proper error handling
         from flask_socketio import emit
@@ -457,75 +435,68 @@ async def migrate_nyx_memory_system():
     Create or update the necessary database tables for the enhanced memory system.
     Run this once when deploying the new system.
     """
-    import asyncpg
-    
-    dsn = os.getenv("DB_DSN", "postgresql://user:pass@localhost:5432/yourdb") 
-    conn = await asyncpg.connect(dsn)
-    
     try:
-        # Create the enhanced NyxMemories table if it doesn't exist
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS NyxMemories (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                conversation_id INTEGER NOT NULL,
-                memory_text TEXT NOT NULL,
-                memory_type TEXT DEFAULT 'observation',
-                significance FLOAT DEFAULT 3.0,
-                embedding VECTOR(1536),
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                tags TEXT[],
-                times_recalled INTEGER DEFAULT 0,
-                last_recalled TIMESTAMP,
-                is_archived BOOLEAN DEFAULT FALSE,
-                is_consolidated BOOLEAN DEFAULT FALSE,
-                metadata JSONB,
+        async with get_db_connection_context() as conn:
+            # Create the enhanced NyxMemories table if it doesn't exist
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS NyxMemories (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    memory_text TEXT NOT NULL,
+                    memory_type TEXT DEFAULT 'observation',
+                    significance FLOAT DEFAULT 3.0,
+                    embedding VECTOR(1536),
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    tags TEXT[],
+                    times_recalled INTEGER DEFAULT 0,
+                    last_recalled TIMESTAMP,
+                    is_archived BOOLEAN DEFAULT FALSE,
+                    is_consolidated BOOLEAN DEFAULT FALSE,
+                    metadata JSONB,
+                    
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
                 
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-            );
+                -- Create indexes for efficient retrieval
+                CREATE INDEX IF NOT EXISTS idx_nyxmem_user_conv ON NyxMemories(user_id, conversation_id);
+                CREATE INDEX IF NOT EXISTS idx_nyxmem_type ON NyxMemories(memory_type);
+                CREATE INDEX IF NOT EXISTS idx_nyxmem_archived ON NyxMemories(is_archived);
+                CREATE INDEX IF NOT EXISTS idx_nyxmem_timestamp ON NyxMemories(timestamp);
+            """)
             
-            -- Create indexes for efficient retrieval
-            CREATE INDEX IF NOT EXISTS idx_nyxmem_user_conv ON NyxMemories(user_id, conversation_id);
-            CREATE INDEX IF NOT EXISTS idx_nyxmem_type ON NyxMemories(memory_type);
-            CREATE INDEX IF NOT EXISTS idx_nyxmem_archived ON NyxMemories(is_archived);
-            CREATE INDEX IF NOT EXISTS idx_nyxmem_timestamp ON NyxMemories(timestamp);
-        """)
-        
-        # Create NyxAgentState table for metacognition
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS NyxAgentState (
-                user_id INTEGER NOT NULL,
-                conversation_id INTEGER NOT NULL,
-                current_goals JSONB,
-                predicted_futures JSONB,
-                reflection_notes TEXT,
-                emotional_state JSONB,
-                narrative_assessment JSONB,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            # Create NyxAgentState table for metacognition
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS NyxAgentState (
+                    user_id INTEGER NOT NULL,
+                    conversation_id INTEGER NOT NULL,
+                    current_goals JSONB,
+                    predicted_futures JSONB,
+                    reflection_notes TEXT,
+                    emotional_state JSONB,
+                    narrative_assessment JSONB,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    PRIMARY KEY (user_id, conversation_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+            """)
+            
+            # Add any columns that might be missing in existing tables
+            try:
+                await conn.execute("ALTER TABLE NyxMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT FALSE;")
+                await conn.execute("ALTER TABLE NyxMemories ADD COLUMN IF NOT EXISTS metadata JSONB;")
+                await conn.execute("ALTER TABLE NyxAgentState ADD COLUMN IF NOT EXISTS emotional_state JSONB;")
+                await conn.execute("ALTER TABLE NyxAgentState ADD COLUMN IF NOT EXISTS narrative_assessment JSONB;")
+            except Exception as column_error:
+                logging.error(f"Error adding columns: {str(column_error)}")
                 
-                PRIMARY KEY (user_id, conversation_id),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-            );
-        """)
-        
-        # Add any columns that might be missing in existing tables
-        try:
-            await conn.execute("ALTER TABLE NyxMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT FALSE;")
-            await conn.execute("ALTER TABLE NyxMemories ADD COLUMN IF NOT EXISTS metadata JSONB;")
-            await conn.execute("ALTER TABLE NyxAgentState ADD COLUMN IF NOT EXISTS emotional_state JSONB;")
-            await conn.execute("ALTER TABLE NyxAgentState ADD COLUMN IF NOT EXISTS narrative_assessment JSONB;")
-        except Exception as column_error:
-            logging.error(f"Error adding columns: {str(column_error)}")
-            
-        logging.info("Successfully migrated database for enhanced Nyx memory system")
-        
+            logging.info("Successfully migrated database for enhanced Nyx memory system")
     except Exception as e:
         logging.error(f"Database migration error: {str(e)}")
         raise
-    finally:
-        await conn.close()
 
 # -----------------------------------------------------------
 # Integration with routes
