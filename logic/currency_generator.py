@@ -3,7 +3,7 @@
 import json
 import re
 import logging
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response
 
 class CurrencyGenerator:
@@ -71,39 +71,35 @@ class CurrencyGenerator:
         
         return formatted
     
-    async def _get_existing_currency(self):
-        """Check if a currency system already exists for this game."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("""
+# Refactored async method
+async def _get_existing_currency(self):
+    """Check if a currency system already exists for this game."""
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
                 SELECT currency_name, currency_plural, minor_currency_name, minor_currency_plural,
                        exchange_rate, currency_symbol, format_template, description
                 FROM CurrencySystem
-                WHERE user_id=%s AND conversation_id=%s
+                WHERE user_id=$1 AND conversation_id=$2
                 LIMIT 1
-            """, (self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
+            """, self.user_id, self.conversation_id)
             
             if row:
                 return {
-                    "currency_name": row[0],
-                    "currency_plural": row[1],
-                    "minor_currency_name": row[2],
-                    "minor_currency_plural": row[3],
-                    "exchange_rate": row[4],
-                    "currency_symbol": row[5],
-                    "format_template": row[6],
-                    "description": row[7]
+                    "currency_name": row['currency_name'],
+                    "currency_plural": row['currency_plural'],
+                    "minor_currency_name": row['minor_currency_name'],
+                    "minor_currency_plural": row['minor_currency_plural'],
+                    "exchange_rate": row['exchange_rate'],
+                    "currency_symbol": row['currency_symbol'],
+                    "format_template": row['format_template'],
+                    "description": row['description']
                 }
             
             return None
-            
-        finally:
-            cursor.close()
-            conn.close()
+    except Exception as e:
+        logging.error(f"Error getting currency: {e}")
+        return None
     
     async def _get_setting_context(self):
         """Get the current setting context for currency generation."""
