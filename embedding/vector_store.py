@@ -106,4 +106,4 @@ async def find_most_similar(
         return results[:top_k]
     except Exception as e:
         logger.error(f"Error finding similar embeddings: {e}")
-        return [] 
+        return []
