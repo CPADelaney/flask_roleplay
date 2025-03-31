@@ -43,7 +43,9 @@ async def initialize_database() -> bool:
 async def setup_npc(user_id: int, conversation_id: int, npc_data: Dict[str, Any]) -> Optional[int]:
     """Set up an NPC with initial data."""
     try:
-        async with TransactionContext() as conn:
+        from db.connection import get_db_connection_context
+        
+        async with get_db_connection_context() as conn:
             # Create NPC entry
             npc_id = npc_data.get("npc_id")
             if npc_id is None:
@@ -111,7 +113,9 @@ async def setup_npc(user_id: int, conversation_id: int, npc_data: Dict[str, Any]
 async def setup_player(user_id: int, conversation_id: int, player_data: Dict[str, Any]) -> bool:
     """Set up a player with initial data."""
     try:
-        async with TransactionContext() as conn:
+        from db.connection import get_db_connection_context
+        
+        async with get_db_connection_context() as conn:
             player_name = player_data.get("player_name", "Chase")
             
             # Insert or update player stats
@@ -166,7 +170,9 @@ async def setup_player(user_id: int, conversation_id: int, player_data: Dict[str
 async def setup_nyx(user_id: int, conversation_id: int, nyx_data: Dict[str, Any]) -> bool:
     """Set up the Nyx DM with initial data."""
     try:
-        async with TransactionContext() as conn:
+        from db.connection import get_db_connection_context
+        
+        async with get_db_connection_context() as conn:
             # Set up NyxAgentState
             await conn.execute("""
                 INSERT INTO NyxAgentState (
