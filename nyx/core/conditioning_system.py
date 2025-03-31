@@ -2,7 +2,6 @@
 
 import logging
 import datetime
-import random
 import json
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
@@ -13,6 +12,7 @@ from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
 
+# Pydantic models for data structures
 class ConditionedAssociation(BaseModel):
     """Represents a conditioned association between stimuli and responses"""
     stimulus: str = Field(..., description="The triggering stimulus")
@@ -25,6 +25,7 @@ class ConditionedAssociation(BaseModel):
     context_keys: List[str] = Field(default_factory=list, description="Contextual keys where this association applies")
     decay_rate: float = Field(0.05, description="Rate at which this association decays if not reinforced")
 
+# Output schema models
 class ClassicalConditioningOutput(BaseModel):
     """Output schema for classical conditioning analysis"""
     association_key: str = Field(..., description="Key for the association")
@@ -63,13 +64,11 @@ class TraitConditioningOutput(BaseModel):
     identity_impact: str = Field(..., description="Description of impact on identity")
     conditioning_strategy: str = Field(..., description="Strategy used for conditioning")
 
-class ConditioningSystem:
-    """
-    System for implementing classical and operant conditioning mechanisms
-    to shape AI personality, preferences, and behaviors.
-    """
+# Context object for conditioning system
+class ConditioningContext:
+    """Context object for conditioning operations"""
     
-    def __init__(self, reward_system, emotional_core=None, memory_core=None, somatosensory_system=None):
+    def __init__(self, reward_system=None, emotional_core=None, memory_core=None, somatosensory_system=None):
         self.reward_system = reward_system
         self.emotional_core = emotional_core
         self.memory_core = memory_core
@@ -96,15 +95,32 @@ class ConditioningSystem:
         self.total_reinforcements = 0
         self.successful_associations = 0
         
+        # Trace group ID for linking traces
+        self.trace_group_id = f"conditioning_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+class ConditioningSystem:
+    """
+    System for implementing classical and operant conditioning mechanisms
+    to shape AI personality, preferences, and behaviors.
+    Refactored to leverage OpenAI Agents SDK for improved modularity and capability.
+    """
+    
+    def __init__(self, reward_system=None, emotional_core=None, memory_core=None, somatosensory_system=None):
+        # Initialize context
+        self.context = ConditioningContext(
+            reward_system=reward_system, 
+            emotional_core=emotional_core,
+            memory_core=memory_core,
+            somatosensory_system=somatosensory_system
+        )
+        
         # Create agents
         self.classical_conditioning_agent = self._create_classical_conditioning_agent()
         self.operant_conditioning_agent = self._create_operant_conditioning_agent()
         self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
         self.personality_development_agent = self._create_personality_development_agent()
         self.conditioning_orchestrator = self._create_conditioning_orchestrator()
-        
-        # Create trace ID for linking traces
-        self.trace_group_id = f"conditioning_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         logger.info("Conditioning system initialized with Agents SDK integration")
     
@@ -274,7 +290,7 @@ class ConditioningSystem:
             ]
         )
     
-    # Tool functions for agents
+    # Function tools for agents
     
     @function_tool
     async def _get_association(self, ctx: RunContextWrapper, key: str, association_type: str = "classical") -> Dict[str, Any]:
@@ -288,10 +304,10 @@ class ConditioningSystem:
         Returns:
             The association if found, or None
         """
-        associations = self.classical_associations if association_type == "classical" else self.operant_associations
+        associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
         
         if key in associations:
-            return associations[key].dict()
+            return associations[key].model_dump()
         else:
             return None
     
@@ -321,13 +337,13 @@ class ConditioningSystem:
         association_key = f"{conditioned_stimulus}→{response}"
         
         # Check if this association already exists
-        if association_key in self.classical_associations:
+        if association_key in ctx.context.classical_associations:
             # Get existing association
-            association = self.classical_associations[association_key]
+            association = ctx.context.classical_associations[association_key]
             
             # Update association strength based on intensity and learning rate
             old_strength = association.association_strength
-            new_strength = min(1.0, old_strength + (intensity * self.association_learning_rate))
+            new_strength = min(1.0, old_strength + (intensity * ctx.context.association_learning_rate))
             
             # Update association data
             association.association_strength = new_strength
@@ -343,7 +359,7 @@ class ConditioningSystem:
                     association.context_keys.append(key)
             
             # Record reinforcement
-            self.total_reinforcements += 1
+            ctx.context.total_reinforcements += 1
 
             logger.info(f"Reinforced classical association: {association_key} ({old_strength:.2f} → {new_strength:.2f})")
             
@@ -360,7 +376,7 @@ class ConditioningSystem:
             association = ConditionedAssociation(
                 stimulus=conditioned_stimulus,
                 response=response,
-                association_strength=intensity * self.association_learning_rate,
+                association_strength=intensity * ctx.context.association_learning_rate,
                 formation_date=datetime.datetime.now().isoformat(),
                 last_reinforced=datetime.datetime.now().isoformat(),
                 reinforcement_count=1,
@@ -369,8 +385,8 @@ class ConditioningSystem:
             )
             
             # Store the association
-            self.classical_associations[association_key] = association
-            self.total_associations += 1
+            ctx.context.classical_associations[association_key] = association
+            ctx.context.total_associations += 1
             
             logger.info(f"Created new classical association: {association_key} ({association.association_strength:.2f})")
             
@@ -410,12 +426,12 @@ class ConditioningSystem:
         is_positive = "positive" in consequence_type
         
         # Check if this association already exists
-        if association_key in self.operant_associations:
+        if association_key in ctx.context.operant_associations:
             # Get existing association
-            association = self.operant_associations[association_key]
+            association = ctx.context.operant_associations[association_key]
             
             # Calculate strength change based on intensity and whether it's reinforcement or punishment
-            strength_change = intensity * self.association_learning_rate
+            strength_change = intensity * ctx.context.association_learning_rate
             if not is_reinforcement:
                 strength_change *= -1  # Decrease strength for punishment
             
@@ -435,7 +451,7 @@ class ConditioningSystem:
                     association.context_keys.append(key)
             
             # Record reinforcement
-            self.total_reinforcements += 1
+            ctx.context.total_reinforcements += 1
             
             logger.info(f"Updated operant association: {association_key} ({old_strength:.2f} → {new_strength:.2f})")
             
@@ -453,7 +469,7 @@ class ConditioningSystem:
             }
         else:
             # Create new association with initial strength based on intensity
-            initial_strength = intensity * self.association_learning_rate
+            initial_strength = intensity * ctx.context.association_learning_rate
             if not is_reinforcement:
                 initial_strength *= 0.5  # Start weaker for punishment
             
@@ -469,8 +485,8 @@ class ConditioningSystem:
             )
             
             # Store the association
-            self.operant_associations[association_key] = association
-            self.total_associations += 1
+            ctx.context.operant_associations[association_key] = association
+            ctx.context.total_associations += 1
             
             logger.info(f"Created new operant association: {association_key} ({association.association_strength:.2f})")
                         
@@ -506,7 +522,7 @@ class ConditioningSystem:
         strength = base_strength
         
         # Adjust based on intensity
-        intensity_factor = intensity * self.association_learning_rate
+        intensity_factor = intensity * ctx.context.association_learning_rate
         strength += intensity_factor
         
         # Adjust based on reinforcement history (diminishing returns)
@@ -531,7 +547,7 @@ class ConditioningSystem:
         Returns:
             List of similar associations
         """
-        associations = self.classical_associations if association_type == "classical" else self.operant_associations
+        associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
         
         similar_associations = []
         
@@ -544,7 +560,7 @@ class ConditioningSystem:
                     similar_associations.append({
                         "key": key,
                         "similarity": similarity,
-                        "association": association.dict()
+                        "association": association.model_dump()
                     })
         
         # Sort by similarity (highest first)
@@ -598,7 +614,7 @@ class ConditioningSystem:
         Returns:
             Whether the reward signal was generated
         """
-        if not self.reward_system:
+        if not ctx.context.reward_system:
             return False
         
         try:
@@ -614,7 +630,7 @@ class ConditioningSystem:
             )
             
             # Process reward signal
-            await self.reward_system.process_reward_signal(reward_signal)
+            await ctx.context.reward_system.process_reward_signal(reward_signal)
             
             return True
         except Exception as e:
@@ -640,7 +656,7 @@ class ConditioningSystem:
         # Find all associations related to this behavior
         behavior_associations = []
         
-        for key, association in self.operant_associations.items():
+        for key, association in ctx.context.operant_associations.items():
             if association.stimulus == behavior:
                 # Check context match if context keys are present
                 context_match = True
@@ -774,7 +790,7 @@ class ConditioningSystem:
         
         intensity_sum = 0.0
         
-        for key, association in self.operant_associations.items():
+        for key, association in ctx.context.operant_associations.items():
             if association.stimulus == behavior:
                 # Count by consequence type
                 consequence_type = association.response
@@ -878,7 +894,8 @@ class ConditioningSystem:
         Returns:
             Update result
         """
-        if not self.identity_evolution:
+        identity_evolution = getattr(ctx.context, 'identity_evolution', None)
+        if not identity_evolution:
             return {
                 "success": False,
                 "reason": "Identity evolution system not available"
@@ -886,7 +903,7 @@ class ConditioningSystem:
         
         try:
             # Update the trait
-            result = await self.identity_evolution.update_trait(
+            result = await identity_evolution.update_trait(
                 trait=trait,
                 impact=adjustment
             )
@@ -1100,13 +1117,13 @@ class ConditioningSystem:
         effects_applied = []
         
         # Apply emotional effects if emotional core is available
-        if self.emotional_core and valence != 0.0:
+        if ctx.context.emotional_core and valence != 0.0:
             try:
                 # Determine which neurochemicals to update based on valence
                 if valence > 0:
                     # Positive association - increase pleasure/reward chemicals
-                    await self.emotional_core.update_neurochemical("nyxamine", intensity * 0.7)
-                    await self.emotional_core.update_neurochemical("seranix", intensity * 0.3)
+                    await ctx.context.emotional_core.update_neurochemical("nyxamine", intensity * 0.7)
+                    await ctx.context.emotional_core.update_neurochemical("seranix", intensity * 0.3)
                     
                     effects_applied.append({
                         "type": "emotional",
@@ -1116,8 +1133,8 @@ class ConditioningSystem:
                     })
                 else:
                     # Negative association - increase stress/defense chemicals
-                    await self.emotional_core.update_neurochemical("cortanyx", intensity * 0.6)
-                    await self.emotional_core.update_neurochemical("adrenyx", intensity * 0.4)
+                    await ctx.context.emotional_core.update_neurochemical("cortanyx", intensity * 0.6)
+                    await ctx.context.emotional_core.update_neurochemical("adrenyx", intensity * 0.4)
                     
                     effects_applied.append({
                         "type": "emotional",
@@ -1129,11 +1146,11 @@ class ConditioningSystem:
                 logger.error(f"Error applying emotional effects: {e}")
         
         # Apply physical effects if somatosensory system is available
-        if self.somatosensory_system:
+        if ctx.context.somatosensory_system:
             try:
                 if valence > 0:
                     # Positive association - pleasure sensation
-                    await self.somatosensory_system.process_stimulus(
+                    await ctx.context.somatosensory_system.process_stimulus(
                         stimulus_type="pleasure",
                         body_region="core",  # Default region
                         intensity=intensity,
@@ -1148,7 +1165,7 @@ class ConditioningSystem:
                     })
                 elif valence < 0:
                     # Negative association - discomfort/tension
-                    await self.somatosensory_system.process_stimulus(
+                    await ctx.context.somatosensory_system.process_stimulus(
                         stimulus_type="pressure",  # Use pressure for tension
                         body_region="core",
                         intensity=intensity * 0.8,
@@ -1193,7 +1210,7 @@ class ConditioningSystem:
         Returns:
             Processing results
         """
-        with trace(workflow_name="classical_conditioning", group_id=self.trace_group_id):
+        with trace(workflow_name="classical_conditioning", group_id=self.context.trace_group_id):
             # Prepare data for conditioning agent
             data = {
                 "unconditioned_stimulus": unconditioned_stimulus,
@@ -1207,7 +1224,8 @@ class ConditioningSystem:
                 # Run the classical conditioning agent
                 result = await Runner.run(
                     self.classical_conditioning_agent,
-                    json.dumps(data)
+                    json.dumps(data),
+                    context=self.context
                 )
                 
                 conditioning_output = result.final_output
@@ -1261,7 +1279,7 @@ class ConditioningSystem:
         Returns:
             Processing results
         """
-        with trace(workflow_name="operant_conditioning", group_id=self.trace_group_id):
+        with trace(workflow_name="operant_conditioning", group_id=self.context.trace_group_id):
             # Prepare data for conditioning agent
             data = {
                 "behavior": behavior,
@@ -1274,7 +1292,8 @@ class ConditioningSystem:
                 # Run the operant conditioning agent
                 result = await Runner.run(
                     self.operant_conditioning_agent,
-                    json.dumps(data)
+                    json.dumps(data),
+                    context=self.context
                 )
                 
                 conditioning_output = result.final_output
@@ -1325,7 +1344,7 @@ class ConditioningSystem:
         Returns:
             Evaluation of behavior consequences
         """
-        with trace(workflow_name="behavior_evaluation", group_id=self.trace_group_id):
+        with trace(workflow_name="behavior_evaluation", group_id=self.context.trace_group_id):
             # Prepare data for evaluation agent
             data = {
                 "behavior": behavior,
@@ -1336,7 +1355,8 @@ class ConditioningSystem:
                 # Run the behavior evaluation agent
                 result = await Runner.run(
                     self.behavior_evaluation_agent,
-                    json.dumps(data)
+                    json.dumps(data),
+                    context=self.context
                 )
                 
                 evaluation_output = result.final_output
@@ -1376,7 +1396,7 @@ class ConditioningSystem:
         Returns:
             Conditioning results
         """
-        with trace(workflow_name="trait_conditioning", group_id=self.trace_group_id):
+        with trace(workflow_name="trait_conditioning", group_id=self.context.trace_group_id):
             # Prepare data for personality development agent
             data = {
                 "trait": trait,
@@ -1389,7 +1409,8 @@ class ConditioningSystem:
                 # Run the personality development agent
                 result = await Runner.run(
                     self.personality_development_agent,
-                    json.dumps(data)
+                    json.dumps(data),
+                    context=self.context
                 )
                 
                 conditioning_output = result.final_output
@@ -1429,7 +1450,7 @@ class ConditioningSystem:
         Returns:
             Conditioning results
         """
-        with trace(workflow_name="preference_conditioning", group_id=self.trace_group_id):
+        with trace(workflow_name="preference_conditioning", group_id=self.context.trace_group_id):
             # Use the conditioning orchestrator to coordinate the process
             data = {
                 "preference_type": preference_type,
@@ -1489,10 +1510,10 @@ class ConditioningSystem:
             
             # If identity evolution is available, update identity
             identity_result = None
-            if self.identity_evolution and abs(value) > 0.7:
+            if hasattr(self.context, 'identity_evolution') and abs(value) > 0.7:
                 try:
                     # Update preference in identity
-                    identity_result = await self.identity_evolution.update_preference(
+                    identity_result = await self.context.identity_evolution.update_preference(
                         category="stimuli",
                         preference=stimulus,
                         impact=value * 0.3  # Scale down the impact
@@ -1501,7 +1522,7 @@ class ConditioningSystem:
                     # Update related trait if value is strong enough
                     if abs(value) > 0.8:
                         trait = "openness" if is_positive else "caution"
-                        await self.identity_evolution.update_trait(
+                        await self.context.identity_evolution.update_trait(
                             trait=trait,
                             impact=value * 0.1  # Small trait impact
                         )
@@ -1535,7 +1556,7 @@ class ConditioningSystem:
         Returns:
             Results of creating the emotion trigger
         """
-        with trace(workflow_name="emotion_trigger_creation", group_id=self.trace_group_id):
+        with trace(workflow_name="emotion_trigger_creation", group_id=self.context.trace_group_id):
             context = context or {}
             
             # Determine valence based on emotion
@@ -1564,7 +1585,7 @@ class ConditioningSystem:
             
             # If emotional core is available, create a test activation
             emotional_test = None
-            if self.emotional_core:
+            if self.context.emotional_core:
                 try:
                     # Map emotion to neurochemicals
                     chemical_map = {
@@ -1582,7 +1603,7 @@ class ConditioningSystem:
                         chemical = chemical_map[emotion_lower]
                         test_intensity = intensity * 0.1  # Very mild test activation
                         
-                        emotional_test = await self.emotional_core.update_neurochemical(
+                        emotional_test = await self.context.emotional_core.update_neurochemical(
                             chemical=chemical,
                             value=test_intensity
                         )
@@ -1611,12 +1632,12 @@ class ConditioningSystem:
         Returns:
             Dictionary with triggered responses, or None if no responses were triggered
         """
-        with trace(workflow_name="trigger_conditioned_response", group_id=self.trace_group_id):
+        with trace(workflow_name="trigger_conditioned_response", group_id=self.context.trace_group_id):
             context = context or {}
             
             # Check for classical conditioning associations
             matched_associations = []
-            for key, association in self.classical_associations.items():
+            for key, association in self.context.classical_associations.items():
                 if association.stimulus == stimulus:
                     # Check context match if context keys are present
                     context_match = True
@@ -1632,7 +1653,7 @@ class ConditioningSystem:
                                     break
                     
                     # Only include if context matches and strength is above threshold
-                    if context_match and association.association_strength >= self.weak_association_threshold:
+                    if context_match and association.association_strength >= self.context.weak_association_threshold:
                         matched_associations.append((key, association))
             
             if not matched_associations:
@@ -1646,7 +1667,7 @@ class ConditioningSystem:
             for key, association in matched_associations:
                 # Determine if association is triggered based on strength
                 # Stronger associations are more likely to be triggered
-                trigger_threshold = random.random() * (1.0 - self.weak_association_threshold) + self.weak_association_threshold
+                trigger_threshold = random.random() * (1.0 - self.context.weak_association_threshold) + self.context.weak_association_threshold
                 
                 if association.association_strength >= trigger_threshold:
                     responses.append({
@@ -1657,12 +1678,12 @@ class ConditioningSystem:
                     })
                     
                     # Record successful association
-                    self.successful_associations += 1
+                    self.context.successful_associations += 1
                     
                     # Apply effects based on association
                     effect_result = await self._apply_association_effects(
-                        RunContextWrapper(context=None),
-                        association.dict()
+                        RunContextWrapper(context=self.context),
+                        association.model_dump()
                     )
                     
                     # Add effects to response
@@ -1677,45 +1698,6 @@ class ConditioningSystem:
                 "context": context
             }
     
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run maintenance on conditioning system - apply extinction, etc.
-        
-        Returns:
-            Maintenance results
-        """
-        with trace(workflow_name="conditioning_maintenance", group_id=self.trace_group_id):
-            # Apply extinction to all associations
-            classical_updates = 0
-            classical_removals = 0
-            
-            for key in list(self.classical_associations.keys()):
-                result = await self.apply_extinction(key, "classical")
-                if result["success"]:
-                    if "removed" in result["message"]:
-                        classical_removals += 1
-                    else:
-                        classical_updates += 1
-            
-            operant_updates = 0
-            operant_removals = 0
-            
-            for key in list(self.operant_associations.keys()):
-                result = await self.apply_extinction(key, "operant")
-                if result["success"]:
-                    if "removed" in result["message"]:
-                        operant_removals += 1
-                    else:
-                        operant_updates += 1
-            
-            return {
-                "classical_updates": classical_updates,
-                "classical_removals": classical_removals,
-                "operant_updates": operant_updates,
-                "operant_removals": operant_removals,
-                "total_associations": len(self.classical_associations) + len(self.operant_associations)
-            }
-    
     async def apply_extinction(self, association_key: str, association_type: str = "classical") -> Dict[str, Any]:
         """
         Apply extinction to an association (weaken it over time without reinforcement)
@@ -1727,62 +1709,63 @@ class ConditioningSystem:
         Returns:
             Extinction results
         """
-        # Get the appropriate association dictionary
-        associations = self.classical_associations if association_type == "classical" else self.operant_associations
-        
-        if association_key not in associations:
-            return {
-                "success": False,
-                "message": f"Association {association_key} not found"
-            }
-        
-        # Get the association
-        association = associations[association_key]
-        
-        # Calculate time since last reinforcement
-        last_reinforced = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
-        time_since_reinforcement = (datetime.datetime.now() - last_reinforced).total_seconds() / 86400.0  # Days
-        
-        # Calculate extinction effect based on time and extinction rate
-        extinction_effect = min(0.9, time_since_reinforcement * association.decay_rate)
-        
-        # Apply extinction
-        old_strength = association.association_strength
-        new_strength = max(0.0, old_strength - extinction_effect)
-        
-        # Update association
-        association.association_strength = new_strength
-        
-        # Remove association if strength is too low
-        if new_strength < 0.05:
-            del associations[association_key]
+        with trace(workflow_name="extinction", group_id=self.context.trace_group_id):
+            # Get the appropriate association dictionary
+            associations = self.context.classical_associations if association_type == "classical" else self.context.operant_associations
+            
+            if association_key not in associations:
+                return {
+                    "success": False,
+                    "message": f"Association {association_key} not found"
+                }
+            
+            # Get the association
+            association = associations[association_key]
+            
+            # Calculate time since last reinforcement
+            last_reinforced = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
+            time_since_reinforcement = (datetime.datetime.now() - last_reinforced).total_seconds() / 86400.0  # Days
+            
+            # Calculate extinction effect based on time and extinction rate
+            extinction_effect = min(0.9, time_since_reinforcement * association.decay_rate)
+            
+            # Apply extinction
+            old_strength = association.association_strength
+            new_strength = max(0.0, old_strength - extinction_effect)
+            
+            # Update association
+            association.association_strength = new_strength
+            
+            # Remove association if strength is too low
+            if new_strength < 0.05:
+                del associations[association_key]
+                return {
+                    "success": True,
+                    "message": f"Association {association_key} removed due to extinction",
+                    "old_strength": old_strength,
+                    "extinction_effect": extinction_effect
+                }
+            
             return {
                 "success": True,
-                "message": f"Association {association_key} removed due to extinction",
+                "message": f"Applied extinction to {association_key}",
                 "old_strength": old_strength,
+                "new_strength": new_strength,
                 "extinction_effect": extinction_effect
             }
-        
-        return {
-            "success": True,
-            "message": f"Applied extinction to {association_key}",
-            "old_strength": old_strength,
-            "new_strength": new_strength,
-            "extinction_effect": extinction_effect
-        }
-    
+
     async def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the conditioning system"""
         return {
-            "classical_associations": len(self.classical_associations),
-            "operant_associations": len(self.operant_associations),
-            "total_associations": self.total_associations,
-            "total_reinforcements": self.total_reinforcements,
-            "successful_associations": self.successful_associations,
+            "classical_associations": len(self.context.classical_associations),
+            "operant_associations": len(self.context.operant_associations),
+            "total_associations": self.context.total_associations,
+            "total_reinforcements": self.context.total_reinforcements,
+            "successful_associations": self.context.successful_associations,
             "learning_parameters": {
-                "association_learning_rate": self.association_learning_rate,
-                "extinction_rate": self.extinction_rate,
-                "generalization_factor": self.generalization_factor
+                "association_learning_rate": self.context.association_learning_rate,
+                "extinction_rate": self.context.extinction_rate,
+                "generalization_factor": self.context.generalization_factor
             }
         }
     
