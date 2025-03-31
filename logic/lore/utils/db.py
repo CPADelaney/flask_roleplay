@@ -1,15 +1,15 @@
+# logic/lore/utils/db.py
+
 """
 Database utility functions for the Lore System.
+
+Refactored to use asyncpg and async/await pattern.
 """
 
 import logging
-from typing import Optional
-from contextlib import contextmanager
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
-from sqlalchemy.exc import SQLAlchemyError
-
+import asyncio
+from typing import Optional, List, Dict, Any
+import asyncpg
 from ..config.settings import config
 
 logger = logging.getLogger(__name__)
@@ -18,48 +18,38 @@ class DatabaseError(Exception):
     """Custom exception for database-related errors."""
     pass
 
-def create_db_engine():
-    """Create a SQLAlchemy engine with connection pooling."""
+async def get_db_pool():
+    """Get a connection pool for database operations."""
     try:
-        engine = create_engine(
-            'postgresql://user:password@localhost:5432/lore_db',
-            poolclass=QueuePool,
-            pool_size=config.DB_POOL_SIZE,
-            max_overflow=config.DB_MAX_OVERFLOW,
-            pool_timeout=config.DB_POOL_TIMEOUT
+        # Create a connection pool
+        pool = await asyncpg.create_pool(
+            dsn='postgresql://user:password@localhost:5432/lore_db',
+            min_size=config.DB_POOL_SIZE,
+            max_size=config.DB_POOL_SIZE + config.DB_MAX_OVERFLOW,
+            command_timeout=config.DB_POOL_TIMEOUT
         )
-        return engine
+        return pool
     except Exception as e:
-        logger.error(f"Failed to create database engine: {e}")
+        logger.error(f"Failed to create database pool: {e}")
         raise DatabaseError(config.ERROR_MESSAGES["db_connection"]) from e
 
-# Create engine and session factory
-engine = create_db_engine()
-SessionFactory = sessionmaker(bind=engine)
+# Global pool variable
+_pool = None
 
-@contextmanager
-def get_db_session() -> Session:
-    """
-    Context manager for database sessions.
-    
-    Yields:
-        Session: SQLAlchemy session
-        
-    Raises:
-        DatabaseError: If session creation or commit fails
-    """
-    session = SessionFactory()
-    try:
-        yield session
-        session.commit()
-    except SQLAlchemyError as e:
-        session.rollback()
-        logger.error(f"Database error: {e}")
-        raise DatabaseError(f"Database operation failed: {str(e)}")
-    finally:
-        session.close()
+async def get_db_connection():
+    """Get a connection from the pool."""
+    global _pool
+    if _pool is None:
+        _pool = await get_db_pool()
+    return await _pool.acquire()
 
-def execute_query(query: str, params: Optional[dict] = None) -> list:
+async def release_db_connection(conn):
+    """Release a connection back to the pool."""
+    global _pool
+    if _pool is not None:
+        await _pool.release(conn)
+
+async def execute_query(query: str, params: Optional[dict] = None) -> list:
     """
     Execute a database query with parameters.
     
@@ -73,15 +63,33 @@ def execute_query(query: str, params: Optional[dict] = None) -> list:
     Raises:
         DatabaseError: If query execution fails
     """
-    with get_db_session() as session:
-        try:
-            result = session.execute(query, params or {})
-            return result.fetchall()
-        except SQLAlchemyError as e:
-            logger.error(f"Query execution failed: {e}")
-            raise DatabaseError(f"Query execution failed: {str(e)}")
+    conn = None
+    try:
+        conn = await get_db_connection()
+        
+        param_values = list(params.values()) if params else []
+        
+        # For SELECT queries (fetch data)
+        if query.strip().upper().startswith("SELECT"):
+            result = await conn.fetch(query, *param_values)
+            return result
+        
+        # For other queries (INSERT, UPDATE, DELETE)
+        else:
+            result = await conn.execute(query, *param_values)
+            return [result]
+            
+    except asyncpg.PostgresError as e:
+        logger.error(f"Query execution failed: {e}")
+        raise DatabaseError(f"Query execution failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in execute_query: {e}")
+        raise DatabaseError(f"Unexpected error: {str(e)}")
+    finally:
+        if conn:
+            await release_db_connection(conn)
 
-def execute_many(query: str, params_list: list) -> None:
+async def execute_many(query: str, params_list: list) -> None:
     """
     Execute a database query multiple times with different parameters.
     
@@ -92,9 +100,100 @@ def execute_many(query: str, params_list: list) -> None:
     Raises:
         DatabaseError: If query execution fails
     """
-    with get_db_session() as session:
-        try:
-            session.execute(query, params_list)
-        except SQLAlchemyError as e:
-            logger.error(f"Batch query execution failed: {e}")
-            raise DatabaseError(f"Batch query execution failed: {str(e)}") 
+    conn = None
+    try:
+        conn = await get_db_connection()
+        
+        # Process each set of parameters
+        results = []
+        async with conn.transaction():
+            for params in params_list:
+                param_values = list(params.values())
+                await conn.execute(query, *param_values)
+                
+    except asyncpg.PostgresError as e:
+        logger.error(f"Batch query execution failed: {e}")
+        raise DatabaseError(f"Batch query execution failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in execute_many: {e}")
+        raise DatabaseError(f"Unexpected error: {str(e)}")
+    finally:
+        if conn:
+            await release_db_connection(conn)
+
+async def fetch_one(query: str, params: Optional[dict] = None) -> Optional[Dict[str, Any]]:
+    """
+    Execute a query and fetch one row as a dictionary.
+    
+    Args:
+        query: SQL query string
+        params: Optional dictionary of query parameters
+        
+    Returns:
+        Dictionary with column names as keys, or None if no row found
+        
+    Raises:
+        DatabaseError: If query execution fails
+    """
+    conn = None
+    try:
+        conn = await get_db_connection()
+        
+        param_values = list(params.values()) if params else []
+        row = await conn.fetchrow(query, *param_values)
+        
+        if row:
+            # Convert Row to dictionary
+            return dict(row)
+        return None
+            
+    except asyncpg.PostgresError as e:
+        logger.error(f"Query execution failed: {e}")
+        raise DatabaseError(f"Query execution failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in fetch_one: {e}")
+        raise DatabaseError(f"Unexpected error: {str(e)}")
+    finally:
+        if conn:
+            await release_db_connection(conn)
+
+async def fetch_value(query: str, params: Optional[dict] = None) -> Any:
+    """
+    Execute a query and fetch a single value.
+    
+    Args:
+        query: SQL query string
+        params: Optional dictionary of query parameters
+        
+    Returns:
+        Single value result or None if no result
+        
+    Raises:
+        DatabaseError: If query execution fails
+    """
+    conn = None
+    try:
+        conn = await get_db_connection()
+        
+        param_values = list(params.values()) if params else []
+        value = await conn.fetchval(query, *param_values)
+        
+        return value
+            
+    except asyncpg.PostgresError as e:
+        logger.error(f"Query execution failed: {e}")
+        raise DatabaseError(f"Query execution failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in fetch_value: {e}")
+        raise DatabaseError(f"Unexpected error: {str(e)}")
+    finally:
+        if conn:
+            await release_db_connection(conn)
+
+async def close_pool():
+    """Close the database connection pool."""
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
+        logger.info("Database connection pool closed")
