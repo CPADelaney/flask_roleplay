@@ -7,7 +7,7 @@ import json
 import math
 from typing import Dict, List, Any, Optional, Tuple
 
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -56,10 +56,8 @@ class MaintenanceSummaryOutput(BaseModel):
     improvements: List[str] = Field(..., description="Improvements made to the system")
     next_maintenance_recommendation: str = Field(..., description="Recommendation for next maintenance")
 
-class ConditioningMaintenanceSystem:
-    """
-    Handles periodic maintenance tasks for the conditioning system.
-    """
+class MaintenanceContext:
+    """Context object for conditioning maintenance operations"""
     
     def __init__(self, conditioning_system, reward_system=None):
         self.conditioning_system = conditioning_system
@@ -79,15 +77,26 @@ class ConditioningMaintenanceSystem:
         # Background task
         self.maintenance_task = None
         
+        # Trace ID for linking traces
+        self.trace_group_id = f"maintenance_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+class ConditioningMaintenanceSystem:
+    """
+    Handles periodic maintenance tasks for the conditioning system.
+    Refactored to use the OpenAI Agents SDK for improved modularity and capabilities.
+    """
+    
+    def __init__(self, conditioning_system, reward_system=None):
+        # Initialize context
+        self.context = MaintenanceContext(conditioning_system, reward_system)
+        
         # Initialize agents
         self.balance_analysis_agent = self._create_balance_analysis_agent()
         self.trait_maintenance_agent = self._create_trait_maintenance_agent() 
         self.association_maintenance_agent = self._create_association_maintenance_agent()
         self.consolidation_agent = self._create_consolidation_agent()
         self.maintenance_orchestrator = self._create_maintenance_orchestrator()
-        
-        # Trace ID for linking traces
-        self.trace_group_id = f"maintenance_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         logger.info("Conditioning maintenance system initialized with Agents SDK integration")
     
@@ -252,8 +261,8 @@ class ConditioningMaintenanceSystem:
             Analysis of trait distribution
         """
         # Get all conditioning associations
-        classical_associations = self.conditioning_system.classical_associations
-        operant_associations = self.conditioning_system.operant_associations
+        classical_associations = ctx.context.conditioning_system.classical_associations
+        operant_associations = ctx.context.conditioning_system.operant_associations
         
         # Count trait references
         trait_counts = {}
@@ -336,7 +345,7 @@ class ConditioningMaintenanceSystem:
             Analysis of behavior distribution
         """
         # Get all operant associations
-        operant_associations = self.conditioning_system.operant_associations
+        operant_associations = ctx.context.conditioning_system.operant_associations
         
         # Behaviors are stimuli in operant associations
         behavior_counts = {}
@@ -582,7 +591,7 @@ class ConditioningMaintenanceSystem:
         """
         # Apply reinforcement via conditioning system
         try:
-            result = await self.conditioning_system.condition_personality_trait(
+            result = await ctx.context.conditioning_system.condition_personality_trait(
                 trait=trait,
                 value=adjustment,
                 context={"source": "maintenance_reinforcement"}
@@ -623,7 +632,7 @@ class ConditioningMaintenanceSystem:
         }
         
         # Check maintenance history for this trait
-        for entry in self.maintenance_history:
+        for entry in ctx.context.maintenance_history:
             if "reinforcement_results" in entry:
                 for reinforcement in entry.get("reinforcement_results", {}).get("reinforcements", []):
                     if reinforcement.get("trait") == trait:
@@ -737,7 +746,7 @@ class ConditioningMaintenanceSystem:
             Association details
         """
         # Get the appropriate association dictionary
-        associations = self.conditioning_system.classical_associations if association_type == "classical" else self.conditioning_system.operant_associations
+        associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
         
         if association_key not in associations:
             return {
@@ -786,7 +795,7 @@ class ConditioningMaintenanceSystem:
             Result of extinction
         """
         try:
-            result = await self.conditioning_system.apply_extinction(association_key, association_type)
+            result = await ctx.context.conditioning_system.apply_extinction(association_key, association_type)
             return result
         except Exception as e:
             logger.error(f"Error applying extinction to {association_type} association {association_key}: {e}")
@@ -812,7 +821,7 @@ class ConditioningMaintenanceSystem:
             Result of adjustment
         """
         # Get the appropriate association dictionary
-        associations = self.conditioning_system.classical_associations if association_type == "classical" else self.conditioning_system.operant_associations
+        associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
         
         if association_key not in associations:
             return {
@@ -846,7 +855,7 @@ class ConditioningMaintenanceSystem:
         candidates = []
         
         # Check classical associations
-        for key, association in self.conditioning_system.classical_associations.items():
+        for key, association in ctx.context.conditioning_system.classical_associations.items():
             # Calculate time since last reinforcement
             last_reinforced = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
             time_since_reinforcement = (datetime.datetime.now() - last_reinforced).total_seconds() / 86400.0  # Days
@@ -855,7 +864,7 @@ class ConditioningMaintenanceSystem:
             is_candidate = False
             reason = ""
             
-            if association.association_strength < self.extinction_threshold:
+            if association.association_strength < ctx.context.extinction_threshold:
                 is_candidate = True
                 reason = "strength_below_threshold"
             elif time_since_reinforcement > 30 and association.association_strength < 0.3:
@@ -872,7 +881,7 @@ class ConditioningMaintenanceSystem:
                 })
         
         # Check operant associations
-        for key, association in self.conditioning_system.operant_associations.items():
+        for key, association in ctx.context.conditioning_system.operant_associations.items():
             # Calculate time since last reinforcement
             last_reinforced = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
             time_since_reinforcement = (datetime.datetime.now() - last_reinforced).total_seconds() / 86400.0  # Days
@@ -881,7 +890,7 @@ class ConditioningMaintenanceSystem:
             is_candidate = False
             reason = ""
             
-            if association.association_strength < self.extinction_threshold:
+            if association.association_strength < ctx.context.extinction_threshold:
                 is_candidate = True
                 reason = "strength_below_threshold"
             elif time_since_reinforcement > 30 and association.association_strength < 0.3:
@@ -911,7 +920,7 @@ class ConditioningMaintenanceSystem:
         Returns:
             Groups of similar associations
         """
-        associations = self.conditioning_system.classical_associations if association_type == "classical" else self.conditioning_system.operant_associations
+        associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
         
         # Group associations by stimulus
         stimulus_groups = {}
@@ -974,7 +983,7 @@ class ConditioningMaintenanceSystem:
             Result of consolidation
         """
         association_type = group.get("association_type", "classical")
-        associations = self.conditioning_system.classical_associations if association_type == "classical" else self.conditioning_system.operant_associations
+        associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
         
         # Get associations from group
         group_associations = group.get("associations", [])
@@ -1086,7 +1095,7 @@ class ConditioningMaintenanceSystem:
             }
         
         # Calculate potential impact
-        total_associations = len(self.conditioning_system.classical_associations if association_type == "classical" else self.conditioning_system.operant_associations)
+        total_associations = len(ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations)
         potential_removals = sum(group.get("count", 0) - 1 for group in similar_groups)
         
         # Calculate efficiency gain
@@ -1125,9 +1134,9 @@ class ConditioningMaintenanceSystem:
         
         # Check if consolidation is due
         consolidation_due = False
-        if self.last_maintenance_time:
-            days_since_last = (now - self.last_maintenance_time).days
-            consolidation_due = days_since_last >= self.consolidation_interval_days
+        if ctx.context.last_maintenance_time:
+            days_since_last = (now - ctx.context.last_maintenance_time).days
+            consolidation_due = days_since_last >= ctx.context.consolidation_interval_days
         else:
             consolidation_due = True
         
@@ -1137,7 +1146,7 @@ class ConditioningMaintenanceSystem:
             priority=0.9,
             entity_id="all_associations",
             scheduled_time=now.isoformat(),
-            parameters={"extinction_threshold": self.extinction_threshold}
+            parameters={"extinction_threshold": ctx.context.extinction_threshold}
         ))
         
         # Add personality balance check
@@ -1155,7 +1164,7 @@ class ConditioningMaintenanceSystem:
             priority=0.7,
             entity_id="core_traits",
             scheduled_time=now.isoformat(),
-            parameters={"reinforcement_threshold": self.reinforcement_threshold}
+            parameters={"reinforcement_threshold": ctx.context.reinforcement_threshold}
         ))
         
         # Add consolidation if due
@@ -1184,8 +1193,8 @@ class ConditioningMaintenanceSystem:
         now = datetime.datetime.now()
         
         # Calculate time since last maintenance
-        if self.last_maintenance_time:
-            seconds_since_last = (now - self.last_maintenance_time).total_seconds()
+        if ctx.context.last_maintenance_time:
+            seconds_since_last = (now - ctx.context.last_maintenance_time).total_seconds()
             hours_since_last = seconds_since_last / 3600
             days_since_last = hours_since_last / 24
         else:
@@ -1194,8 +1203,8 @@ class ConditioningMaintenanceSystem:
             days_since_last = None
         
         # Calculate next scheduled maintenance
-        if self.last_maintenance_time:
-            next_maintenance = self.last_maintenance_time + datetime.timedelta(hours=self.maintenance_interval_hours)
+        if ctx.context.last_maintenance_time:
+            next_maintenance = ctx.context.last_maintenance_time + datetime.timedelta(hours=ctx.context.maintenance_interval_hours)
             hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
         else:
             next_maintenance = None
@@ -1206,21 +1215,21 @@ class ConditioningMaintenanceSystem:
         
         # Check if consolidation is due
         consolidation_due = False
-        if self.last_maintenance_time:
-            consolidation_due = days_since_last is not None and days_since_last >= self.consolidation_interval_days
+        if ctx.context.last_maintenance_time:
+            consolidation_due = days_since_last is not None and days_since_last >= ctx.context.consolidation_interval_days
         else:
             consolidation_due = True
         
         return {
-            "last_maintenance_time": self.last_maintenance_time.isoformat() if self.last_maintenance_time else None,
+            "last_maintenance_time": ctx.context.last_maintenance_time.isoformat() if ctx.context.last_maintenance_time else None,
             "hours_since_last_maintenance": hours_since_last,
             "next_scheduled_maintenance": next_maintenance.isoformat() if next_maintenance else None,
             "hours_until_next_maintenance": hours_until_next,
             "maintenance_due": maintenance_due,
             "consolidation_due": consolidation_due,
-            "maintenance_interval_hours": self.maintenance_interval_hours,
-            "consolidation_interval_days": self.consolidation_interval_days,
-            "maintenance_history_count": len(self.maintenance_history)
+            "maintenance_interval_hours": ctx.context.maintenance_interval_hours,
+            "consolidation_interval_days": ctx.context.consolidation_interval_days,
+            "maintenance_history_count": len(ctx.context.maintenance_history)
         }
     
     @function_tool
@@ -1240,17 +1249,17 @@ class ConditioningMaintenanceSystem:
             maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
         
         # Add to history
-        self.maintenance_history.append(maintenance_record)
+        ctx.context.maintenance_history.append(maintenance_record)
         
         # Trim history if needed
-        if len(self.maintenance_history) > self.max_history_entries:
-            self.maintenance_history = self.maintenance_history[-self.max_history_entries:]
+        if len(ctx.context.maintenance_history) > ctx.context.max_history_entries:
+            ctx.context.maintenance_history = ctx.context.maintenance_history[-ctx.context.max_history_entries:]
         
         return {
             "success": True,
-            "history_count": len(self.maintenance_history),
-            "max_history_entries": self.max_history_entries,
-            "latest_entry_timestamp": self.maintenance_history[-1].get("timestamp") if self.maintenance_history else None
+            "history_count": len(ctx.context.maintenance_history),
+            "max_history_entries": ctx.context.max_history_entries,
+            "latest_entry_timestamp": ctx.context.maintenance_history[-1].get("timestamp") if ctx.context.maintenance_history else None
         }
     
     @function_tool
@@ -1262,8 +1271,8 @@ class ConditioningMaintenanceSystem:
             System efficiency analysis
         """
         # Get association counts
-        classical_count = len(self.conditioning_system.classical_associations)
-        operant_count = len(self.conditioning_system.operant_associations)
+        classical_count = len(ctx.context.conditioning_system.classical_associations)
+        operant_count = len(ctx.context.conditioning_system.operant_associations)
         total_count = classical_count + operant_count
         
         # Calculate efficiency metrics
@@ -1271,15 +1280,15 @@ class ConditioningMaintenanceSystem:
         
         # Density: ratio of reinforcement count to association count
         # Higher density means stronger, more frequently reinforced associations
-        total_reinforcements = sum(assoc.reinforcement_count for assoc in self.conditioning_system.classical_associations.values()) + \
-                              sum(assoc.reinforcement_count for assoc in self.conditioning_system.operant_associations.values())
+        total_reinforcements = sum(assoc.reinforcement_count for assoc in ctx.context.conditioning_system.classical_associations.values()) + \
+                              sum(assoc.reinforcement_count for assoc in ctx.context.conditioning_system.operant_associations.values())
         
         density = total_reinforcements / total_count if total_count > 0 else 0.0
         metrics["reinforcement_density"] = density
         
         # Strength quality: average association strength
-        total_strength = sum(assoc.association_strength for assoc in self.conditioning_system.classical_associations.values()) + \
-                        sum(assoc.association_strength for assoc in self.conditioning_system.operant_associations.values())
+        total_strength = sum(assoc.association_strength for assoc in ctx.context.conditioning_system.classical_associations.values()) + \
+                        sum(assoc.association_strength for assoc in ctx.context.conditioning_system.operant_associations.values())
         
         avg_strength = total_strength / total_count if total_count > 0 else 0.0
         metrics["average_strength"] = avg_strength
@@ -1317,25 +1326,25 @@ class ConditioningMaintenanceSystem:
     
     async def start_maintenance_scheduler(self):
         """Start the periodic maintenance scheduler"""
-        if self.maintenance_task is not None:
+        if self.context.maintenance_task is not None:
             logger.warning("Maintenance scheduler already running")
             return
         
-        self.maintenance_task = asyncio.create_task(self._maintenance_loop())
+        self.context.maintenance_task = asyncio.create_task(self._maintenance_loop())
         logger.info("Maintenance scheduler started")
     
     async def stop_maintenance_scheduler(self):
         """Stop the periodic maintenance scheduler"""
-        if self.maintenance_task is None:
+        if self.context.maintenance_task is None:
             logger.warning("Maintenance scheduler not running")
             return
         
-        self.maintenance_task.cancel()
+        self.context.maintenance_task.cancel()
         try:
-            await self.maintenance_task
+            await self.context.maintenance_task
         except asyncio.CancelledError:
             pass
-        self.maintenance_task = None
+        self.context.maintenance_task = None
         logger.info("Maintenance scheduler stopped")
     
     async def _maintenance_loop(self):
@@ -1349,8 +1358,8 @@ class ConditioningMaintenanceSystem:
                     logger.error(f"Error in maintenance run: {e}")
                 
                 # Sleep until next maintenance
-                sleep_seconds = self.maintenance_interval_hours * 3600
-                logger.info(f"Next maintenance scheduled in {self.maintenance_interval_hours} hours")
+                sleep_seconds = self.context.maintenance_interval_hours * 3600
+                logger.info(f"Next maintenance scheduled in {self.context.maintenance_interval_hours} hours")
                 await asyncio.sleep(sleep_seconds)
         except asyncio.CancelledError:
             logger.info("Maintenance loop cancelled")
@@ -1363,7 +1372,7 @@ class ConditioningMaintenanceSystem:
         Returns:
             Maintenance results
         """
-        with trace(workflow_name="conditioning_maintenance", group_id=self.trace_group_id):
+        with trace(workflow_name="conditioning_maintenance", group_id=self.context.trace_group_id):
             logger.info("Starting conditioning system maintenance")
             start_time = datetime.datetime.now()
             
@@ -1372,12 +1381,13 @@ class ConditioningMaintenanceSystem:
                 result = await Runner.run(
                     self.maintenance_orchestrator,
                     json.dumps({
-                        "last_maintenance_time": self.last_maintenance_time.isoformat() if self.last_maintenance_time else None,
-                        "interval_hours": self.maintenance_interval_hours,
-                        "consolidation_interval_days": self.consolidation_interval_days,
-                        "extinction_threshold": self.extinction_threshold,
-                        "reinforcement_threshold": self.reinforcement_threshold
-                    })
+                        "last_maintenance_time": self.context.last_maintenance_time.isoformat() if self.context.last_maintenance_time else None,
+                        "interval_hours": self.context.maintenance_interval_hours,
+                        "consolidation_interval_days": self.context.consolidation_interval_days,
+                        "extinction_threshold": self.context.extinction_threshold,
+                        "reinforcement_threshold": self.context.reinforcement_threshold
+                    }),
+                    context=self.context
                 )
                 
                 # Get summary output
@@ -1387,11 +1397,11 @@ class ConditioningMaintenanceSystem:
                 duration = (datetime.datetime.now() - start_time).total_seconds()
                 
                 # Update last maintenance time
-                self.last_maintenance_time = datetime.datetime.now()
+                self.context.last_maintenance_time = datetime.datetime.now()
                 
                 # Create maintenance record
                 maintenance_record = {
-                    "timestamp": self.last_maintenance_time.isoformat(),
+                    "timestamp": self.context.last_maintenance_time.isoformat(),
                     "duration_seconds": duration,
                     "tasks_performed": summary_output.tasks_performed,
                     "associations_modified": summary_output.associations_modified,
@@ -1402,7 +1412,7 @@ class ConditioningMaintenanceSystem:
                 }
                 
                 # Update maintenance history
-                await self._record_maintenance_history(RunContextWrapper(context=None), maintenance_record)
+                await self._record_maintenance_history(RunContextWrapper(context=self.context), maintenance_record)
                 
                 logger.info(f"Conditioning system maintenance completed in {duration:.2f} seconds")
                 return maintenance_record
@@ -1419,12 +1429,13 @@ class ConditioningMaintenanceSystem:
     
     async def _check_personality_balance(self) -> Dict[str, Any]:
         """Check if personality traits are balanced"""
-        with trace(workflow_name="personality_balance_check", group_id=self.trace_group_id):
+        with trace(workflow_name="personality_balance_check", group_id=self.context.trace_group_id):
             try:
                 # Run the balance analysis agent
                 result = await Runner.run(
                     self.balance_analysis_agent,
-                    json.dumps({})
+                    json.dumps({}),
+                    context=self.context
                 )
                 
                 analysis_output = result.final_output
@@ -1448,7 +1459,7 @@ class ConditioningMaintenanceSystem:
     
     async def _reinforce_core_traits(self, personality_balance: Dict[str, Any]) -> Dict[str, Any]:
         """Reinforce core personality traits if needed"""
-        with trace(workflow_name="trait_reinforcement", group_id=self.trace_group_id):
+        with trace(workflow_name="trait_reinforcement", group_id=self.context.trace_group_id):
             # Define core traits and their ideal values
             core_traits = {
                 "dominance": 0.8,
@@ -1466,7 +1477,7 @@ class ConditioningMaintenanceSystem:
                     behavior = imbalance.get("behavior")
                     
                     # Apply a mild negative reinforcement to reduce dominance
-                    result = await self.conditioning_system.process_operant_conditioning(
+                    result = await self.context.conditioning_system.process_operant_conditioning(
                         behavior=behavior,
                         consequence_type="negative_punishment",  # Remove positive reinforcement
                         intensity=0.3,  # Mild effect
@@ -1485,7 +1496,7 @@ class ConditioningMaintenanceSystem:
                 # Only reinforce traits that should be strong (value >= 0.6)
                 if value >= 0.6:
                     # Use a mild reinforcement to maintain the trait
-                    result = await self.conditioning_system.condition_personality_trait(
+                    result = await self.context.conditioning_system.condition_personality_trait(
                         trait=trait,
                         value=value * 0.3,  # Scale down to avoid overreinforcement
                         context={"source": "maintenance_reinforcement"}
@@ -1506,12 +1517,13 @@ class ConditioningMaintenanceSystem:
     
     async def _consolidate_associations(self) -> Dict[str, Any]:
         """Consolidate similar associations"""
-        with trace(workflow_name="association_consolidation", group_id=self.trace_group_id):
+        with trace(workflow_name="association_consolidation", group_id=self.context.trace_group_id):
             try:
                 # Run the consolidation agent
                 result = await Runner.run(
                     self.consolidation_agent,
-                    json.dumps({})
+                    json.dumps({}),
+                    context=self.context
                 )
                 
                 consolidation_output = result.final_output
@@ -1532,17 +1544,17 @@ class ConditioningMaintenanceSystem:
     
     async def get_maintenance_stats(self) -> Dict[str, Any]:
         """Get maintenance statistics"""
-        status = await self._get_maintenance_status(RunContextWrapper(context=None))
+        status = await self._get_maintenance_status(RunContextWrapper(context=self.context))
         
         return {
             "last_maintenance_time": status.get("last_maintenance_time"),
-            "maintenance_count": len(self.maintenance_history),
-            "maintenance_interval_hours": self.maintenance_interval_hours,
-            "extinction_threshold": self.extinction_threshold,
-            "reinforcement_threshold": self.reinforcement_threshold,
-            "consolidation_interval_days": self.consolidation_interval_days,
-            "task_running": self.maintenance_task is not None,
-            "recent_history": self.maintenance_history[-5:] if self.maintenance_history else [],
+            "maintenance_count": len(self.context.maintenance_history),
+            "maintenance_interval_hours": self.context.maintenance_interval_hours,
+            "extinction_threshold": self.context.extinction_threshold,
+            "reinforcement_threshold": self.context.reinforcement_threshold,
+            "consolidation_interval_days": self.context.consolidation_interval_days,
+            "task_running": self.context.maintenance_task is not None,
+            "recent_history": self.context.maintenance_history[-5:] if self.context.maintenance_history else [],
             "next_scheduled_maintenance": status.get("next_scheduled_maintenance"),
             "hours_until_next_maintenance": status.get("hours_until_next_maintenance"),
             "maintenance_due": status.get("maintenance_due", False)
