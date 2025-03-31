@@ -7,6 +7,9 @@ import logging
 from typing import Dict, Any, Optional
 from functools import wraps
 
+# Import database connections
+from db.connection import get_db_connection_context
+
 logger = logging.getLogger(__name__)
 
 # Request metrics
@@ -175,13 +178,26 @@ def record_cache_operation(cache_type: str, hit: bool, size_bytes: Optional[int]
     if size_bytes is not None:
         CACHE_SIZE.labels(cache_type=cache_type).set(size_bytes)
 
-def get_current_metrics() -> Dict[str, Any]:
+async def get_current_metrics() -> Dict[str, Any]:
     """Get current values for all metrics."""
+    # Get DB connection count
+    db_connection_count = 0
+    try:
+        async with get_db_connection_context() as conn:
+            result = await conn.fetchrow("SELECT COUNT(*) FROM pg_stat_activity")
+            if result and result[0]:
+                db_connection_count = result[0]
+    except Exception as e:
+        logger.error(f"Error getting DB connection count: {e}")
+    
+    # Update DB_CONNECTION_COUNT gauge
+    DB_CONNECTION_COUNT.set(db_connection_count)
+    
     return {
         "system": {
             "memory_usage_bytes": SYSTEM_MEMORY_USAGE._value.get(),
             "cpu_usage_percent": SYSTEM_CPU_USAGE._value.get(),
-            "db_connections": DB_CONNECTION_COUNT._value.get()
+            "db_connections": db_connection_count
         },
         "requests": {
             "total": sum(REQUEST_COUNT._metrics.values()),
@@ -199,4 +215,4 @@ def get_current_metrics() -> Dict[str, Any]:
             "hits": sum(CACHE_HIT_COUNT._metrics.values()),
             "misses": sum(CACHE_MISS_COUNT._metrics.values())
         }
-    } 
+    }
