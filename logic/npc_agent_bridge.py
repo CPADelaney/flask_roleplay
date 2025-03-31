@@ -7,14 +7,14 @@ This provides compatibility and a smooth transition path.
 
 import logging
 import asyncio
+import asyncpg
 from typing import Dict, List, Any, Optional
 
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from logic.npc_agents import NPCAgentSystem  # Your existing NPC system
+from db.connection import get_db_connection_context
 
 from agents import Agent, function_tool, Runner, ModelSettings, trace
-from logic.fully_integrated_npc_system import IntegratedNPCSystem
-from logic.npc_agents import NPCAgentSystem
 
 class NPCSystemBridge:
     """
@@ -96,37 +96,35 @@ class NPCSystemBridge:
         Returns:
             List of relationship link data
         """
-        from db.connection import get_db_connection
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        links = []
         try:
-            cursor.execute("""
-                SELECT link_id, link_type, link_level
-                FROM SocialLinks
-                WHERE user_id=%s AND conversation_id=%s
-                AND ((entity1_type='player' AND entity1_id=%s AND entity2_type='npc' AND entity2_id=%s)
-                OR (entity1_type='npc' AND entity1_id=%s AND entity2_type='player' AND entity2_id=%s))
-            """, (
-                self.user_id, self.conversation_id,
-                self.user_id, npc_id,
-                npc_id, self.user_id
-            ))
-            
-            links = []
-            for row in cursor.fetchall():
-                link_id, link_type, link_level = row
-                links.append({
-                    "link_id": link_id,
-                    "link_type": link_type,
-                    "link_level": link_level
-                })
-            
-            return links
-        finally:
-            cursor.close()
-            conn.close()
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT link_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id=$1 AND conversation_id=$2
+                    AND ((entity1_type='player' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
+                    OR (entity1_type='npc' AND entity1_id=$4 AND entity2_type='player' AND entity2_id=$3))
+                """, 
+                    self.user_id, self.conversation_id,
+                    self.user_id, npc_id
+                )
+                
+                for row in rows:
+                    links.append({
+                        "link_id": row['link_id'],
+                        "link_type": row['link_type'],
+                        "link_level": row['link_level']
+                    })
+                
+                return links
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error getting relationship links: {db_err}", exc_info=True)
+            return []
+        except Exception as e:
+            logging.error(f"Error getting relationship links: {e}", exc_info=True)
+            return []
     
     async def create_new_npc(self, environment_desc: str, day_names: List[str] = None) -> int:
         """
