@@ -1,7 +1,10 @@
+# routes/npc_routes.py
+
 from flask import Blueprint, request, jsonify
 from flasgger import swag_from
 from npcs.npc_creation import NPCCreationHandler
 from middleware.error_handling import create_error_response
+from db.connection import get_db_connection_context
 
 npc_bp = Blueprint('npc_bp', __name__)
 
@@ -68,12 +71,12 @@ npc_bp = Blueprint('npc_bp', __name__)
         }
     }
 })
-def create_npc():
+async def create_npc():
     """Create a new NPC."""
     try:
         data = request.get_json()
         handler = NPCCreationHandler()
-        npc = handler.create_npc(data)
+        npc = await handler.create_npc(data)
         
         return jsonify({
             'success': True,
@@ -140,11 +143,11 @@ def create_npc():
         }
     }
 })
-def get_npc(npc_id):
+async def get_npc(npc_id):
     """Get NPC details by ID."""
     try:
         handler = NPCCreationHandler()
-        npc = handler.get_npc(npc_id)
+        npc = await handler.get_npc(npc_id)
         
         if not npc:
             return create_error_response("NPC not found", status_code=404)
@@ -154,4 +157,4 @@ def get_npc(npc_id):
             'npc': npc.to_dict()
         })
     except Exception as e:
-        return create_error_response(e) 
+        return create_error_response(e)
