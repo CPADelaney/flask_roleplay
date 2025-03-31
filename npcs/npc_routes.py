@@ -13,6 +13,9 @@ from .system import NPCAgentSystem
 from .relationship import NPCRelationshipManager
 from .handler import NPCInteractionHandler
 
+# Change the import to use the async version
+from db.connection import get_db_connection_context
+
 router = APIRouter(prefix="/npcs", tags=["NPCs"])
 
 # Input models
@@ -112,9 +115,8 @@ def get_npc_interaction_handler():
 def get_npc_coordinator(user_id: int, conversation_id: int):
     return NPCAgentCoordinator(user_id, conversation_id)
 
-def get_npc_system(user_id: int, conversation_id: int):
-    # You'll need to adapt this for your specific implementation
-    # For example, you might need a connection pool
+async def get_npc_system(user_id: int, conversation_id: int):
+    # Updated to use async connection
     return NPCAgentSystem(user_id, conversation_id, None)
 
 async def create_npc_background(
@@ -312,7 +314,7 @@ async def interact_with_npc(
     """
     try:
         # Process the interaction
-        response = await interaction_handler.handle_npc_interaction(
+        response = await interaction_handler.handle_interaction(
             npc_id=npc_id,
             interaction_type=request.interaction_type,
             player_input=request.player_input,
@@ -418,7 +420,7 @@ async def process_daily_activities(
     """
     try:
         # Get NPC system
-        system = get_npc_system(request.user_id, request.conversation_id)
+        system = await get_npc_system(request.user_id, request.conversation_id)
         
         # Process activities
         result = await system.process_daily_npc_activities()
@@ -437,13 +439,15 @@ async def get_nearby_npcs(
     user_id: int,
     conversation_id: int,
     location: Optional[str] = None,
-    limit: int = 5,
-    system = Depends(get_npc_system)
+    limit: int = 5
 ):
     """
     Get NPCs that are at a specific location.
     """
     try:
+        # Get NPC system
+        system = await get_npc_system(user_id, conversation_id)
+        
         # Get nearby NPCs
         npcs = await system.get_nearby_npcs(location=location)
         
