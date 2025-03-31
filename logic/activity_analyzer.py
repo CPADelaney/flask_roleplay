@@ -3,7 +3,8 @@
 import logging
 import json
 import re
-from db.connection import get_db_connection
+import asyncio
+from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response
 from logic.resource_management import ResourceManager
 
@@ -106,102 +107,93 @@ class ActivityAnalyzer:
     
     async def _get_existing_effects(self, activity_type, activity_details):
         """Get existing effects for this activity from the database."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Try to find an exact match first
-            cursor.execute("""
-                SELECT effects, description, flags
-                FROM ActivityEffects
-                WHERE user_id=%s AND conversation_id=%s
-                  AND activity_name=%s AND activity_details=%s
-                LIMIT 1
-            """, (self.user_id, self.conversation_id, activity_type, activity_details))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                effects_json, description, flags_json = row
+            async with get_db_connection_context() as conn:
+                # Try to find an exact match first
+                row = await conn.fetchrow("""
+                    SELECT effects, description, flags
+                    FROM ActivityEffects
+                    WHERE user_id=$1 AND conversation_id=$2
+                      AND activity_name=$3 AND activity_details=$4
+                    LIMIT 1
+                """, self.user_id, self.conversation_id, activity_type, activity_details)
                 
-                try:
-                    effects = json.loads(effects_json) if isinstance(effects_json, str) else effects_json
-                    flags = json.loads(flags_json) if isinstance(flags_json, str) and flags_json else {}
-                except json.JSONDecodeError:
-                    effects = {}
-                    flags = {}
+                if row:
+                    effects_json, description, flags_json = row['effects'], row['description'], row['flags']
+                    
+                    try:
+                        effects = json.loads(effects_json) if isinstance(effects_json, str) else effects_json
+                        flags = json.loads(flags_json) if isinstance(flags_json, str) and flags_json else {}
+                    except json.JSONDecodeError:
+                        effects = {}
+                        flags = {}
+                    
+                    return {
+                        "activity_type": activity_type,
+                        "activity_details": activity_details,
+                        "effects": effects,
+                        "description": description,
+                        "flags": flags
+                    }
                 
-                return {
-                    "activity_type": activity_type,
-                    "activity_details": activity_details,
-                    "effects": effects,
-                    "description": description,
-                    "flags": flags
-                }
-            
-            # If no exact match, try to find a partial match
-            # For example, if we're looking for "hamburger with fries",
-            # we might find "hamburger" as a partial match
-            cursor.execute("""
-                SELECT activity_details, effects, description, flags
-                FROM ActivityEffects
-                WHERE user_id=%s AND conversation_id=%s
-                  AND activity_name=%s 
-                  AND %s LIKE CONCAT('%%', activity_details, '%%')
-                ORDER BY LENGTH(activity_details) DESC
-                LIMIT 1
-            """, (self.user_id, self.conversation_id, activity_type, activity_details))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                details, effects_json, description, flags_json = row
+                # If no exact match, try to find a partial match
+                # For example, if we're looking for "hamburger with fries",
+                # we might find "hamburger" as a partial match
+                rows = await conn.fetch("""
+                    SELECT activity_details, effects, description, flags
+                    FROM ActivityEffects
+                    WHERE user_id=$1 AND conversation_id=$2
+                      AND activity_name=$3 
+                      AND $4 LIKE CONCAT('%', activity_details, '%')
+                    ORDER BY LENGTH(activity_details) DESC
+                    LIMIT 1
+                """, self.user_id, self.conversation_id, activity_type, activity_details)
                 
-                try:
-                    effects = json.loads(effects_json) if isinstance(effects_json, str) else effects_json
-                    flags = json.loads(flags_json) if isinstance(flags_json, str) and flags_json else {}
-                except json.JSONDecodeError:
-                    effects = {}
-                    flags = {}
+                if rows:
+                    row = rows[0]
+                    details, effects_json, description, flags_json = row['activity_details'], row['effects'], row['description'], row['flags']
+                    
+                    try:
+                        effects = json.loads(effects_json) if isinstance(effects_json, str) else effects_json
+                        flags = json.loads(flags_json) if isinstance(flags_json, str) and flags_json else {}
+                    except json.JSONDecodeError:
+                        effects = {}
+                        flags = {}
+                    
+                    return {
+                        "activity_type": activity_type,
+                        "activity_details": details,  # Use the matching details
+                        "effects": effects,
+                        "description": description,
+                        "flags": flags
+                    }
                 
-                return {
-                    "activity_type": activity_type,
-                    "activity_details": details,  # Use the matching details
-                    "effects": effects,
-                    "description": description,
-                    "flags": flags
-                }
-            
+                return None
+                
+        except Exception as e:
+            logging.error(f"Error getting existing effects: {e}")
             return None
-            
-        finally:
-            cursor.close()
-            conn.close()
     
     async def _get_setting_context(self):
         """Get the current setting context for better activity analysis."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                SELECT value 
-                FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='EnvironmentDesc'
-                LIMIT 1
-            """, (self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                return row[0]
-            
-            # Fallback
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT value 
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    return row['value']
+                
+                # Fallback
+                return "A modern setting with typical resources and activities."
+                
+        except Exception as e:
+            logging.error(f"Error getting setting context: {e}")
             return "A modern setting with typical resources and activities."
-            
-        finally:
-            cursor.close()
-            conn.close()
     
     async def _generate_activity_effects(self, activity_text, activity_type, activity_details, setting_context):
         """
@@ -327,39 +319,30 @@ class ActivityAnalyzer:
     
     async def _store_activity_effects(self, activity_type, activity_details, setting_context, effects):
         """Store the activity effects in the database for future reference."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Extract the components we need
-            resource_changes = effects.get("resource_changes", {})
-            description = effects.get("description", f"Effects of {activity_type} {activity_details}")
-            flags = effects.get("flags", {})
-            
-            cursor.execute("""
-                INSERT INTO ActivityEffects 
-                (user_id, conversation_id, activity_name, activity_details, 
-                 setting_context, effects, description, flags)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, conversation_id, activity_name, activity_details)
-                DO UPDATE SET 
-                    effects = EXCLUDED.effects,
-                    description = EXCLUDED.description,
-                    flags = EXCLUDED.flags,
-                    updated_at = CURRENT_TIMESTAMP
-            """, (
+            async with get_db_connection_context() as conn:
+                # Extract the components we need
+                resource_changes = effects.get("resource_changes", {})
+                description = effects.get("description", f"Effects of {activity_type} {activity_details}")
+                flags = effects.get("flags", {})
+                
+                await conn.execute("""
+                    INSERT INTO ActivityEffects 
+                    (user_id, conversation_id, activity_name, activity_details, 
+                     setting_context, effects, description, flags)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (user_id, conversation_id, activity_name, activity_details)
+                    DO UPDATE SET 
+                        effects = EXCLUDED.effects,
+                        description = EXCLUDED.description,
+                        flags = EXCLUDED.flags,
+                        updated_at = CURRENT_TIMESTAMP
+                """, 
                 self.user_id, self.conversation_id, activity_type, activity_details,
-                setting_context, json.dumps(resource_changes), description, json.dumps(flags)
-            ))
-            
-            conn.commit()
-            
+                setting_context, json.dumps(resource_changes), description, json.dumps(flags))
+                
         except Exception as e:
-            conn.rollback()
             logging.error(f"Error storing activity effects: {e}")
-        finally:
-            cursor.close()
-            conn.close()
     
     async def _apply_resource_effects(self, effects):
         """
