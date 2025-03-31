@@ -2,15 +2,15 @@
 
 import json
 import logging
+import asyncio
 import asyncpg
-import openai
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
 
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
 
-def get_chatgpt_response_no_function(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
+async def get_chatgpt_response_no_function(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
     """
     A local version of the GPT call that does not enforce a function call.
     Returns a plain text response.
@@ -33,7 +33,7 @@ def get_chatgpt_response_no_function(conversation_id: int, aggregator_text: str,
          "tokens_used": tokens_used
     }
 
-def generate_calendar_names(environment_desc, conversation_id):
+async def generate_calendar_names(environment_desc, conversation_id):
     """
     Use GPT to generate immersive calendar names for the in-game time system.
     
@@ -58,7 +58,7 @@ def generate_calendar_names(environment_desc, conversation_id):
     
     logging.info("Calling GPT for calendar names with prompt:\n%s", prompt)
     # Use the no-function variant for calendar names.
-    gpt_response = get_chatgpt_response_no_function(conversation_id, environment_desc, prompt)
+    gpt_response = await get_chatgpt_response_no_function(conversation_id, environment_desc, prompt)
     logging.info("GPT calendar naming response: %s", gpt_response)
     
     calendar_names = {}
@@ -84,36 +84,25 @@ def generate_calendar_names(environment_desc, conversation_id):
     
     return calendar_names
 
-async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: list):
+async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: dict):
     """
     Asynchronously stores the generated calendar names in the CurrentRoleplay table
     under the key 'CalendarNames'. This ensures consistency throughout your game.
     """
     try:
         # Convert data to JSON string *before* the DB operation
-        # Note: asyncpg can often handle Python lists/dicts directly if the column type is JSON/JSONB
-        # Check your table schema. If 'value' is JSON/JSONB, you might not need json.dumps here.
-        # Assuming 'value' is TEXT or VARCHAR for this example:
+        # Note: asyncpg can often handle Python objects directly if the column type is JSON/JSONB
         value_json = json.dumps(calendar_names)
 
-        # Use 'async with' to get a connection from the pool
+        # Use async context manager for database connection
         async with get_db_connection_context() as conn:
-            # conn is an asyncpg.Connection
-
-            # Use await conn.execute() and $1, $2, $3 placeholders
-            # INSERT/UPDATE operations don't typically return results, just execute
+            # Execute with asyncpg connection
             await conn.execute("""
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
                 VALUES ($1, $2, 'CalendarNames', $3)
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value = EXCLUDED.value
             """, user_id, conversation_id, value_json)
-
-            # No explicit commit needed for single statements with asyncpg unless inside an explicit transaction block.
-            # If you needed multiple operations to be atomic, you'd wrap them:
-            # async with conn.transaction():
-            #     await conn.execute(...)
-            #     await conn.execute(...)
 
             logging.info(f"Stored CalendarNames successfully for user {user_id}, convo {conversation_id}.")
 
@@ -124,40 +113,33 @@ async def store_calendar_names(user_id: int, conversation_id: int, calendar_name
             f"Database error storing CalendarNames for user {user_id}, convo {conversation_id}: {db_err}",
             exc_info=True
         )
-        # Depending on your application flow, you might want to raise the error
-        # raise db_err
     except ConnectionError as pool_err:
-        # Log errors acquiring connection from pool (e.g., pool not initialized)
+        # Log errors acquiring connection from pool
         logging.error(
             f"DB Pool error storing CalendarNames for user {user_id}, convo {conversation_id}: {pool_err}",
             exc_info=True
         )
-        # raise pool_err
     except asyncio.TimeoutError:
         # Log errors if acquiring a connection times out
         logging.error(
             f"Timeout acquiring DB connection storing CalendarNames for user {user_id}, convo {conversation_id}.",
             exc_info=True
         )
-        # raise asyncio.TimeoutError
     except Exception as e:
-        # Catch any other unexpected errors (like JSON serialization issues, though less likely here)
-        logging.exception( # Use logger.exception to include traceback automatically
+        # Catch any other unexpected errors (like JSON serialization issues)
+        logging.exception(
             f"Unexpected error storing calendar names for user {user_id}, convo {conversation_id}: {e}"
         )
-        # raise e
-    # finally block is no longer needed for closing connection/cursor
 
 async def update_calendar_names(user_id, conversation_id, environment_desc) -> dict:
     """
     Generates immersive calendar names based on the provided environment description,
     stores them, and returns the resulting dictionary.
     """
-    calendar_names = generate_calendar_names(environment_desc, conversation_id)
-    store_calendar_names(user_id, conversation_id, calendar_names)
+    calendar_names = await generate_calendar_names(environment_desc, conversation_id)
+    await store_calendar_names(user_id, conversation_id, calendar_names)
     return calendar_names
 
-# Refactored async code
 async def load_calendar_names(user_id, conversation_id):
     """
     Retrieves the calendar names (year_name, months, days) 
