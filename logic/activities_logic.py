@@ -1,15 +1,14 @@
 # logic/activities_logic.py
 
 import random
+import asyncio
 from db.connection import get_db_connection_context
 
-# Refactored async code
 async def get_all_activities():
     """Fetches all Activities from DB. Returns a list of dicts."""
     activities = []
     
     async with get_db_connection_context() as conn:
-        # Direct connection execution with asyncpg
         rows = await conn.fetch("""
             SELECT name, purpose, stat_integration, intensity_tiers, setting_variants
             FROM Activities
@@ -24,10 +23,10 @@ async def get_all_activities():
                 "intensity_tiers": r['intensity_tiers'],
                 "setting_variants": r['setting_variants']
             })
-            
+    
     return activities
 
-def filter_activities_for_npc(npc_archetypes=[], meltdown_level=0, user_stats=None, setting=""):
+async def filter_activities_for_npc(npc_archetypes=[], meltdown_level=0, user_stats=None, setting=""):
     """
     Grabs all Activities, then filters or weighs them by:
       - NPC archetypes (e.g. "Giantess", "Mommy Domme", etc.)
@@ -35,10 +34,10 @@ def filter_activities_for_npc(npc_archetypes=[], meltdown_level=0, user_stats=No
       - user stats or setting
     Returns a short random selection of e.g. 3–5 activities.
     """
-    all_acts = get_all_activities()
+    all_acts = await get_all_activities()
 
     # Example approach:
-    # 1) Create a "score" for each Activity based on how many relevant keywords match the NPC’s archetypes or setting
+    # 1) Create a "score" for each Activity based on how many relevant keywords match the NPC's archetypes or setting
     # 2) Possibly add a meltdown factor if meltdown_level > 3 => prefer extreme acts
     # 3) We'll keep it naive for demonstration: just partial matching.
 
@@ -107,4 +106,3 @@ def build_short_summary(activity):
         example_tier = activity["intensity_tiers"][0]  # just the first line
     # Combine
     return f"{name} -> {short_purpose} (e.g. {example_tier})"
-
