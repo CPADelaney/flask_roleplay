@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# npcs/npc_learning_adaptation.py
 
 """
 NPC Learning and Adaptation System
@@ -18,7 +18,8 @@ import random
 from typing import Dict, List, Any, Optional
 import json
 
-from data.npc_dal import NPCDataAccess
+# Update the import to use the new async connection context
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from nyx.nyx_governance import AgentType, DirectiveType, NyxGovernanceManager
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -545,32 +546,32 @@ class NPCLearningAdaptation:
             if new_intensity == current_intensity:
                 return False
             
-            # Update the database
-            success = await NPCDataAccess.update_npc_stat(
-                npc_id=self.npc_id,
-                stat_name="intensity",
-                new_value=new_intensity,
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
+            # Update the database - using the new async connection pattern
+            async with get_db_connection_context() as conn:
+                # Update the intensity value
+                await conn.execute(
+                    """
+                    UPDATE NPCStats
+                    SET intensity = $1
+                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                    """,
+                    new_intensity, self.npc_id, self.user_id, self.conversation_id
+                )
+            
+            # Log the change
+            logger.info(f"NPC {self.npc_id} intensity updated: {current_intensity} -> {new_intensity} ({reason})")
+            
+            # Create a memory of this change
+            await self.memory_system.remember(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                memory_text=f"I adjusted my dominance intensity from {current_intensity} to {new_intensity}. {reason}",
+                importance="medium",
+                tags=["adaptation", "intensity_change"],
+                emotional=True
             )
             
-            if success:
-                # Log the change
-                logger.info(f"NPC {self.npc_id} intensity updated: {current_intensity} -> {new_intensity} ({reason})")
-                
-                # Create a memory of this change
-                await self.memory_system.remember(
-                    entity_type="npc",
-                    entity_id=self.npc_id,
-                    memory_text=f"I adjusted my dominance intensity from {current_intensity} to {new_intensity}. {reason}",
-                    importance="medium",
-                    tags=["adaptation", "intensity_change"],
-                    emotional=True
-                )
-                
-                return True
-            
-            return False
+            return True
             
         except Exception as e:
             logger.error(f"Error updating NPC intensity: {e}")
@@ -586,21 +587,21 @@ class NPCLearningAdaptation:
             if new_value == current_value:
                 return False
             
-            # Update the database
-            success = await NPCDataAccess.update_npc_stat(
-                npc_id=self.npc_id,
-                stat_name=stat_name,
-                new_value=new_value,
-                user_id=self.user_id,
-                conversation_id=self.conversation_id
-            )
+            # Update the database - using the new async connection pattern
+            async with get_db_connection_context() as conn:
+                # Update the stat value
+                await conn.execute(
+                    f"""
+                    UPDATE NPCStats
+                    SET {stat_name} = $1
+                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                    """,
+                    new_value, self.npc_id, self.user_id, self.conversation_id
+                )
             
-            if success:
-                # Log the change
-                logger.info(f"NPC {self.npc_id} {stat_name} updated: {current_value} -> {new_value}")
-                return True
-            
-            return False
+            # Log the change
+            logger.info(f"NPC {self.npc_id} {stat_name} updated: {current_value} -> {new_value}")
+            return True
             
         except Exception as e:
             logger.error(f"Error updating NPC stat {stat_name}: {e}")
@@ -623,6 +624,78 @@ class NPCLearningAdaptation:
                 tags=["learning", "adaptation"],
                 emotional=True
             )
+
+
+# Define the NPCDataAccess class with async DB methods
+class NPCDataAccess:
+    """Data access methods for NPC data"""
+    
+    @staticmethod
+    async def get_npc_details(npc_id: int, user_id: int, conversation_id: int) -> Dict[str, Any]:
+        """Get NPC details from the database."""
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, personality_traits,
+                           intensity, scheming_level, betrayal_planning
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """,
+                    npc_id, user_id, conversation_id
+                )
+                
+                if row:
+                    # Process personality traits
+                    personality_traits = []
+                    raw_traits = row['personality_traits']
+                    if raw_traits:
+                        try:
+                            if isinstance(raw_traits, list):
+                                personality_traits = raw_traits
+                            elif isinstance(raw_traits, str):
+                                personality_traits = json.loads(raw_traits)
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"Failed to parse personality_traits for NPC {npc_id}: {e}")
+                    
+                    return {
+                        "npc_id": row["npc_id"],
+                        "npc_name": row["npc_name"],
+                        "dominance": row["dominance"],
+                        "cruelty": row["cruelty"],
+                        "intensity": row["intensity"],
+                        "scheming_level": row.get("scheming_level", 0),
+                        "betrayal_planning": row.get("betrayal_planning", False),
+                        "personality_traits": personality_traits
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Error getting NPC details: {e}")
+            return None
+    
+    @staticmethod
+    async def update_npc_stat(
+        npc_id: int, 
+        stat_name: str, 
+        new_value: float, 
+        user_id: int, 
+        conversation_id: int
+    ) -> bool:
+        """Update a specific NPC stat in the database."""
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    f"""
+                    UPDATE NPCStats
+                    SET {stat_name} = $1
+                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                    """,
+                    new_value, npc_id, user_id, conversation_id
+                )
+                return True
+        except Exception as e:
+            logger.error(f"Error updating NPC stat {stat_name}: {e}")
+            return False
 
 
 class NPCLearningManager:
