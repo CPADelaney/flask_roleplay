@@ -8,11 +8,16 @@ from IntegratedNPCSystem with the existing game social links.
 import logging
 import json
 import random
+import asyncio
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
+import asyncpg  # Explicitly import for error types
+
 from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
+
+logger = logging.getLogger(__name__)  # Added logger definition
 
 class RelationshipIntegration:
     """
@@ -315,7 +320,6 @@ class RelationshipIntegration:
         except Exception as e:
             logger.exception(f"Unexpected error adding NPC {npc_id} to group {group_id}: {e}")
             return False
-        # No finally block needed for connection closing
     
     async def generate_group_dynamics(self, group_id: int) -> Dict[str, Any]:
         """
@@ -379,17 +383,17 @@ class RelationshipIntegration:
                     for _ in range(3):
                         event_type = random.choice(["meeting", "conflict", "collaboration", "celebration", "crisis"])
                                 
-                    if event_type == "meeting":
-                        events.append(f"The group held a meeting to discuss their goals and plans.")
-                    elif event_type == "conflict":
-                        conflict_members = random.sample(members, min(2, len(members)))
-                        events.append(f"{conflict_members[0].get('npc_name')} and {conflict_members[1].get('npc_name')} had a disagreement about the group's direction.")
-                    elif event_type == "collaboration":
-                        events.append(f"The group worked together on a project, strengthening their bonds.")
-                    elif event_type == "celebration":
-                        events.append(f"The group celebrated a significant achievement together.")
-                    elif event_type == "crisis":
-                        events.append(f"The group faced a crisis that tested their unity and resolve.")
+                        if event_type == "meeting":
+                            events.append(f"The group held a meeting to discuss their goals and plans.")
+                        elif event_type == "conflict":
+                            conflict_members = random.sample(members, min(2, len(members)))
+                            events.append(f"{conflict_members[0].get('npc_name')} and {conflict_members[1].get('npc_name')} had a disagreement about the group's direction.")
+                        elif event_type == "collaboration":
+                            events.append(f"The group worked together on a project, strengthening their bonds.")
+                        elif event_type == "celebration":
+                            events.append(f"The group celebrated a significant achievement together.")
+                        elif event_type == "crisis":
+                            events.append(f"The group faced a crisis that tested their unity and resolve.")
                 
                 # Update group dynamics
                 dynamics = group_data.get("dynamics", {})
@@ -567,9 +571,6 @@ class RelationshipIntegration:
         except Exception as e:
             logging.error(f"Error generating relationship evolution: {e}")
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
     
     async def get_entity_name(self, entity_type: str, entity_id: int) -> str:
         """
