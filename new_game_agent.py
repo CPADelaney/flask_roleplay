@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 import os
-import asyncpg
+import functools
 from datetime import datetime
 from typing import Dict, Any
 
@@ -19,6 +19,9 @@ from npcs.new_npc_creation import spawn_multiple_npcs_enhanced, init_chase_sched
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from lore.dynamic_lore_generator import DynamicLoreGenerator
+
+# Import database connections
+from db.connection import get_db_connection_context
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -278,8 +281,7 @@ class NewGameAgent:
         calendar_data = await self.create_calendar(ctx, result.final_output.environment_desc)
         
         # Store environment data in database
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             # Store environment description
             await conn.execute("""
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -357,9 +359,6 @@ class NewGameAgent:
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value=EXCLUDED.value
             """, user_id, conversation_id, json.dumps(calendar_data))
-            
-        finally:
-            await conn.close()
         
         return result.final_output
     
@@ -434,8 +433,7 @@ class NewGameAgent:
         conversation_id = ctx.context["conversation_id"]
         
         # Get calendar data for day names
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
@@ -444,8 +442,6 @@ class NewGameAgent:
             
             calendar_data = json.loads(row["value"]) if row else {}
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
-        finally:
-            await conn.close()
         
         # Create NPCs
         environment_desc = environment_data.get("environment_desc", "") + "\n\n" + environment_data.get("environment_history", "")
@@ -455,16 +451,13 @@ class NewGameAgent:
         chase_schedule = await self.create_chase_schedule(ctx, environment_desc, day_names)
         
         # Store Chase's schedule
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
                 VALUES($1, $2, 'ChaseSchedule', $3)
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value=EXCLUDED.value
             """, user_id, conversation_id, json.dumps(chase_schedule))
-        finally:
-            await conn.close()
         
         return {
             "npc_ids": npc_ids,
@@ -495,8 +488,7 @@ class NewGameAgent:
         aggregator_text = build_aggregator_text(aggregator_data)
         
         # Get calendar data for first day name
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
@@ -506,8 +498,6 @@ class NewGameAgent:
             calendar_data = json.loads(row["value"]) if row else {}
             day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
             first_day_name = day_names[0] if day_names else "the first day"
-        finally:
-            await conn.close()
         
         # Create prompt for the narrative agent
         prompt = f"""
@@ -540,14 +530,11 @@ class NewGameAgent:
         opening_narrative = result.final_output
         
         # Store the opening narrative
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO messages (conversation_id, sender, content)
                 VALUES($1, $2, $3)
             """, conversation_id, "Nyx", opening_narrative)
-        finally:
-            await conn.close()
         
         return opening_narrative
     
@@ -570,8 +557,7 @@ class NewGameAgent:
         conversation_id = ctx.context["conversation_id"]
         
         # Mark conversation as ready
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             # Get the environment description for lore generation
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
@@ -593,8 +579,6 @@ class NewGameAgent:
                 SET status='ready'
                 WHERE id=$1 AND user_id=$2
             """, conversation_id, user_id)
-        finally:
-            await conn.close()
             
         # Initialize and generate lore
         try:
@@ -672,16 +656,13 @@ class NewGameAgent:
             welcome_image_url = image_result["image_urls"][0]
             
             # Store the image URL
-            conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-            try:
+            async with get_db_connection_context() as conn:
                 await conn.execute("""
                     INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
                     VALUES($1, $2, 'WelcomeImageUrl', $3)
                     ON CONFLICT (user_id, conversation_id, key)
                     DO UPDATE SET value=EXCLUDED.value
                 """, user_id, conversation_id, welcome_image_url)
-            finally:
-                await conn.close()
         
         return {
             "status": "ready",
@@ -696,8 +677,7 @@ class NewGameAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-        try:
+        async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
                 WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
@@ -705,9 +685,80 @@ class NewGameAgent:
             """, user_id, conversation_id)
             
             return row["value"] if row else "Unknown Setting"
-        finally:
-            await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="generate_lore",
+        action_description="Generated lore for new game environment"
+    )
+    async def generate_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore for the game environment.
+        
+        Args:
+            environment_desc: Description of the environment
+            
+        Returns:
+            Dictionary with generated lore data
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        try:
+            # Get the lore system instance and initialize it
+            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
+            await lore_system.initialize()
+            
+            # Generate comprehensive lore based on the environment
+            logging.info(f"Generating lore for environment: {environment_desc[:100]}...")
+            lore_result = await lore_system.generate_world_lore(environment_desc)
+            
+            # Get NPC IDs for lore integration
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, user_id, conversation_id)
+                
+                npc_ids = [row["npc_id"] for row in rows] if rows else []
+                
+            # Integrate lore with NPCs if we have any
+            if npc_ids:
+                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
+                await lore_system.integrate_lore_with_npcs(npc_ids)
+            
+            # Create summary for easy reference
+            factions_count = len(lore_result.get('factions', []))
+            cultural_count = len(lore_result.get('cultural_elements', []))
+            locations_count = len(lore_result.get('locations', []))
+            events_count = len(lore_result.get('historical_events', []))
+            
+            lore_summary = f"Generated {factions_count} factions, {cultural_count} cultural elements, {locations_count} locations, and {events_count} historical events"
+            
+            # Store lore summary in the database
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value=EXCLUDED.value
+                """, user_id, conversation_id, lore_summary)
+            
+            return {
+                "lore_summary": lore_summary,
+                "factions_count": factions_count,
+                "cultural_elements_count": cultural_count,
+                "locations_count": locations_count,
+                "historical_events_count": events_count
+            }
+            
+        except Exception as e:
+            logging.error(f"Error generating lore: {e}", exc_info=True)
+            return {
+                "error": f"Failed to generate lore: {str(e)}",
+                "lore_summary": "Failed to generate lore"
+            }
+
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="process_new_game",
@@ -716,8 +767,7 @@ class NewGameAgent:
     async def process_new_game(self, user_id, conversation_data):
         provided_convo_id = conversation_data.get("conversation_id")
     
-        conn = await asyncpg.connect(dsn=DB_DSN, statement_cache_size=0)
-        try:
+        async with get_db_connection_context() as conn:
             if not provided_convo_id:
                 row = await conn.fetchrow("""
                     INSERT INTO conversations (user_id, conversation_name)
@@ -739,28 +789,13 @@ class NewGameAgent:
             for t in tables:
                 await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
                                    user_id, conversation_id)
-        finally:
-            await conn.close()
-    
+        
         # NOW we have conversation_id, so let's insert default "Chase" stats
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
             functools.partial(insert_default_player_stats_chase, user_id, conversation_id)
         )
-
-            # Clear old data
-            tables = [
-                "Events", "PlannedEvents", "PlayerInventory", "Quests",
-                "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
-            ]
-            for t in tables:
-                await conn.execute(
-                    f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
-                    user_id, conversation_id
-                )
-        finally:
-            await conn.close()
         
         # Initialize directive handler for this session
         await self.initialize_directive_handler(user_id, conversation_id)
@@ -828,85 +863,6 @@ class NewGameAgent:
             "conversation_id": conversation_id,
             "welcome_image_url": result.final_output.get('welcome_image_url', None)
         }
-
-    @with_governance(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        action_type="generate_lore",
-        action_description="Generated lore for new game environment"
-    )
-    async def generate_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
-        """
-        Generate comprehensive lore for the game environment.
-        
-        Args:
-            environment_desc: Description of the environment
-            
-        Returns:
-            Dictionary with generated lore data
-        """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
-        
-        try:
-            # Get the lore system instance and initialize it
-            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
-            await lore_system.initialize()
-            
-            # Generate comprehensive lore based on the environment
-            logging.info(f"Generating lore for environment: {environment_desc[:100]}...")
-            lore_result = await lore_system.generate_world_lore(environment_desc)
-            
-            # Get NPC IDs for lore integration
-            conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-            try:
-                rows = await conn.fetch("""
-                    SELECT npc_id FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, user_id, conversation_id)
-                
-                npc_ids = [row["npc_id"] for row in rows] if rows else []
-            finally:
-                await conn.close()
-                
-            # Integrate lore with NPCs if we have any
-            if npc_ids:
-                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
-                await lore_system.integrate_lore_with_npcs(npc_ids)
-            
-            # Create summary for easy reference
-            factions_count = len(lore_result.get('factions', []))
-            cultural_count = len(lore_result.get('cultural_elements', []))
-            locations_count = len(lore_result.get('locations', []))
-            events_count = len(lore_result.get('historical_events', []))
-            
-            lore_summary = f"Generated {factions_count} factions, {cultural_count} cultural elements, {locations_count} locations, and {events_count} historical events"
-            
-            # Store lore summary in the database
-            conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
-            try:
-                await conn.execute("""
-                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                    VALUES($1, $2, 'LoreSummary', $3)
-                    ON CONFLICT (user_id, conversation_id, key)
-                    DO UPDATE SET value=EXCLUDED.value
-                """, user_id, conversation_id, lore_summary)
-            finally:
-                await conn.close()
-            
-            return {
-                "lore_summary": lore_summary,
-                "factions_count": factions_count,
-                "cultural_elements_count": cultural_count,
-                "locations_count": locations_count,
-                "historical_events_count": events_count
-            }
-            
-        except Exception as e:
-            logging.error(f"Error generating lore: {e}", exc_info=True)
-            return {
-                "error": f"Failed to generate lore: {str(e)}",
-                "lore_summary": "Failed to generate lore"
-            }
 
 # Register with governance system
 async def register_with_governance(user_id: int, conversation_id: int) -> None:
