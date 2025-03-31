@@ -134,6 +134,7 @@ class ContextDistribution(BaseModel):
             result[context_name] = max(0.0, result[context_name] - amount)
         return ContextDistribution(**result)
     
+    @staticmethod
     def from_enum(context: InteractionContext, weight: float = 1.0) -> "ContextDistribution":
         """Create a distribution with a single active context"""
         result = ContextDistribution()
@@ -153,6 +154,29 @@ class ContextDistribution(BaseModel):
             return context_enum, weight
         except (ValueError, KeyError):
             return InteractionContext.UNDEFINED, 0.0
+    
+    def get_similarity(self, other: "ContextDistribution") -> float:
+        """Calculate cosine similarity between two distributions"""
+        dot_product = (self.dominant * other.dominant + 
+                      self.casual * other.casual +
+                      self.intellectual * other.intellectual +
+                      self.empathic * other.empathic +
+                      self.playful * other.playful +
+                      self.creative * other.creative +
+                      self.professional * other.professional)
+        
+        mag1 = math.sqrt(self.dominant**2 + self.casual**2 + self.intellectual**2 + 
+                         self.empathic**2 + self.playful**2 + self.creative**2 + 
+                         self.professional**2)
+        
+        mag2 = math.sqrt(other.dominant**2 + other.casual**2 + other.intellectual**2 + 
+                         other.empathic**2 + other.playful**2 + other.creative**2 + 
+                         other.professional**2)
+        
+        if mag1 * mag2 == 0:
+            return 0.0
+            
+        return dot_product / (mag1 * mag2)
 
 class BlendedContextDetectionOutput(BaseModel):
     """Output schema for blended context detection"""
