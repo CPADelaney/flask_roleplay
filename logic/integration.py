@@ -7,11 +7,12 @@ This module handles initialization, caching, and provides utility functions.
 
 import logging
 import asyncio
+import json
 from typing import Dict, List, Optional, Union, Any, Tuple
 from functools import lru_cache
 
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 # Cache of active NPC systems
 _npc_systems = {}
@@ -117,40 +118,16 @@ async def get_calendar_info(user_id: int, conversation_id: int) -> Dict[str, Any
     Returns:
         Dictionary with calendar information
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     try:
-        cursor.execute("""
-            SELECT value
-            FROM CurrentRoleplay
-            WHERE user_id=%s AND conversation_id=%s AND key='CalendarNames'
-        """, (user_id, conversation_id))
-        
-        row = cursor.fetchone()
-        if not row:
-            # Default calendar
-            return {
-                "year_name": "The Eternal Cycle",
-                "months": [
-                    "Aurora", "Blaze", "Crimson", "Dusk",
-                    "Ember", "Frost", "Gleam", "Haze",
-                    "Iris", "Jade", "Knell", "Lumen"
-                ],
-                "days": [
-                    "Sol", "Luna", "Terra", "Vesta", 
-                    "Mercury", "Venus", "Mars"
-                ]
-            }
-        
-        # Parse calendar data
-        import json
-        calendar_data = row[0]
-        if isinstance(calendar_data, str):
-            try:
-                calendar_data = json.loads(calendar_data)
-            except json.JSONDecodeError:
-                # Default calendar on error
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT value
+                FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+            """, user_id, conversation_id)
+            
+            if not row:
+                # Default calendar
                 return {
                     "year_name": "The Eternal Cycle",
                     "months": [
@@ -163,11 +140,43 @@ async def get_calendar_info(user_id: int, conversation_id: int) -> Dict[str, Any
                         "Mercury", "Venus", "Mars"
                     ]
                 }
-        
-        return calendar_data
-    finally:
-        cursor.close()
-        conn.close()
+            
+            # Parse calendar data
+            calendar_data = row['value']
+            if isinstance(calendar_data, str):
+                try:
+                    calendar_data = json.loads(calendar_data)
+                except json.JSONDecodeError:
+                    # Default calendar on error
+                    return {
+                        "year_name": "The Eternal Cycle",
+                        "months": [
+                            "Aurora", "Blaze", "Crimson", "Dusk",
+                            "Ember", "Frost", "Gleam", "Haze",
+                            "Iris", "Jade", "Knell", "Lumen"
+                        ],
+                        "days": [
+                            "Sol", "Luna", "Terra", "Vesta", 
+                            "Mercury", "Venus", "Mars"
+                        ]
+                    }
+            
+            return calendar_data
+    except Exception as e:
+        logging.error(f"Error getting calendar info: {e}")
+        # Default calendar on error
+        return {
+            "year_name": "The Eternal Cycle",
+            "months": [
+                "Aurora", "Blaze", "Crimson", "Dusk",
+                "Ember", "Frost", "Gleam", "Haze",
+                "Iris", "Jade", "Knell", "Lumen"
+            ],
+            "days": [
+                "Sol", "Luna", "Terra", "Vesta", 
+                "Mercury", "Venus", "Mars"
+            ]
+        }
 
 async def process_end_of_day(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
@@ -343,44 +352,42 @@ async def get_nearby_npcs(user_id: int, conversation_id: int, location: str = No
     Returns:
         List of NPC data
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    nearby_npcs = []
     
     try:
-        if location:
-            # Get NPCs at the specific location
-            cursor.execute("""
-                SELECT npc_id, npc_name, current_location, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s 
-                AND current_location=%s
-                LIMIT 5
-            """, (user_id, conversation_id, location))
-        else:
-            # Get any NPCs (prioritize ones that are introduced)
-            cursor.execute("""
-                SELECT npc_id, npc_name, current_location, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY introduced DESC
-                LIMIT 5
-            """, (user_id, conversation_id))
+        async with get_db_connection_context() as conn:
+            if location:
+                # Get NPCs at the specific location
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 
+                    AND current_location=$3
+                    LIMIT 5
+                """, user_id, conversation_id, location)
+            else:
+                # Get any NPCs (prioritize ones that are introduced)
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """, user_id, conversation_id)
+                
+            for row in rows:
+                nearby_npcs.append({
+                    "npc_id": row['npc_id'],
+                    "npc_name": row['npc_name'],
+                    "current_location": row['current_location'],
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty']
+                })
             
-        nearby_npcs = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, current_location, dominance, cruelty = row
-            nearby_npcs.append({
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "current_location": current_location,
-                "dominance": dominance,
-                "cruelty": cruelty
-            })
-        
         return nearby_npcs
-    finally:
-        cursor.close()
-        conn.close()
+    except Exception as e:
+        logging.error(f"Error getting nearby NPCs: {e}")
+        return []
 
 def determine_interaction_type(player_input: str) -> str:
     """
