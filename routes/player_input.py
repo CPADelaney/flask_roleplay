@@ -1,7 +1,7 @@
 # routes/player_input.py
 
 from flask import Blueprint, request, jsonify, session
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 # If you want meltdown logic tracking (e.g., record_meltdown_dialog):
 # from logic.meltdown_logic import record_meltdown_dialog, append_meltdown_file
 
@@ -12,7 +12,7 @@ player_input_bp = Blueprint("player_input", __name__)
 player_input_root_bp = Blueprint("player_input_root", __name__)
 
 @player_input_bp.route("/start_chat", methods=["POST"])
-def start_chat():
+async def start_chat():
     try:
         if "user_id" not in session:
             return jsonify({"error": "Not authenticated"}), 401
@@ -29,15 +29,13 @@ def start_chat():
             return jsonify({"error": "Missing required fields"}), 400
         
         # Store user message in database
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO messages (conversation_id, sender, content) 
-            VALUES (%s, %s, %s)
-        """, (conversation_id, "user", user_input))
-        conn.commit()
-        cur.close()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    INSERT INTO messages (conversation_id, sender, content) 
+                    VALUES (%s, %s, %s)
+                """, (conversation_id, "user", user_input))
+            await conn.commit()
         
         # The socketio object is imported and used in main.py
         # This route just returns success, and the actual processing happens via Socket.IO
@@ -52,7 +50,7 @@ def start_chat():
         return jsonify({"error": str(e)}), 500
 
 @player_input_bp.route('/player_input', methods=['POST'])
-def handle_player_input():
+async def handle_player_input():
     """
     This route demonstrates how meltdown NPCs might override user text
     from a server standpoint.
@@ -69,28 +67,26 @@ def handle_player_input():
        - We simply echo the user_text back.
 
     Notes about concurrency/scaling:
-      - If many users are sending input simultaneously, you’d generally
+      - If many users are sending input simultaneously, you'd generally
         store or queue these texts in a DB or cache for further processing,
         especially if meltdown NPC references must be consistent across sessions.
-      - If meltdown logic changes or updates an NPC’s memory each time it hijacks input,
+      - If meltdown logic changes or updates an NPC's memory each time it hijacks input,
         you may call record_meltdown_dialog(...) or similar to track these events.
     """
 
     payload = request.get_json() or {}
     user_text = payload.get("text", "")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Query for any meltdown NPC(s), sorted by monica_level desc
-    cursor.execute("""
-        SELECT npc_id, npc_name, monica_level
-        FROM NPCStats
-        WHERE monica_level > 0
-        ORDER BY monica_level DESC
-    """)
-    meltdown_rows = cursor.fetchall()
-    conn.close()
+    async with get_db_connection_context() as conn:
+        # Query for any meltdown NPC(s), sorted by monica_level desc
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT npc_id, npc_name, monica_level
+                FROM NPCStats
+                WHERE monica_level > 0
+                ORDER BY monica_level DESC
+            """)
+            meltdown_rows = await cursor.fetchall()
 
     if meltdown_rows:
         # Take the top meltdown NPC (highest level)
@@ -109,8 +105,8 @@ def handle_player_input():
 
         # If you want meltdown memory logs:
         # meltdown_line = f"User's input was hijacked by {npc_name}, meltdown_level={mlevel}"
-        # record_meltdown_dialog(npc_id, meltdown_line)
-        # append_meltdown_file(npc_name, meltdown_line)
+        # await record_meltdown_dialog(npc_id, meltdown_line)
+        # await append_meltdown_file(npc_name, meltdown_line)
 
         return jsonify({
             "message": f"{npc_name} forcibly rewrote your input!",
