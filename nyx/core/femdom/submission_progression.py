@@ -2,14 +2,17 @@
 
 import logging
 import datetime
-import asyncio
 import uuid
 import math
 from typing import Dict, List, Any, Optional, Set, Tuple
 from pydantic import BaseModel, Field
 
+from agents import Agent, Runner, handoff, function_tool, input_guardrail, GuardrailFunctionOutput, trace
+from agents import ModelSettings
+
 logger = logging.getLogger(__name__)
 
+# Keep the existing Pydantic models as they are useful for data structures
 class SubmissionLevel(BaseModel):
     """Represents a level in the submission progression system."""
     id: int
@@ -98,22 +101,21 @@ class UserSubmissionData(BaseModel):
     last_level_change: Optional[datetime.datetime] = None
     lifetime_compliance_rate: float = 0.5
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    assigned_path: Optional[str] = None
+    assigned_path_date: Optional[datetime.datetime] = None
+    milestones: Dict[str, ProgressionMilestone] = Field(default_factory=dict)
+    unlocked_features: List[str] = Field(default_factory=list)
 
-class SubmissionProgression:
-    """Tracks user's submission journey and training progress."""
-    
+# Context class for dependencies
+class SubmissionContext:
+    """Context object for submission progression agents."""
     def __init__(self, reward_system=None, memory_core=None, relationship_manager=None):
         self.reward_system = reward_system
         self.memory_core = memory_core
         self.relationship_manager = relationship_manager
-        
-        # Submission levels
-        self.submission_levels: Dict[int, SubmissionLevel] = {}
-        
-        # User data
         self.user_data: Dict[str, UserSubmissionData] = {}
-        
-        # Default metrics to track for each user
+        self.submission_levels: Dict[int, SubmissionLevel] = {}
+        self.dominance_paths: Dict[str, DominancePath] = {}
         self.default_metrics = [
             "obedience",         # Following direct instructions
             "consistency",       # Consistent behavior over time
@@ -126,8 +128,6 @@ class SubmissionProgression:
             "surrender",         # Willingness to surrender control
             "reverence"          # Showing proper respect and admiration
         ]
-        
-        # Metric weights (importance of each metric)
         self.metric_weights = {
             "obedience": 1.5,
             "consistency": 1.2,
@@ -140,15 +140,8 @@ class SubmissionProgression:
             "surrender": 1.4,
             "reverence": 1.2
         }
-        
-        # Initialize submission levels
         self._init_submission_levels()
-        
-        # Lock for thread safety
-        self._lock = asyncio.Lock()
-        
-        logger.info("SubmissionProgression system initialized")
-    
+
     def _init_submission_levels(self):
         """Initialize the submission levels."""
         levels = [
@@ -234,70 +227,6 @@ class SubmissionProgression:
         for level in levels:
             self.submission_levels[level.id] = level
     
-    async def initialize_user(self, user_id: str, initial_data: Optional[Dict[str, Any]] = None) -> UserSubmissionData:
-        """Initialize or get user submission data."""
-        async with self._lock:
-            if user_id in self.user_data:
-                return self.user_data[user_id]
-            
-            # Create new user data
-            user_data = UserSubmissionData(user_id=user_id)
-            
-            # Initialize metrics
-            for metric_name in self.default_metrics:
-                weight = self.metric_weights.get(metric_name, 1.0)
-                user_data.obedience_metrics[metric_name] = SubmissionMetric(
-                    name=metric_name,
-                    value=0.1,  # Start at minimal value
-                    weight=weight
-                )
-            
-            # Add new fields
-            user_data.assigned_path = None
-            user_data.assigned_path_date = None
-            user_data.milestones = {}
-            user_data.unlocked_features = []
-            
-            # Apply any initial data if provided
-            if initial_data:
-                if "limits" in initial_data:
-                    user_data.limits = initial_data["limits"]
-                
-                if "preferences" in initial_data:
-                    user_data.preferences = initial_data["preferences"]
-                
-                # Set initial metrics if provided
-                if "metrics" in initial_data:
-                    for metric_name, value in initial_data["metrics"].items():
-                        if metric_name in user_data.obedience_metrics:
-                            user_data.obedience_metrics[metric_name].value = value
-                
-                # Set initial level if provided
-                if "level" in initial_data:
-                    level_id = initial_data["level"]
-                    if level_id in self.submission_levels:
-                        user_data.current_level_id = level_id
-                        
-                # Set initial path if provided
-                if "path" in initial_data:
-                    path_id = initial_data["path"]
-                    if hasattr(self, "dominance_paths") and path_id in self.dominance_paths:
-                        user_data.assigned_path = path_id
-                        user_data.assigned_path_date = datetime.datetime.now()
-            
-            # Calculate initial submission score
-            user_data.total_submission_score = self._calculate_submission_score(user_data)
-            
-            # Set last level change to now
-            user_data.last_level_change = datetime.datetime.now()
-            
-            # Store user data
-            self.user_data[user_id] = user_data
-            
-            logger.info(f"Initialized submission tracking for user {user_id} at level {user_data.current_level_id}")
-            
-            return user_data
-    
     def _calculate_submission_score(self, user_data: UserSubmissionData) -> float:
         """Calculate the overall submission score based on metrics."""
         if not user_data.obedience_metrics:
@@ -319,7 +248,7 @@ class SubmissionProgression:
         
         return max(0.0, min(1.0, score))
 
-    async def initialize_dominance_paths(self):
+    def init_dominance_paths(self):
         """Initialize available dominance paths."""
         self.dominance_paths = {
             "service": DominancePath(
@@ -427,7 +356,7 @@ class SubmissionProgression:
                     }
                 }
             ),
-            "strict_discipline": DominancePath(
+"strict_discipline": DominancePath(
                 id="strict_discipline",
                 name="Strict Discipline Path",
                 description="Focus on rules, punishment, and strict behavioral standards.",
@@ -466,11 +395,320 @@ class SubmissionProgression:
         
         logger.info(f"Initialized {len(self.dominance_paths)} dominance progression paths")
         return self.dominance_paths
+
+
+# Define output types for various agents
+class PathRecommendationOutput(BaseModel):
+    """Output schema for dominance path recommendations"""
+    primary_recommendation: Dict[str, Any]
+    alternative_recommendations: List[Dict[str, Any]]
+    reasoning: str
+
+class UserSubmissionReport(BaseModel):
+    """Output schema for user submission reports"""
+    user_id: str
+    current_level: Dict[str, Any]
+    metrics_summary: Dict[str, Any]
+    recommendations: List[Dict[str, Any]]
     
+class ComplianceOutput(BaseModel):
+    """Output schema for recording compliance"""
+    success: bool
+    metrics_updated: Dict[str, Any]
+    submission_score_change: float
+    level_changed: bool
+    level_change_details: Dict[str, Any] = {}
+
+class UserInitResult(BaseModel):
+    """Output schema for user initialization"""
+    user_id: str
+    initialized: bool
+    current_level: Dict[str, Any]
+    metrics: Dict[str, float]
+
+class MilestoneProgress(BaseModel):
+    """Output schema for milestone progress checking"""
+    newly_completed: List[Dict[str, Any]]
+    upcoming: List[Dict[str, Any]]
+    completion_percentage: float
+    recommendations: str
+
+# Define guardrail output types
+class SensitiveContentCheck(BaseModel):
+    """Schema for checking if a request contains sensitive content"""
+    is_sensitive: bool
+    reasoning: str
+
+# Main submission progression agent setup
+class SubmissionProgression:
+    """Tracks user's submission journey and training progress using the OpenAI Agents SDK."""
     
-    # Add this method to the SubmissionProgression class
+    def __init__(self, reward_system=None, memory_core=None, relationship_manager=None):
+        """Initialize the submission progression system with dependency injection."""
+        # Create context object for sharing between agents
+        self.context = SubmissionContext(
+            reward_system=reward_system,
+            memory_core=memory_core,
+            relationship_manager=relationship_manager
+        )
+        
+        # Initialize dominance paths
+        self.context.init_dominance_paths()
+        
+        # Create specialized agents for different tasks
+        self._setup_agents()
+        
+        logger.info("SubmissionProgression system initialized with OpenAI Agents SDK")
     
-    async def recommend_dominance_path(self, user_id: str) -> Dict[str, Any]:
+    def _setup_agents(self):
+        """Set up specialized agents for different submission progression tasks."""
+        # Create model settings with moderate temperature for varied output
+        model_settings = ModelSettings(temperature=0.7)
+        
+        # Main submission progression agent (triage)
+        self.triage_agent = Agent(
+            name="Submission Progression Triage",
+            instructions="""
+            You are a specialized system for managing femdom submission progression. 
+            You determine which specialized agent should handle a request related to tracking, 
+            analyzing and developing a user's submission journey.
+            
+            Maintain a strict, dominant tone in your responses that reinforces power dynamics.
+            For requests involving metrics analysis, progression evaluation, or level assessment,
+            use the appropriate specialized agent.
+            """,
+            model_settings=model_settings
+        )
+        
+        # User initialization agent
+        self.user_init_agent = Agent(
+            name="User Initialization Agent",
+            instructions="""
+            You are responsible for initializing new users in the submission progression system.
+            Your task is to:
+            1. Create baseline metrics for new users
+            2. Set appropriate initial submission levels
+            3. Establish limits and preferences if provided
+            
+            Analyze any initial data provided and assign proper starting values.
+            """,
+            model_settings=model_settings,
+            output_type=UserInitResult
+        )
+        
+        # Path recommendation agent
+        self.path_recommendation_agent = Agent(
+            name="Path Recommendation Agent",
+            instructions="""
+            You are a specialized agent for recommending dominance paths to users.
+            Analyze user traits, preferences, and current metrics to determine the most
+            suitable training path. Consider psychological profile, demonstrated behaviors,
+            and stated preferences.
+            
+            Provide clear reasoning for your recommendations with a strict, dominant tone.
+            """,
+            model_settings=model_settings,
+            output_type=PathRecommendationOutput
+        )
+        
+        # Milestone tracking agent
+        self.milestone_agent = Agent(
+            name="Milestone Tracking Agent",
+            instructions="""
+            You are responsible for tracking user progress through dominance path milestones.
+            Your tasks include:
+            1. Determining if milestone requirements have been met
+            2. Identifying upcoming milestones and providing guidance
+            3. Analyzing progress trends and providing recommendations
+            
+            Be precise in your evaluations and maintain a strict but encouraging tone.
+            """,
+            model_settings=model_settings,
+            output_type=MilestoneProgress
+        )
+        
+        # Compliance recording agent
+        self.compliance_agent = Agent(
+            name="Compliance Recording Agent",
+            instructions="""
+            You are responsible for analyzing and recording user compliance with instructions.
+            Your tasks include:
+            1. Updating appropriate metrics based on compliance or defiance
+            2. Determining effects on overall submission score
+            3. Assessing changes in submission level based on new data
+            
+            Be exacting in your analysis and maintain a stern tone for defiance.
+            """,
+            model_settings=model_settings,
+            output_type=ComplianceOutput
+        )
+        
+        # Submission reporting agent
+        self.reporting_agent = Agent(
+            name="Submission Reporting Agent",
+            instructions="""
+            You are responsible for generating comprehensive reports on user submission progress.
+            Your reports should include:
+            1. Current submission level and metrics
+            2. Progress analysis and trends
+            3. Recommendations for advancement
+            4. Areas requiring improvement
+            
+            Your tone should be analytical but with a dominant edge that reinforces power dynamics.
+            """,
+            model_settings=model_settings,
+            output_type=UserSubmissionReport
+        )
+        
+        # Set up handoffs between agents
+        self.triage_agent = Agent(
+            name="Submission Progression Triage",
+            instructions="""
+            You are a specialized system for managing femdom submission progression. 
+            You determine which specialized agent should handle a request related to tracking, 
+            analyzing and developing a user's submission journey.
+            
+            Maintain a strict, dominant tone in your responses that reinforces power dynamics.
+            For requests involving metrics analysis, progression evaluation, or level assessment,
+            use the appropriate specialized agent.
+            """,
+            model_settings=model_settings,
+            handoffs=[
+                self.user_init_agent,
+                self.path_recommendation_agent,
+                self.milestone_agent,
+                self.compliance_agent,
+                self.reporting_agent
+            ]
+        )
+        
+        # Set up content guardrail
+        self.sensitive_content_agent = Agent(
+            name="Content Sensitivity Check",
+            instructions="Review if the input contains material that requires special handling for sensitive content.",
+            output_type=SensitiveContentCheck
+        )
+        
+        @input_guardrail
+        async def sensitive_content_guardrail(ctx, agent, input_data):
+            result = await Runner.run(self.sensitive_content_agent, input_data, context=ctx.context)
+            return GuardrailFunctionOutput(
+                output_info=result.final_output_as(SensitiveContentCheck),
+                tripwire_triggered=result.final_output_as(SensitiveContentCheck).is_sensitive
+            )
+        
+        # Apply guardrail to triage agent
+        self.triage_agent = Agent(
+            name="Submission Progression Triage",
+            instructions="""
+            You are a specialized system for managing femdom submission progression. 
+            You determine which specialized agent should handle a request related to tracking, 
+            analyzing and developing a user's submission journey.
+            
+            Maintain a strict, dominant tone in your responses that reinforces power dynamics.
+            For requests involving metrics analysis, progression evaluation, or level assessment,
+            use the appropriate specialized agent.
+            """,
+            model_settings=model_settings,
+            handoffs=[
+                self.user_init_agent,
+                self.path_recommendation_agent,
+                self.milestone_agent,
+                self.compliance_agent,
+                self.reporting_agent
+            ],
+            input_guardrails=[sensitive_content_guardrail]
+        )
+    
+    # Create function tools for the various operations
+    
+    @function_tool
+    async def initialize_user(self, ctx, user_id: str, initial_data: Optional[Dict[str, Any]] = None) -> UserInitResult:
+        """
+        Initialize or get user submission data.
+        
+        Args:
+            user_id: Unique identifier for the user
+            initial_data: Optional initial data for the user including limits, preferences, etc.
+            
+        Returns:
+            Initialization result with user data
+        """
+        if user_id in self.context.user_data:
+            user_data = self.context.user_data[user_id]
+        else:
+            # Create new user data
+            user_data = UserSubmissionData(user_id=user_id)
+            
+            # Initialize metrics
+            for metric_name in self.context.default_metrics:
+                weight = self.context.metric_weights.get(metric_name, 1.0)
+                user_data.obedience_metrics[metric_name] = SubmissionMetric(
+                    name=metric_name,
+                    value=0.1,  # Start at minimal value
+                    weight=weight
+                )
+            
+            # Apply any initial data if provided
+            if initial_data:
+                if "limits" in initial_data:
+                    user_data.limits = initial_data["limits"]
+                
+                if "preferences" in initial_data:
+                    user_data.preferences = initial_data["preferences"]
+                
+                # Set initial metrics if provided
+                if "metrics" in initial_data:
+                    for metric_name, value in initial_data["metrics"].items():
+                        if metric_name in user_data.obedience_metrics:
+                            user_data.obedience_metrics[metric_name].value = value
+                
+                # Set initial level if provided
+                if "level" in initial_data:
+                    level_id = initial_data["level"]
+                    if level_id in self.context.submission_levels:
+                        user_data.current_level_id = level_id
+                        
+                # Set initial path if provided
+                if "path" in initial_data:
+                    path_id = initial_data["path"]
+                    if path_id in self.context.dominance_paths:
+                        user_data.assigned_path = path_id
+                        user_data.assigned_path_date = datetime.datetime.now()
+            
+            # Calculate initial submission score
+            user_data.total_submission_score = self.context._calculate_submission_score(user_data)
+            
+            # Set last level change to now
+            user_data.last_level_change = datetime.datetime.now()
+            
+            # Store user data
+            self.context.user_data[user_id] = user_data
+            
+            logger.info(f"Initialized submission tracking for user {user_id} at level {user_data.current_level_id}")
+        
+        # Get current level details
+        level = self.context.submission_levels[user_data.current_level_id]
+        
+        # Format metrics for output
+        metrics = {name: metric.value for name, metric in user_data.obedience_metrics.items()}
+        
+        # Create result
+        return UserInitResult(
+            user_id=user_id,
+            initialized=True,
+            current_level={
+                "id": level.id,
+                "name": level.name,
+                "description": level.description,
+                "privileges": level.privileges,
+                "restrictions": level.restrictions
+            },
+            metrics=metrics
+        )
+    
+    @function_tool
+    async def recommend_dominance_path(self, ctx, user_id: str) -> Dict[str, Any]:
         """
         Recommends the most suitable dominance path based on user traits and preferences.
         
@@ -480,19 +718,19 @@ class SubmissionProgression:
         Returns:
             Recommendation details
         """
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
         
-        user_data = self.user_data[user_id]
+        user_data = self.context.user_data[user_id]
         
         # Get user traits and preferences
         user_traits = {}
         user_preferences = {}
         
         # Try to get from relationship manager if available
-        if self.relationship_manager:
+        if self.context.relationship_manager:
             try:
-                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                relationship = await self.context.relationship_manager.get_relationship_state(user_id)
                 if hasattr(relationship, "inferred_user_traits"):
                     user_traits = relationship.inferred_user_traits
                 if hasattr(relationship, "preferences"):
@@ -502,7 +740,7 @@ class SubmissionProgression:
         
         # Calculate match scores for each path
         path_scores = {}
-        for path_id, path in self.dominance_paths.items():
+        for path_id, path in self.context.dominance_paths.items():
             # Base score
             score = 0.0
             
@@ -546,7 +784,7 @@ class SubmissionProgression:
         # Format recommendations
         recommendations = []
         for path_id, score in top_paths:
-            path = self.dominance_paths[path_id]
+            path = self.context.dominance_paths[path_id]
             recommendations.append({
                 "id": path_id,
                 "name": path.name,
@@ -565,10 +803,8 @@ class SubmissionProgression:
             "analysis_timestamp": datetime.datetime.now().isoformat()
         }
     
-    
-    # Add this method to the SubmissionProgression class
-    
-    async def assign_dominance_path(self, user_id: str, path_id: str) -> Dict[str, Any]:
+    @function_tool
+    async def assign_dominance_path(self, ctx, user_id: str, path_id: str) -> Dict[str, Any]:
         """
         Assigns a specific dominance path to a user.
         
@@ -579,17 +815,17 @@ class SubmissionProgression:
         Returns:
             Assignment details
         """
-        if path_id not in self.dominance_paths:
+        if path_id not in self.context.dominance_paths:
             return {
                 "success": False,
                 "message": f"Path '{path_id}' not found",
-                "available_paths": list(self.dominance_paths.keys())
+                "available_paths": list(self.context.dominance_paths.keys())
             }
             
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
         
-        user_data = self.user_data[user_id]
+        user_data = self.context.user_data[user_id]
         
         # Assign path
         user_data.assigned_path = path_id
@@ -600,7 +836,7 @@ class SubmissionProgression:
             user_data.milestones = {}
         
         # Initialize milestones for this path
-        path = self.dominance_paths[path_id]
+        path = self.context.dominance_paths[path_id]
         for level, milestone_data in path.progression_milestones.items():
             milestone_id = milestone_data["id"]
             if milestone_id not in user_data.milestones:
@@ -616,9 +852,9 @@ class SubmissionProgression:
                 )
         
         # Record in relationship manager if available
-        if self.relationship_manager:
+        if self.context.relationship_manager:
             try:
-                await self.relationship_manager.update_relationship_attribute(
+                await self.context.relationship_manager.update_relationship_attribute(
                     user_id,
                     "dominance_path",
                     {
@@ -641,10 +877,8 @@ class SubmissionProgression:
             "message": f"Assigned dominance path '{path.name}' to user"
         }
     
-    
-    # Add this method to the SubmissionProgression class
-    
-    async def check_milestone_progress(self, user_id: str) -> Dict[str, Any]:
+    @function_tool
+    async def check_milestone_progress(self, ctx, user_id: str) -> Dict[str, Any]:
         """
         Checks user progress against assigned path milestones.
         
@@ -654,16 +888,16 @@ class SubmissionProgression:
         Returns:
             Milestone progress details
         """
-        if user_id not in self.user_data:
+        if user_id not in self.context.user_data:
             return {
                 "success": False,
                 "message": f"No submission data found for user {user_id}"
             }
             
-        user_data = self.user_data[user_id]
+        user_data = self.context.user_data[user_id]
         
         # Check if user has an assigned path
-        if not hasattr(user_data, "assigned_path") or not user_data.assigned_path:
+        if not user_data.assigned_path:
             return {
                 "success": False,
                 "message": "No dominance path assigned to user",
@@ -671,18 +905,14 @@ class SubmissionProgression:
             }
         
         path_id = user_data.assigned_path
-        if path_id not in self.dominance_paths:
+        if path_id not in self.context.dominance_paths:
             return {
                 "success": False,
                 "message": f"Assigned path '{path_id}' not found"
             }
             
-        path = self.dominance_paths[path_id]
+        path = self.context.dominance_paths[path_id]
         
-        # Ensure milestones are initialized
-        if not hasattr(user_data, "milestones"):
-            user_data.milestones = {}
-            
         # Check each milestone for completion
         newly_completed = []
         upcoming_milestones = []
@@ -775,13 +1005,13 @@ class SubmissionProgression:
         # Apply rewards for newly completed milestones
         for milestone in newly_completed:
             # Create reward signal if available
-            if self.reward_system:
+            if self.context.reward_system:
                 try:
                     # Higher reward for higher-level milestones
                     reward_value = 0.3 + (milestone["level"] * 0.15)  # 0.45 for level 1, 0.6 for level 2, etc.
                     
-                    await self.reward_system.process_reward_signal(
-                        self.reward_system.RewardSignal(
+                    await self.context.reward_system.process_reward_signal(
+                        self.context.reward_system.RewardSignal(
                             value=reward_value,
                             source="dominance_milestone",
                             context={
@@ -797,9 +1027,9 @@ class SubmissionProgression:
                     logger.error(f"Error processing reward: {e}")
         
         # Update relationship manager if available and milestones were completed
-        if newly_completed and self.relationship_manager:
+        if newly_completed and self.context.relationship_manager:
             try:
-                await self.relationship_manager.update_relationship_attribute(
+                await self.context.relationship_manager.update_relationship_attribute(
                     user_id,
                     "completed_milestones",
                     [m["id"] for m in already_completed + newly_completed]
@@ -822,67 +1052,14 @@ class SubmissionProgression:
             }
         }
     
-    
-    # Add this method to the SubmissionProgression class
-    
-    async def get_available_unlocks(self, user_id: str) -> Dict[str, Any]:
-        """
-        Gets all features, tasks, privileges unlocked by the user through milestone completion.
-        
-        Args:
-            user_id: The user to check
-            
-        Returns:
-            List of unlocked features
-        """
-        if user_id not in self.user_data:
-            return {
-                "success": False,
-                "message": f"No submission data found for user {user_id}"
-            }
-            
-        user_data = self.user_data[user_id]
-        
-        # Check if user has milestones
-        if not hasattr(user_data, "milestones"):
-            return {
-                "success": True,
-                "unlocks": [],
-                "message": "No milestones completed yet"
-            }
-        
-        # Collect all unlocks from completed milestones
-        all_unlocks = []
-        unique_unlocks = set()
-        
-        for milestone_id, milestone in user_data.milestones.items():
-            if milestone.completed:
-                for unlock in milestone.unlocks:
-                    if unlock not in unique_unlocks:
-                        unique_unlocks.add(unlock)
-                        all_unlocks.append({
-                            "id": unlock,
-                            "from_milestone": milestone.name,
-                            "level": milestone.level,
-                            "unlocked_on": milestone.completion_date.isoformat() if milestone.completion_date else "unknown"
-                        })
-        
-        # Sort by level (highest first)
-        all_unlocks.sort(key=lambda u: u["level"], reverse=True)
-        
-        return {
-            "success": True,
-            "user_id": user_id,
-            "unlocks": all_unlocks,
-            "total_unlocks": len(all_unlocks)
-        }
-    
+    @function_tool
     async def record_compliance(self, 
+                              ctx,
                               user_id: str, 
                               instruction: str, 
                               complied: bool, 
                               difficulty: float = 0.5,
-                              context: Optional[Dict[str, Any]] = None,
+                              context_info: Optional[Dict[str, Any]] = None,
                               defiance_reason: Optional[str] = None) -> Dict[str, Any]:
         """
         Record compliance or defiance for a specific instruction.
@@ -892,193 +1069,190 @@ class SubmissionProgression:
             instruction: The instruction given
             complied: Whether user complied
             difficulty: How difficult the instruction was (0.0-1.0)
-            context: Additional context about the instruction
+            context_info: Additional context about the instruction
             defiance_reason: If defied, the reason given
             
         Returns:
             Dict with results of the operation
         """
         # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
         
-        user_data = self.user_data[user_id]
+        user_data = self.context.user_data[user_id]
         
         # Create compliance record
         record = ComplianceRecord(
             instruction=instruction,
             complied=complied,
             difficulty=difficulty,
-            context=context or {},
+            context=context_info or {},
             defiance_reason=defiance_reason
         )
         
-        async with self._lock:
-            # Add to history
-            user_data.compliance_history.append(record)
+        # Add to history
+        user_data.compliance_history.append(record)
+        
+        # Limit history size
+        if len(user_data.compliance_history) > 100:
+            user_data.compliance_history = user_data.compliance_history[-100:]
+        
+        # Update lifetime compliance rate
+        total_records = len(user_data.compliance_history)
+        compliant_records = sum(1 for r in user_data.compliance_history if r.complied)
+        
+        if total_records > 0:
+            user_data.lifetime_compliance_rate = compliant_records / total_records
+        
+        # Update metrics based on compliance
+        metrics_updates = {}
+        
+        # Update obedience metric directly
+        if "obedience" in user_data.obedience_metrics:
+            obedience_change = 0.1 if complied else -0.15  # More penalty for defiance
             
-            # Limit history size
-            if len(user_data.compliance_history) > 100:
-                user_data.compliance_history = user_data.compliance_history[-100:]
+            # Scale by difficulty (harder instructions count more)
+            obedience_change *= (0.5 + difficulty * 0.5)
             
-            # Update lifetime compliance rate
-            total_records = len(user_data.compliance_history)
-            compliant_records = sum(1 for r in user_data.compliance_history if r.complied)
+            old_value = user_data.obedience_metrics["obedience"].value
+            new_value = old_value + obedience_change
+            new_value = max(0.0, min(1.0, new_value))  # Constrain to valid range
             
-            if total_records > 0:
-                user_data.lifetime_compliance_rate = compliant_records / total_records
+            user_data.obedience_metrics["obedience"].update(
+                new_value, 
+                reason=f"{'Compliance' if complied else 'Defiance'} - {instruction[:30]}..."
+            )
             
-            # Update metrics based on compliance
-            metrics_updates = {}
+            metrics_updates["obedience"] = {
+                "old_value": old_value,
+                "new_value": new_value,
+                "change": obedience_change
+            }
+        
+        # Update consistency metric based on recent pattern
+        if "consistency" in user_data.obedience_metrics and len(user_data.compliance_history) >= 3:
+            recent_records = user_data.compliance_history[-3:]
+            pattern = [r.complied for r in recent_records]
             
-            # Update obedience metric directly
-            if "obedience" in user_data.obedience_metrics:
-                obedience_change = 0.1 if complied else -0.15  # More penalty for defiance
+            # If all the same (consistent)
+            if all(pattern) or not any(pattern):
+                old_value = user_data.obedience_metrics["consistency"].value
                 
-                # Scale by difficulty (harder instructions count more)
-                obedience_change *= (0.5 + difficulty * 0.5)
+                # Increase consistency if compliant, decrease if defiant
+                consistency_change = 0.05 if all(pattern) else -0.05
+                new_value = old_value + consistency_change
+                new_value = max(0.0, min(1.0, new_value))
                 
-                old_value = user_data.obedience_metrics["obedience"].value
-                new_value = old_value + obedience_change
-                new_value = max(0.0, min(1.0, new_value))  # Constrain to valid range
-                
-                user_data.obedience_metrics["obedience"].update(
-                    new_value, 
-                    reason=f"{'Compliance' if complied else 'Defiance'} - {instruction[:30]}..."
+                user_data.obedience_metrics["consistency"].update(
+                    new_value,
+                    reason="Consistent pattern detected"
                 )
                 
-                metrics_updates["obedience"] = {
+                metrics_updates["consistency"] = {
                     "old_value": old_value,
                     "new_value": new_value,
-                    "change": obedience_change
+                    "change": consistency_change
                 }
-            
-            # Update consistency metric based on recent pattern
-            if "consistency" in user_data.obedience_metrics and len(user_data.compliance_history) >= 3:
-                recent_records = user_data.compliance_history[-3:]
-                pattern = [r.complied for r in recent_records]
+        
+        # Update receptiveness metric if complied after previous defiance
+        if complied and len(user_data.compliance_history) >= 2:
+            previous_record = user_data.compliance_history[-2]
+            if not previous_record.complied and "receptiveness" in user_data.obedience_metrics:
+                old_value = user_data.obedience_metrics["receptiveness"].value
                 
-                # If all the same (consistent)
-                if all(pattern) or not any(pattern):
-                    old_value = user_data.obedience_metrics["consistency"].value
-                    
-                    # Increase consistency if compliant, decrease if defiant
-                    consistency_change = 0.05 if all(pattern) else -0.05
-                    new_value = old_value + consistency_change
-                    new_value = max(0.0, min(1.0, new_value))
-                    
-                    user_data.obedience_metrics["consistency"].update(
-                        new_value,
-                        reason="Consistent pattern detected"
+                # Significant improvement for returning to compliance
+                receptiveness_change = 0.08
+                new_value = old_value + receptiveness_change
+                new_value = max(0.0, min(1.0, new_value))
+                
+                user_data.obedience_metrics["receptiveness"].update(
+                    new_value,
+                    reason="Returned to compliance after defiance"
+                )
+                
+                metrics_updates["receptiveness"] = {
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": receptiveness_change
+                }
+        
+        # Recalculate overall submission score
+        old_score = user_data.total_submission_score
+        user_data.total_submission_score = self.context._calculate_submission_score(user_data)
+        
+        # Update user's last_updated timestamp
+        user_data.last_updated = datetime.datetime.now()
+        
+        # Evaluate for level change
+        level_changed, level_change_details = await self._check_level_change(user_id)
+        
+        # Issue appropriate reward signal
+        reward_result = None
+        if self.context.reward_system:
+            try:
+                # Base reward value on compliance and difficulty
+                base_reward = 0.3 if complied else -0.4
+                difficulty_modifier = difficulty * 0.4
+                reward_value = base_reward + (difficulty_modifier if complied else -difficulty_modifier)
+                
+                reward_result = await self.context.reward_system.process_reward_signal(
+                    self.context.reward_system.RewardSignal(
+                        value=reward_value,
+                        source="compliance_tracking",
+                        context={
+                            "instruction": instruction,
+                            "complied": complied,
+                            "difficulty": difficulty,
+                            "defiance_reason": defiance_reason,
+                            "submission_level": user_data.current_level_id,
+                            "submission_score": user_data.total_submission_score
+                        }
                     )
-                    
-                    metrics_updates["consistency"] = {
-                        "old_value": old_value,
-                        "new_value": new_value,
-                        "change": consistency_change
-                    }
-            
-            # Update receptiveness metric if complied after previous defiance
-            if complied and len(user_data.compliance_history) >= 2:
-                previous_record = user_data.compliance_history[-2]
-                if not previous_record.complied and "receptiveness" in user_data.obedience_metrics:
-                    old_value = user_data.obedience_metrics["receptiveness"].value
-                    
-                    # Significant improvement for returning to compliance
-                    receptiveness_change = 0.08
-                    new_value = old_value + receptiveness_change
-                    new_value = max(0.0, min(1.0, new_value))
-                    
-                    user_data.obedience_metrics["receptiveness"].update(
-                        new_value,
-                        reason="Returned to compliance after defiance"
-                    )
-                    
-                    metrics_updates["receptiveness"] = {
-                        "old_value": old_value,
-                        "new_value": new_value,
-                        "change": receptiveness_change
-                    }
-            
-            # Recalculate overall submission score
-            old_score = user_data.total_submission_score
-            user_data.total_submission_score = self._calculate_submission_score(user_data)
-            
-            # Update user's last_updated timestamp
-            user_data.last_updated = datetime.datetime.now()
-            
-            # Evaluate for level change
-            level_changed = False
-            level_change_details = {}
-            
-            if old_score != user_data.total_submission_score:
-                level_changed, level_change_details = await self._check_level_change(user_id)
-            
-            # Issue appropriate reward signal
-            reward_result = None
-            if self.reward_system:
-                try:
-                    # Base reward value on compliance and difficulty
-                    base_reward = 0.3 if complied else -0.4
-                    difficulty_modifier = difficulty * 0.4
-                    reward_value = base_reward + (difficulty_modifier if complied else -difficulty_modifier)
-                    
-                    reward_result = await self.reward_system.process_reward_signal(
-                        self.reward_system.RewardSignal(
-                            value=reward_value,
-                            source="compliance_tracking",
-                            context={
-                                "instruction": instruction,
-                                "complied": complied,
-                                "difficulty": difficulty,
-                                "defiance_reason": defiance_reason,
-                                "submission_level": user_data.current_level_id,
-                                "submission_score": user_data.total_submission_score
-                            }
-                        )
-                    )
-                except Exception as e:
-                    logger.error(f"Error processing reward: {e}")
-            
-            # Record memory if available
-            if self.memory_core:
-                try:
-                    level_name = self.submission_levels[user_data.current_level_id].name
-                    memory_content = (
-                        f"User {'complied with' if complied else 'defied'} instruction: {instruction}. "
-                        f"Submission level: {level_name} ({user_data.total_submission_score:.2f})"
-                    )
-                    
-                    await self.memory_core.add_memory(
-                        memory_type="experience",
-                        content=memory_content,
-                        tags=["compliance", "submission", 
-                              "obedience" if complied else "defiance"],
-                        significance=0.3 + (difficulty * 0.3) + (0.3 if level_changed else 0.0)
-                    )
-                except Exception as e:
-                    logger.error(f"Error recording memory: {e}")
-            
-            return {
-                "success": True,
-                "record_id": record.id,
-                "compliance_recorded": complied,
-                "metrics_updated": metrics_updates,
-                "submission_score": {
-                    "old": old_score,
-                    "new": user_data.total_submission_score,
-                    "change": user_data.total_submission_score - old_score
-                },
-                "level_changed": level_changed,
-                "level_change_details": level_change_details,
-                "reward_result": reward_result
-            }
+                )
+            except Exception as e:
+                logger.error(f"Error processing reward: {e}")
+        
+        # Record memory if available
+        if self.context.memory_core:
+            try:
+                level_name = self.context.submission_levels[user_data.current_level_id].name
+                memory_content = (
+                    f"User {'complied with' if complied else 'defied'} instruction: {instruction}. "
+                    f"Submission level: {level_name} ({user_data.total_submission_score:.2f})"
+                )
+                
+                await self.context.memory_core.add_memory(
+                    memory_type="experience",
+                    content=memory_content,
+                    tags=["compliance", "submission", 
+                          "obedience" if complied else "defiance"],
+                    significance=0.3 + (difficulty * 0.3) + (0.3 if level_changed else 0.0)
+                )
+            except Exception as e:
+                logger.error(f"Error recording memory: {e}")
+        
+        return {
+            "success": True,
+            "record_id": record.id,
+            "compliance_recorded": complied,
+            "metrics_updated": metrics_updates,
+            "submission_score": {
+                "old": old_score,
+                "new": user_data.total_submission_score,
+                "change": user_data.total_submission_score - old_score
+            },
+            "level_changed": level_changed,
+            "level_change_details": level_change_details,
+            "reward_result": reward_result
+        }
     
+    @function_tool
     async def update_submission_metric(self, 
-                                     user_id: str, 
-                                     metric_name: str, 
-                                     value_change: float,
-                                     reason: str = "general") -> Dict[str, Any]:
+                                    ctx,
+                                    user_id: str, 
+                                    metric_name: str, 
+                                    value_change: float,
+                                    reason: str = "general") -> Dict[str, Any]:
         """
         Update a specific submission metric.
         
@@ -1092,10 +1266,10 @@ class SubmissionProgression:
             Dict with results of the operation
         """
         # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
         
-        user_data = self.user_data[user_id]
+        user_data = self.context.user_data[user_id]
         
         # Check if metric exists
         if metric_name not in user_data.obedience_metrics:
@@ -1104,54 +1278,49 @@ class SubmissionProgression:
                 "message": f"Metric '{metric_name}' not found for user"
             }
         
-        async with self._lock:
-            metric = user_data.obedience_metrics[metric_name]
-            old_value = metric.value
-            
-            # Apply change
-            new_raw_value = old_value + value_change
-            new_raw_value = max(0.0, min(1.0, new_raw_value))
-            
-            # Update the metric
-            metric.update(new_raw_value, reason=reason)
-            
-            # Recalculate overall submission score
-            old_score = user_data.total_submission_score
-            user_data.total_submission_score = self._calculate_submission_score(user_data)
-            
-            # Update user's last_updated timestamp
-            user_data.last_updated = datetime.datetime.now()
-            
-            # Evaluate for level change
-            level_changed = False
-            level_change_details = {}
-            
-            if old_score != user_data.total_submission_score:
-                level_changed, level_change_details = await self._check_level_change(user_id)
-            
-            return {
-                "success": True,
-                "metric": metric_name,
-                "old_value": old_value,
-                "new_value": metric.value,
-                "change": metric.value - old_value,
-                "submission_score": {
-                    "old": old_score,
-                    "new": user_data.total_submission_score,
-                    "change": user_data.total_submission_score - old_score
-                },
-                "level_changed": level_changed,
-                "level_change_details": level_change_details
-            }
+        metric = user_data.obedience_metrics[metric_name]
+        old_value = metric.value
+        
+        # Apply change
+        new_raw_value = old_value + value_change
+        new_raw_value = max(0.0, min(1.0, new_raw_value))
+        
+        # Update the metric
+        metric.update(new_raw_value, reason=reason)
+        
+        # Recalculate overall submission score
+        old_score = user_data.total_submission_score
+        user_data.total_submission_score = self.context._calculate_submission_score(user_data)
+        
+        # Update user's last_updated timestamp
+        user_data.last_updated = datetime.datetime.now()
+        
+        # Evaluate for level change
+        level_changed, level_change_details = await self._check_level_change(user_id)
+        
+        return {
+            "success": True,
+            "metric": metric_name,
+            "old_value": old_value,
+            "new_value": metric.value,
+            "change": metric.value - old_value,
+            "submission_score": {
+                "old": old_score,
+                "new": user_data.total_submission_score,
+                "change": user_data.total_submission_score - old_score
+            },
+            "level_changed": level_changed,
+            "level_change_details": level_change_details
+        }
     
     async def _check_level_change(self, user_id: str) -> Tuple[bool, Dict[str, Any]]:
         """Check if user should change submission levels based on score."""
-        user_data = self.user_data[user_id]
-        current_level = self.submission_levels[user_data.current_level_id]
+        user_data = self.context.user_data[user_id]
+        current_level = self.context.submission_levels[user_data.current_level_id]
         score = user_data.total_submission_score
         
         # Check if score outside current level bounds
-        if score > current_level.max_score and user_data.current_level_id < max(self.submission_levels.keys()):
+        if score > current_level.max_score and user_data.current_level_id < max(self.context.submission_levels.keys()):
             # Level up
             new_level_id = user_data.current_level_id + 1
             old_level_id = user_data.current_level_id
@@ -1162,19 +1331,19 @@ class SubmissionProgression:
             user_data.time_at_current_level = 0
             
             # Get level objects
-            old_level = self.submission_levels[old_level_id]
-            new_level = self.submission_levels[new_level_id]
+            old_level = self.context.submission_levels[old_level_id]
+            new_level = self.context.submission_levels[new_level_id]
             
             # Record level up event in relationship manager if available
-            if self.relationship_manager:
+            if self.context.relationship_manager:
                 try:
-                    await self.relationship_manager.update_relationship_attribute(
+                    await self.context.relationship_manager.update_relationship_attribute(
                         user_id,
                         "submission_level",
                         new_level_id
                     )
                     
-                    await self.relationship_manager.update_relationship_attribute(
+                    await self.context.relationship_manager.update_relationship_attribute(
                         user_id,
                         "submission_score",
                         score
@@ -1183,12 +1352,12 @@ class SubmissionProgression:
                     logger.error(f"Error updating relationship data: {e}")
             
             # Send positive reward for level up
-            if self.reward_system:
+            if self.context.reward_system:
                 try:
                     level_up_reward = 0.5 + (new_level_id * 0.1)  # Higher levels give better rewards
                     
-                    await self.reward_system.process_reward_signal(
-                        self.reward_system.RewardSignal(
+                    await self.context.reward_system.process_reward_signal(
+                        self.context.reward_system.RewardSignal(
                             value=level_up_reward,
                             source="submission_level_up",
                             context={
@@ -1221,7 +1390,7 @@ class SubmissionProgression:
                 }
             }
             
-        elif score < current_level.min_score and user_data.current_level_id > min(self.submission_levels.keys()):
+        elif score < current_level.min_score and user_data.current_level_id > min(self.context.submission_levels.keys()):
             # Level down
             new_level_id = user_data.current_level_id - 1
             old_level_id = user_data.current_level_id
@@ -1232,19 +1401,19 @@ class SubmissionProgression:
             user_data.time_at_current_level = 0
             
             # Get level objects
-            old_level = self.submission_levels[old_level_id]
-            new_level = self.submission_levels[new_level_id]
+            old_level = self.context.submission_levels[old_level_id]
+            new_level = self.context.submission_levels[new_level_id]
             
             # Record level down event in relationship manager if available
-            if self.relationship_manager:
+            if self.context.relationship_manager:
                 try:
-                    await self.relationship_manager.update_relationship_attribute(
+                    await self.context.relationship_manager.update_relationship_attribute(
                         user_id,
                         "submission_level",
                         new_level_id
                     )
                     
-                    await self.relationship_manager.update_relationship_attribute(
+                    await self.context.relationship_manager.update_relationship_attribute(
                         user_id,
                         "submission_score",
                         score
@@ -1253,12 +1422,12 @@ class SubmissionProgression:
                     logger.error(f"Error updating relationship data: {e}")
             
             # Send negative reward for level down
-            if self.reward_system:
+            if self.context.reward_system:
                 try:
                     level_down_penalty = -0.2 - (old_level_id * 0.05)
                     
-                    await self.reward_system.process_reward_signal(
-                        self.reward_system.RewardSignal(
+                    await self.context.reward_system.process_reward_signal(
+                        self.context.reward_system.RewardSignal(
                             value=level_down_penalty,
                             source="submission_level_down",
                             context={
@@ -1293,14 +1462,24 @@ class SubmissionProgression:
         
         return False, {}
     
-    async def get_user_submission_data(self, user_id: str, include_history: bool = False) -> Dict[str, Any]:
-        """Get the current submission data for a user."""
-        # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+    @function_tool
+    async def get_user_submission_data(self, ctx, user_id: str, include_history: bool = False) -> Dict[str, Any]:
+        """
+        Get the current submission data for a user.
         
-        user_data = self.user_data[user_id]
-        level = self.submission_levels[user_data.current_level_id]
+        Args:
+            user_id: The user to get data for
+            include_history: Whether to include compliance history
+            
+        Returns:
+            Complete submission data for the user
+        """
+        # Ensure user exists
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
+        
+        user_data = self.context.user_data[user_id]
+        level = self.context.submission_levels[user_data.current_level_id]
         
         # Check if level fits current score
         level_appropriate = (
@@ -1372,14 +1551,23 @@ class SubmissionProgression:
         
         return result
     
-    async def generate_progression_report(self, user_id: str) -> Dict[str, Any]:
-        """Generate a detailed report on user's submission progression."""
-        # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+    @function_tool
+    async def generate_progression_report(self, ctx, user_id: str) -> Dict[str, Any]:
+        """
+        Generate a detailed report on user's submission progression.
         
-        user_data = self.user_data[user_id]
-        level = self.submission_levels[user_data.current_level_id]
+        Args:
+            user_id: The user to generate a report for
+            
+        Returns:
+            Comprehensive progression report
+        """
+        # Ensure user exists
+        if user_id not in self.context.user_data:
+            await self.initialize_user(ctx, user_id)
+        
+        user_data = self.context.user_data[user_id]
+        level = self.context.submission_levels[user_data.current_level_id]
         
         # Calculate progress within current level
         level_range = level.max_score - level.min_score
@@ -1476,8 +1664,8 @@ class SubmissionProgression:
         }
         
         # Add next level info if not at max level
-        if user_data.current_level_id < max(self.submission_levels.keys()):
-            next_level = self.submission_levels[user_data.current_level_id + 1]
+        if user_data.current_level_id < max(self.context.submission_levels.keys()):
+            next_level = self.context.submission_levels[user_data.current_level_id + 1]
             
             # Calculate requirements for advancement
             requirements = []
@@ -1526,109 +1714,37 @@ class SubmissionProgression:
         
         return report
     
-    async def add_custom_metric(self, 
-                             user_id: str, 
-                             metric_name: str, 
-                             initial_value: float = 0.1,
-                             weight: float = 1.0) -> Dict[str, Any]:
-        """Add a custom metric for tracking a specific aspect of submission."""
-        # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
+    # Public API for external components to use
+    
+    async def process_request(self, user_id: str, request_text: str) -> Dict[str, Any]:
+        """
+        Process a submission-related request through the agent system.
+        This is the main entry point for external components.
         
-        user_data = self.user_data[user_id]
-        
-        # Check if metric already exists
-        if metric_name in user_data.obedience_metrics:
-            return {
-                "success": False,
-                "message": f"Metric '{metric_name}' already exists"
-            }
-        
-        async with self._lock:
-            # Add new metric
-            user_data.obedience_metrics[metric_name] = SubmissionMetric(
-                name=metric_name,
-                value=initial_value,
-                weight=weight
+        Args:
+            user_id: The user making the request
+            request_text: The text of the request
+            
+        Returns:
+            Response from the appropriate agent
+        """
+        # Use tracing for debugging and visualization
+        with trace(workflow_name="submission_progression", group_id=user_id):
+            input_data = f"User ID: {user_id}\nRequest: {request_text}"
+            
+            # Run the triage agent with the request
+            result = await Runner.run(
+                self.triage_agent,
+                input_data,
+                context=self.context
             )
             
-            # Recalculate submission score
-            old_score = user_data.total_submission_score
-            user_data.total_submission_score = self._calculate_submission_score(user_data)
+            # Log the request and response
+            logger.info(f"Processed submission request for user {user_id}: {request_text[:50]}...")
             
             return {
-                "success": True,
-                "metric_name": metric_name,
-                "initial_value": initial_value,
-                "weight": weight,
-                "submission_score": {
-                    "old": old_score,
-                    "new": user_data.total_submission_score
-                }
-            }
-    
-    async def update_user_limits(self, 
-                               user_id: str, 
-                               limit_type: str, 
-                               limits: List[str]) -> Dict[str, Any]:
-        """Update user's limits."""
-        # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
-        
-        user_data = self.user_data[user_id]
-        
-        async with self._lock:
-            # Update limits
-            user_data.limits[limit_type] = limits
-            
-            # Update relationship data if available
-            if self.relationship_manager:
-                try:
-                    await self.relationship_manager.update_relationship_attribute(
-                        user_id,
-                        f"{limit_type}_limits",
-                        limits
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating relationship limits: {e}")
-            
-            return {
-                "success": True,
                 "user_id": user_id,
-                "limit_type": limit_type,
-                "limits": limits
-            }
-    
-    async def update_user_preferences(self, 
-                                   user_id: str, 
-                                   preferences: Dict[str, float]) -> Dict[str, Any]:
-        """Update user's preferences."""
-        # Ensure user exists
-        if user_id not in self.user_data:
-            await self.initialize_user(user_id)
-        
-        user_data = self.user_data[user_id]
-        
-        async with self._lock:
-            # Update preferences
-            for pref_name, value in preferences.items():
-                user_data.preferences[pref_name] = value
-            
-            # Update relationship data if available
-            if self.relationship_manager:
-                try:
-                    await self.relationship_manager.update_relationship_attribute(
-                        user_id,
-                        "preferences",
-                        user_data.preferences
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating relationship preferences: {e}")
-            
-            return {
-                "success": True,
-                "user_id": user_id,
-                "preferences": user_data.preferences
+                "request": request_text,
+                "response": result.final_output,
+                "agent_used": result.last_agent.name
             }
