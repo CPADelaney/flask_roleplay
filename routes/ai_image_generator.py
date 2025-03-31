@@ -10,7 +10,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 import requests
 from werkzeug.utils import secure_filename
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from flask import Blueprint, request, jsonify, session, current_app
 from logic.addiction_system import get_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ======================================================
 # 1️⃣ FETCH ROLEPLAY DATA & NPC DETAILS
 # ======================================================
-def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_name="Chase"):
+async def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_name="Chase"):
     """
     Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, SocialLinks, and PlayerJournal.
     Safely handles empty npc_names to avoid an 'IN ()' syntax error and omits `visual_seed`
@@ -58,184 +58,190 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
         }
         return {}, default_player_stats, {}, []
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    async with get_db_connection_context() as conn:
+        # 2. Fetch NPC data
+        # Omit the visual_seed column if it doesn't exist in your table:
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT n.id, 
+                       n.npc_name,
+                       n.physical_description, 
+                       n.dominance, 
+                       n.cruelty, 
+                       n.intensity,
+                       n.archetype_summary, 
+                       n.archetype_extras_summary, 
+                       n.personality_traits, 
+                       n.likes,
+                       n.dislikes, 
+                       n.current_location
+                FROM NPCStats n
+                WHERE n.user_id=%s 
+                  AND n.conversation_id=%s 
+                  AND n.npc_name IN %s
+            """, (user_id, conversation_id, tuple(npc_names)))
 
-    # 2. Fetch NPC data
-    # Omit the visual_seed column if it doesn't exist in your table:
-    cursor.execute("""
-        SELECT n.id, 
-               n.npc_name,
-               n.physical_description, 
-               n.dominance, 
-               n.cruelty, 
-               n.intensity,
-               n.archetype_summary, 
-               n.archetype_extras_summary, 
-               n.personality_traits, 
-               n.likes,
-               n.dislikes, 
-               n.current_location
-        FROM NPCStats n
-        WHERE n.user_id=%s 
-          AND n.conversation_id=%s 
-          AND n.npc_name IN %s
-    """, (user_id, conversation_id, tuple(npc_names)))
+            npc_rows = await cursor.fetchall()
+            detailed_npcs = {}
 
-    npc_rows = cursor.fetchall()
-    detailed_npcs = {}
+            for row in npc_rows:
+                npc_id = row[0]
+                npc_name = row[1]
 
-    for row in npc_rows:
-        npc_id = row[0]
-        npc_name = row[1]
+                # 3. Fetch Visual Attributes
+                await cursor.execute("""
+                    SELECT hair_color, 
+                           hair_style, 
+                           eye_color, 
+                           skin_tone, 
+                           body_type, 
+                           height, 
+                           age_appearance, 
+                           default_outfit, 
+                           outfit_variations,
+                           makeup_style, 
+                           accessories, 
+                           expressions, 
+                           poses, 
+                           visual_seed,
+                           last_generated_image
+                    FROM NPCVisualAttributes
+                    WHERE npc_id=%s 
+                      AND user_id=%s 
+                      AND conversation_id=%s
+                """, (npc_id, user_id, conversation_id))
+                visual_attrs = await cursor.fetchone()
 
-        # 3. Fetch Visual Attributes
-        cursor.execute("""
-            SELECT hair_color, 
-                   hair_style, 
-                   eye_color, 
-                   skin_tone, 
-                   body_type, 
-                   height, 
-                   age_appearance, 
-                   default_outfit, 
-                   outfit_variations,
-                   makeup_style, 
-                   accessories, 
-                   expressions, 
-                   poses, 
-                   visual_seed,
-                   last_generated_image
-            FROM NPCVisualAttributes
-            WHERE npc_id=%s 
-              AND user_id=%s 
-              AND conversation_id=%s
-        """, (npc_id, user_id, conversation_id))
-        visual_attrs = cursor.fetchone()
+                # 4. Fetch Previous Images
+                await cursor.execute("""
+                    SELECT image_generated
+                    FROM NPCVisualEvolution
+                    WHERE npc_id=%s 
+                      AND user_id=%s 
+                      AND conversation_id=%s
+                    ORDER BY timestamp DESC
+                    LIMIT 5
+                """, (npc_id, user_id, conversation_id))
+                visual_evol_rows = await cursor.fetchall()
+                previous_images = [img[0] for img in visual_evol_rows if img[0]]
 
-        # 4. Fetch Previous Images
-        cursor.execute("""
-            SELECT image_generated
-            FROM NPCVisualEvolution
-            WHERE npc_id=%s 
-              AND user_id=%s 
-              AND conversation_id=%s
-            ORDER BY timestamp DESC
-            LIMIT 5
-        """, (npc_id, user_id, conversation_id))
-        previous_images = [img[0] for img in cursor.fetchall() if img[0]]
+                # 5. Fetch Social Links for this NPC
+                await cursor.execute("""
+                    SELECT link_type, link_level, dynamics
+                    FROM SocialLinks
+                    WHERE user_id=%s 
+                      AND conversation_id=%s 
+                      AND (
+                           (entity1_type='npc' AND entity1_id=%s AND entity2_type='player') 
+                        OR (entity2_type='npc' AND entity2_id=%s AND entity1_type='player')
+                      )
+                    LIMIT 1
+                """, (user_id, conversation_id, npc_id, npc_id))
+                social_link = await cursor.fetchone()
 
-        # 5. Fetch Social Links for this NPC
-        cursor.execute("""
-            SELECT link_type, link_level, dynamics
-            FROM SocialLinks
-            WHERE user_id=%s 
-              AND conversation_id=%s 
-              AND (
-                   (entity1_type='npc' AND entity1_id=%s AND entity2_type='player') 
-                OR (entity2_type='npc' AND entity2_id=%s AND entity1_type='player')
-              )
-            LIMIT 1
-        """, (user_id, conversation_id, npc_id, npc_id))
-        social_link = cursor.fetchone()
+                # 6. Build the NPC dictionary
+                detailed_npcs[npc_name] = {
+                    "id": npc_id,
+                    "physical_description": row[2] or "A figure shaped by her role",
+                    "dominance": row[3],
+                    "cruelty": row[4],
+                    "intensity": row[5],
+                    "archetype_summary": row[6] or "",
+                    "archetype_extras_summary": row[7] or "",
+                    "personality_traits": json.loads(row[8] or "[]"),
+                    "likes": json.loads(row[9] or "[]"),
+                    "dislikes": json.loads(row[10] or "[]"),
+                    "current_location": row[11],
+                    "previous_images": previous_images,
+                    "social_link": {
+                        "link_type": social_link[0] if social_link else None,
+                        "link_level": social_link[1] if social_link else 0,
+                        "dynamics": json.loads(social_link[2] or "{}") if social_link else {}
+                    }
+                }
 
-        # 6. Build the NPC dictionary
-        detailed_npcs[npc_name] = {
-            "id": npc_id,
-            "physical_description": row[2] or "A figure shaped by her role",
-            "dominance": row[3],
-            "cruelty": row[4],
-            "intensity": row[5],
-            "archetype_summary": row[6] or "",
-            "archetype_extras_summary": row[7] or "",
-            "personality_traits": json.loads(row[8] or "[]"),
-            "likes": json.loads(row[9] or "[]"),
-            "dislikes": json.loads(row[10] or "[]"),
-            "current_location": row[11],
-            "previous_images": previous_images,
-            "social_link": {
-                "link_type": social_link[0] if social_link else None,
-                "link_level": social_link[1] if social_link else 0,
-                "dynamics": json.loads(social_link[2] or "{}") if social_link else {}
+                # Merge Visual Attributes if present
+                if visual_attrs:
+                    # notice we keep visual_seed from NPCVisualAttributes, if that's valid
+                    detailed_npcs[npc_name].update({
+                        "hair_color": visual_attrs[0],
+                        "hair_style": visual_attrs[1],
+                        "eye_color": visual_attrs[2],
+                        "skin_tone": visual_attrs[3],
+                        "body_type": visual_attrs[4],
+                        "height": visual_attrs[5],
+                        "age_appearance": visual_attrs[6],
+                        "default_outfit": visual_attrs[7],
+                        "outfit_variations": json.loads(visual_attrs[8] or "{}"),
+                        "makeup_style": visual_attrs[9],
+                        "accessories": json.loads(visual_attrs[10] or "[]"),
+                        "expressions": json.loads(visual_attrs[11] or "{}"),
+                        "poses": json.loads(visual_attrs[12] or "[]"),
+                        "visual_seed": visual_attrs[13],  # Or remove if not needed
+                        "last_generated_image": visual_attrs[14]
+                    })
+
+        # 7. Fetch PlayerStats
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT obedience, corruption, willpower, shame, dependency, lust, mental_resilience
+                FROM PlayerStats 
+                WHERE user_id=%s 
+                  AND conversation_id=%s 
+                  AND player_name=%s
+                LIMIT 1
+            """, (user_id, conversation_id, player_name))
+            player_row = await cursor.fetchone()
+            
+        if player_row:
+            player_stats = dict(zip(
+                ["obedience", "corruption", "willpower", "shame", "dependency", "lust", "mental_resilience"],
+                player_row
+            ))
+        else:
+            # Default stats if none found
+            player_stats = {
+                "obedience": 50,
+                "corruption": 0,
+                "willpower": 50,
+                "shame": 0,
+                "dependency": 0,
+                "lust": 0,
+                "mental_resilience": 50
             }
+
+        # 8. Fetch recent PlayerJournal entries
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT entry_text, entry_type
+                FROM PlayerJournal
+                WHERE user_id=%s 
+                  AND conversation_id=%s
+                ORDER BY timestamp DESC
+                LIMIT 3
+            """, (user_id, conversation_id))
+            journal_rows = await cursor.fetchall()
+            
+        journal_entries = [
+            {"text": row[0], "type": row[1]}
+            for row in journal_rows
+        ]
+
+        # 9. Fetch UserVisualPreferences
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT npc_name, avg_rating
+                FROM UserVisualPreferences
+                WHERE user_id=%s 
+                  AND npc_name IN %s
+            """, (user_id, tuple(npc_names)))
+            pref_rows = await cursor.fetchall()
+            
+        user_preferences = {
+            row[0]: {"avg_rating": row[1]}
+            for row in pref_rows
         }
 
-        # Merge Visual Attributes if present
-        if visual_attrs:
-            # notice we keep visual_seed from NPCVisualAttributes, if that’s valid
-            detailed_npcs[npc_name].update({
-                "hair_color": visual_attrs[0],
-                "hair_style": visual_attrs[1],
-                "eye_color": visual_attrs[2],
-                "skin_tone": visual_attrs[3],
-                "body_type": visual_attrs[4],
-                "height": visual_attrs[5],
-                "age_appearance": visual_attrs[6],
-                "default_outfit": visual_attrs[7],
-                "outfit_variations": json.loads(visual_attrs[8] or "{}"),
-                "makeup_style": visual_attrs[9],
-                "accessories": json.loads(visual_attrs[10] or "[]"),
-                "expressions": json.loads(visual_attrs[11] or "{}"),
-                "poses": json.loads(visual_attrs[12] or "[]"),
-                "visual_seed": visual_attrs[13],  # Or remove if not needed
-                "last_generated_image": visual_attrs[14]
-            })
-
-    # 7. Fetch PlayerStats
-    cursor.execute("""
-        SELECT obedience, corruption, willpower, shame, dependency, lust, mental_resilience
-        FROM PlayerStats 
-        WHERE user_id=%s 
-          AND conversation_id=%s 
-          AND player_name=%s
-        LIMIT 1
-    """, (user_id, conversation_id, player_name))
-    player_row = cursor.fetchone()
-    if player_row:
-        player_stats = dict(zip(
-            ["obedience", "corruption", "willpower", "shame", "dependency", "lust", "mental_resilience"],
-            player_row
-        ))
-    else:
-        # Default stats if none found
-        player_stats = {
-            "obedience": 50,
-            "corruption": 0,
-            "willpower": 50,
-            "shame": 0,
-            "dependency": 0,
-            "lust": 0,
-            "mental_resilience": 50
-        }
-
-    # 8. Fetch recent PlayerJournal entries
-    cursor.execute("""
-        SELECT entry_text, entry_type
-        FROM PlayerJournal
-        WHERE user_id=%s 
-          AND conversation_id=%s
-        ORDER BY timestamp DESC
-        LIMIT 3
-    """, (user_id, conversation_id))
-    journal_entries = [
-        {"text": row[0], "type": row[1]}
-        for row in cursor.fetchall()
-    ]
-
-    # 9. Fetch UserVisualPreferences
-    cursor.execute("""
-        SELECT npc_name, avg_rating
-        FROM UserVisualPreferences
-        WHERE user_id=%s 
-          AND npc_name IN %s
-    """, (user_id, tuple(npc_names)))
-    user_preferences = {
-        row[0]: {"avg_rating": row[1]}
-        for row in cursor.fetchall()
-    }
-
-    cursor.close()
-    conn.close()
     return detailed_npcs, player_stats, user_preferences, journal_entries
 
 
@@ -249,7 +255,7 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
 
     scene_data = gpt_response["scene_data"]
     npc_names = scene_data["npc_names"]
-    detailed_npcs, player_stats, user_preferences, journal_entries = get_npc_and_roleplay_context(
+    detailed_npcs, player_stats, user_preferences, journal_entries = await get_npc_and_roleplay_context(
         user_id, conversation_id, npc_names
     )
     addiction_status = await get_addiction_status(user_id, conversation_id, "Chase")
@@ -304,34 +310,34 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
 # ======================================================
 # 3️⃣ UPDATE VISUAL ATTRIBUTES VIA GPT-4o
 # ======================================================
-def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
+async def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
     """Use GPT-4o to extract and update visual attributes from the image prompt."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    async with get_db_connection_context() as conn:
+        # Fetch current attributes
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                SELECT hair_color, hair_style, eye_color, skin_tone, body_type, 
+                       height, age_appearance, default_outfit, makeup_style, accessories
+                FROM NPCVisualAttributes
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (npc_id, user_id, conversation_id))
+            current_attrs = await cursor.fetchone()
+            
+        current_state = {
+            "hair_color": current_attrs[0] if current_attrs else None,
+            "hair_style": current_attrs[1] if current_attrs else None,
+            "eye_color": current_attrs[2] if current_attrs else None,
+            "skin_tone": current_attrs[3] if current_attrs else None,
+            "body_type": current_attrs[4] if current_attrs else None,
+            "height": current_attrs[5] if current_attrs else None,
+            "age_appearance": current_attrs[6] if current_attrs else None,
+            "default_outfit": current_attrs[7] if current_attrs else None,
+            "makeup_style": current_attrs[8] if current_attrs else None,
+            "accessories": json.loads(current_attrs[9] or "[]") if current_attrs else []
+        }
 
-    # Fetch current attributes
-    cursor.execute("""
-        SELECT hair_color, hair_style, eye_color, skin_tone, body_type, 
-               height, age_appearance, default_outfit, makeup_style, accessories
-        FROM NPCVisualAttributes
-        WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-    """, (npc_id, user_id, conversation_id))
-    current_attrs = cursor.fetchone()
-    current_state = {
-        "hair_color": current_attrs[0] if current_attrs else None,
-        "hair_style": current_attrs[1] if current_attrs else None,
-        "eye_color": current_attrs[2] if current_attrs else None,
-        "skin_tone": current_attrs[3] if current_attrs else None,
-        "body_type": current_attrs[4] if current_attrs else None,
-        "height": current_attrs[5] if current_attrs else None,
-        "age_appearance": current_attrs[6] if current_attrs else None,
-        "default_outfit": current_attrs[7] if current_attrs else None,
-        "makeup_style": current_attrs[8] if current_attrs else None,
-        "accessories": json.loads(current_attrs[9] or "[]") if current_attrs else []
-    }
-
-    # GPT-4o extraction
-    gpt_prompt = f"""
+        # GPT-4o extraction
+        gpt_prompt = f"""
 Given this image generation prompt from a femdom visual novel:
 '{prompt_data}'
 
@@ -348,78 +354,78 @@ Extract detailed visual attributes for an NPC:
 10. Accessories (e.g., 'starstone choker')
 
 Return a JSON object with these keys, using 'unknown' if not specified."""
-    client = get_openai_client()
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": gpt_prompt}],
-        temperature=0.5,
-        response_format={"type": "json_object"}
-    )
-    new_attrs = safe_json_loads(response.choices[0].message.content) or {
-        "hair_color": "unknown",
-        "hair_style": "unknown",
-        "eye_color": "unknown",
-        "skin_tone": "unknown",
-        "body_type": "unknown",
-        "height": "unknown",
-        "age_appearance": "unknown",
-        "default_outfit": "unknown",
-        "makeup_style": "unknown",
-        "accessories": []
-    }
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": gpt_prompt}],
+            temperature=0.5,
+            response_format={"type": "json_object"}
+        )
+        new_attrs = safe_json_loads(response.choices[0].message.content) or {
+            "hair_color": "unknown",
+            "hair_style": "unknown",
+            "eye_color": "unknown",
+            "skin_tone": "unknown",
+            "body_type": "unknown",
+            "height": "unknown",
+            "age_appearance": "unknown",
+            "default_outfit": "unknown",
+            "makeup_style": "unknown",
+            "accessories": []
+        }
 
-    # Update or insert
-    if current_attrs:
-        cursor.execute("""
-            UPDATE NPCVisualAttributes
-            SET hair_color=%s, hair_style=%s, eye_color=%s, skin_tone=%s, body_type=%s,
-                height=%s, age_appearance=%s, default_outfit=%s, makeup_style=%s, 
-                accessories=%s, last_generated_image=%s, updated_at=CURRENT_TIMESTAMP
-            WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-        """, (
-            new_attrs["hair_color"],
-            new_attrs["hair_style"],
-            new_attrs["eye_color"],
-            new_attrs["skin_tone"],
-            new_attrs["body_type"],
-            new_attrs["height"],
-            new_attrs["age_appearance"],
-            new_attrs["default_outfit"],
-            new_attrs["makeup_style"],
-            json.dumps(new_attrs["accessories"]),
-            image_path,
-            npc_id,
-            user_id,
-            conversation_id
-        ))
-    else:
-        cursor.execute("""
-            INSERT INTO NPCVisualAttributes
-            (npc_id, user_id, conversation_id, hair_color, hair_style, eye_color, 
-             skin_tone, body_type, height, age_appearance, default_outfit, makeup_style, 
-             accessories, visual_seed, last_generated_image)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            npc_id,
-            user_id,
-            conversation_id,
-            new_attrs["hair_color"],
-            new_attrs["hair_style"],
-            new_attrs["eye_color"],
-            new_attrs["skin_tone"],
-            new_attrs["body_type"],
-            new_attrs["height"],
-            new_attrs["age_appearance"],
-            new_attrs["default_outfit"],
-            new_attrs["makeup_style"],
-            json.dumps(new_attrs["accessories"]),
-            hashlib.md5(f"{npc_id}".encode()).hexdigest(),
-            image_path
-        ))
-
-    conn.commit()
-    cursor.close()
-    conn.close()
+        # Update or insert
+        async with conn.cursor() as cursor:
+            if current_attrs:
+                await cursor.execute("""
+                    UPDATE NPCVisualAttributes
+                    SET hair_color=%s, hair_style=%s, eye_color=%s, skin_tone=%s, body_type=%s,
+                        height=%s, age_appearance=%s, default_outfit=%s, makeup_style=%s, 
+                        accessories=%s, last_generated_image=%s, updated_at=CURRENT_TIMESTAMP
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (
+                    new_attrs["hair_color"],
+                    new_attrs["hair_style"],
+                    new_attrs["eye_color"],
+                    new_attrs["skin_tone"],
+                    new_attrs["body_type"],
+                    new_attrs["height"],
+                    new_attrs["age_appearance"],
+                    new_attrs["default_outfit"],
+                    new_attrs["makeup_style"],
+                    json.dumps(new_attrs["accessories"]),
+                    image_path,
+                    npc_id,
+                    user_id,
+                    conversation_id
+                ))
+            else:
+                await cursor.execute("""
+                    INSERT INTO NPCVisualAttributes
+                    (npc_id, user_id, conversation_id, hair_color, hair_style, eye_color, 
+                     skin_tone, body_type, height, age_appearance, default_outfit, makeup_style, 
+                     accessories, visual_seed, last_generated_image)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    npc_id,
+                    user_id,
+                    conversation_id,
+                    new_attrs["hair_color"],
+                    new_attrs["hair_style"],
+                    new_attrs["eye_color"],
+                    new_attrs["skin_tone"],
+                    new_attrs["body_type"],
+                    new_attrs["height"],
+                    new_attrs["age_appearance"],
+                    new_attrs["default_outfit"],
+                    new_attrs["makeup_style"],
+                    json.dumps(new_attrs["accessories"]),
+                    hashlib.md5(f"{npc_id}".encode()).hexdigest(),
+                    image_path
+                ))
+        
+        await conn.commit()
+        
     return new_attrs, current_state
 
 
@@ -519,28 +525,26 @@ Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurr
 # ======================================================
 # 5️⃣ TRACK VISUAL EVOLUTION
 # ======================================================
-def track_visual_evolution(npc_id, user_id, conversation_id, event_type, description, previous, current, scene, image_path):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO NPCVisualEvolution
-        (npc_id, user_id, conversation_id, event_type, event_description, 
-         previous_state, current_state, scene_context, image_generated)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        npc_id,
-        user_id,
-        conversation_id,
-        event_type,
-        description,
-        json.dumps(previous),
-        json.dumps(current),
-        scene,
-        image_path
-    ))
-    conn.commit()
-    cursor.close()
-    conn.close()
+async def track_visual_evolution(npc_id, user_id, conversation_id, event_type, description, previous, current, scene, image_path):
+    async with get_db_connection_context() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                INSERT INTO NPCVisualEvolution
+                (npc_id, user_id, conversation_id, event_type, event_description, 
+                 previous_state, current_state, scene_context, image_generated)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                npc_id,
+                user_id,
+                conversation_id,
+                event_type,
+                description,
+                json.dumps(previous),
+                json.dumps(current),
+                scene,
+                image_path
+            ))
+        await conn.commit()
     return True
 
 
@@ -620,7 +624,7 @@ def generate_ai_image(
         "lcm": lcm,
     }
 
-    # If you do NOT need img2img, you won’t pass any files.
+    # If you do NOT need img2img, you won't pass any files.
     # If you *do* want img2img, see below for an example.
 
     try:
@@ -749,7 +753,7 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
             for npc in scene_data["npcs"]:
                 npc_id = npc.get("id")
                 if npc_id:
-                    new_attrs, current_state = update_npc_visual_attributes(
+                    new_attrs, current_state = await update_npc_visual_attributes(
                         user_id, conversation_id, npc_id, 
                         prompt_data=optimized_prompt, 
                         image_path=cached_path
@@ -760,7 +764,7 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
                         current_state.get(k) != new_attrs.get(k)
                         for k in new_attrs
                     ):
-                        track_visual_evolution(
+                        await track_visual_evolution(
                             npc_id, user_id, conversation_id,
                             "appearance_change",
                             "Updated visual appearance in scene",
