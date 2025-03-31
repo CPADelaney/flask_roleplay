@@ -1,18 +1,16 @@
 # logic/seed_plot_triggers.py
 import json
 import logging
-from db.connection import get_db_connection
+import asyncio
+import asyncpg
+from db.connection import get_db_connection_context
 
-def create_and_seed_plot_triggers():
+async def create_and_seed_plot_triggers():
     """
     Inserts rows into the PlotTriggers table for Document 17 (Plot Triggers and Events).
     Each row covers a major section: Early Stage, Mid-Stage, Endgame, etc.
     We'll use ON CONFLICT so re-running won't duplicate data.
     """
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
     logging.info("Inserting or updating 'PlotTriggers' rows...")
 
     # We'll store each big chunk of the doc as a row.
@@ -184,41 +182,41 @@ def create_and_seed_plot_triggers():
         }
     ]
 
-    insert_sql = """
-    INSERT INTO PlotTriggers (
-      trigger_name,
-      stage_name,
-      description,
-      key_features,
-      stat_dynamics,
-      examples,
-      triggers
-    )
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (trigger_name)
-    DO UPDATE
-      SET
-        stage_name = EXCLUDED.stage_name,
-        description = EXCLUDED.description,
-        key_features = EXCLUDED.key_features,
-        stat_dynamics = EXCLUDED.stat_dynamics,
-        examples = EXCLUDED.examples,
-        triggers = EXCLUDED.triggers
-    """
-
-    for row_data in triggers_data:
-        cur.execute(insert_sql, (
-            row_data["trigger_name"],
-            row_data["stage_name"],
-            row_data["description"],
-            json.dumps(row_data["key_features"]),
-            json.dumps(row_data["stat_dynamics"]),
-            json.dumps(row_data["examples"]),
-            json.dumps(row_data["triggers"])
-        ))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    logging.info("Seeded 'PlotTriggers' data successfully.")
+    try:
+        async with get_db_connection_context() as conn:
+            for row_data in triggers_data:
+                await conn.execute("""
+                INSERT INTO PlotTriggers (
+                  trigger_name,
+                  stage_name,
+                  description,
+                  key_features,
+                  stat_dynamics,
+                  examples,
+                  triggers
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (trigger_name)
+                DO UPDATE
+                  SET
+                    stage_name = EXCLUDED.stage_name,
+                    description = EXCLUDED.description,
+                    key_features = EXCLUDED.key_features,
+                    stat_dynamics = EXCLUDED.stat_dynamics,
+                    examples = EXCLUDED.examples,
+                    triggers = EXCLUDED.triggers
+                """, 
+                row_data["trigger_name"],
+                row_data["stage_name"],
+                row_data["description"],
+                json.dumps(row_data["key_features"]),
+                json.dumps(row_data["stat_dynamics"]),
+                json.dumps(row_data["examples"]),
+                json.dumps(row_data["triggers"])
+                )
+            
+            logging.info("Seeded 'PlotTriggers' data successfully.")
+    except asyncpg.PostgresError as e:
+        logging.error(f"Database error in create_and_seed_plot_triggers: {e}", exc_info=True)
+    except Exception as e:
+        logging.error(f"Unexpected error in create_and_seed_plot_triggers: {e}", exc_info=True)
