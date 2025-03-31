@@ -13,10 +13,18 @@ from memory.config import DB_CONFIG
 
 logger = logging.getLogger("memory_db")
 
+# Function to get a database connection context
+async def get_connection_context():
+    """
+    Get a connection context for database operations.
+    This is a bridge function to use the new get_db_connection_context function.
+    """
+    from db.connection import get_db_connection_context
+    return get_db_connection_context()
+
 class DBConnectionManager:
     """
-    Manages database connections with a connection pool.
-    Provides context managers for transaction management.
+    Legacy connection manager maintained for backward compatibility.
     """
     _pool: Optional[asyncpg.Pool] = None
     _lock = asyncio.Lock()
@@ -150,8 +158,7 @@ class DBConnectionManager:
 
 class Transaction:
     """
-    Context manager for transaction handling.
-    Ensures proper transaction lifecycle and error handling.
+    Context manager for transaction handling using new connection pattern.
     """
     def __init__(self, conn: asyncpg.Connection, readonly: bool = False):
         self.conn = conn
@@ -181,35 +188,39 @@ class Transaction:
 
 class ConnectionContext:
     """
-    Context manager for database connections.
-    Automatically acquires and releases connections.
+    Context manager for database connections using new connection pattern.
     """
     def __init__(self, readonly: bool = False):
         self.conn = None
         self.readonly = readonly
+        self.db_context = None
         
     async def __aenter__(self):
-        self.conn = await DBConnectionManager.acquire()
+        from db.connection import get_db_connection_context
+        self.db_context = get_db_connection_context()
+        self.conn = await self.db_context.__aenter__()
         return self.conn
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await DBConnectionManager.release(self.conn)
+        await self.db_context.__aexit__(exc_type, exc_val, exc_tb)
 
 
 class TransactionContext:
     """
-    Combined context manager for connection and transaction.
-    Automatically handles connection acquisition, transaction lifecycle, and proper cleanup.
+    Combined context manager for connection and transaction using new connection pattern.
     """
     def __init__(self, readonly: bool = False):
         self.conn = None
         self.tx = None
         self.readonly = readonly
         self.start_time = None
+        self.db_context = None
         
     async def __aenter__(self):
         self.start_time = time.time()
-        self.conn = await DBConnectionManager.acquire()
+        from db.connection import get_db_connection_context
+        self.db_context = get_db_connection_context()
+        self.conn = await self.db_context.__aenter__()
         self.tx = self.conn.transaction(readonly=self.readonly)
         await self.tx.start()
         DBConnectionManager.track_transaction_start()
@@ -233,28 +244,25 @@ class TransactionContext:
                     logger.warning(f"Long transaction detected: {elapsed:.2f}s")
         finally:
             # Always release the connection
-            await DBConnectionManager.release(self.conn)
+            await self.db_context.__aexit__(exc_type, exc_val, exc_tb)
 
 
-# Simplified helpers for common operations
+# New helper functions using the new connection pattern
 async def execute_query(query: str, *args, **kwargs) -> Any:
     """
     Execute a query and return results.
-    Handles connection acquisition and release.
+    Handles connection acquisition and release using the new pattern.
     """
-    conn = None
-    try:
-        conn = await DBConnectionManager.acquire()
+    from db.connection import get_db_connection_context
+    
+    async with get_db_connection_context() as conn:
         DBConnectionManager.track_query()
         return await conn.fetch(query, *args, **kwargs)
-    finally:
-        if conn:
-            await DBConnectionManager.release(conn)
 
 
 async def execute_transaction(func, *args, readonly: bool = False, **kwargs) -> Any:
     """
-    Execute a function within a transaction.
+    Execute a function within a transaction using the new pattern.
     
     Args:
         func: Async function that receives connection as first argument
@@ -265,12 +273,28 @@ async def execute_transaction(func, *args, readonly: bool = False, **kwargs) -> 
     Returns:
         Result of func
     """
-    async with TransactionContext(readonly=readonly) as conn:
-        return await func(conn, *args, **kwargs)
+    from db.connection import get_db_connection_context
+    
+    async with get_db_connection_context() as conn:
+        tx = conn.transaction(readonly=readonly)
+        await tx.start()
+        DBConnectionManager.track_transaction_start()
         
+        try:
+            result = await func(conn, *args, **kwargs)
+            await tx.commit()
+            DBConnectionManager.track_transaction_commit()
+            return result
+        except Exception as e:
+            await tx.rollback()
+            DBConnectionManager.track_transaction_rollback()
+            logger.debug(f"Transaction rolled back due to: {e}")
+            raise
+
+
 def with_transaction(func):
     """
-    Decorator that wraps a method in TransactionContext.
+    Decorator that wraps a method in TransactionContext using the new pattern.
     If 'conn' is already passed in, it uses that transaction;
     otherwise it creates a new transaction automatically.
     """
@@ -281,7 +305,22 @@ def with_transaction(func):
             return await func(*args, conn=conn, **kwargs)
         else:
             # Otherwise, create a new transaction context
-            async with TransactionContext() as transaction_conn:
-                return await func(*args, conn=transaction_conn, **kwargs)
+            from db.connection import get_db_connection_context
+            
+            async with get_db_connection_context() as db_conn:
+                tx = db_conn.transaction()
+                await tx.start()
+                DBConnectionManager.track_transaction_start()
+                
+                try:
+                    result = await func(*args, conn=db_conn, **kwargs)
+                    await tx.commit()
+                    DBConnectionManager.track_transaction_commit()
+                    return result
+                except Exception as e:
+                    await tx.rollback()
+                    DBConnectionManager.track_transaction_rollback()
+                    logger.debug(f"Transaction rolled back due to: {e}")
+                    raise
 
     return wrapper
