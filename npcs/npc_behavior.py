@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
 from memory.wrapper import MemorySystem
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from ..nyx.llm_integration import NyxLLM
 from ..nyx.integrate import get_nyx_client
 from ..memory.integrated import MemorySystem
@@ -240,53 +240,52 @@ class BehaviorEvolution:
             return self.npc_data_cache[cache_key]
         
         # Not in cache or expired, fetch from DB
-        def _fetch():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT npc_id, npc_name, dominance, cruelty, personality_traits,
-                           scheming_level, betrayal_planning
-                    FROM NPCStats
-                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """, 
-                    (npc_id, self.user_id, self.conversation_id)
-                )
-                row = cursor.fetchone()
-                
-                if not row:
-                    return None
-                
-                # Parse JSON fields
-                personality_traits = []
-                if row[4]:  # personality_traits
-                    try:
-                        if isinstance(row[4], str):
-                            personality_traits = json.loads(row[4])
-                        else:
-                            personality_traits = row[4]
-                    except (json.JSONDecodeError, NameError):
-                        # Handle the case where json module might not be imported
-                        import json
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT npc_id, npc_name, dominance, cruelty, personality_traits,
+                               scheming_level, betrayal_planning
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                        """, 
+                        (npc_id, self.user_id, self.conversation_id)
+                    )
+                    row = await cursor.fetchone()
+                    
+                    if not row:
+                        return None
+                    
+                    # Parse JSON fields
+                    personality_traits = []
+                    if row[4]:  # personality_traits
                         try:
                             if isinstance(row[4], str):
+                                import json
                                 personality_traits = json.loads(row[4])
                             else:
                                 personality_traits = row[4]
-                        except:
-                            personality_traits = []
-                
-                return {
-                    "npc_id": row[0],
-                    "npc_name": row[1],
-                    "dominance": row[2],
-                    "cruelty": row[3],
-                    "personality_traits": personality_traits,
-                    "scheming_level": row[5] if row[5] is not None else 0,
-                    "betrayal_planning": bool(row[6]) if row[6] is not None else False
-                }
-        
-        try:
-            npc_data = await asyncio.to_thread(_fetch)
+                        except (json.JSONDecodeError, NameError):
+                            # Handle the case where json module might not be imported
+                            import json
+                            try:
+                                if isinstance(row[4], str):
+                                    personality_traits = json.loads(row[4])
+                                else:
+                                    personality_traits = row[4]
+                            except:
+                                personality_traits = []
+                    
+                    npc_data = {
+                        "npc_id": row[0],
+                        "npc_name": row[1],
+                        "dominance": row[2],
+                        "cruelty": row[3],
+                        "personality_traits": personality_traits,
+                        "scheming_level": row[5] if row[5] is not None else 0,
+                        "betrayal_planning": bool(row[6]) if row[6] is not None else False
+                    }
             
             # Update cache if data found
             if npc_data:
@@ -305,30 +304,29 @@ class BehaviorEvolution:
         Returns:
             List of NPC data dictionaries
         """
-        def _fetch():
+        try:
             npcs = []
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT npc_id, npc_name, dominance, cruelty
-                    FROM NPCStats
-                    WHERE user_id = %s AND conversation_id = %s
-                    """,
-                    (self.user_id, self.conversation_id)
-                )
-                
-                for row in cursor.fetchall():
-                    npcs.append({
-                        "npc_id": row[0],
-                        "npc_name": row[1],
-                        "dominance": row[2],
-                        "cruelty": row[3]
-                    })
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT npc_id, npc_name, dominance, cruelty
+                        FROM NPCStats
+                        WHERE user_id = %s AND conversation_id = %s
+                        """,
+                        (self.user_id, self.conversation_id)
+                    )
+                    
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        npcs.append({
+                            "npc_id": row[0],
+                            "npc_name": row[1],
+                            "dominance": row[2],
+                            "cruelty": row[3]
+                        })
             
             return npcs
-        
-        try:
-            return await asyncio.to_thread(_fetch)
         except Exception as e:
             logger.error(f"Error fetching all NPCs: {e}")
             return []
@@ -345,11 +343,11 @@ class BehaviorEvolution:
             True if successful, False otherwise
         """
         try:
-            def _update():
-                with get_db_connection() as conn, conn.cursor() as cursor:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
                     # Update scheming level
                     new_level = adjustments.get("scheme_level", 0)
-                    cursor.execute(
+                    await cursor.execute(
                         """
                         UPDATE NPCStats
                         SET scheming_level = %s
@@ -360,7 +358,7 @@ class BehaviorEvolution:
                     
                     # Update betrayal planning
                     betrayal_planning = adjustments.get("betrayal_planning", False)
-                    cursor.execute(
+                    await cursor.execute(
                         """
                         UPDATE NPCStats
                         SET betrayal_planning = %s
@@ -369,13 +367,10 @@ class BehaviorEvolution:
                         (betrayal_planning, npc_id, self.user_id, self.conversation_id)
                     )
                     
-                    conn.commit()
-                    return True
-            
-            result = await asyncio.to_thread(_update)
+                    await conn.commit()
             
             # If targeting player, create a memory
-            if result and adjustments.get("targeting_player"):
+            if adjustments.get("targeting_player"):
                 memory_system = await self.get_memory_system()
                 await memory_system.remember(
                     entity_type="npc",
@@ -392,7 +387,7 @@ class BehaviorEvolution:
                 if cache_key in self.cache_expiry:
                     del self.cache_expiry[cache_key]
             
-            return result
+            return True
         except Exception as e:
             logger.error(f"Error applying scheming adjustments: {e}")
             return False
