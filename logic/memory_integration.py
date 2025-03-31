@@ -8,10 +8,12 @@ with the existing game memory functions.
 import logging
 import json
 import random
+import asyncio
+import asyncpg
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 
 class MemoryIntegration:
@@ -267,35 +269,30 @@ class MemoryIntegration:
         Returns:
             ID of the created entry
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                INSERT INTO PlayerJournal (
-                    user_id, conversation_id, entry_type, entry_text, 
-                    fantasy_flag, intensity_level, timestamp
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                RETURNING id
-            """, (
+            async with get_db_connection_context() as conn:
+                # Insert the journal entry and return the ID
+                row = await conn.fetchrow("""
+                    INSERT INTO PlayerJournal (
+                        user_id, conversation_id, entry_type, entry_text, 
+                        fantasy_flag, intensity_level, timestamp
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                    RETURNING id
+                """, 
                 self.user_id, self.conversation_id, entry_type, entry_text,
-                fantasy_flag, intensity_level
-            ))
-            
-            row = cursor.fetchone()
-            if row:
-                conn.commit()
-                return row[0]
-            
+                fantasy_flag, intensity_level)
+                
+                if row:
+                    return row['id']
+                return 0
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error recording player journal entry: {db_err}", exc_info=True)
             return 0
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error recording player journal entry: {e}")
+            logging.error(f"Error recording player journal entry: {e}", exc_info=True)
             return 0
-        finally:
-            cursor.close()
-            conn.close()
     
     async def record_dream_sequence(self, dream_text: str, 
                                   intensity_level: int = 3) -> int:
