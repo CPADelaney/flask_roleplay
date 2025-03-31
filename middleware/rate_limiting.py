@@ -11,6 +11,9 @@ from typing import Dict, Optional, Tuple
 import redis
 from dataclasses import dataclass
 
+# Import database connections
+from db.connection import get_db_connection_context
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -165,7 +168,7 @@ class RateLimiter:
         except redis.RedisError as e:
             logger.error(f"Redis error in rate limiting: {e}")
             # Fallback to local bucket on Redis error
-            return self.check_rate_limit(key, limit, period, cost, distributed=False)
+            return await self.check_rate_limit(key, limit, period, cost, distributed=False)
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
@@ -248,7 +251,7 @@ def rate_limit(
         return wrapped
     return decorator
 
-def get_rate_limit_stats(key_pattern: str = "*") -> Dict:
+async def get_rate_limit_stats(key_pattern: str = "*") -> Dict:
     """Get rate limiting statistics."""
     try:
         redis_client = rate_limiter._get_redis()
@@ -265,4 +268,4 @@ def get_rate_limit_stats(key_pattern: str = "*") -> Dict:
         return stats
     except redis.RedisError as e:
         logger.error(f"Error getting rate limit stats: {e}")
-        return {} 
+        return {}
