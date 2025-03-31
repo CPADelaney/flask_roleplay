@@ -1577,7 +1577,7 @@ class ContextEvolutionManager(UnifiedMemoryManager):
                 )
                 VALUES ($1, $2, $3)
             """, memory['memory_id'], evolution_id,
-                new_relevance - memory.get('relevance_score', 0))
+                new_relevance - memory.get('relevance_score', 0)) 
     
     def _calculate_context_shift(self, changes: Dict[str, Any]) -> float:
         """
