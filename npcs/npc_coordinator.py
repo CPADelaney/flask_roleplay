@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from agents import Agent, Runner, function_tool, handoff, trace, InputGuardrail, RunContextWrapper, GuardrailFunctionOutput
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 
 from .agent import NPCAgent, ResourcePool
@@ -163,9 +163,6 @@ class NPCAgentCoordinator:
         """
         Load specified NPC agents into memory, or load all if none specified.
         Thread-safe implementation that prevents duplicate initialization.
-
-        Returns:
-            List of NPC IDs that were successfully loaded.
         """
         if npc_ids is None:
             logger.info("Loading all NPC agents for user=%s, conversation=%s", self.user_id, self.conversation_id)
@@ -187,24 +184,26 @@ class NPCAgentCoordinator:
         loaded_ids: List[int] = []
 
         try:
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(query, params)
+                    rows = await cursor.fetchall()
 
-                # First collect all IDs to load
-                to_load = []
-                for row in rows:
-                    npc_id = row[0]
-                    if npc_id not in self.active_agents:
-                        to_load.append(npc_id)
-                    loaded_ids.append(npc_id)
-
-                # Then initialize them with proper locking
-                for npc_id in to_load:
-                    async with self._agent_init_lock:
+                    # First collect all IDs to load
+                    to_load = []
+                    for row in rows:
+                        npc_id = row[0]
                         if npc_id not in self.active_agents:
-                            self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-                            await self.active_agents[npc_id].initialize()
+                            to_load.append(npc_id)
+                        loaded_ids.append(npc_id)
+
+                    # Then initialize them with proper locking
+                    for npc_id in to_load:
+                        async with self._agent_init_lock:
+                            if npc_id not in self.active_agents:
+                                self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                                await self.active_agents[npc_id].initialize()
 
             logger.info("Loaded agents: %s", loaded_ids)
             return loaded_ids
@@ -283,35 +282,37 @@ class NPCAgentCoordinator:
         Get an NPC's traits and personality information.
         """
         try:
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT npc_name, dominance, cruelty, personality_traits 
-                    FROM NPCStats
-                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """,
-                    (npc_id, self.user_id, self.conversation_id),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return {"error": f"NPC {npc_id} not found"}
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT npc_name, dominance, cruelty, personality_traits 
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                        """,
+                        (npc_id, self.user_id, self.conversation_id),
+                    )
+                    row = await cursor.fetchone()
+                    if not row:
+                        return {"error": f"NPC {npc_id} not found"}
 
-                npc_name, dominance, cruelty, personality_traits = row
+                    npc_name, dominance, cruelty, personality_traits = row
 
-                # Parse personality traits if it's a JSON string
-                if personality_traits and isinstance(personality_traits, str):
-                    try:
-                        personality_traits = json.loads(personality_traits)
-                    except json.JSONDecodeError:
-                        personality_traits = []
+                    # Parse personality traits if it's a JSON string
+                    if personality_traits and isinstance(personality_traits, str):
+                        try:
+                            personality_traits = json.loads(personality_traits)
+                        except json.JSONDecodeError:
+                            personality_traits = []
 
-                return {
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "personality_traits": personality_traits,
-                }
+                    return {
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "dominance": dominance,
+                        "cruelty": cruelty,
+                        "personality_traits": personality_traits,
+                    }
         except Exception as e:
             logger.error(f"Error getting NPC traits for {npc_id}: {e}")
             return {"error": str(e)}
@@ -327,46 +328,48 @@ class NPCAgentCoordinator:
         relationships = {}
 
         try:
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                for i, npc1 in enumerate(npc_ids):
-                    for npc2 in npc_ids[i + 1 :]:
-                        cursor.execute(
-                            """
-                            SELECT link_type, link_level 
-                            FROM SocialLinks
-                            WHERE user_id = %s AND conversation_id = %s
-                              AND (
-                                (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                OR
-                                (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                              )
-                            """,
-                            (self.user_id, self.conversation_id, npc1, npc2, npc2, npc1),
-                        )
-                        row = cursor.fetchone()
-                        key = f"{min(npc1, npc2)}_{max(npc1, npc2)}"
-                        if row:
-                            link_type, link_level = row
-                            relationships[key] = {
-                                "npc1": npc1,
-                                "npc2": npc2,
-                                "link_type": link_type,
-                                "link_level": link_level,
-                            }
-                        else:
-                            # No established relationship
-                            relationships[key] = {
-                                "npc1": npc1,
-                                "npc2": npc2,
-                                "link_type": "neutral",
-                                "link_level": 50,
-                            }
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    for i, npc1 in enumerate(npc_ids):
+                        for npc2 in npc_ids[i + 1:]:
+                            await cursor.execute(
+                                """
+                                SELECT link_type, link_level 
+                                FROM SocialLinks
+                                WHERE user_id = %s AND conversation_id = %s
+                                  AND (
+                                    (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                                    OR
+                                    (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                                  )
+                                """,
+                                (self.user_id, self.conversation_id, npc1, npc2, npc2, npc1),
+                            )
+                            row = await cursor.fetchone()
+                            key = f"{min(npc1, npc2)}_{max(npc1, npc2)}"
+                            if row:
+                                link_type, link_level = row
+                                relationships[key] = {
+                                    "npc1": npc1,
+                                    "npc2": npc2,
+                                    "link_type": link_type,
+                                    "link_level": link_level,
+                                }
+                            else:
+                                # No established relationship
+                                relationships[key] = {
+                                    "npc1": npc1,
+                                    "npc2": npc2,
+                                    "link_type": "neutral",
+                                    "link_level": 50,
+                                }
 
             return relationships
         except Exception as e:
             logger.error(f"Error getting relationships between NPCs: {e}")
             return {}
-
+            
     @function_tool
     async def _create_group_memory(
         self,
@@ -1065,18 +1068,21 @@ class NPCAgentCoordinator:
         current_location = context.get("location", "Unknown")
         logger.debug("Determining NPCs at location=%s", current_location)
         try:
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT npc_id
-                    FROM NPCStats
-                    WHERE user_id = %s
-                      AND conversation_id = %s
-                      AND current_location = %s
-                    """,
-                    (self.user_id, self.conversation_id, current_location),
-                )
-                return [row[0] for row in cursor.fetchall()]
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT npc_id
+                        FROM NPCStats
+                        WHERE user_id = %s
+                          AND conversation_id = %s
+                          AND current_location = %s
+                        """,
+                        (self.user_id, self.conversation_id, current_location),
+                    )
+                    rows = await cursor.fetchall()
+                    return [row[0] for row in rows]
         except Exception as e:
             logger.error(f"Error determining affected NPCs: {e}")
             return []
@@ -1147,6 +1153,14 @@ class NPCAgentCoordinator:
         """
         Update multiple NPCs in a single batch operation for better performance.
         Thread-safe implementation.
+        
+        Args:
+            npc_ids: List of NPC IDs to update
+            update_type: Type of update (location_change, emotional_update, etc.)
+            update_data: Data for the update
+            
+        Returns:
+            Results of the batch update
         """
         async with self._batch_update_lock:
             results = {
@@ -1160,33 +1174,53 @@ class NPCAgentCoordinator:
                     if not new_location:
                         return {"error": "No location specified"}
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            cursor.execute("BEGIN")
-                            cursor.execute(
-                                """
-                                UPDATE NPCStats
-                                SET current_location = %s
-                                WHERE npc_id = ANY(%s)
-                                  AND user_id = %s
-                                  AND conversation_id = %s
-                                RETURNING npc_id
-                                """,
-                                (new_location, npc_ids, self.user_id, self.conversation_id),
-                            )
-                            rows = cursor.fetchall()
-                            results["success_count"] = len(rows)
-                            results["updated_npcs"] = [r[0] for r in rows]
-                            cursor.execute("COMMIT")
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
+                                
+                                # Update location for each NPC
+                                for npc_id in npc_ids:
+                                    await cursor.execute(
+                                        """
+                                        UPDATE NPCStats
+                                        SET current_location = %s
+                                        WHERE npc_id = %s
+                                          AND user_id = %s
+                                          AND conversation_id = %s
+                                        """,
+                                        (new_location, npc_id, self.user_id, self.conversation_id),
+                                    )
+                                
+                                # Get updated NPCs for confirmation
+                                await cursor.execute(
+                                    """
+                                    SELECT npc_id FROM NPCStats
+                                    WHERE npc_id = ANY(%s)
+                                      AND user_id = %s
+                                      AND conversation_id = %s
+                                      AND current_location = %s
+                                    """,
+                                    (npc_ids, self.user_id, self.conversation_id, new_location)
+                                )
+                                updated_rows = await cursor.fetchall()
+                                updated_npc_ids = [row[0] for row in updated_rows]
+                                
+                                # Commit the transaction
+                                await cursor.execute("COMMIT")
+                                
+                                results["success_count"] = len(updated_npc_ids)
+                                results["updated_npcs"] = updated_npc_ids
                     except Exception as e:
                         logger.error(f"Error updating NPC locations: {e}")
                         results["error"] = str(e)
                         results["error_count"] = len(npc_ids)
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    await cursor.execute("ROLLBACK")
                         except Exception as rollback_error:
                             logger.error(f"Error rolling back transaction: {rollback_error}")
-
                         
                 elif update_type == "emotional_update":
                     # Batch emotional state update
@@ -1302,44 +1336,55 @@ class NPCAgentCoordinator:
                             return {"error": "No value specified for mask integrity adjustment"}
                         
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                # Begin transaction
-                                cursor.execute("BEGIN")
-                                
-                                if absolute:
-                                    cursor.execute("""
-                                        UPDATE NPCStats
-                                        SET mask_integrity = %s
-                                        WHERE npc_id = ANY(%s)
-                                        AND user_id = %s
-                                        AND conversation_id = %s
-                                        RETURNING npc_id
-                                    """, (value, npc_ids, self.user_id, self.conversation_id))
-                                else:
-                                    # Relative adjustment
-                                    cursor.execute("""
-                                        UPDATE NPCStats
-                                        SET mask_integrity = GREATEST(0, LEAST(100, mask_integrity + %s))
-                                        WHERE npc_id = ANY(%s)
-                                        AND user_id = %s
-                                        AND conversation_id = %s
-                                        RETURNING npc_id
-                                    """, (value, npc_ids, self.user_id, self.conversation_id))
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    # Begin transaction
+                                    await cursor.execute("BEGIN")
                                     
-                                updated_ids = [row[0] for row in cursor.fetchall()]
-                                results["success_count"] = len(updated_ids)
-                                results["updated_npcs"] = updated_ids
-                                
-                                # Commit transaction
-                                cursor.execute("COMMIT")
-                                
-                                # Invalidate cached masks - with lock
-                                async with self._mask_state_lock:
-                                    for npc_id in updated_ids:
-                                        if npc_id in self._mask_states:
-                                            del self._mask_states[npc_id]
-                                            if npc_id in self._mask_states_timestamps:
-                                                del self._mask_states_timestamps[npc_id]
+                                    updated_ids = []
+                                    if absolute:
+                                        for npc_id in npc_ids:
+                                            await cursor.execute("""
+                                                UPDATE NPCStats
+                                                SET mask_integrity = %s
+                                                WHERE npc_id = %s
+                                                AND user_id = %s
+                                                AND conversation_id = %s
+                                                RETURNING npc_id
+                                            """, (value, npc_id, self.user_id, self.conversation_id))
+                                            
+                                            row = await cursor.fetchone()
+                                            if row:
+                                                updated_ids.append(row[0])
+                                    else:
+                                        # Relative adjustment
+                                        for npc_id in npc_ids:
+                                            await cursor.execute("""
+                                                UPDATE NPCStats
+                                                SET mask_integrity = GREATEST(0, LEAST(100, mask_integrity + %s))
+                                                WHERE npc_id = %s
+                                                AND user_id = %s
+                                                AND conversation_id = %s
+                                                RETURNING npc_id
+                                            """, (value, npc_id, self.user_id, self.conversation_id))
+                                            
+                                            row = await cursor.fetchone()
+                                            if row:
+                                                updated_ids.append(row[0])
+                                    
+                                    results["success_count"] = len(updated_ids)
+                                    results["updated_npcs"] = updated_ids
+                                    
+                                    # Commit transaction
+                                    await cursor.execute("COMMIT")
+                                    
+                                    # Invalidate cached masks - with lock
+                                    async with self._mask_state_lock:
+                                        for npc_id in updated_ids:
+                                            if npc_id in self._mask_states:
+                                                del self._mask_states[npc_id]
+                                                if npc_id in self._mask_states_timestamps:
+                                                    del self._mask_states_timestamps[npc_id]
                         except Exception as e:
                             logger.error(f"Error updating mask integrity: {e}")
                             results["error"] = str(e)
@@ -1347,8 +1392,9 @@ class NPCAgentCoordinator:
                             
                             # Attempt to rollback transaction
                             try:
-                                with get_db_connection() as conn, conn.cursor() as cursor:
-                                    cursor.execute("ROLLBACK")
+                                async with get_db_connection_context() as conn:
+                                    async with conn.cursor() as cursor:
+                                        await cursor.execute("ROLLBACK")
                             except Exception as rollback_error:
                                 logger.error(f"Error rolling back transaction: {rollback_error}")
                     
@@ -1369,79 +1415,81 @@ class NPCAgentCoordinator:
                         return {"error": "Must specify link_type and either link_level or adjustment"}
                         
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Begin transaction
-                            cursor.execute("BEGIN")
-                            
-                            updated_pairs = []
-                            for npc_id in npc_ids:
-                                # Process target NPCs in smaller batches
-                                batch_size = 5
-                                for i in range(0, len(target_npc_ids), batch_size):
-                                    batch_targets = target_npc_ids[i:i+batch_size]
-                                    
-                                    for target_id in batch_targets:
-                                        if npc_id == target_id:
-                                            continue  # Skip self-relationship
-                                            
-                                        # Check if relationship exists
-                                        cursor.execute("""
-                                            SELECT link_level
-                                            FROM SocialLinks
-                                            WHERE user_id = %s
-                                            AND conversation_id = %s
-                                            AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                                OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
-                                        """, (self.user_id, self.conversation_id, npc_id, target_id, target_id, npc_id))
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
+                                
+                                updated_pairs = []
+                                for npc_id in npc_ids:
+                                    # Process target NPCs in smaller batches
+                                    batch_size = 5
+                                    for i in range(0, len(target_npc_ids), batch_size):
+                                        batch_targets = target_npc_ids[i:i+batch_size]
                                         
-                                        row = cursor.fetchone()
-                                        
-                                        if row:
-                                            # Update existing relationship
-                                            current_level = row[0]
-                                            new_level = link_level if link_level is not None else max(0, min(100, current_level + adjustment))
-                                            
-                                            cursor.execute("""
-                                                UPDATE SocialLinks
-                                                SET link_type = %s, link_level = %s
+                                        for target_id in batch_targets:
+                                            if npc_id == target_id:
+                                                continue  # Skip self-relationship
+                                                
+                                            # Check if relationship exists
+                                            await cursor.execute("""
+                                                SELECT link_level
+                                                FROM SocialLinks
                                                 WHERE user_id = %s
                                                 AND conversation_id = %s
                                                 AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
                                                     OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
-                                            """, (link_type, new_level, self.user_id, self.conversation_id, 
-                                                  npc_id, target_id, target_id, npc_id))
-                                        else:
-                                            # Create new relationship
-                                            new_level = link_level if link_level is not None else 50  # Default level
+                                            """, (self.user_id, self.conversation_id, npc_id, target_id, target_id, npc_id))
                                             
-                                            cursor.execute("""
-                                                INSERT INTO SocialLinks
-                                                (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level)
-                                                VALUES (%s, %s, 'npc', %s, 'npc', %s, %s, %s)
-                                            """, (self.user_id, self.conversation_id, npc_id, target_id, link_type, new_level))
+                                            row = await cursor.fetchone()
                                             
-                                        updated_pairs.append((npc_id, target_id))
-                                    
-                                    # Small delay between batches
-                                    if i + batch_size < len(target_npc_ids):
-                                        await asyncio.sleep(0.05)
+                                            if row:
+                                                # Update existing relationship
+                                                current_level = row[0]
+                                                new_level = link_level if link_level is not None else max(0, min(100, current_level + adjustment))
+                                                
+                                                await cursor.execute("""
+                                                    UPDATE SocialLinks
+                                                    SET link_type = %s, link_level = %s
+                                                    WHERE user_id = %s
+                                                    AND conversation_id = %s
+                                                    AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                                                        OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
+                                                """, (link_type, new_level, self.user_id, self.conversation_id, 
+                                                      npc_id, target_id, target_id, npc_id))
+                                            else:
+                                                # Create new relationship
+                                                new_level = link_level if link_level is not None else 50  # Default level
+                                                
+                                                await cursor.execute("""
+                                                    INSERT INTO SocialLinks
+                                                    (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level)
+                                                    VALUES (%s, %s, 'npc', %s, 'npc', %s, %s, %s)
+                                                """, (self.user_id, self.conversation_id, npc_id, target_id, link_type, new_level))
+                                                
+                                            updated_pairs.append((npc_id, target_id))
+                                        
+                                        # Small delay between batches
+                                        if i + batch_size < len(target_npc_ids):
+                                            await asyncio.sleep(0.05)
+                                
+                                await cursor.execute("COMMIT")
+                                
+                                results["success_count"] = len(updated_pairs)
+                                results["updated_relationships"] = updated_pairs
+                                
+                        except Exception as e:
+                            logger.error(f"Error updating relationships: {e}")
+                            results["error"] = str(e)
+                            results["error_count"] = len(npc_ids) * len(target_npc_ids)
                             
-                            cursor.execute("COMMIT")
-                            
-                            results["success_count"] = len(updated_pairs)
-                            results["updated_relationships"] = updated_pairs
-                            
-                    except Exception as e:
-                        logger.error(f"Error updating relationships: {e}")
-                        results["error"] = str(e)
-                        results["error_count"] = len(npc_ids) * len(target_npc_ids)
-                        
-                        # Rollback on error
-                        try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
-                        except Exception as rollback_error:
-                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                            # Rollback on error
+                            try:
+                                async with get_db_connection_context() as conn:
+                                    async with conn.cursor() as cursor:
+                                        await cursor.execute("ROLLBACK")
+                            except Exception as rollback_error:
+                                logger.error(f"Error rolling back transaction: {rollback_error}")
                 
                 # Belief update - create or update beliefs
                 elif update_type == "belief_update":
@@ -1495,63 +1543,64 @@ class NPCAgentCoordinator:
                         return {"error": "No traits specified for update"}
                         
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Begin transaction
-                            cursor.execute("BEGIN")
-                            
-                            # Build dynamic update SQL
-                            update_fields = []
-                            update_values = []
-                            
-                            for trait, value in traits.items():
-                                if trait in ["dominance", "cruelty", "mental_resilience"]:
-                                    # Numeric trait
-                                    update_fields.append(f"{trait} = %s")
-                                    update_values.append(value)
-                                elif trait == "personality_traits":
-                                    # JSON trait - handle as array or object
-                                    update_fields.append(f"{trait} = %s")
-                                    
-                                    if isinstance(value, list) or isinstance(value, dict):
-                                        import json
-                                        update_values.append(json.dumps(value))
-                                    else:
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
+                                
+                                # Build dynamic update SQL
+                                update_fields = []
+                                update_values = []
+                                
+                                for trait, value in traits.items():
+                                    if trait in ["dominance", "cruelty", "mental_resilience"]:
+                                        # Numeric trait
+                                        update_fields.append(f"{trait} = %s")
                                         update_values.append(value)
-                            
-                            if update_fields:
-                                # Process NPCs in smaller batches
-                                batch_size = 10
-                                updated_ids = []
-                                
-                                for i in range(0, len(npc_ids), batch_size):
-                                    batch_npcs = npc_ids[i:i+batch_size]
-                                    
-                                    query = f"""
-                                        UPDATE NPCStats
-                                        SET {', '.join(update_fields)}
-                                        WHERE npc_id = ANY(%s)
-                                        AND user_id = %s
-                                        AND conversation_id = %s
-                                        RETURNING npc_id
-                                    """
-                                    
-                                    cursor.execute(
-                                        query, 
-                                        [*update_values, batch_npcs, self.user_id, self.conversation_id]
-                                    )
-                                    
-                                    batch_updated = [row[0] for row in cursor.fetchall()]
-                                    updated_ids.extend(batch_updated)
-                                    
-                                    # Small delay between batches
-                                    if i + batch_size < len(npc_ids):
-                                        await asyncio.sleep(0.05)
+                                    elif trait == "personality_traits":
+                                        # JSON trait - handle as array or object
+                                        update_fields.append(f"{trait} = %s")
                                         
-                                results["success_count"] = len(updated_ids)
-                                results["updated_npcs"] = updated_ids
+                                        if isinstance(value, list) or isinstance(value, dict):
+                                            import json
+                                            update_values.append(json.dumps(value))
+                                        else:
+                                            update_values.append(value)
                                 
-                            cursor.execute("COMMIT")
-                            
+                                if update_fields:
+                                    # Process NPCs in smaller batches
+                                    batch_size = 10
+                                    updated_ids = []
+                                    
+                                    for i in range(0, len(npc_ids), batch_size):
+                                        batch_npcs = npc_ids[i:i+batch_size]
+                                        
+                                        for npc_id in batch_npcs:
+                                            query = f"""
+                                                UPDATE NPCStats
+                                                SET {', '.join(update_fields)}
+                                                WHERE npc_id = %s
+                                                AND user_id = %s
+                                                AND conversation_id = %s
+                                                RETURNING npc_id
+                                            """
+                                            
+                                            query_params = update_values + [npc_id, self.user_id, self.conversation_id]
+                                            await cursor.execute(query, query_params)
+                                            
+                                            row = await cursor.fetchone()
+                                            if row:
+                                                updated_ids.append(row[0])
+                                        
+                                        # Small delay between batches
+                                        if i + batch_size < len(npc_ids):
+                                            await asyncio.sleep(0.05)
+                                            
+                                    results["success_count"] = len(updated_ids)
+                                    results["updated_npcs"] = updated_ids
+                                    
+                                await cursor.execute("COMMIT")
+                                
                     except Exception as e:
                         logger.error(f"Error updating NPC traits: {e}")
                         results["error"] = str(e)
@@ -1559,8 +1608,9 @@ class NPCAgentCoordinator:
                         
                         # Rollback on error
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    await cursor.execute("ROLLBACK")
                         except Exception as rollback_error:
                             logger.error(f"Error rolling back transaction: {rollback_error}")
                 
@@ -1619,74 +1669,78 @@ class NPCAgentCoordinator:
                         return {"error": "No schedule data specified"}
                         
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Begin transaction
-                            cursor.execute("BEGIN")
-                            
-                            # Process NPCs in smaller batches
-                            batch_size = 10
-                            updated_ids = []
-                            
-                            for i in range(0, len(npc_ids), batch_size):
-                                batch_npcs = npc_ids[i:i+batch_size]
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
                                 
-                                for npc_id in batch_npcs:
-                                    # First get current schedule
-                                    cursor.execute("""
-                                        SELECT schedule
-                                        FROM NPCStats
-                                        WHERE npc_id = %s
-                                        AND user_id = %s
-                                        AND conversation_id = %s
-                                    """, (npc_id, self.user_id, self.conversation_id))
+                                # Process NPCs in smaller batches
+                                batch_size = 10
+                                updated_ids = []
+                                
+                                for i in range(0, len(npc_ids), batch_size):
+                                    batch_npcs = npc_ids[i:i+batch_size]
                                     
-                                    row = cursor.fetchone()
-                                    if not row:
-                                        continue
+                                    for npc_id in batch_npcs:
+                                        # First get current schedule
+                                        await cursor.execute("""
+                                            SELECT schedule
+                                            FROM NPCStats
+                                            WHERE npc_id = %s
+                                            AND user_id = %s
+                                            AND conversation_id = %s
+                                        """, (npc_id, self.user_id, self.conversation_id))
                                         
-                                    current_schedule = row[0]
-                                    
-                                    # Parse and update schedule
-                                    if current_schedule is None:
-                                        current_schedule = {}
-                                    elif isinstance(current_schedule, str):
-                                        import json
-                                        try:
-                                            current_schedule = json.loads(current_schedule)
-                                        except json.JSONDecodeError:
+                                        row = await cursor.fetchone()
+                                        if not row:
+                                            continue
+                                            
+                                        current_schedule = row[0]
+                                        
+                                        # Parse and update schedule
+                                        if current_schedule is None:
                                             current_schedule = {}
-                                    
-                                    if not isinstance(current_schedule, dict):
-                                        current_schedule = {}
+                                        elif isinstance(current_schedule, str):
+                                            import json
+                                            try:
+                                                current_schedule = json.loads(current_schedule)
+                                            except json.JSONDecodeError:
+                                                current_schedule = {}
                                         
-                                    # Update schedule for specific time period or create a new one
-                                    if time_period:
-                                        current_schedule[time_period] = schedule_data
-                                    else:
-                                        # Replace entire schedule
-                                        current_schedule = schedule_data
+                                        if not isinstance(current_schedule, dict):
+                                            current_schedule = {}
+                                            
+                                        # Update schedule for specific time period or create a new one
+                                        if time_period:
+                                            current_schedule[time_period] = schedule_data
+                                        else:
+                                            # Replace entire schedule
+                                            current_schedule = schedule_data
+                                            
+                                        # Save updated schedule
+                                        import json
+                                        await cursor.execute("""
+                                            UPDATE NPCStats
+                                            SET schedule = %s
+                                            WHERE npc_id = %s
+                                            AND user_id = %s
+                                            AND conversation_id = %s
+                                            RETURNING npc_id
+                                        """, (json.dumps(current_schedule), npc_id, self.user_id, self.conversation_id))
                                         
-                                    # Save updated schedule
-                                    import json
-                                    cursor.execute("""
-                                        UPDATE NPCStats
-                                        SET schedule = %s
-                                        WHERE npc_id = %s
-                                        AND user_id = %s
-                                        AND conversation_id = %s
-                                    """, (json.dumps(current_schedule), npc_id, self.user_id, self.conversation_id))
+                                        row = await cursor.fetchone()
+                                        if row:
+                                            updated_ids.append(row[0])
                                     
-                                    updated_ids.append(npc_id)
+                                    # Small delay between batches
+                                    if i + batch_size < len(npc_ids):
+                                        await asyncio.sleep(0.05)
+                                        
+                                await cursor.execute("COMMIT")
                                 
-                                # Small delay between batches
-                                if i + batch_size < len(npc_ids):
-                                    await asyncio.sleep(0.05)
-                                    
-                            cursor.execute("COMMIT")
-                            
-                            results["success_count"] = len(updated_ids)
-                            results["updated_npcs"] = updated_ids
-                            
+                                results["success_count"] = len(updated_ids)
+                                results["updated_npcs"] = updated_ids
+                                
                     except Exception as e:
                         logger.error(f"Error updating NPC schedules: {e}")
                         results["error"] = str(e)
@@ -1694,8 +1748,9 @@ class NPCAgentCoordinator:
                         
                         # Rollback on error
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    await cursor.execute("ROLLBACK")
                         except Exception as rollback_error:
                             logger.error(f"Error rolling back transaction: {rollback_error}")
                 
@@ -1713,38 +1768,41 @@ class NPCAgentCoordinator:
                         return {"error": f"Invalid status field. Allowed: {allowed_fields}"}
                         
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Begin transaction
-                            cursor.execute("BEGIN")
-                            
-                            # Process NPCs in smaller batches
-                            batch_size = 20
-                            updated_ids = []
-                            
-                            for i in range(0, len(npc_ids), batch_size):
-                                batch_npcs = npc_ids[i:i+batch_size]
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
                                 
-                                cursor.execute(f"""
-                                    UPDATE NPCStats
-                                    SET {status_field} = %s
-                                    WHERE npc_id = ANY(%s)
-                                    AND user_id = %s
-                                    AND conversation_id = %s
-                                    RETURNING npc_id
-                                """, (status_value, batch_npcs, self.user_id, self.conversation_id))
+                                # Process NPCs in smaller batches
+                                batch_size = 20
+                                updated_ids = []
                                 
-                                batch_updated = [row[0] for row in cursor.fetchall()]
-                                updated_ids.extend(batch_updated)
+                                for i in range(0, len(npc_ids), batch_size):
+                                    batch_npcs = npc_ids[i:i+batch_size]
+                                    
+                                    for npc_id in batch_npcs:
+                                        await cursor.execute(f"""
+                                            UPDATE NPCStats
+                                            SET {status_field} = %s
+                                            WHERE npc_id = %s
+                                            AND user_id = %s
+                                            AND conversation_id = %s
+                                            RETURNING npc_id
+                                        """, (status_value, npc_id, self.user_id, self.conversation_id))
+                                        
+                                        row = await cursor.fetchone()
+                                        if row:
+                                            updated_ids.append(row[0])
+                                    
+                                    # Small delay between batches
+                                    if i + batch_size < len(npc_ids):
+                                        await asyncio.sleep(0.05)
                                 
-                                # Small delay between batches
-                                if i + batch_size < len(npc_ids):
-                                    await asyncio.sleep(0.05)
+                                await cursor.execute("COMMIT")
                                 
-                            cursor.execute("COMMIT")
-                            
-                            results["success_count"] = len(updated_ids)
-                            results["updated_npcs"] = updated_ids
-                            
+                                results["success_count"] = len(updated_ids)
+                                results["updated_npcs"] = updated_ids
+                                
                     except Exception as e:
                         logger.error(f"Error updating NPC status: {e}")
                         results["error"] = str(e)
@@ -1752,8 +1810,9 @@ class NPCAgentCoordinator:
                         
                         # Rollback on error
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    await cursor.execute("ROLLBACK")
                         except Exception as rollback_error:
                             logger.error(f"Error rolling back transaction: {rollback_error}")
                 
@@ -1765,46 +1824,49 @@ class NPCAgentCoordinator:
                         return {"error": "No appearance data specified"}
                         
                     try:
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Begin transaction
-                            cursor.execute("BEGIN")
-                            
-                            import json
-                            
-                            # Ensure appearance data is JSON
-                            if isinstance(appearance_data, dict):
-                                appearance_json = json.dumps(appearance_data)
-                            else:
-                                appearance_json = appearance_data
+                        async with get_db_connection_context() as conn:
+                            async with conn.cursor() as cursor:
+                                # Begin transaction
+                                await cursor.execute("BEGIN")
                                 
-                            # Process NPCs in smaller batches
-                            batch_size = 20
-                            updated_ids = []
-                            
-                            for i in range(0, len(npc_ids), batch_size):
-                                batch_npcs = npc_ids[i:i+batch_size]
+                                import json
                                 
-                                cursor.execute("""
-                                    UPDATE NPCStats
-                                    SET appearance = %s
-                                    WHERE npc_id = ANY(%s)
-                                    AND user_id = %s
-                                    AND conversation_id = %s
-                                    RETURNING npc_id
-                                """, (appearance_json, batch_npcs, self.user_id, self.conversation_id))
+                                # Ensure appearance data is JSON
+                                if isinstance(appearance_data, dict):
+                                    appearance_json = json.dumps(appearance_data)
+                                else:
+                                    appearance_json = appearance_data
+                                    
+                                # Process NPCs in smaller batches
+                                batch_size = 20
+                                updated_ids = []
                                 
-                                batch_updated = [row[0] for row in cursor.fetchall()]
-                                updated_ids.extend(batch_updated)
+                                for i in range(0, len(npc_ids), batch_size):
+                                    batch_npcs = npc_ids[i:i+batch_size]
+                                    
+                                    for npc_id in batch_npcs:
+                                        await cursor.execute("""
+                                            UPDATE NPCStats
+                                            SET appearance = %s
+                                            WHERE npc_id = %s
+                                            AND user_id = %s
+                                            AND conversation_id = %s
+                                            RETURNING npc_id
+                                        """, (appearance_json, npc_id, self.user_id, self.conversation_id))
+                                        
+                                        row = await cursor.fetchone()
+                                        if row:
+                                            updated_ids.append(row[0])
+                                    
+                                    # Small delay between batches
+                                    if i + batch_size < len(npc_ids):
+                                        await asyncio.sleep(0.05)
                                 
-                                # Small delay between batches
-                                if i + batch_size < len(npc_ids):
-                                    await asyncio.sleep(0.05)
+                                await cursor.execute("COMMIT")
                                 
-                            cursor.execute("COMMIT")
-                            
-                            results["success_count"] = len(updated_ids)
-                            results["updated_npcs"] = updated_ids
-                            
+                                results["success_count"] = len(updated_ids)
+                                results["updated_npcs"] = updated_ids
+                                
                     except Exception as e:
                         logger.error(f"Error updating NPC appearance: {e}")
                         results["error"] = str(e)
@@ -1812,11 +1874,12 @@ class NPCAgentCoordinator:
                         
                         # Rollback on error
                         try:
-                            with get_db_connection() as conn, conn.cursor() as cursor:
-                                cursor.execute("ROLLBACK")
+                            async with get_db_connection_context() as conn:
+                                async with conn.cursor() as cursor:
+                                    await cursor.execute("ROLLBACK")
                         except Exception as rollback_error:
                             logger.error(f"Error rolling back transaction: {rollback_error}")
-            
+                
                 else:
                     return {
                         "error": f"Unknown update type: {update_type}",
