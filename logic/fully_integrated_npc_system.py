@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 import contextlib
 
-# Import existing modules to utilize their functionality
+# UPDATED: Import async connection context manager
 from db.connection import get_db_connection_context
+
+# Import existing modules to utilize their functionality
 from logic.social_links import (
     create_social_link,
     update_link_type_and_level,
@@ -117,7 +119,7 @@ class IntegratedNPCSystem:
     
     def __init__(self, user_id: int, conversation_id: int):
         """
-        Initialize the NPC system with enhanced connection pooling.
+        Initialize the NPC system.
         
         Args:
             user_id: The user ID
@@ -125,8 +127,6 @@ class IntegratedNPCSystem:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
-        # No longer need connection pool initialization code since we're using get_db_connection_context
         
         # Initialize caching structures with more granular control
         self.npc_cache = {}  # Cache for NPC data
@@ -270,34 +270,9 @@ class IntegratedNPCSystem:
                     f"{len(expired_rel_keys)} relationship cache entries, " +
                     f"{len(expired_mem_keys)} memory cache entries")
     
-    async def _initialize_pool(self):
-        """Initialize the connection pool with optimized settings."""
-        try:
-            # Get connection string from environment
-            dsn = os.getenv("DB_DSN")
-            self._pool = await asyncpg.create_pool(
-                dsn=dsn,
-                min_size=5,      # Minimum connections in pool
-                max_size=20,     # Maximum connections in pool
-                command_timeout=60.0,
-                max_inactive_connection_lifetime=300.0,  # 5 minutes
-                max_queries=50000,
-                statement_cache_size=0,  # Disable statement cache for less memory usage
-            )
-            logger.info("Database connection pool initialized successfully")
-        except Exception as e:
-            logger.error(f"Error initializing connection pool: {e}")
-            # Create minimal pool as fallback
-            self._pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
-        finally:
-            # Signal that initialization is complete
-            self._pool_initialized.set()
+    # UPDATED: Removed _initialize_pool method
     
-    async def get_connection_pool(self):
-        """Get the connection pool, waiting for initialization if needed."""
-        await self._pool_initialized.wait()
-        return self._pool
-    
+    # UPDATED: Database access methods
     async def execute_query(self, query, *args, timeout=10.0):
         """Execute a database query with error handling."""
         start_time = datetime.now()
@@ -393,24 +368,11 @@ class IntegratedNPCSystem:
             }
         }
         
-        # Get pool statistics if available
-        pool_metrics = {}
-        try:
-            pool = await self.get_connection_pool()
-            pool_metrics = {
-                "pool_size": pool.get_size(),
-                "pool_free_size": pool.get_free_size(),
-                "pool_max_size": pool.get_max_size()
-            }
-        except Exception:
-            pool_metrics = {"note": "Unable to get pool statistics"}
-        
         # Combine all metrics
         full_metrics = {
             "timestamp": datetime.now().isoformat(),
             "db": db_metrics,
-            "cache": cache_metrics,
-            "pool": pool_metrics
+            "cache": cache_metrics
         }
         
         # Log metrics at appropriate level
@@ -522,7 +484,6 @@ class IntegratedNPCSystem:
                     except Exception as fallback_error:
                         logger.error(f"Even fallback NPC creation failed: {fallback_error}")
                         raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
-    
 
     async def _initialize_npc_agent(
         self, 
@@ -654,45 +615,42 @@ class IntegratedNPCSystem:
         # Initialize agents for the new NPCs
         for npc_id in npc_ids:
             # Get NPC details to initialize agent
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT npc_name, current_location, memory 
-                FROM NPCStats 
-                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            """, (npc_id, self.user_id, self.conversation_id))
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                npc_name = row[0]
-                current_location = row[1] or "Unknown"
-                memories = row[2] if row[2] else []
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT npc_name, current_location, memory 
+                    FROM NPCStats 
+                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, npc_id, self.user_id, self.conversation_id)
                 
-                # Parse memories if needed
-                if isinstance(memories, str):
-                    try:
-                        memories = json.loads(memories)
-                    except:
-                        memories = []
-                
-                # Initialize agent in background
-                asyncio.create_task(
-                    self._initialize_npc_agent(
-                        npc_id=npc_id,
-                        npc_name=npc_name,
-                        memories=memories,
-                        current_location=current_location,
-                        time_of_day="Morning"  # Default
+                if row:
+                    npc_name = row[0]
+                    current_location = row[1] or "Unknown"
+                    memories = row[2] if row[2] else []
+                    
+                    # Parse memories if needed
+                    if isinstance(memories, str):
+                        try:
+                            memories = json.loads(memories)
+                        except:
+                            memories = []
+                    
+                    # Initialize agent in background
+                    asyncio.create_task(
+                        self._initialize_npc_agent(
+                            npc_id=npc_id,
+                            npc_name=npc_name,
+                            memories=memories,
+                            current_location=current_location,
+                            time_of_day="Morning"  # Default
+                        )
                     )
-                )
-                
-                # Update cache
-                self.npc_cache[npc_id] = {
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "last_updated": datetime.now()
-                }
+                    
+                    # Update cache
+                    self.npc_cache[npc_id] = {
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "last_updated": datetime.now()
+                    }
         
         return npc_ids
 
@@ -780,8 +738,7 @@ class IntegratedNPCSystem:
         agent = self.agent_system.npc_agents[npc_id]
         
         try:
-            # Use connection pool for better performance
-            async with self.connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 # Use a single connection for all related queries
                 start_time = datetime.now()
                 
@@ -957,8 +914,8 @@ class IntegratedNPCSystem:
         agent = self.agent_system.npc_agents[npc_id]
         
         try:
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Update NPC status with RETURNING to verify existence
                 row = await conn.fetchrow("""
                     UPDATE NPCStats
@@ -1106,7 +1063,7 @@ class IntegratedNPCSystem:
         """
         try:
             # Get the relationship details before update
-            async with self.connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
                     FROM SocialLinks
@@ -1201,7 +1158,7 @@ class IntegratedNPCSystem:
         """
         try:
             # Get the relationship details
-            async with self.connection_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT entity1_type, entity1_id, entity2_type, entity2_id
                     FROM SocialLinks
@@ -1401,8 +1358,8 @@ class IntegratedNPCSystem:
         try:
             events = []
             
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Get social links with sufficiently high levels that might trigger events
                 rows = await conn.fetch("""
                     SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
@@ -1687,8 +1644,8 @@ class IntegratedNPCSystem:
             RelationshipError: If there's an issue applying the choice
         """
         try:
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Get link details
                 row = await conn.fetchrow("""
                     SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
@@ -1805,8 +1762,8 @@ class IntegratedNPCSystem:
             if cache_key in self.relationship_cache and (datetime.now() - self.relationship_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
                 return self.relationship_cache[cache_key]
             
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Check for direct relationship
                 row = await conn.fetchrow("""
                     SELECT link_id, link_type, link_level, link_history
@@ -1902,7 +1859,7 @@ class IntegratedNPCSystem:
     
     async def _get_entity_name(self, entity_type: str, entity_id: int) -> str:
         """
-        Get the name of an entity using connection pooling for better performance.
+        Get the name of an entity using connection for better performance.
         
         Args:
             entity_type: Entity type (e.g., "npc", "player")
@@ -1919,8 +1876,8 @@ class IntegratedNPCSystem:
             if cache_key in self.npc_cache:
                 return self.npc_cache[cache_key].get("npc_name", f"NPC-{entity_id}")
             
-            # Use connection pool
-            async with self.connection_pool.acquire() as conn:
+            # Use connection
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT npc_name 
                     FROM NPCStats
@@ -2056,8 +2013,8 @@ class IntegratedNPCSystem:
             return "Unknown"
         
         try:
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Get all locations for the NPCs in a single query with count
                 rows = await conn.fetch("""
                     SELECT current_location, COUNT(*) as location_count
@@ -2227,8 +2184,8 @@ class IntegratedNPCSystem:
             return result
         
         try:
-            # Use connection pool for performance
-            async with self.connection_pool.acquire() as conn:
+            # Use connection for performance
+            async with get_db_connection_context() as conn:
                 # Batch query for efficiency
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, introduced
@@ -2300,8 +2257,8 @@ class IntegratedNPCSystem:
             error_msg = f"Error adding memory to NPC: {e}"
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
-    
-    async def retrieve_relevant_memories(self, context, limit=5, memory_types=None):
+
+async def retrieve_relevant_memories(self, context, limit=5, memory_types=None):
         """
         Unified memory retrieval method that delegates to appropriate implementation.
         
@@ -2470,43 +2427,38 @@ class IntegratedNPCSystem:
         # Extract query text
         query_text = self._extract_query_text(context)
         
-        # Simple direct database query as fallback
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        # UPDATED: Use async connection context manager
         try:
-            # Basic search using text similarity
-            cursor.execute("""
-                SELECT id, memory_text, memory_type, significance, emotional_intensity
-                FROM NPCMemories
-                WHERE user_id = %s AND conversation_id = %s
-                ORDER BY 
-                    CASE 
-                        WHEN LOWER(memory_text) LIKE %s THEN 1
-                        ELSE 2
-                    END,
-                    significance DESC,
-                    created_at DESC
-                LIMIT %s
-            """, (self.user_id, self.conversation_id, f"%{query_text.lower()}%", limit))
-            
-            memories = []
-            for row in cursor.fetchall():
-                memories.append({
-                    "id": row[0],
-                    "text": row[1],
-                    "type": row[2],
-                    "significance": row[3],
-                    "emotional_intensity": row[4]
-                })
-            
-            return memories
+            async with get_db_connection_context() as conn:
+                # Basic search using text similarity
+                rows = await conn.fetch("""
+                    SELECT id, memory_text, memory_type, significance, emotional_intensity
+                    FROM NPCMemories
+                    WHERE user_id = $1 AND conversation_id = $2
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(memory_text) LIKE $3 THEN 1
+                            ELSE 2
+                        END,
+                        significance DESC,
+                        created_at DESC
+                    LIMIT $4
+                """, self.user_id, self.conversation_id, f"%{query_text.lower()}%", limit)
+                
+                memories = []
+                for row in rows:
+                    memories.append({
+                        "id": row[0],
+                        "text": row[1],
+                        "type": row[2],
+                        "significance": row[3],
+                        "emotional_intensity": row[4]
+                    })
+                
+                return memories
         except Exception as e:
             logger.error(f"Error in fallback memory retrieval: {e}")
             return self._get_fallback_memories()
-        finally:
-            cursor.close()
-            conn.close()
     
     async def propagate_memory_to_related_npcs(self, 
                                            source_npc_id: int,
@@ -2536,8 +2488,11 @@ class IntegratedNPCSystem:
             if source_npc_id not in self.agent_system.npc_agents:
                 self.agent_system.npc_agents[source_npc_id] = NPCAgent(source_npc_id, self.user_id, self.conversation_id)
             
-            # Use connection pool for better performance
-            async with self.connection_pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            related_npcs = []
+            source_name = "Unknown"
+            
+            async with get_db_connection_context() as conn:
                 # Find related NPCs with a single query
                 rows = await conn.fetch("""
                     SELECT sl.entity2_id, sl.link_level, n.npc_name as source_name
@@ -2552,9 +2507,6 @@ class IntegratedNPCSystem:
                       AND sl.entity2_type = 'npc'
                       AND sl.link_level > 30
                 """, self.user_id, self.conversation_id, source_npc_id)
-                
-                source_name = "Unknown"
-                related_npcs = []
                 
                 for row in rows:
                     related_npcs.append((row["entity2_id"], row["link_level"]))
@@ -2670,41 +2622,41 @@ class IntegratedNPCSystem:
                                        npc_id: int, 
                                        trigger: str = None,
                                        severity: int = None) -> Dict[str, Any]:
-            """
-            Generate a mask slippage event for an NPC.
+        """
+        Generate a mask slippage event for an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            trigger: What triggered the slippage
+            severity: Severity level of the slippage
             
-            Args:
-                npc_id: ID of the NPC
-                trigger: What triggered the slippage
-                severity: Severity level of the slippage
-                
-            Returns:
-                Dictionary with slippage information
-                
-            Raises:
-                MemorySystemError: If there's an issue generating the slippage
-            """
-            try:
-                # Get or create NPC agent
-                if npc_id not in self.agent_system.npc_agents:
-                    self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-                
-                agent = self.agent_system.npc_agents[npc_id]
-                memory_system = await agent._get_memory_system()
-                
-                # Generate mask slippage using the memory system
-                result = await memory_system.reveal_npc_trait(
-                    npc_id=npc_id,
-                    trigger=trigger,
-                    severity=severity
-                )
-                
-                return result
-                
-            except Exception as e:
-                error_msg = f"Error generating mask slippage: {e}"
-                logger.error(error_msg)
-                raise MemorySystemError(error_msg)
+        Returns:
+            Dictionary with slippage information
+            
+        Raises:
+            MemorySystemError: If there's an issue generating the slippage
+        """
+        try:
+            # Get or create NPC agent
+            if npc_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            
+            agent = self.agent_system.npc_agents[npc_id]
+            memory_system = await agent._get_memory_system()
+            
+            # Generate mask slippage using the memory system
+            result = await memory_system.reveal_npc_trait(
+                npc_id=npc_id,
+                trigger=trigger,
+                severity=severity
+            )
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Error generating mask slippage: {e}"
+            logger.error(error_msg)
+            raise MemorySystemError(error_msg)
     
     async def update_npc_emotional_state(self, 
                                       npc_id: int, 
@@ -3027,9 +2979,8 @@ class IntegratedNPCSystem:
         Returns:
             List of NPCs at the location
         """
-        pool = await self.get_connection_pool()
-        
-        async with pool.acquire() as conn:
+        # UPDATED: Use async connection context manager
+        async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
                 SELECT 
                     n.npc_id, n.npc_name, 
@@ -3255,9 +3206,8 @@ class IntegratedNPCSystem:
         npc_data = {}
         
         try:
-            # Use optimized batch query
-            pool = await self.get_connection_pool()
-            async with pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, current_location, schedule
                     FROM NPCStats
@@ -3346,9 +3296,8 @@ class IntegratedNPCSystem:
         location_groups = {}
         
         try:
-            # Use connection pool for performance
-            pool = await self.get_connection_pool()
-            async with pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id, current_location
                     FROM NPCStats
@@ -3375,9 +3324,8 @@ class IntegratedNPCSystem:
         dominant_npcs = []
         
         try:
-            # Use connection pool for performance
-            pool = await self.get_connection_pool()
-            async with pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT npc_id 
                     FROM NPCStats
@@ -3405,8 +3353,8 @@ class IntegratedNPCSystem:
                 interaction_chance += 0.2  # More group interactions in evening
             
             # Check if initiator has high dominance and cruelty (femdom context)
-            pool = await self.get_connection_pool()
-            async with pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT dominance, cruelty
                     FROM NPCStats
@@ -3506,7 +3454,8 @@ class IntegratedNPCSystem:
             important_relationships = set()
             
             # Get active and important NPCs in a single query
-            async with self.connection_pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 # Find NPCs with important relationships
                 rel_rows = await conn.fetch("""
                     SELECT DISTINCT entity1_id as npc_id
@@ -3601,8 +3550,8 @@ class IntegratedNPCSystem:
             # Using apply_stat_change
             result = apply_stat_change(self.user_id, self.conversation_id, changes, cause)
             
-            # Use connection pool for better performance
-            async with self.connection_pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 # Get all current values in a single query
                 stat_names = list(changes.keys())
                 placeholders = ", ".join(f"{name}" for name in stat_names)
@@ -3752,6 +3701,7 @@ class IntegratedNPCSystem:
                 self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
             
             # Process through the agent system using transaction management
+            # UPDATED: Use async context manager for transaction
             async with self._transaction_context() as conn:
                 # Get NPC details for performance boosting (single query)
                 npc_details = await self._fetch_npc_basic_data(conn, npc_id)
@@ -3851,17 +3801,7 @@ class IntegratedNPCSystem:
         
         return stat_changes
     
-    @contextlib.asynccontextmanager
-    async def _transaction_context(self):
-        """Context manager for database transactions with proper error handling."""
-        async with get_db_connection_context() as conn:
-            try:
-                await conn.execute("BEGIN")
-                yield conn
-                await conn.execute("COMMIT")
-            except Exception as e:
-                await conn.execute("ROLLBACK")
-                raise
+    # UPDATED: Transaction context manager already updated earlier
     
     async def _apply_stat_changes_transaction(self, conn, stat_changes, cause):
         """Apply stat changes within a transaction."""
@@ -3869,20 +3809,16 @@ class IntegratedNPCSystem:
             # Apply each stat change
             for stat_name, change_value in stat_changes.items():
                 # Get current value
-                row = await conn.fetchrow("""
-                    SELECT {stat_name} FROM PlayerStats 
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
-                """, self.user_id, self.conversation_id)
+                query_text = f"SELECT {stat_name} FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'"
+                row = await conn.fetchrow(query_text, self.user_id, self.conversation_id)
                 
                 if row:
                     old_value = row[stat_name]
                     new_value = old_value + change_value
                     
                     # Update the stat
-                    await conn.execute("""
-                        UPDATE PlayerStats SET {stat_name} = $1
-                        WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'
-                    """, new_value, self.user_id, self.conversation_id)
+                    update_query = f"UPDATE PlayerStats SET {stat_name} = $1 WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'"
+                    await conn.execute(update_query, new_value, self.user_id, self.conversation_id)
                     
                     # Log the change
                     await conn.execute("""
@@ -3996,7 +3932,8 @@ class IntegratedNPCSystem:
             stat_changes = {}
             
             # Calculate group dominance average with a single batch query
-            async with self.connection_pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT AVG(dominance) as avg_dominance, AVG(cruelty) as avg_cruelty, COUNT(*) as npc_count
                     FROM NPCStats
@@ -4061,8 +3998,8 @@ class IntegratedNPCSystem:
             return self.npc_cache[cache_key].get("npc_name", f"NPC-{npc_id}")
         
         try:
-            # Use connection pool for better performance
-            async with self.connection_pool.acquire() as conn:
+            # UPDATED: Use async connection context manager
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT npc_name 
                     FROM NPCStats
@@ -4086,62 +4023,3 @@ class IntegratedNPCSystem:
         except Exception as e:
             logger.error(f"Error getting NPC name: {e}")
             return f"NPC-{npc_id}"
-
-#=================================================================
-# USAGE EXAMPLES
-#=================================================================
-
-async def example_usage():
-    """Example demonstrating key agent-based functionality."""
-    user_id = 1
-    conversation_id = 123
-    
-    # Initialize the system
-    npc_system = IntegratedNPCSystem(user_id, conversation_id)
-    
-    # Create a new NPC
-    environment_desc = "A mansion with sprawling gardens and opulent interior."
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    npc_id = await npc_system.create_new_npc(environment_desc, day_names)
-    
-    # Get NPC details
-    npc_details = await npc_system.get_npc_details(npc_id)
-    print(f"Created NPC: {npc_details['npc_name']}")
-    
-    # Introduce the NPC
-    await npc_system.introduce_npc(npc_id)
-    
-    # Handle an interaction with the NPC using the agent architecture
-    interaction_result = await npc_system.handle_npc_interaction(
-        npc_id, "conversation", "Hello, nice to meet you."
-    )
-    print(f"Interaction result: {interaction_result}")
-    
-    # Update NPC's emotional state
-    await npc_system.update_npc_emotional_state(npc_id, "joy", 0.7)
-    
-    # Create another NPC
-    second_npc_id = await npc_system.create_new_npc(environment_desc, day_names)
-    
-    # Handle a group interaction
-    group_result = await npc_system.handle_group_interaction(
-        [npc_id, second_npc_id], "conversation", "Hello everyone!"
-    )
-    print(f"Group interaction result: {group_result}")
-    
-    # Generate a scene with both NPCs
-    scene = await npc_system.generate_multi_npc_scene([npc_id, second_npc_id], "Garden")
-    print(f"Generated scene: {scene}")
-    
-    # Process scheduled activities
-    await npc_system.process_npc_scheduled_activities()
-    
-    # Run memory maintenance
-    await npc_system.run_memory_maintenance()
-    
-    print("Agent-based NPC system demo completed successfully!")
-
-if __name__ == "__main__":
-    # Run the agent-based example
-    import asyncio
-    asyncio.run(example_usage())
