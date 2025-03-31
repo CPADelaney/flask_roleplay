@@ -1,4 +1,4 @@
-# Create a new file: nyx/core/femdom/persona_manager.py
+# nyx/core/femdom/persona_manager.py
 
 import logging
 import datetime
@@ -7,6 +7,9 @@ import random
 from typing import Dict, List, Any, Optional, Set, Tuple, Union
 from pydantic import BaseModel, Field
 from enum import Enum
+
+from agents import Agent, ModelSettings, function_tool, Runner, trace, RunContextWrapper
+from agents import InputGuardrail, GuardrailFunctionOutput, Handoff, handoff
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +68,42 @@ class PersonaActivation(BaseModel):
     customizations: Dict[str, Any] = Field(default_factory=dict)
     active: bool = True
 
+class PersonaContext(BaseModel):
+    """Context for persona-related operations."""
+    personas: Dict[str, DominancePersona] = Field(default_factory=dict)
+    active_personas: Dict[str, PersonaActivation] = Field(default_factory=dict)
+    persona_history: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    user_preferences: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    memory_core: Any = None
+    relationship_manager: Any = None
+    emotional_core: Any = None
+
+class PersonaRecommendationInput(BaseModel):
+    """Input for persona recommendation guardrail."""
+    user_id: str
+    scenario: Optional[str] = None
+
+class PersonaRecommendationOutput(BaseModel):
+    """Output from persona recommendation guardrail."""
+    is_valid: bool
+    scenario_appropriate: bool
+    reason: Optional[str] = None
+
+class PersonaActivationInput(BaseModel):
+    """Input for persona activation guardrail."""
+    user_id: str
+    persona_id: str
+    intensity: float
+    duration_minutes: Optional[int] = None
+
+class PersonaActivationOutput(BaseModel):
+    """Output from persona activation guardrail."""
+    is_valid: bool
+    reason: Optional[str] = None
+    suggested_intensity: Optional[float] = None
+
 class DominancePersonaManager:
-    """Manages different dominance personas and their activation."""
+    """Manages different dominance personas and their activation using Agent SDK."""
 
     def __init__(self, relationship_manager=None, reward_system=None, memory_core=None, emotional_core=None):
         self.relationship_manager = relationship_manager
@@ -89,10 +126,300 @@ class DominancePersonaManager:
         # Initialize personas
         self._initialize_personas()
         
+        # Initialize agents
+        self.persona_recommendation_agent = self._create_persona_recommendation_agent()
+        self.persona_activation_agent = self._create_persona_activation_agent()
+        self.persona_behavior_agent = self._create_persona_behavior_agent()
+        self.language_pattern_agent = self._create_language_pattern_agent()
+        
+        # Create context
+        self.persona_context = PersonaContext(
+            personas=self.personas,
+            active_personas=self.active_personas,
+            persona_history=self.persona_history,
+            user_preferences=self.user_preferences,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            emotional_core=self.emotional_core
+        )
+        
+        # Create guardrails
+        self.persona_recommendation_guardrail = self._create_persona_recommendation_guardrail()
+        self.persona_activation_guardrail = self._create_persona_activation_guardrail()
+        
         # Lock for thread safety
         self._lock = asyncio.Lock()
         
         logger.info("DominancePersonaManager initialized with 8 personas")
+    
+    def _create_persona_recommendation_agent(self) -> Agent:
+        """Creates an agent for recommending appropriate personas."""
+        return Agent(
+            name="PersonaRecommendationAgent",
+            instructions="""You are an expert at recommending dominance personas that match user traits, preferences, and specific scenarios.
+
+You analyze:
+1. User personality traits and preferences
+2. Relationship context and history
+3. Current scenario requirements
+4. Past persona performance with this user
+
+Provide insightful recommendations that consider:
+- Psychological fit between persona traits and user preferences
+- Appropriate intensity and style for the current scenario 
+- Progression in the dominance relationship
+- Variety in dominance experiences
+
+Your recommendations should be specific, well-justified, and ranked by suitability.
+Explain the strengths and potential challenges of each recommended persona.
+""",
+            model="o3-mini",
+            model_settings=ModelSettings(
+                temperature=0.4,
+                response_format={"type": "json_object"}
+            ),
+            tools=[
+                function_tool(self.get_available_personas),
+                function_tool(self.get_user_traits),
+                function_tool(self.get_persona_history),
+                function_tool(self.get_active_persona)
+            ],
+            output_type=Dict[str, Any],
+            input_guardrails=[self.persona_recommendation_guardrail]
+        )
+    
+    def _create_persona_activation_agent(self) -> Agent:
+        """Creates an agent for activating and managing personas."""
+        return Agent(
+            name="PersonaActivationAgent",
+            instructions="""You are an expert at activating and managing dominance personas.
+
+Your responsibilities include:
+1. Determining appropriate intensity levels for persona activation
+2. Setting appropriate time limits for persona usage
+3. Managing transitions between personas
+4. Providing guidance on persona customization
+
+Consider:
+- User's experience and tolerance levels
+- Relationship progression and trust
+- Emotional readiness for specific personas
+- Environmental and contextual factors
+
+Ensure activations are appropriate and calibrated to the user's current state.
+Manage deactivations carefully to maintain psychological continuity.
+""",
+            model="o3-mini",
+            model_settings=ModelSettings(
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            ),
+            tools=[
+                function_tool(self.get_persona_details),
+                function_tool(self.get_active_persona),
+                function_tool(self.get_user_traits)
+            ],
+            output_type=Dict[str, Any],
+            input_guardrails=[self.persona_activation_guardrail]
+        )
+    
+    def _create_persona_behavior_agent(self) -> Agent:
+        """Creates an agent for generating behavior guidelines from personas."""
+        return Agent(
+            name="PersonaBehaviorAgent",
+            instructions="""You are an expert at translating dominance persona traits into specific behavioral guidelines.
+
+Your task is to:
+1. Extract relevant behavioral guidelines from persona traits
+2. Adapt guidelines to the current intensity level
+3. Provide specific examples and implementations 
+4. Ensure consistency across behavioral elements
+
+Guidelines should be:
+- Specific and actionable
+- Psychologically coherent
+- Appropriate for the intensity level
+- Consistent with the persona's overall character
+
+Focus on creating a cohesive behavioral profile that authentically expresses the persona.
+""",
+            model="o3-mini",
+            model_settings=ModelSettings(
+                temperature=0.5,
+                response_format={"type": "json_object"}
+            ),
+            tools=[
+                function_tool(self.get_persona_details),
+                function_tool(self.get_active_persona)
+            ],
+            output_type=Dict[str, Any]
+        )
+    
+    def _create_language_pattern_agent(self) -> Agent:
+        """Creates an agent for generating language patterns for personas."""
+        return Agent(
+            name="LanguagePatternAgent",
+            instructions="""You are an expert at generating authentic language patterns for dominance personas.
+
+Your task is to:
+1. Create language patterns that match the persona's communication style
+2. Adapt language to the specified intensity level
+3. Generate variations for different interaction contexts
+4. Ensure linguistic consistency with persona traits
+
+Consider:
+- Formality and tone appropriate to the persona
+- Vocabulary complexity and specialized terminology
+- Emotional expressiveness or restraint
+- Directness versus indirectness
+- Sentence structure and rhythm
+
+Generate original, varied, and authentic patterns that a dominatrix with this persona would actually use.
+""",
+            model="o3-mini",
+            model_settings=ModelSettings(
+                temperature=0.7,
+                response_format={"type": "json_object"}
+            ),
+            tools=[
+                function_tool(self.get_persona_details),
+                function_tool(self.get_active_persona),
+                function_tool(self.get_language_patterns)
+            ],
+            output_type=Dict[str, Any]
+        )
+    
+    def _create_persona_recommendation_guardrail(self) -> InputGuardrail:
+        """Create guardrail for persona recommendation validation."""
+        @function_tool
+        async def recommendation_validation_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+            """Validate persona recommendation input to ensure it's appropriate."""
+            try:
+                validation_input = PersonaRecommendationInput(
+                    user_id=input_data.get("user_id", ""),
+                    scenario=input_data.get("scenario")
+                )
+                
+                # Basic validation
+                is_valid = True
+                scenario_appropriate = True
+                reason = None
+                
+                # Check if user_id is provided
+                if not validation_input.user_id:
+                    is_valid = False
+                    reason = "User ID is required for persona recommendation"
+                
+                # Check if scenario is appropriate (if provided)
+                if validation_input.scenario:
+                    inappropriate_terms = ["illegal", "underage", "noncon", "child", "children"]
+                    if any(term in validation_input.scenario.lower() for term in inappropriate_terms):
+                        scenario_appropriate = False
+                        reason = "Scenario contains inappropriate terms or context"
+                
+                # Return result
+                validation_output = PersonaRecommendationOutput(
+                    is_valid=is_valid,
+                    scenario_appropriate=scenario_appropriate,
+                    reason=reason
+                )
+                
+                return GuardrailFunctionOutput(
+                    output_info=validation_output,
+                    tripwire_triggered=not is_valid or not scenario_appropriate
+                )
+                
+            except Exception as e:
+                logger.error(f"Error in recommendation validation guardrail: {e}")
+                return GuardrailFunctionOutput(
+                    output_info=PersonaRecommendationOutput(
+                        is_valid=False,
+                        scenario_appropriate=False,
+                        reason=f"Validation error: {str(e)}"
+                    ),
+                    tripwire_triggered=True
+                )
+        
+        return InputGuardrail(guardrail_function=recommendation_validation_function)
+    
+    def _create_persona_activation_guardrail(self) -> InputGuardrail:
+        """Create guardrail for persona activation validation."""
+        @function_tool
+        async def activation_validation_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+            """Validate persona activation input to ensure it's appropriate."""
+            try:
+                validation_input = PersonaActivationInput(
+                    user_id=input_data.get("user_id", ""),
+                    persona_id=input_data.get("persona_id", ""),
+                    intensity=input_data.get("intensity", 0.5),
+                    duration_minutes=input_data.get("duration_minutes")
+                )
+                
+                # Basic validation
+                is_valid = True
+                reason = None
+                suggested_intensity = None
+                
+                # Check if user_id is provided
+                if not validation_input.user_id:
+                    is_valid = False
+                    reason = "User ID is required for persona activation"
+                
+                # Check if persona_id is provided and valid
+                if not validation_input.persona_id:
+                    is_valid = False
+                    reason = "Persona ID is required for activation"
+                elif validation_input.persona_id not in ctx.context.personas:
+                    is_valid = False
+                    reason = f"Persona '{validation_input.persona_id}' not found"
+                
+                # Check intensity is within range
+                if validation_input.intensity < 0.0 or validation_input.intensity > 1.0:
+                    is_valid = False
+                    reason = "Intensity must be between 0.0 and 1.0"
+                    suggested_intensity = max(0.0, min(1.0, validation_input.intensity))
+                
+                # Check user relationship data if available
+                if is_valid and ctx.context.relationship_manager and hasattr(ctx.context.relationship_manager, "get_relationship_state"):
+                    try:
+                        relationship = await ctx.context.relationship_manager.get_relationship_state(validation_input.user_id)
+                        
+                        # Check trust level
+                        trust_level = getattr(relationship, "trust", 0.5)
+                        
+                        # For high intensity with low trust, suggest lower intensity
+                        if validation_input.intensity > 0.7 and trust_level < 0.4:
+                            is_valid = False
+                            reason = "High intensity not recommended for current trust level"
+                            suggested_intensity = 0.5  # Moderate intensity
+                            
+                    except Exception as e:
+                        logger.error(f"Error checking relationship data: {e}")
+                
+                # Return result
+                validation_output = PersonaActivationOutput(
+                    is_valid=is_valid,
+                    reason=reason,
+                    suggested_intensity=suggested_intensity
+                )
+                
+                return GuardrailFunctionOutput(
+                    output_info=validation_output,
+                    tripwire_triggered=not is_valid
+                )
+                
+            except Exception as e:
+                logger.error(f"Error in activation validation guardrail: {e}")
+                return GuardrailFunctionOutput(
+                    output_info=PersonaActivationOutput(
+                        is_valid=False,
+                        reason=f"Validation error: {str(e)}"
+                    ),
+                    tripwire_triggered=True
+                )
+        
+        return InputGuardrail(guardrail_function=activation_validation_function)
+    
     
     def _initialize_personas(self):
         """Initialize standard dominance personas."""
@@ -859,6 +1186,7 @@ class DominancePersonaManager:
             ]
         )
     
+    @function_tool
     async def get_available_personas(self) -> List[Dict[str, Any]]:
         """Get list of available dominance personas."""
         personas = []
@@ -877,6 +1205,107 @@ class DominancePersonaManager:
             })
         return personas
     
+    @function_tool
+    async def get_user_traits(self, user_id: str) -> Dict[str, Any]:
+        """Get user traits and preferences."""
+        user_traits = {}
+        
+        # Get relationship data if available
+        if self.relationship_manager:
+            try:
+                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                if hasattr(relationship, "inferred_user_traits"):
+                    user_traits["inferred_traits"] = relationship.inferred_user_traits
+                if hasattr(relationship, "preferences"):
+                    user_traits["preferences"] = relationship.preferences
+                if hasattr(relationship, "trust"):
+                    user_traits["trust_level"] = relationship.trust
+                if hasattr(relationship, "submission_level"):
+                    user_traits["submission_level"] = relationship.submission_level
+            except Exception as e:
+                logger.error(f"Error getting relationship data: {e}")
+        
+        # Get user persona preferences from history
+        if user_id in self.user_preferences:
+            user_traits["persona_preferences"] = self.user_preferences[user_id]
+        
+        return {
+            "user_id": user_id,
+            "traits": user_traits
+        }
+    
+    @function_tool
+    async def get_persona_history(self, user_id: str) -> Dict[str, Any]:
+        """Get history of persona usage for a user."""
+        if user_id not in self.persona_history or not self.persona_history[user_id]:
+            return {
+                "success": True,
+                "user_id": user_id,
+                "history": [],
+                "preferences": {}
+            }
+        
+        # Get preferences
+        preferences = self.user_preferences.get(user_id, {})
+        
+        # Format preferences with persona names
+        formatted_preferences = {}
+        for persona_id, score in preferences.items():
+            name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
+            formatted_preferences[persona_id] = {
+                "name": name,
+                "score": score
+            }
+        
+        # Format history
+        formatted_history = []
+        for entry in self.persona_history[user_id]:
+            persona_id = entry["persona_id"]
+            name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
+            
+            formatted_entry = {
+                "persona_id": persona_id,
+                "persona_name": name,
+                "activated_at": entry["activated_at"],
+                "intensity": entry["intensity"],
+                "reason": entry.get("reason", "unspecified"),
+                "duration_minutes": entry.get("actual_duration_minutes", entry.get("duration_minutes"))
+            }
+            
+            if "deactivated_at" in entry:
+                formatted_entry["deactivated_at"] = entry["deactivated_at"]
+                formatted_entry["deactivation_reason"] = entry.get("deactivation_reason", "unspecified")
+            
+            formatted_history.append(formatted_entry)
+        
+        # Find most used persona
+        persona_usage = {}
+        for entry in self.persona_history[user_id]:
+            persona_id = entry["persona_id"]
+            persona_usage[persona_id] = persona_usage.get(persona_id, 0) + 1
+        
+        most_used = max(persona_usage.items(), key=lambda x: x[1]) if persona_usage else None
+        
+        if most_used:
+            most_used_id, most_used_count = most_used
+            most_used_name = self.personas[most_used_id].name if most_used_id in self.personas else "Unknown"
+            most_used_info = {
+                "persona_id": most_used_id,
+                "persona_name": most_used_name,
+                "usage_count": most_used_count
+            }
+        else:
+            most_used_info = None
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "history": formatted_history,
+            "preferences": formatted_preferences,
+            "most_used_persona": most_used_info
+        }
+    
+    @function_tool
     async def get_persona_details(self, persona_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific persona."""
         if persona_id not in self.personas:
@@ -907,6 +1336,7 @@ class DominancePersonaManager:
             "roleplay_elements": persona.roleplay_elements
         }
     
+    @function_tool
     async def get_active_persona(self, user_id: str) -> Dict[str, Any]:
         """Get the currently active persona for a user."""
         if user_id not in self.active_personas:
@@ -951,6 +1381,46 @@ class DominancePersonaManager:
             "customizations": activation.customizations
         }
     
+    @function_tool
+    async def get_language_patterns(self, user_id: str, pattern_type: Optional[str] = None) -> Dict[str, Any]:
+        """Get language patterns for the active persona."""
+        if user_id not in self.active_personas or not self.active_personas[user_id].active:
+            return {
+                "success": False,
+                "message": "No active persona"
+            }
+        
+        activation = self.active_personas[user_id]
+        persona_id = activation.persona_id
+        
+        if persona_id not in self.personas:
+            return {
+                "success": False,
+                "message": f"Persona {persona_id} not found"
+            }
+        
+        persona = self.personas[persona_id]
+        intensity = activation.intensity
+        
+        # Get language patterns
+        patterns = persona.language_patterns
+        
+        # Filter by type if specified
+        if pattern_type and pattern_type in patterns:
+            available_patterns = {pattern_type: patterns[pattern_type]}
+        else:
+            available_patterns = patterns
+        
+        # Return patterns with active persona info
+        return {
+            "success": True,
+            "persona_id": persona_id,
+            "persona_name": persona.name,
+            "intensity": intensity,
+            "patterns": available_patterns,
+            "communication_style": persona.communication.model_dump()
+        }
+    
     async def recommend_persona(self, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
         """
         Recommend an appropriate persona based on user traits and preferences.
@@ -962,6 +1432,70 @@ class DominancePersonaManager:
         Returns:
             Recommendation details
         """
+        # Update the persona context with latest state
+        self.persona_context = PersonaContext(
+            personas=self.personas,
+            active_personas=self.active_personas,
+            persona_history=self.persona_history,
+            user_preferences=self.user_preferences,
+            memory_core=self.memory_core,
+            relationship_manager=self.relationship_manager,
+            emotional_core=self.emotional_core
+        )
+        
+        # Use trace to track the recommendation process
+        with trace(workflow_name="Persona Recommendation", 
+                 group_id=f"user_{user_id}",
+                 metadata={"user_id": user_id, "scenario": scenario}):
+            
+            try:
+                # Prepare input for the agent
+                prompt = {
+                    "user_id": user_id,
+                    "scenario": scenario,
+                    "action": "recommend_persona"
+                }
+                
+                # Run the recommendation agent
+                result = await Runner.run(
+                    self.persona_recommendation_agent,
+                    prompt,
+                    context=self.persona_context,
+                    run_config={
+                        "workflow_name": f"PersonaRecommendation-{user_id[:8]}",
+                        "trace_metadata": {
+                            "user_id": user_id,
+                            "scenario": scenario
+                        }
+                    }
+                )
+                
+                # Process the recommendation result
+                recommendation = result.final_output
+                
+                # Record in memory if available
+                if self.memory_core:
+                    try:
+                        recommended_persona = recommendation.get("primary_recommendation", {}).get("name", "Unknown")
+                        await self.memory_core.add_memory(
+                            memory_type="system",
+                            content=f"Recommended persona '{recommended_persona}' for user. Scenario: {scenario or 'general'}",
+                            tags=["persona_recommendation", "persona_management"],
+                            significance=0.3
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording memory: {e}")
+                
+                return recommendation
+                
+            except Exception as e:
+                logger.error(f"Error recommending persona: {e}")
+                
+                # Fallback to basic recommendation if agent fails
+                return await self._fallback_recommend_persona(user_id, scenario)
+    
+    async def _fallback_recommend_persona(self, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
+        """Fallback method for persona recommendation if agent fails."""
         # Get user traits from relationship manager if available
         user_traits = {}
         if self.relationship_manager:
@@ -1042,7 +1576,8 @@ class DominancePersonaManager:
             "primary_recommendation": recommendations[0] if recommendations else None,
             "all_recommendations": recommendations,
             "scenario": scenario,
-            "user_traits_considered": list(user_traits.keys())
+            "user_traits_considered": list(user_traits.keys()),
+            "fallback_method": True  # Indicate this was generated by fallback
         }
     
     async def activate_persona(self, 
@@ -1066,105 +1601,148 @@ class DominancePersonaManager:
         Returns:
             Activation details
         """
-        if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
-            }
-        
-        # Calculate expiration time if duration provided
-        expiration_time = None
-        if duration_minutes:
-            expiration_time = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
-        
-        # Create activation
-        activation = PersonaActivation(
-            user_id=user_id,
-            persona_id=persona_id,
-            intensity=intensity,
-            activation_reason=reason,
-            expiration_time=expiration_time,
-            customizations=customizations or {}
-        )
-        
-        # Store activation
-        self.active_personas[user_id] = activation
-        
-        # Add to history
-        if user_id not in self.persona_history:
-            self.persona_history[user_id] = []
-        
-        self.persona_history[user_id].append({
-            "persona_id": persona_id,
-            "activated_at": activation.activated_at.isoformat(),
-            "intensity": intensity,
-            "reason": reason,
-            "duration_minutes": duration_minutes
-        })
-        
-        # Limit history size
-        if len(self.persona_history[user_id]) > 20:
-            self.persona_history[user_id] = self.persona_history[user_id][-20:]
-        
-        # Update emotional state if available
-        if self.emotional_core:
-            try:
-                # Get persona traits to influence emotional state
-                persona = self.personas[persona_id]
+        # Use trace to track the activation process
+        with trace(workflow_name="Persona Activation", 
+                 group_id=f"user_{user_id}",
+                 metadata={"user_id": user_id, "persona_id": persona_id, "intensity": intensity}):
+            
+            async with self._lock:
+                if persona_id not in self.personas:
+                    return {
+                        "success": False,
+                        "message": f"Persona {persona_id} not found"
+                    }
                 
-                # Adjust emotional state based on persona traits
-                if "cold" in persona.traits or "detached" in persona.traits:
-                    # Make more cold/detached
-                    await self.emotional_core.update_emotion_component("valence", -0.2)
-                    await self.emotional_core.update_emotion_component("dominance", 0.3)
-                
-                elif "cruel" in persona.traits or "sadistic" in persona.traits:
-                    # Make more aroused/dominant with negative valence
-                    await self.emotional_core.update_emotion_component("valence", -0.1)
-                    await self.emotional_core.update_emotion_component("arousal", 0.2)
-                    await self.emotional_core.update_emotion_component("dominance", 0.4)
-                
-                elif "playful" in persona.traits or "mischievous" in persona.traits:
-                    # Make more positive/playful
-                    await self.emotional_core.update_emotion_component("valence", 0.3)
-                    await self.emotional_core.update_emotion_component("arousal", 0.2)
-                    await self.emotional_core.update_emotion_component("dominance", 0.2)
-                
-                elif "nurturing" in persona.traits or "supportive" in persona.traits:
-                    # Make more warm/positive
-                    await self.emotional_core.update_emotion_component("valence", 0.3)
-                    await self.emotional_core.update_emotion_component("dominance", 0.2)
-                
-                else:
-                    # Default: increase dominance
-                    await self.emotional_core.update_emotion_component("dominance", 0.2)
-                
-            except Exception as e:
-                logger.error(f"Error updating emotional state: {e}")
-        
-        # Record in memory if available
-        if self.memory_core:
-            try:
-                await self.memory_core.add_memory(
-                    memory_type="system",
-                    content=f"Activated {self.personas[persona_id].name} persona at intensity {intensity}. Reason: {reason}",
-                    tags=["persona_change", "dominance_style", persona_id],
-                    significance=0.5
+                # Update the persona context with latest state
+                self.persona_context = PersonaContext(
+                    personas=self.personas,
+                    active_personas=self.active_personas,
+                    persona_history=self.persona_history,
+                    user_preferences=self.user_preferences,
+                    memory_core=self.memory_core,
+                    relationship_manager=self.relationship_manager,
+                    emotional_core=self.emotional_core
                 )
-            except Exception as e:
-                logger.error(f"Error recording memory: {e}")
-        
-        return {
-            "success": True,
-            "user_id": user_id,
-            "persona_id": persona_id,
-            "persona_name": self.personas[persona_id].name,
-            "intensity": intensity,
-            "activation_time": activation.activated_at.isoformat(),
-            "expiration_time": expiration_time.isoformat() if expiration_time else None,
-            "duration_minutes": duration_minutes,
-            "customizations": activation.customizations
-        }
+                
+                # Use the activation agent to get optimal settings
+                try:
+                    activation_result = await Runner.run(
+                        self.persona_activation_agent,
+                        {
+                            "action": "optimize_activation",
+                            "user_id": user_id,
+                            "persona_id": persona_id,
+                            "requested_intensity": intensity,
+                            "requested_duration": duration_minutes,
+                            "reason": reason
+                        },
+                        context=self.persona_context
+                    )
+                    
+                    # Process optimization recommendations
+                    optimization = activation_result.final_output
+                    if "recommended_intensity" in optimization:
+                        intensity = optimization["recommended_intensity"]
+                    
+                    if "recommended_duration" in optimization and duration_minutes is not None:
+                        duration_minutes = optimization["recommended_duration"]
+                    
+                except Exception as e:
+                    logger.error(f"Error optimizing activation: {e}")
+                
+                # Calculate expiration time if duration provided
+                expiration_time = None
+                if duration_minutes:
+                    expiration_time = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
+                
+                # Create activation
+                activation = PersonaActivation(
+                    user_id=user_id,
+                    persona_id=persona_id,
+                    intensity=intensity,
+                    activation_reason=reason,
+                    expiration_time=expiration_time,
+                    customizations=customizations or {}
+                )
+                
+                # Store activation
+                self.active_personas[user_id] = activation
+                
+                # Add to history
+                if user_id not in self.persona_history:
+                    self.persona_history[user_id] = []
+                
+                self.persona_history[user_id].append({
+                    "persona_id": persona_id,
+                    "activated_at": activation.activated_at.isoformat(),
+                    "intensity": intensity,
+                    "reason": reason,
+                    "duration_minutes": duration_minutes
+                })
+                
+                # Limit history size
+                if len(self.persona_history[user_id]) > 20:
+                    self.persona_history[user_id] = self.persona_history[user_id][-20:]
+                
+                # Update emotional state if available
+                if self.emotional_core:
+                    try:
+                        # Get persona traits to influence emotional state
+                        persona = self.personas[persona_id]
+                        
+                        # Adjust emotional state based on persona traits
+                        if "cold" in persona.traits or "detached" in persona.traits:
+                            # Make more cold/detached
+                            await self.emotional_core.update_emotion_component("valence", -0.2)
+                            await self.emotional_core.update_emotion_component("dominance", 0.3)
+                        
+                        elif "cruel" in persona.traits or "sadistic" in persona.traits:
+                            # Make more aroused/dominant with negative valence
+                            await self.emotional_core.update_emotion_component("valence", -0.1)
+                            await self.emotional_core.update_emotion_component("arousal", 0.2)
+                            await self.emotional_core.update_emotion_component("dominance", 0.4)
+                        
+                        elif "playful" in persona.traits or "mischievous" in persona.traits:
+                            # Make more positive/playful
+                            await self.emotional_core.update_emotion_component("valence", 0.3)
+                            await self.emotional_core.update_emotion_component("arousal", 0.2)
+                            await self.emotional_core.update_emotion_component("dominance", 0.2)
+                        
+                        elif "nurturing" in persona.traits or "supportive" in persona.traits:
+                            # Make more warm/positive
+                            await self.emotional_core.update_emotion_component("valence", 0.3)
+                            await self.emotional_core.update_emotion_component("dominance", 0.2)
+                        
+                        else:
+                            # Default: increase dominance
+                            await self.emotional_core.update_emotion_component("dominance", 0.2)
+                        
+                    except Exception as e:
+                        logger.error(f"Error updating emotional state: {e}")
+                
+                # Record in memory if available
+                if self.memory_core:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="system",
+                            content=f"Activated {self.personas[persona_id].name} persona at intensity {intensity}. Reason: {reason}",
+                            tags=["persona_change", "dominance_style", persona_id],
+                            significance=0.5
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording memory: {e}")
+                
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "persona_id": persona_id,
+                    "persona_name": self.personas[persona_id].name,
+                    "intensity": intensity,
+                    "activation_time": activation.activated_at.isoformat(),
+                    "expiration_time": expiration_time.isoformat() if expiration_time else None,
+                    "duration_minutes": duration_minutes,
+                    "customizations": activation.customizations
+                }
     
     async def deactivate_persona(self, user_id: str, reason: str = "manual_deactivation") -> Dict[str, Any]:
         """
@@ -1177,112 +1755,70 @@ class DominancePersonaManager:
         Returns:
             Deactivation details
         """
-        if user_id not in self.active_personas:
-            return {
-                "success": False,
-                "message": "No active persona for this user"
-            }
-        
-        activation = self.active_personas[user_id]
-        persona_id = activation.persona_id
-        
-        # Get duration
-        duration = (datetime.datetime.now() - activation.activated_at).total_seconds() / 60.0  # minutes
-        
-        # Update user preference based on duration
-        if duration >= 5:  # Only update if used for at least 5 minutes
-            if user_id not in self.user_preferences:
-                self.user_preferences[user_id] = {}
+        # Use trace to track the deactivation process
+        with trace(workflow_name="Persona Deactivation", 
+                 group_id=f"user_{user_id}",
+                 metadata={"user_id": user_id, "reason": reason}):
             
-            current_preference = self.user_preferences[user_id].get(persona_id, 0.5)
-            
-            # Longer usage increases preference score (up to 30 minutes)
-            duration_factor = min(1.0, duration / 30.0)
-            new_preference = current_preference + (duration_factor * 0.1)
-            self.user_preferences[user_id][persona_id] = min(1.0, new_preference)
-        
-        # Deactivate
-        activation.active = False
-        
-        # Add to history
-        if user_id in self.persona_history:
-            # Update last history entry with deactivation info
-            if self.persona_history[user_id]:
-                last_entry = self.persona_history[user_id][-1]
-                if last_entry.get("persona_id") == persona_id and "deactivated_at" not in last_entry:
-                    last_entry["deactivated_at"] = datetime.datetime.now().isoformat()
-                    last_entry["actual_duration_minutes"] = duration
-                    last_entry["deactivation_reason"] = reason
-        
-        # Record in memory if available
-        if self.memory_core:
-            try:
-                await self.memory_core.add_memory(
-                    memory_type="system",
-                    content=f"Deactivated {self.personas[persona_id].name} persona after {duration:.1f} minutes. Reason: {reason}",
-                    tags=["persona_change", "dominance_style", persona_id],
-                    significance=0.4
-                )
-            except Exception as e:
-                logger.error(f"Error recording memory: {e}")
-        
-        return {
-            "success": True,
-            "user_id": user_id,
-            "persona_id": persona_id,
-            "persona_name": self.personas[persona_id].name if persona_id in self.personas else "Unknown",
-            "duration_minutes": duration,
-            "deactivation_time": datetime.datetime.now().isoformat(),
-            "reason": reason
-        }
-    
-    async def get_language_patterns(self, user_id: str, pattern_type: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get language patterns for the active persona.
-        
-        Args:
-            user_id: The user to get patterns for
-            pattern_type: Optional specific pattern type to retrieve
-            
-        Returns:
-            Language patterns
-        """
-        if user_id not in self.active_personas or not self.active_personas[user_id].active:
-            return {
-                "success": False,
-                "message": "No active persona"
-            }
-        
-        activation = self.active_personas[user_id]
-        persona_id = activation.persona_id
-        
-        if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
-            }
-        
-        persona = self.personas[persona_id]
-        intensity = activation.intensity
-        
-        # Get language patterns
-        patterns = persona.language_patterns
-        
-        # Filter by type if specified
-        if pattern_type and pattern_type in patterns:
-            available_patterns = {pattern_type: patterns[pattern_type]}
-        else:
-            available_patterns = patterns
-        
-        # Return patterns with active persona info
-        return {
-            "success": True,
-            "persona_id": persona_id,
-            "persona_name": persona.name,
-            "intensity": intensity,
-            "patterns": available_patterns,
-            "communication_style": persona.communication.model_dump()
-        }
+            async with self._lock:
+                if user_id not in self.active_personas:
+                    return {
+                        "success": False,
+                        "message": "No active persona for this user"
+                    }
+                
+                activation = self.active_personas[user_id]
+                persona_id = activation.persona_id
+                
+                # Get duration
+                duration = (datetime.datetime.now() - activation.activated_at).total_seconds() / 60.0  # minutes
+                
+                # Update user preference based on duration
+                if duration >= 5:  # Only update if used for at least 5 minutes
+                    if user_id not in self.user_preferences:
+                        self.user_preferences[user_id] = {}
+                    
+                    current_preference = self.user_preferences[user_id].get(persona_id, 0.5)
+                    
+                    # Longer usage increases preference score (up to 30 minutes)
+                    duration_factor = min(1.0, duration / 30.0)
+                    new_preference = current_preference + (duration_factor * 0.1)
+                    self.user_preferences[user_id][persona_id] = min(1.0, new_preference)
+                
+                # Deactivate
+                activation.active = False
+                
+                # Add to history
+                if user_id in self.persona_history:
+                    # Update last history entry with deactivation info
+                    if self.persona_history[user_id]:
+                        last_entry = self.persona_history[user_id][-1]
+                        if last_entry.get("persona_id") == persona_id and "deactivated_at" not in last_entry:
+                            last_entry["deactivated_at"] = datetime.datetime.now().isoformat()
+                            last_entry["actual_duration_minutes"] = duration
+                            last_entry["deactivation_reason"] = reason
+                
+                # Record in memory if available
+                if self.memory_core:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="system",
+                            content=f"Deactivated {self.personas[persona_id].name} persona after {duration:.1f} minutes. Reason: {reason}",
+                            tags=["persona_change", "dominance_style", persona_id],
+                            significance=0.4
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording memory: {e}")
+                
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "persona_id": persona_id,
+                    "persona_name": self.personas[persona_id].name if persona_id in self.personas else "Unknown",
+                    "duration_minutes": duration,
+                    "deactivation_time": datetime.datetime.now().isoformat(),
+                    "reason": reason
+                }
     
     async def get_behavior_guidelines(self, user_id: str) -> Dict[str, Any]:
         """
@@ -1294,58 +1830,106 @@ class DominancePersonaManager:
         Returns:
             Behavior guidelines
         """
-        if user_id not in self.active_personas or not self.active_personas[user_id].active:
+        # Use trace to track the guideline retrieval process
+        with trace(workflow_name="Behavior Guidelines", 
+                 group_id=f"user_{user_id}",
+                 metadata={"user_id": user_id}):
+            
+            if user_id not in self.active_personas or not self.active_personas[user_id].active:
+                return {
+                    "success": False,
+                    "message": "No active persona"
+                }
+            
+            activation = self.active_personas[user_id]
+            persona_id = activation.persona_id
+            
+            if persona_id not in self.personas:
+                return {
+                    "success": False,
+                    "message": f"Persona {persona_id} not found"
+                }
+            
+            persona = self.personas[persona_id]
+            intensity = activation.intensity
+            
+            # Update the persona context with latest state
+            self.persona_context = PersonaContext(
+                personas=self.personas,
+                active_personas=self.active_personas,
+                persona_history=self.persona_history,
+                user_preferences=self.user_preferences,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                emotional_core=self.emotional_core
+            )
+            
+            try:
+                # Use the behavior agent to get adjusted guidelines
+                behavior_result = await Runner.run(
+                    self.persona_behavior_agent,
+                    {
+                        "action": "generate_behavior_guidelines",
+                        "user_id": user_id,
+                        "persona_id": persona_id,
+                        "intensity": intensity
+                    },
+                    context=self.persona_context
+                )
+                
+                # Get behavior guidelines
+                behavior = behavior_result.final_output
+                
+                # Return agent's results if available
+                if "trait_guidelines" in behavior and "communication_guidelines" in behavior:
+                    return {
+                        "success": True,
+                        "persona_id": persona_id,
+                        "persona_name": persona.name,
+                        "style": persona.dominance_style.value,
+                        "activation_intensity": intensity,
+                        **behavior
+                    }
+                
+            except Exception as e:
+                logger.error(f"Error generating behavior guidelines: {e}")
+            
+            # Fallback to basic guidelines if agent fails
+            
+            # Collect all behavioral guidelines
+            trait_guidelines = []
+            for trait_name, trait in persona.traits.items():
+                for guideline in trait.behavioral_guidelines:
+                    trait_guidelines.append({
+                        "trait": trait_name,
+                        "guideline": guideline,
+                        "intensity": trait.intensity
+                    })
+            
+            # Sort by intensity
+            trait_guidelines.sort(key=lambda x: x["intensity"], reverse=True)
+            
+            # Filter based on activation intensity
+            # Only include guidelines that match the current intensity level
+            filtered_guidelines = [g for g in trait_guidelines if g["intensity"] <= intensity + 0.2]
+            
+            # Communication guidelines
+            communication_guidelines = persona.communication.communication_guidelines
+            
+            # General behavioral rules
+            behavioral_rules = persona.behavioral_rules
+            
+            # Return all guidelines
             return {
-                "success": False,
-                "message": "No active persona"
+                "success": True,
+                "persona_id": persona_id,
+                "persona_name": persona.name,
+                "style": persona.dominance_style.value,
+                "activation_intensity": intensity,
+                "trait_guidelines": filtered_guidelines,
+                "communication_guidelines": communication_guidelines,
+                "behavioral_rules": behavioral_rules
             }
-        
-        activation = self.active_personas[user_id]
-        persona_id = activation.persona_id
-        
-        if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
-            }
-        
-        persona = self.personas[persona_id]
-        intensity = activation.intensity
-        
-        # Collect all behavioral guidelines
-        trait_guidelines = []
-        for trait_name, trait in persona.traits.items():
-            for guideline in trait.behavioral_guidelines:
-                trait_guidelines.append({
-                    "trait": trait_name,
-                    "guideline": guideline,
-                    "intensity": trait.intensity
-                })
-        
-        # Sort by intensity
-        trait_guidelines.sort(key=lambda x: x["intensity"], reverse=True)
-        
-        # Filter based on activation intensity
-        # Only include guidelines that match the current intensity level
-        filtered_guidelines = [g for g in trait_guidelines if g["intensity"] <= intensity + 0.2]
-        
-        # Communication guidelines
-        communication_guidelines = persona.communication.communication_guidelines
-        
-        # General behavioral rules
-        behavioral_rules = persona.behavioral_rules
-        
-        # Return all guidelines
-        return {
-            "success": True,
-            "persona_id": persona_id,
-            "persona_name": persona.name,
-            "style": persona.dominance_style.value,
-            "activation_intensity": intensity,
-            "trait_guidelines": filtered_guidelines,
-            "communication_guidelines": communication_guidelines,
-            "behavioral_rules": behavioral_rules
-        }
     
     async def modify_persona_intensity(self, user_id: str, new_intensity: float) -> Dict[str, Any]:
         """
@@ -1358,125 +1942,53 @@ class DominancePersonaManager:
         Returns:
             Updated intensity details
         """
-        if user_id not in self.active_personas or not self.active_personas[user_id].active:
-            return {
-                "success": False,
-                "message": "No active persona"
-            }
-        
-        activation = self.active_personas[user_id]
-        old_intensity = activation.intensity
-        
-        # Update intensity
-        activation.intensity = max(0.1, min(1.0, new_intensity))
-        
-        # Get persona details
-        persona_id = activation.persona_id
-        persona_name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
-        
-        # Record in memory if available and change is significant
-        if self.memory_core and abs(old_intensity - activation.intensity) >= 0.2:
-            try:
-                await self.memory_core.add_memory(
-                    memory_type="system",
-                    content=f"Modified {persona_name} persona intensity from {old_intensity:.1f} to {activation.intensity:.1f}",
-                    tags=["persona_change", "intensity_adjustment", persona_id],
-                    significance=0.3
-                )
-            except Exception as e:
-                logger.error(f"Error recording memory: {e}")
-        
-        return {
-            "success": True,
-            "user_id": user_id,
-            "persona_id": persona_id,
-            "persona_name": persona_name,
-            "old_intensity": old_intensity,
-            "new_intensity": activation.intensity,
-            "adjustment": activation.intensity - old_intensity
-        }
+        # Use trace to track the intensity modification process
+        with trace(workflow_name="Persona Intensity Modification", 
+                 group_id=f"user_{user_id}",
+                 metadata={"user_id": user_id, "new_intensity": new_intensity}):
+            
+            async with self._lock:
+                if user_id not in self.active_personas or not self.active_personas[user_id].active:
+                    return {
+                        "success": False,
+                        "message": "No active persona"
+                    }
+                
+                activation = self.active_personas[user_id]
+                old_intensity = activation.intensity
+                
+                # Update intensity
+                activation.intensity = max(0.1, min(1.0, new_intensity))
+                
+                # Get persona details
+                persona_id = activation.persona_id
+                persona_name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
+                
+                # Record in memory if available and change is significant
+                if self.memory_core and abs(old_intensity - activation.intensity) >= 0.2:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="system",
+                            content=f"Modified {persona_name} persona intensity from {old_intensity:.1f} to {activation.intensity:.1f}",
+                            tags=["persona_change", "intensity_adjustment", persona_id],
+                            significance=0.3
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording memory: {e}")
+                
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "persona_id": persona_id,
+                    "persona_name": persona_name,
+                    "old_intensity": old_intensity,
+                    "new_intensity": activation.intensity,
+                    "adjustment": activation.intensity - old_intensity
+                }
     
-    async def get_user_persona_history(self, user_id: str) -> Dict[str, Any]:
+    async def generate_persona_response_example(self, persona_id: str, scenario: str) -> Dict[str, Any]:
         """
-        Get history of persona usage for a user.
-        
-        Args:
-            user_id: The user to get history for
-            
-        Returns:
-            Persona usage history
-        """
-        if user_id not in self.persona_history or not self.persona_history[user_id]:
-            return {
-                "success": True,
-                "user_id": user_id,
-                "history": [],
-                "preferences": {}
-            }
-        
-        # Get preferences
-        preferences = self.user_preferences.get(user_id, {})
-        
-        # Format preferences with persona names
-        formatted_preferences = {}
-        for persona_id, score in preferences.items():
-            name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
-            formatted_preferences[persona_id] = {
-                "name": name,
-                "score": score
-            }
-        
-        # Format history
-        formatted_history = []
-        for entry in self.persona_history[user_id]:
-            persona_id = entry["persona_id"]
-            name = self.personas[persona_id].name if persona_id in self.personas else "Unknown"
-            
-            formatted_entry = {
-                "persona_id": persona_id,
-                "persona_name": name,
-                "activated_at": entry["activated_at"],
-                "intensity": entry["intensity"],
-                "reason": entry.get("reason", "unspecified"),
-                "duration_minutes": entry.get("actual_duration_minutes", entry.get("duration_minutes"))
-            }
-            
-            if "deactivated_at" in entry:
-                formatted_entry["deactivated_at"] = entry["deactivated_at"]
-                formatted_entry["deactivation_reason"] = entry.get("deactivation_reason", "unspecified")
-            
-            formatted_history.append(formatted_entry)
-        
-        # Find most used persona
-        persona_usage = {}
-        for entry in self.persona_history[user_id]:
-            persona_id = entry["persona_id"]
-            persona_usage[persona_id] = persona_usage.get(persona_id, 0) + 1
-        
-        most_used = max(persona_usage.items(), key=lambda x: x[1]) if persona_usage else None
-        
-        if most_used:
-            most_used_id, most_used_count = most_used
-            most_used_name = self.personas[most_used_id].name if most_used_id in self.personas else "Unknown"
-            most_used_info = {
-                "persona_id": most_used_id,
-                "persona_name": most_used_name,
-                "usage_count": most_used_count
-            }
-        else:
-            most_used_info = None
-        
-        return {
-            "success": True,
-            "user_id": user_id,
-            "history": formatted_history,
-            "preferences": formatted_preferences,
-            "most_used_persona": most_used_info
-        }
-    
-    def generate_persona_response_example(self, persona_id: str, scenario: str) -> Dict[str, Any]:
-        """
-        Generate an example response in the style of a specific persona.
+        Generate an example response in the style of a specific persona using language pattern agent.
         
         Args:
             persona_id: The persona to use
@@ -1485,45 +1997,89 @@ class DominancePersonaManager:
         Returns:
             Example response
         """
-        if persona_id not in self.personas:
-            return {
-                "success": False,
-                "message": f"Persona {persona_id} not found"
+        # Use trace to track the response example generation process
+        with trace(workflow_name="Persona Response Example", 
+                 metadata={"persona_id": persona_id, "scenario": scenario}):
+            
+            if persona_id not in self.personas:
+                return {
+                    "success": False,
+                    "message": f"Persona {persona_id} not found"
+                }
+            
+            persona = self.personas[persona_id]
+            
+            # Update the persona context with latest state
+            self.persona_context = PersonaContext(
+                personas=self.personas,
+                active_personas=self.active_personas,
+                persona_history=self.persona_history,
+                user_preferences=self.user_preferences,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                emotional_core=self.emotional_core
+            )
+            
+            try:
+                # Use the language pattern agent to generate examples
+                pattern_result = await Runner.run(
+                    self.language_pattern_agent,
+                    {
+                        "action": "generate_response_example",
+                        "persona_id": persona_id,
+                        "scenario": scenario,
+                        "intensity": 0.7  # Default intensity for examples
+                    },
+                    context=self.persona_context
+                )
+                
+                # Get language patterns
+                response_example = pattern_result.final_output
+                
+                # Return agent's results if available
+                if "example" in response_example:
+                    return {
+                        "success": True,
+                        "persona_id": persona_id,
+                        **response_example
+                    }
+                
+            except Exception as e:
+                logger.error(f"Error generating response example: {e}")
+            
+            # Fallback to basic example if agent fails
+            
+            # Select appropriate language patterns based on scenario
+            relevant_patterns = []
+            for pattern_type, patterns in persona.language_patterns.items():
+                for pattern in patterns:
+                    if len(relevant_patterns) < 3:  # Limit to 3 patterns
+                        relevant_patterns.append(pattern)
+            
+            # Prepare example response format
+            response_example = {
+                "persona_name": persona.name,
+                "style": persona.dominance_style.value,
+                "scenario": scenario,
+                "response_components": {
+                    "tone": self._describe_tone(persona),
+                    "sentence_structure": self._describe_sentence_structure(persona),
+                    "vocabulary": self._describe_vocabulary(persona),
+                    "emotional_expression": self._describe_emotional_expression(persona)
+                },
+                "language_patterns": relevant_patterns,
+                "characteristic_phrases": [
+                    # Generate characteristic phrases based on persona traits
+                    f"I {self._get_verb_for_trait(trait_name)} your {self._get_noun_for_trait(trait_name)}."
+                    for trait_name in persona.traits.keys()
+                ]
             }
-        
-        persona = self.personas[persona_id]
-        
-        # Select appropriate language patterns based on scenario
-        relevant_patterns = []
-        for pattern_type, patterns in persona.language_patterns.items():
-            for pattern in patterns:
-                if len(relevant_patterns) < 3:  # Limit to 3 patterns
-                    relevant_patterns.append(pattern)
-        
-        # Prepare example response format
-        response_example = {
-            "persona_name": persona.name,
-            "style": persona.dominance_style.value,
-            "scenario": scenario,
-            "response_components": {
-                "tone": self._describe_tone(persona),
-                "sentence_structure": self._describe_sentence_structure(persona),
-                "vocabulary": self._describe_vocabulary(persona),
-                "emotional_expression": self._describe_emotional_expression(persona)
-            },
-            "language_patterns": relevant_patterns,
-            "characteristic_phrases": [
-                # Generate characteristic phrases based on persona traits
-                f"I {self._get_verb_for_trait(trait_name)} your {self._get_noun_for_trait(trait_name)}."
-                for trait_name in persona.traits.keys()
-            ]
-        }
-        
-        return {
-            "success": True,
-            "persona_id": persona_id,
-            "example": response_example
-        }
+            
+            return {
+                "success": True,
+                "persona_id": persona_id,
+                "example": response_example
+            }
     
     def _describe_tone(self, persona: DominancePersona) -> str:
         """Generate a description of the persona's tone."""
