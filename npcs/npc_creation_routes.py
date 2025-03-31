@@ -140,4 +140,4 @@ async def get_npc(
         raise
     except Exception as e:
         logging.error(f"Error getting NPC details: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) 
