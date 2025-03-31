@@ -12,7 +12,7 @@ from functools import lru_cache
 import contextlib
 
 # Import existing modules to utilize their functionality
-from db.connection import get_db_connection, get_connection_pool
+from db.connection import get_db_connection_context
 from logic.social_links import (
     create_social_link,
     update_link_type_and_level,
@@ -126,11 +126,7 @@ class IntegratedNPCSystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Enhanced connection pool with better configuration
-        self._pool = None
-        self._pool_initialized = asyncio.Event()
-        # Start async initialization in the background
-        asyncio.create_task(self._initialize_pool())
+        # No longer need connection pool initialization code since we're using get_db_connection_context
         
         # Initialize caching structures with more granular control
         self.npc_cache = {}  # Cache for NPC data
@@ -302,14 +298,13 @@ class IntegratedNPCSystem:
         await self._pool_initialized.wait()
         return self._pool
     
-    async def execute_with_pool(self, query, *args, timeout=10.0):
-        """Execute a database query with the connection pool and error handling."""
+    async def execute_query(self, query, *args, timeout=10.0):
+        """Execute a database query with error handling."""
         start_time = datetime.now()
-        pool = await self.get_connection_pool()
         self.perf_metrics['db_queries'] += 1
         
         try:
-            async with pool.acquire() as conn:
+            async with get_db_connection_context(timeout=timeout) as conn:
                 result = await conn.execute(query, *args)
                 
                 # Track query performance
@@ -318,25 +313,17 @@ class IntegratedNPCSystem:
                 self._update_avg_query_time(query_time)
                 
                 return result
-        except asyncpg.PostgresConnectionError:
-            # Connection error - try to reinitialize pool
-            logger.error("Database connection error, reinitializing pool...")
-            await self._initialize_pool()
-            # Retry once with fresh connection
-            async with pool.acquire() as conn:
-                return await conn.execute(query, *args)
         except Exception as e:
             logger.error(f"Database query error: {e}, Query: {query[:100]}...")
             raise
     
-    async def fetchrow_with_pool(self, query, *args, timeout=10.0):
-        """Fetch a single row with the connection pool and error handling."""
+    async def fetch_row(self, query, *args, timeout=10.0):
+        """Fetch a single row with error handling."""
         start_time = datetime.now()
-        pool = await self.get_connection_pool()
         self.perf_metrics['db_queries'] += 1
         
         try:
-            async with pool.acquire() as conn:
+            async with get_db_connection_context(timeout=timeout) as conn:
                 result = await conn.fetchrow(query, *args)
                 
                 # Track query performance
@@ -345,25 +332,17 @@ class IntegratedNPCSystem:
                 self._update_avg_query_time(query_time)
                 
                 return result
-        except asyncpg.PostgresConnectionError:
-            # Connection error - try to reinitialize pool
-            logger.error("Database connection error, reinitializing pool...")
-            await self._initialize_pool()
-            # Retry once with fresh connection
-            async with pool.acquire() as conn:
-                return await conn.fetchrow(query, *args)
         except Exception as e:
             logger.error(f"Database query error: {e}, Query: {query[:100]}...")
             raise
     
-    async def fetch_with_pool(self, query, *args, timeout=10.0):
-        """Fetch multiple rows with the connection pool and error handling."""
+    async def fetch_all(self, query, *args, timeout=10.0):
+        """Fetch multiple rows with error handling."""
         start_time = datetime.now()
-        pool = await self.get_connection_pool()
         self.perf_metrics['db_queries'] += 1
         
         try:
-            async with pool.acquire() as conn:
+            async with get_db_connection_context(timeout=timeout) as conn:
                 result = await conn.fetch(query, *args)
                 
                 # Track query performance
@@ -372,13 +351,6 @@ class IntegratedNPCSystem:
                 self._update_avg_query_time(query_time)
                 
                 return result
-        except asyncpg.PostgresConnectionError:
-            # Connection error - try to reinitialize pool
-            logger.error("Database connection error, reinitializing pool...")
-            await self._initialize_pool()
-            # Retry once with fresh connection
-            async with pool.acquire() as conn:
-                return await conn.fetch(query, *args)
         except Exception as e:
             logger.error(f"Database query error: {e}, Query: {query[:100]}...")
             raise
@@ -550,6 +522,7 @@ class IntegratedNPCSystem:
                     except Exception as fallback_error:
                         logger.error(f"Even fallback NPC creation failed: {fallback_error}")
                         raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
+    
 
     async def _initialize_npc_agent(
         self, 
@@ -624,8 +597,7 @@ class IntegratedNPCSystem:
         Returns:
             NPC ID of the created minimal NPC
         """
-        pool = await self.get_connection_pool()
-        async with pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             npc_id = await conn.fetchval("""
                 INSERT INTO NPCStats (
                     user_id, conversation_id, npc_name, sex, 
@@ -3882,20 +3854,14 @@ class IntegratedNPCSystem:
     @contextlib.asynccontextmanager
     async def _transaction_context(self):
         """Context manager for database transactions with proper error handling."""
-        pool = await self.get_connection_pool()
-        conn = None
-        try:
-            conn = await pool.acquire()
-            await conn.execute("BEGIN")
-            yield conn
-            await conn.execute("COMMIT")
-        except Exception as e:
-            if conn:
+        async with get_db_connection_context() as conn:
+            try:
+                await conn.execute("BEGIN")
+                yield conn
+                await conn.execute("COMMIT")
+            except Exception as e:
                 await conn.execute("ROLLBACK")
-            raise
-        finally:
-            if conn:
-                await pool.release(conn)
+                raise
     
     async def _apply_stat_changes_transaction(self, conn, stat_changes, cause):
         """Apply stat changes within a transaction."""
