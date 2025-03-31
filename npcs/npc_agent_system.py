@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
-import asyncpg
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, TraceProvider, input_guardrail, GuardrailFunctionOutput
 
 from .agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
+from db.connection import get_db_connection_context  # Updated import
 
 logger = logging.getLogger(__name__)
 
@@ -59,21 +59,16 @@ class NPCAgentSystem:
         self,
         user_id: int,
         conversation_id: int,
-        connection_pool: asyncpg.Pool
+        connection_pool  # No change to this parameter as it's passed in
     ):
         """
         Initialize the agent system for a specific user & conversation.
-
-        Args:
-            user_id: The ID of the user/player
-            conversation_id: The ID of the current conversation/scene
-            connection_pool: An asyncpg.Pool for database access
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_agents: Dict[int, NPCAgent] = {}
         self._memory_system = None
-        self.connection_pool = connection_pool  # Store asyncpg connection pool
+        self.connection_pool = connection_pool
         self._system_agent = None
         self.lore_context_manager = LoreContextManager(user_id, conversation_id)
 
@@ -220,12 +215,6 @@ class NPCAgentSystem:
     async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """
         Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
-        
-        Args:
-            npc_ids: Optional list of specific NPC IDs to initialize
-            
-        Returns:
-            Dictionary with initialization results
         """
         logger.info(
             "Initializing NPC agents for user=%s, conversation=%s",
@@ -244,6 +233,7 @@ class NPCAgentSystem:
             query += " AND npc_id = ANY($3)"
             params.append(npc_ids)
 
+        # Using the provided connection pool
         async with self.connection_pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
             
@@ -254,9 +244,6 @@ class NPCAgentSystem:
                 if npc_id not in self.npc_agents:
                     self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
                     init_tasks.append(self.npc_agents[npc_id].initialize())
-                else:
-                    # Already initialized
-                    pass
             
             # Wait for all initializations to complete
             if init_tasks:
@@ -339,15 +326,6 @@ class NPCAgentSystem:
     ) -> List[int]:
         """
         Figure out which NPCs are affected by a given player action with improved memory awareness.
-
-        Prioritizes:
-        1. A 'target_npc_id' in the player_action
-        2. NPCs in the specified location
-        3. If action is "talk", fallback to the last 3 recently active NPCs
-        4. NPCs with high relevance to the context based on memories
-
-        Returns:
-            A list of NPC IDs that are relevant to this action.
         """
         target_npc_id = player_action.get("target_npc_id")
         if target_npc_id:
@@ -365,6 +343,7 @@ class NPCAgentSystem:
         location_npcs = []
         if location:
             try:
+                # Using the provided connection pool
                 async with self.connection_pool.acquire() as conn:
                     rows = await conn.fetch(
                         """
@@ -464,14 +443,6 @@ class NPCAgentSystem:
     ) -> Dict[str, Any]:
         """
         Update multiple NPCs in a single batch operation for better performance.
-        
-        Args:
-            npc_ids: List of NPC IDs to update
-            update_type: Type of update (location_change, emotional_update, etc.)
-            update_data: Data for the update
-            
-        Returns:
-            Results of the batch update
         """
         results = {
             "success_count": 0,
@@ -484,24 +455,27 @@ class NPCAgentSystem:
                 new_location = update_data.get("new_location")
                 if not new_location:
                     return {"error": "No location specified"}
+                
                 try:
+                    # Using the provided connection pool
                     async with self.connection_pool.acquire() as conn:
-                        updated_npcs = []
-                        for npc_id in npc_ids:
-                            await conn.execute(
-                                """
-                                UPDATE NPCStats
-                                SET current_location = $1
-                                WHERE npc_id = $2
-                                  AND user_id = $3
-                                  AND conversation_id = $4
-                                """,
-                                new_location, npc_id, self.user_id, self.conversation_id
-                            )
-                            updated_npcs.append(npc_id)
-                        
-                        results["success_count"] = len(updated_npcs)
-                        results["updated_npcs"] = updated_npcs
+                        async with conn.transaction():
+                            updated_npcs = []
+                            for npc_id in npc_ids:
+                                await conn.execute(
+                                    """
+                                    UPDATE NPCStats
+                                    SET current_location = $1
+                                    WHERE npc_id = $2
+                                      AND user_id = $3
+                                      AND conversation_id = $4
+                                    """,
+                                    new_location, npc_id, self.user_id, self.conversation_id
+                                )
+                                updated_npcs.append(npc_id)
+                            
+                            results["success_count"] = len(updated_npcs)
+                            results["updated_npcs"] = updated_npcs
                 except Exception as e:
                     logger.error(f"Error updating NPC locations: {e}")
                     results["error"] = str(e)
@@ -571,12 +545,10 @@ class NPCAgentSystem:
     async def _fetch_current_location(self) -> Optional[str]:
         """
         Attempt to retrieve the current location from the CurrentRoleplay table.
-
-        Returns:
-            The current location string, or None if not found or on error.
         """
         logger.debug("Fetching current location from CurrentRoleplay")
         try:
+            # Using the provided connection pool
             async with self.connection_pool.acquire() as conn:
                 row = await conn.fetchrow("""
                     SELECT value
@@ -669,12 +641,10 @@ class NPCAgentSystem:
     async def get_current_game_time(self) -> Dict[str, Any]:
         """
         Get the current in-game time information.
-
-        Returns:
-            Dictionary with year, month, day, time_of_day
         """
         year, month, day, time_of_day = None, None, None, None
         try:
+            # Using the provided connection pool
             async with self.connection_pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
