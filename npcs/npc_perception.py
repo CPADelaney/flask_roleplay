@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from agents import function_tool, trace
 from agents.tracing import custom_span, function_span
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
@@ -415,20 +415,16 @@ class EnvironmentPerception:
                 
                 # Fetch location from database if not in context
                 if environment_data["location"] == "Unknown":
-                    def fetch_location():
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            cursor.execute(
-                                """
-                                SELECT value FROM CurrentRoleplay 
-                                WHERE key = 'CurrentLocation' AND user_id = %s AND conversation_id = %s
-                                """,
-                                (self.user_id, self.conversation_id)
-                            )
-                            row = cursor.fetchone()
-                            return row[0] if row else "Unknown"
-                    
-                    location = await asyncio.to_thread(fetch_location)
-                    environment_data["location"] = location
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT value FROM CurrentRoleplay 
+                            WHERE key = 'CurrentLocation' AND user_id = $1 AND conversation_id = $2
+                            """,
+                            self.user_id, self.conversation_id
+                        )
+                        if row:
+                            environment_data["location"] = row[0]
                 
                 # Extract time of day from context if available
                 if context.time_of_day:
@@ -436,56 +432,49 @@ class EnvironmentPerception:
                 
                 # Fetch time of day from database if not in context
                 if environment_data["time_of_day"] == "Unknown":
-                    def fetch_time():
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            cursor.execute(
-                                """
-                                SELECT value FROM CurrentRoleplay 
-                                WHERE key = 'TimeOfDay' AND user_id = %s AND conversation_id = %s
-                                """,
-                                (self.user_id, self.conversation_id)
-                            )
-                            row = cursor.fetchone()
-                            return row[0] if row else "Unknown"
-                    
-                    time_of_day = await asyncio.to_thread(fetch_time)
-                    environment_data["time_of_day"] = time_of_day
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT value FROM CurrentRoleplay 
+                            WHERE key = 'TimeOfDay' AND user_id = $1 AND conversation_id = $2
+                            """,
+                            self.user_id, self.conversation_id
+                        )
+                        if row:
+                            environment_data["time_of_day"] = row[0]
                 
                 # Use entities from context if available
                 if context.entities_present:
                     environment_data["entities_present"] = context.entities_present
                 else:
                     # Fetch entities present in location
-                    def fetch_entities():
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            # Fetch NPCs
-                            cursor.execute(
-                                """
-                                SELECT npc_id, npc_name FROM NPCStats
-                                WHERE current_location = %s AND user_id = %s AND conversation_id = %s
-                                """,
-                                (environment_data["location"], self.user_id, self.conversation_id)
-                            )
-                            entities = []
-                            for npc_id, npc_name in cursor.fetchall():
-                                if npc_id != self.npc_id:  # Don't include self
-                                    entities.append({
-                                        "type": "npc",
-                                        "id": npc_id,
-                                        "name": npc_name
-                                    })
-                            
-                            # Add player entity
-                            entities.append({
-                                "type": "player",
-                                "id": self.user_id,
-                                "name": "Player"
-                            })
-                            
-                            return entities
-                    
-                    entities = await asyncio.to_thread(fetch_entities)
-                    environment_data["entities_present"] = entities
+                    async with get_db_connection_context() as conn:
+                        # Fetch NPCs
+                        rows = await conn.fetch(
+                            """
+                            SELECT npc_id, npc_name FROM NPCStats
+                            WHERE current_location = $1 AND user_id = $2 AND conversation_id = $3
+                            """,
+                            environment_data["location"], self.user_id, self.conversation_id
+                        )
+                        
+                        entities = []
+                        for row in rows:
+                            if row["npc_id"] != self.npc_id:  # Don't include self
+                                entities.append({
+                                    "type": "npc",
+                                    "id": row["npc_id"],
+                                    "name": row["npc_name"]
+                                })
+                        
+                        # Add player entity
+                        entities.append({
+                            "type": "player",
+                            "id": self.user_id,
+                            "name": "Player"
+                        })
+                        
+                        environment_data["entities_present"] = entities
                 
                 # Add description if available
                 if context.description:
@@ -518,33 +507,32 @@ class EnvironmentPerception:
             }
             
             try:
-                def fetch_context():
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT key, value 
-                            FROM CurrentRoleplay 
-                            WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
-                              AND user_id = %s 
-                              AND conversation_id = %s
-                            """,
-                            (self.user_id, self.conversation_id),
-                        )
-                        return cursor.fetchall()
-                        
-                rows = await asyncio.to_thread(fetch_context)
-                for key, value in rows:
-                    if key == "CurrentYear":
-                        time_context["year"] = value
-                    elif key == "CurrentMonth":
-                        time_context["month"] = value
-                    elif key == "CurrentDay":
-                        time_context["day"] = value
-                    elif key == "TimeOfDay":
-                        time_context["time_of_day"] = value
-                
-                return time_context
-                
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT key, value 
+                        FROM CurrentRoleplay 
+                        WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
+                          AND user_id = $1 
+                          AND conversation_id = $2
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                    
+                    for row in rows:
+                        key = row["key"]
+                        value = row["value"]
+                        if key == "CurrentYear":
+                            time_context["year"] = value
+                        elif key == "CurrentMonth":
+                            time_context["month"] = value
+                        elif key == "CurrentDay":
+                            time_context["day"] = value
+                        elif key == "TimeOfDay":
+                            time_context["time_of_day"] = value
+                    
+                    return time_context
+                    
             except Exception as e:
                 logger.error(f"Error fetching time context: {e}")
                 return time_context
@@ -560,26 +548,23 @@ class EnvironmentPerception:
             narrative_context = {}
             
             try:
-                def fetch_context():
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            SELECT key, value 
-                            FROM CurrentRoleplay 
-                            WHERE key IN ('CurrentPlotStage', 'CurrentTension')
-                              AND user_id = %s 
-                              AND conversation_id = %s
-                            """,
-                            (self.user_id, self.conversation_id),
-                        )
-                        return cursor.fetchall()
-                        
-                rows = await asyncio.to_thread(fetch_context)
-                for key, value in rows:
-                    narrative_context[key] = value
-                
-                return narrative_context
-                
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT key, value 
+                        FROM CurrentRoleplay 
+                        WHERE key IN ('CurrentPlotStage', 'CurrentTension')
+                          AND user_id = $1 
+                          AND conversation_id = $2
+                        """,
+                        self.user_id, self.conversation_id
+                    )
+                    
+                    for row in rows:
+                        narrative_context[row["key"]] = row["value"]
+                    
+                    return narrative_context
+                    
             except Exception as e:
                 logger.error(f"Error fetching narrative context: {e}")
                 return narrative_context
@@ -611,24 +596,20 @@ class EnvironmentPerception:
                         continue
                     
                     # Get relationship from database
-                    def fetch_rel():
-                        with get_db_connection() as conn, conn.cursor() as cursor:
-                            cursor.execute(
-                                """
-                                SELECT link_type, link_level
-                                FROM SocialLinks
-                                WHERE user_id = %s
-                                  AND conversation_id = %s
-                                  AND entity1_type = 'npc'
-                                  AND entity1_id = %s
-                                  AND entity2_type = %s
-                                  AND entity2_id = %s
-                                """,
-                                (self.user_id, self.conversation_id, self.npc_id, entity_type, entity_id)
-                            )
-                            return cursor.fetchone()
-                    
-                    row = await asyncio.to_thread(fetch_rel)
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            """
+                            SELECT link_type, link_level
+                            FROM SocialLinks
+                            WHERE user_id = $1
+                              AND conversation_id = $2
+                              AND entity1_type = 'npc'
+                              AND entity1_id = $3
+                              AND entity2_type = $4
+                              AND entity2_id = $5
+                            """,
+                            self.user_id, self.conversation_id, self.npc_id, entity_type, entity_id
+                        )
                     
                     # Default relationship
                     relationship = {
@@ -639,8 +620,8 @@ class EnvironmentPerception:
                     }
                     
                     if row:
-                        relationship["link_type"] = row[0]
-                        relationship["link_level"] = row[1]
+                        relationship["link_type"] = row["link_type"]
+                        relationship["link_level"] = row["link_level"]
                     
                     # Get memories about this entity
                     memory_result = await memory_system.recall(
@@ -753,22 +734,18 @@ async def get_npc_location(npc_id: int, user_id: int, conversation_id: int) -> s
         Location name
     """
     try:
-        def fetch_location():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT current_location
-                    FROM NPCStats
-                    WHERE npc_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
-                    """,
-                    (npc_id, user_id, conversation_id)
-                )
-                row = cursor.fetchone()
-                return row[0] if row else "Unknown"
-        
-        return await asyncio.to_thread(fetch_location)
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT current_location
+                FROM NPCStats
+                WHERE npc_id = $1
+                  AND user_id = $2
+                  AND conversation_id = $3
+                """,
+                npc_id, user_id, conversation_id
+            )
+            return row["current_location"] if row else "Unknown"
     except Exception as e:
         logger.error(f"Error getting NPC location: {e}")
         return "Unknown"
