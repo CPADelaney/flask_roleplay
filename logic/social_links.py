@@ -1,6 +1,7 @@
 # logic/social_links_agentic.py
 """
 Comprehensive End-to-End Social Links System with an Agentic approach using OpenAI's Agents SDK.
+Converted to use asyncpg and connection pooling.
 
 Features:
 1) Core CRUD and advanced relationship logic for SocialLinks.
@@ -9,12 +10,15 @@ Features:
 4) A "SocialLinksAgent" that uses these tools.
 5) Example usage demonstrating how to run the agent in code.
 """
- 
+
 import json
 import logging
 import random
+import asyncio # Added for potential use
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
+
+import asyncpg # Added import
 
 # ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
 from agents import (
@@ -23,25 +27,29 @@ from agents import (
     Runner,
     function_tool,
     RunContextWrapper,
-    AsyncOpenAI, 
+    AsyncOpenAI,
     OpenAIResponsesModel
 )
-from agents.models.openai_responses import OpenAIResponsesModel
+# Note: OpenAIResponsesModel imported twice, removed duplicate
+# from agents.models.openai_responses import OpenAIResponsesModel
 
 # ~~~~~~~~~ DB imports & any other placeholders ~~~~~~~~~
-from db.connection import get_db_connection
-
+from db.connection import get_db_connection_context # Use context manager
+# from db.connection import get_db_connection # REMOVED
 
 # ~~~~~~~~~ Logging Configuration ~~~~~~~~~
-logging.basicConfig(level=logging.INFO)
+# Define logger at module level for consistency
 logger = logging.getLogger(__name__)
+# Basic config if run standalone, otherwise rely on parent application config
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1) Simple Core CRUD for SocialLinks Table
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def get_social_link(
+async def get_social_link(
     user_id: int,
     conversation_id: int,
     entity1_type: str,
@@ -50,38 +58,48 @@ def get_social_link(
     entity2_id: int
 ) -> Optional[Dict[str, Any]]:
     """
-    Fetch an existing social link row if it exists for (user_id, conversation_id, e1, e2).
-    Returns a dict with link_id, link_type, link_level, link_history, etc., or None if not found.
+    Fetch an existing social link row using asyncpg.
+    Returns a dict with link details or None if not found.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            """
-            SELECT link_id, link_type, link_level, link_history
-            FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-              AND entity1_type=%s AND entity1_id=%s
-              AND entity2_type=%s AND entity2_id=%s
-            """,
-            (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
-        )
-        row = cursor.fetchone()
-        if row:
-            (link_id, link_type, link_level, link_hist) = row
-            return {
-                "link_id": link_id,
-                "link_type": link_type,
-                "link_level": link_level,
-                "link_history": link_hist,
-            }
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT link_id, link_type, link_level, link_history, dynamics, -- Added dynamics
+                       experienced_crossroads, experienced_rituals          -- Added experienced
+                FROM SocialLinks
+                WHERE user_id = $1 AND conversation_id = $2
+                  AND entity1_type = $3 AND entity1_id = $4
+                  AND entity2_type = $5 AND entity2_id = $6
+                """,
+                user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
+            )
+            if row:
+                # asyncpg might auto-parse JSONB, handle potential strings/None
+                history = row['link_history'] if isinstance(row['link_history'], list) else (json.loads(row['link_history']) if isinstance(row['link_history'], str) else [])
+                dynamics = row['dynamics'] if isinstance(row['dynamics'], dict) else (json.loads(row['dynamics']) if isinstance(row['dynamics'], str) else {})
+                crossroads = row['experienced_crossroads'] if isinstance(row['experienced_crossroads'], list) else (json.loads(row['experienced_crossroads']) if isinstance(row['experienced_crossroads'], str) else [])
+                rituals = row['experienced_rituals'] if isinstance(row['experienced_rituals'], list) else (json.loads(row['experienced_rituals']) if isinstance(row['experienced_rituals'], str) else [])
+
+                return {
+                    "link_id": row['link_id'],
+                    "link_type": row['link_type'],
+                    "link_level": row['link_level'],
+                    "link_history": history,
+                    "dynamics": dynamics,
+                    "experienced_crossroads": crossroads,
+                    "experienced_rituals": rituals,
+                }
+            return None
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error getting social link: {e}", exc_info=True)
         return None
-    finally:
-        cursor.close()
-        conn.close()
+    except Exception as e:
+        logger.error(f"Unexpected error getting social link: {e}", exc_info=True)
+        return None
 
 
-def create_social_link(
+async def create_social_link(
     user_id: int,
     conversation_id: int,
     entity1_type: str,
@@ -89,67 +107,64 @@ def create_social_link(
     entity2_type: str,
     entity2_id: int,
     link_type: str = "neutral",
-    link_level: int = 0
-) -> int:
+    link_level: int = 0,
+    initial_dynamics: Optional[Dict] = None # Allow passing initial dynamics
+) -> Optional[int]:
     """
-    Create a new SocialLinks row for (user_id, conversation_id, e1, e2).
-    Initializes link_history as an empty array.
-    If a matching row already exists, returns its link_id.
+    Create a new SocialLinks row using asyncpg, handling conflicts.
+    Initializes link_history, dynamics, etc.
+    Returns the link_id (new or existing).
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    initial_dynamics_json = json.dumps(initial_dynamics or {})
+    initial_history_json = '[]' # Start with empty history
+    initial_experienced_json = '[]' # Start with empty experienced
+
     try:
-        cursor.execute(
-            """
-            INSERT INTO SocialLinks (
+        async with get_db_connection_context() as conn:
+            # Use INSERT ... ON CONFLICT ... RETURNING link_id for atomicity
+            link_id = await conn.fetchval(
+                """
+                INSERT INTO SocialLinks (
+                    user_id, conversation_id,
+                    entity1_type, entity1_id,
+                    entity2_type, entity2_id,
+                    link_type, link_level,
+                    link_history, dynamics, experienced_crossroads, experienced_rituals
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb)
+                ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+                DO UPDATE SET link_id = EXCLUDED.link_id -- No actual update, just to get RETURNING
+                RETURNING link_id;
+                """,
                 user_id, conversation_id,
                 entity1_type, entity1_id,
                 entity2_type, entity2_id,
-                link_type, link_level, link_history
+                link_type, link_level,
+                initial_history_json, initial_dynamics_json,
+                initial_experienced_json, initial_experienced_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '[]')
-            ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
-            DO NOTHING
-            RETURNING link_id
-            """,
-            (
-                user_id,
-                conversation_id,
-                entity1_type,
-                entity1_id,
-                entity2_type,
-                entity2_id,
-                link_type,
-                link_level,
-            )
-        )
-        result = cursor.fetchone()
-        if result is None:
-            # If the insert did nothing because row exists, fetch existing link_id
-            cursor.execute(
-                """
-                SELECT link_id
-                FROM SocialLinks
-                WHERE user_id=%s
-                  AND conversation_id=%s
-                  AND entity1_type=%s AND entity1_id=%s
-                  AND entity2_type=%s AND entity2_id=%s
-                """,
-                (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
-            )
-            result = cursor.fetchone()
-        link_id = result[0]
-        conn.commit()
-        return link_id
-    except:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+            # If ON CONFLICT occurred, the above might return NULL or the existing ID
+            # depending on PG version and exact conflict target. A safer way is separate SELECT.
+            if link_id is None:
+                 link_id = await conn.fetchval(
+                     """
+                     SELECT link_id FROM SocialLinks
+                     WHERE user_id = $1 AND conversation_id = $2
+                     AND entity1_type = $3 AND entity1_id = $4
+                     AND entity2_type = $5 AND entity2_id = $6
+                     """,
+                     user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
+                 )
+            return link_id
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error creating social link: {e}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error creating social link: {e}", exc_info=True)
+        return None
 
 
-def update_link_type_and_level(
+async def update_link_type_and_level(
     user_id: int,
     conversation_id: int,
     link_id: int,
@@ -157,83 +172,74 @@ def update_link_type_and_level(
     level_change: int = 0
 ) -> Optional[Dict[str, Any]]:
     """
-    Adjust an existing link's type or level, within user_id+conversation_id+link_id scope.
-    Returns a dict with new_type, new_level if updated, or None if no row found.
+    Adjust an existing link's type or level using asyncpg.
+    Returns updated info or None if not found.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            """
-            SELECT link_type, link_level
-            FROM SocialLinks
-            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
-            """,
-            (link_id, user_id, conversation_id)
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
+        async with get_db_connection_context() as conn:
+            # Use RETURNING to get the final values in one step
+            updated_row = await conn.fetchrow(
+                """
+                UPDATE SocialLinks
+                SET link_type = COALESCE($1, link_type),
+                    link_level = link_level + $2
+                WHERE link_id = $3 AND user_id = $4 AND conversation_id = $5
+                RETURNING link_id, link_type, link_level;
+                """,
+                new_type, level_change, link_id, user_id, conversation_id
+            )
 
-        (old_type, old_level) = row
-        final_type = new_type if new_type else old_type
-        final_level = old_level + level_change
-
-        cursor.execute(
-            """
-            UPDATE SocialLinks
-            SET link_type=%s, link_level=%s
-            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
-            """,
-            (final_type, final_level, link_id, user_id, conversation_id)
-        )
-        conn.commit()
-        return {
-            "link_id": link_id,
-            "new_type": final_type,
-            "new_level": final_level,
-        }
-    except:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+            if updated_row:
+                return {
+                    "link_id": updated_row['link_id'],
+                    "new_type": updated_row['link_type'],
+                    "new_level": updated_row['link_level'],
+                }
+            else:
+                logger.warning(f"No link found to update for link_id={link_id}, user={user_id}, conv={conversation_id}")
+                return None
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error updating link type/level: {e}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error updating link type/level: {e}", exc_info=True)
+        return None
 
 
-def add_link_event(
+async def add_link_event(
     user_id: int,
     conversation_id: int,
     link_id: int,
     event_text: str
-):
+) -> bool:
     """
-    Append a string to link_history for link_id (scoped to user_id+conversation_id).
+    Append an event string to link_history using asyncpg. Returns True on success.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            """
-            UPDATE SocialLinks
-            SET link_history = COALESCE(link_history, '[]'::jsonb) || to_jsonb(%s)
-            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
-            RETURNING link_history
-            """,
-            (event_text, link_id, user_id, conversation_id)
-        )
-        updated = cursor.fetchone()
-        if not updated:
-            logging.warning(f"No link found for link_id={link_id}, user_id={user_id}, conv={conversation_id}")
-        else:
-            logging.info(f"Appended event to link_history => {updated[0]}")
-        conn.commit()
-    except:
-        conn.rollback()
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            # Append the new event as a JSONB element
+            result = await conn.execute(
+                """
+                UPDATE SocialLinks
+                SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
+                WHERE link_id = $2 AND user_id = $3 AND conversation_id = $4
+                """,
+                json.dumps(event_text), # Ensure it's a valid JSON string element
+                link_id, user_id, conversation_id
+            )
+            # Check if any row was updated
+            if result == "UPDATE 1":
+                logger.info(f"Appended event to link_history for link_id={link_id}")
+                return True
+            else:
+                logger.warning(f"No link found to add event for link_id={link_id}, user={user_id}, conv={conversation_id}")
+                return False
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error adding link event: {e}", exc_info=True)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error adding link event: {e}", exc_info=True)
+        return False
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -471,11 +477,17 @@ def get_primary_dynamic(dynamics: Dict[str, int]) -> str:
     if not dynamics:
         return "neutral"
     primary_dynamic = "neutral"
-    max_level = 0
+    max_level = -float('inf') # Handle potential negative dynamics correctly
     for dname, lvl in dynamics.items():
+        # Consider absolute value or just highest value depending on desired logic
         if lvl > max_level:
             max_level = lvl
             primary_dynamic = dname
+    # If all dynamics are <= 0, might still return neutral or the least negative one
+    if max_level <= 0 and dynamics:
+         # Find the max (least negative) among potentially all negative values
+         primary_dynamic = max(dynamics, key=dynamics.get)
+
     return primary_dynamic
 
 
@@ -485,12 +497,16 @@ def get_dynamic_description(dynamic_name: str, level: int) -> str:
     """
     for dyn in RELATIONSHIP_DYNAMICS:
         if dyn["name"] == dynamic_name:
-            for level_info in dyn["levels"]:
+            # Find the highest level definition that the current level is less than or equal to
+            matched_level = None
+            for level_info in sorted(dyn["levels"], key=lambda x: x["level"]):
                 if level <= level_info["level"]:
-                    return f"{level_info['name']}: {level_info['description']}"
-            # If no matching bracket, return the highest bracket
-            highest = dyn["levels"][-1]
-            return f"{highest['name']}: {highest['description']}"
+                    matched_level = level_info
+                    break
+            # If level is higher than all defined levels, use the highest definition
+            if not matched_level:
+                matched_level = dyn["levels"][-1] # Assumes levels are sorted or max level is last
+            return f"{matched_level['name']}: {matched_level['description']}"
     return "Unknown dynamic"
 
 
@@ -498,108 +514,96 @@ def get_dynamic_description(dynamic_name: str, level: int) -> str:
 # 4) Crossroad Checking + Ritual Checking
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+async def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
-    Check if any NPC relationship has reached a dynamic level that triggers a Crossroads event.
-    Returns the first triggered crossroads event dict (with choices), or None if none triggered.
+    Async check if any NPC relationship triggers a Crossroads event.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        # Gather all player-related links (assuming player is entityX_id == user_id, or you might store differently)
-        cursor.execute(
-            """
-            SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
-                   dynamics, experienced_crossroads
-            FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-            AND (
-                (entity1_type='player' AND entity1_id=%s)
-                OR (entity2_type='player' AND entity2_id=%s)
+        async with get_db_connection_context() as conn:
+            # Gather all player-related links
+            links = await conn.fetch(
+                """
+                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
+                       dynamics, experienced_crossroads
+                FROM SocialLinks
+                WHERE user_id = $1 AND conversation_id = $2
+                AND (
+                    (entity1_type='player' AND entity1_id = $1) -- Assuming player ID is user ID here
+                    OR (entity2_type='player' AND entity2_id = $1)
+                )
+                """,
+                user_id, conversation_id
             )
-            """,
-            (user_id, conversation_id, user_id, user_id)
-        )
-        links = cursor.fetchall()
 
-        for link in links:
-            link_id, e1t, e1id, e2t, e2id, dynamics_json, crossroads_json = link
+            for link_record in links:
+                link_id = link_record['link_id']
+                e1t = link_record['entity1_type']
+                e1id = link_record['entity1_id']
+                e2t = link_record['entity2_type']
+                e2id = link_record['entity2_id']
+                dynamics_data = link_record['dynamics'] # Already parsed by asyncpg?
+                crossroads_data = link_record['experienced_crossroads']
 
-            if isinstance(dynamics_json, str):
-                try:
-                    dynamics = json.loads(dynamics_json)
-                except:
-                    dynamics = {}
-            else:
-                dynamics = dynamics_json or {}
+                dynamics = dynamics_data if isinstance(dynamics_data, dict) else (json.loads(dynamics_data) if isinstance(dynamics_data, str) else {})
+                experienced = crossroads_data if isinstance(crossroads_data, list) else (json.loads(crossroads_data) if isinstance(crossroads_data, str) else [])
 
-            if crossroads_json:
-                if isinstance(crossroads_json, str):
-                    try:
-                        experienced = json.loads(crossroads_json)
-                    except:
-                        experienced = []
-                else:
-                    experienced = crossroads_json
-            else:
-                experienced = []
+                # Determine NPC side
+                npc_id = None
+                if e1t == "npc" and e2t == "player":
+                    npc_id = e1id
+                elif e2t == "npc" and e1t == "player":
+                    npc_id = e2id
 
-            # Determine which side is NPC
-            if e1t == "npc" and e2t == "player":
-                npc_id = e1id
-            elif e2t == "npc" and e1t == "player":
-                npc_id = e2id
-            else:
-                continue  # Not an NPC-player link
-
-            # Grab NPC name
-            cursor.execute(
-                "SELECT npc_name FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
-                (user_id, conversation_id, npc_id),
-            )
-            npcrow = cursor.fetchone()
-            if not npcrow:
-                continue
-            npc_name = npcrow[0]
-
-            # Check each Crossroads
-            for crossroads_def in RELATIONSHIP_CROSSROADS:
-                if crossroads_def["name"] in experienced:
+                if npc_id is None:
                     continue
-                dynamic_needed = crossroads_def["dynamic"]
-                trigger_level = crossroads_def["trigger_level"]
-                current_level = dynamics.get(dynamic_needed, 0)
 
-                if current_level >= trigger_level:
-                    # Trigger this crossroads
-                    formatted_choices = []
-                    for ch in crossroads_def["choices"]:
-                        fc = {
-                            "text": ch["text"],
-                            "effects": ch["effects"],
-                            "outcome": ch["outcome"].format(npc_name=npc_name),
+                # Get NPC name (can use the same connection)
+                npc_name = await conn.fetchval(
+                    "SELECT npc_name FROM NPCStats WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3",
+                    user_id, conversation_id, npc_id
+                )
+                if not npc_name:
+                    logger.warning(f"NPC {npc_id} not found for crossroads check.")
+                    continue
+
+                # Check each Crossroads definition
+                for crossroads_def in RELATIONSHIP_CROSSROADS:
+                    if crossroads_def["name"] in experienced:
+                        continue
+                    dynamic_needed = crossroads_def["dynamic"]
+                    trigger_level = crossroads_def["trigger_level"]
+                    current_level = dynamics.get(dynamic_needed, 0)
+
+                    if current_level >= trigger_level:
+                        # Trigger this crossroads
+                        formatted_choices = []
+                        for ch in crossroads_def["choices"]:
+                            fc = {
+                                "text": ch["text"],
+                                "effects": ch["effects"],
+                                "outcome": ch["outcome"].format(npc_name=npc_name),
+                            }
+                            formatted_choices.append(fc)
+                        return {
+                            "type": "relationship_crossroads",
+                            "name": crossroads_def["name"],
+                            "description": crossroads_def["description"],
+                            "npc_id": npc_id,
+                            "npc_name": npc_name,
+                            "choices": formatted_choices,
+                            "link_id": link_id,
                         }
-                        formatted_choices.append(fc)
-                    return {
-                        "type": "relationship_crossroads",
-                        "name": crossroads_def["name"],
-                        "description": crossroads_def["description"],
-                        "npc_id": npc_id,
-                        "npc_name": npc_name,
-                        "choices": formatted_choices,
-                        "link_id": link_id,
-                    }
-        return None
+            return None # No crossroads triggered
 
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error checking for relationship crossroads: {e}", exc_info=True)
+        return None
     except Exception as e:
-        logging.error(f"Error checking for relationship crossroads: {e}")
+        logger.error(f"Unexpected error checking crossroads: {e}", exc_info=True)
         return None
-    finally:
-        cursor.close()
-        conn.close()
 
 
-def apply_crossroads_choice(
+async def apply_crossroads_choice(
     user_id: int,
     conversation_id: int,
     link_id: int,
@@ -607,363 +611,338 @@ def apply_crossroads_choice(
     choice_index: int
 ) -> Dict[str, Any]:
     """
-    Apply the chosen effect from a Crossroads event and update the link accordingly.
+    Async apply the chosen effect from a Crossroads event.
+    Uses a transaction for atomicity.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    cr_def = next((c for c in RELATIONSHIP_CROSSROADS if c["name"] == crossroads_name), None)
+    if not cr_def:
+        return {"error": f"Crossroads '{crossroads_name}' definition not found"}
+    if not 0 <= choice_index < len(cr_def["choices"]):
+        return {"error": "Invalid choice index"}
+    choice = cr_def["choices"][choice_index]
+
     try:
-        # Locate the crossroads definition
-        cr_def = None
-        for c in RELATIONSHIP_CROSSROADS:
-            if c["name"] == crossroads_name:
-                cr_def = c
-                break
-        if not cr_def:
-            return {"error": f"Crossroads '{crossroads_name}' not found"}
-
-        # Validate choice
-        if choice_index < 0 or choice_index >= len(cr_def["choices"]):
-            return {"error": "Invalid choice index"}
-
-        choice = cr_def["choices"][choice_index]
-
-        # Get link details
-        cursor.execute(
-            """
-            SELECT entity1_type, entity1_id, entity2_type, entity2_id, dynamics, experienced_crossroads
-            FROM SocialLinks
-            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
-            """,
-            (link_id, user_id, conversation_id),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return {"error": "Social link not found"}
-
-        e1t, e1id, e2t, e2id, dyn_json, crossroads_json = row
-
-        # Identify NPC
-        if e1t == "npc" and e2t == "player":
-            npc_id = e1id
-        elif e2t == "npc" and e1t == "player":
-            npc_id = e2id
-        else:
-            return {"error": "No NPC in this relationship"}
-
-        # Grab NPC name
-        cursor.execute(
-            "SELECT npc_name FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
-            (user_id, conversation_id, npc_id),
-        )
-        npcrow = cursor.fetchone()
-        if not npcrow:
-            return {"error": "NPC not found"}
-        npc_name = npcrow[0]
-
-        # Parse dynamics
-        if isinstance(dyn_json, str):
-            try:
-                dynamics = json.loads(dyn_json)
-            except:
-                dynamics = {}
-        else:
-            dynamics = dyn_json or {}
-
-        # Parse experienced crossroads
-        if crossroads_json:
-            if isinstance(crossroads_json, str):
-                try:
-                    experienced = json.loads(crossroads_json)
-                except:
-                    experienced = []
-            else:
-                experienced = crossroads_json
-        else:
-            experienced = []
-
-        # Apply effect to either relationship or player stats
-        for dynamic_name, delta in choice["effects"].items():
-            if dynamic_name.startswith("player_"):
-                # Update player stat
-                player_stat = dynamic_name[7:]  # remove "player_"
-                cursor.execute(
-                    f"""
-                    UPDATE PlayerStats
-                    SET {player_stat} = {player_stat} + %s
-                    WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
+        async with get_db_connection_context() as conn:
+            async with conn.transaction(): # Ensure all updates succeed or fail together
+                # Get link details
+                row = await conn.fetchrow(
+                    """
+                    SELECT entity1_type, entity1_id, entity2_type, entity2_id, dynamics, experienced_crossroads
+                    FROM SocialLinks
+                    WHERE link_id = $1 AND user_id = $2 AND conversation_id = $3
+                    FOR UPDATE -- Lock the row for the transaction
                     """,
-                    (delta, user_id, conversation_id),
+                    link_id, user_id, conversation_id
                 )
-            else:
-                # Relationship dynamic
-                current_val = dynamics.get(dynamic_name, 0)
-                new_val = max(0, min(100, current_val + delta))
-                dynamics[dynamic_name] = new_val
+                if not row:
+                    # Raise error to trigger transaction rollback
+                    raise ValueError("Social link not found during apply_crossroads_choice")
 
-        # Mark this crossroads as experienced
-        experienced.append(crossroads_name)
+                e1t, e1id, e2t, e2id, dyn_data, crossroads_data = row['entity1_type'], row['entity1_id'], row['entity2_type'], row['entity2_id'], row['dynamics'], row['experienced_crossroads']
 
-        # Update the DB
-        cursor.execute(
-            """
-            UPDATE SocialLinks
-            SET dynamics=%s,
-                experienced_crossroads=%s
-            WHERE link_id=%s
-            """,
-            (json.dumps(dynamics), json.dumps(experienced), link_id),
-        )
+                # Identify NPC
+                npc_id = e1id if e1t == "npc" else (e2id if e2t == "npc" else None)
+                if npc_id is None:
+                     raise ValueError("No NPC found in relationship for crossroads")
 
-        # Recompute link_type + link_level based on primary dynamic
-        primary = get_primary_dynamic(dynamics)
-        level = dynamics.get(primary, 0)
-        cursor.execute(
-            """
-            UPDATE SocialLinks
-            SET link_type=%s, link_level=%s
-            WHERE link_id=%s
-            """,
-            (primary, level, link_id),
-        )
+                # Get NPC name
+                npc_name = await conn.fetchval(
+                    "SELECT npc_name FROM NPCStats WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3",
+                    user_id, conversation_id, npc_id
+                )
+                if not npc_name:
+                     raise ValueError(f"NPC {npc_id} not found for crossroads application")
 
-        # Add event to link_history
-        event_text = (
-            f"Crossroads '{crossroads_name}' chosen: {choice['text']}. "
-            f"Outcome: {choice['outcome'].format(npc_name=npc_name)}"
-        )
-        cursor.execute(
-            """
-            UPDATE SocialLinks
-            SET link_history = link_history || %s::jsonb
-            WHERE link_id=%s
-            """,
-            (json.dumps([event_text]), link_id),
-        )
+                # Parse dynamics and experienced lists
+                dynamics = dyn_data if isinstance(dyn_data, dict) else (json.loads(dyn_data) if isinstance(dyn_data, str) else {})
+                experienced = crossroads_data if isinstance(crossroads_data, list) else (json.loads(crossroads_data) if isinstance(crossroads_data, str) else [])
 
-        # Add to PlayerJournal if desired
-        journal_entry = (
-            f"Crossroads: {crossroads_name} with {npc_name}. "
-            f"Choice: {choice['text']} => {choice['outcome'].format(npc_name=npc_name)}"
-        )
-        cursor.execute(
-            """
-            INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
-            VALUES (%s, %s, 'relationship_crossroads', %s, CURRENT_TIMESTAMP)
-            """,
-            (user_id, conversation_id, journal_entry),
-        )
+                if crossroads_name in experienced:
+                    # Should ideally not happen if check_for_crossroads is used correctly, but handle defensively
+                    logger.warning(f"Crossroads '{crossroads_name}' already experienced for link {link_id}. Applying effects again.")
+                    # Or: return {"error": "Crossroads already experienced"}
 
-        conn.commit()
-        return {"success": True, "outcome_text": choice["outcome"].format(npc_name=npc_name)}
-    except Exception as e:
-        conn.rollback()
-        logging.error(f"Error applying crossroads choice: {e}")
-        return {"error": str(e)}
-    finally:
-        cursor.close()
-        conn.close()
+                # --- Apply Effects ---
+                player_stat_updates = {}
+                for dynamic_name, delta in choice["effects"].items():
+                    if dynamic_name.startswith("player_"):
+                        player_stat = dynamic_name[7:]
+                        player_stat_updates[player_stat] = delta
+                    else:
+                        current_val = dynamics.get(dynamic_name, 0)
+                        new_val = max(0, min(100, current_val + delta)) # Clamp between 0-100 (adjust if needed)
+                        dynamics[dynamic_name] = new_val
 
+                # Update player stats if any
+                if player_stat_updates:
+                    set_clauses = []
+                    params = []
+                    param_idx = 1
+                    for stat, delta in player_stat_updates.items():
+                         # IMPORTANT: Ensure 'stat' is a valid column name to prevent SQL injection
+                         # Use a whitelist or validation if necessary. Assuming fixed stats here.
+                         valid_player_stats = ["corruption", "confidence", "willpower", "obedience", "dependency", "lust", "mental_resilience", "physical_endurance"]
+                         if stat in valid_player_stats:
+                              set_clauses.append(f"{stat} = GREATEST(0, LEAST(100, {stat} + ${param_idx}))") # Clamp 0-100
+                              params.append(delta)
+                              param_idx += 1
+                         else:
+                              logger.error(f"Invalid player stat '{stat}' in crossroads effect. Skipping.")
 
-def check_for_relationship_ritual(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Checks whether any relationship triggers a ritual event.
-    Returns the first triggered ritual event, or None if none is triggered.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        # Gather all player-related links
-        cursor.execute(
-            """
-            SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
-                   dynamics, experienced_rituals
-            FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-            AND (
-                (entity1_type='player' AND entity1_id=%s)
-                OR (entity2_type='player' AND entity2_id=%s)
-            )
-            """,
-            (user_id, conversation_id, user_id, user_id),
-        )
-        links = cursor.fetchall()
+                    if set_clauses:
+                         params.extend([user_id, conversation_id])
+                         player_update_sql = f"""
+                            UPDATE PlayerStats
+                            SET {', '.join(set_clauses)}
+                            WHERE user_id = ${param_idx} AND conversation_id = ${param_idx+1} AND player_name = 'Chase' -- Adjust player name if needed
+                         """
+                         await conn.execute(player_update_sql, *params)
 
-        for link in links:
-            link_id, e1t, e1id, e2t, e2id, dyn_json, rjson = link
+                # Mark crossroads as experienced
+                if crossroads_name not in experienced: # Avoid duplicates if re-applying
+                    experienced.append(crossroads_name)
 
-            if isinstance(dyn_json, str):
-                try:
-                    dynamics = json.loads(dyn_json)
-                except:
-                    dynamics = {}
-            else:
-                dynamics = dyn_json or {}
+                # Recompute primary link type/level based on new dynamics
+                primary_type = get_primary_dynamic(dynamics)
+                primary_level = dynamics.get(primary_type, 0)
 
-            if rjson:
-                if isinstance(rjson, str):
-                    try:
-                        experienced = json.loads(rjson)
-                    except:
-                        experienced = []
-                else:
-                    experienced = rjson
-            else:
-                experienced = []
-
-            # Identify NPC
-            if e1t == "npc" and e2t == "player":
-                npc_id = e1id
-            elif e2t == "npc" and e1t == "player":
-                npc_id = e2id
-            else:
-                continue
-
-            # Check NPC dominance
-            cursor.execute(
-                "SELECT npc_name, dominance FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
-                (user_id, conversation_id, npc_id),
-            )
-            row_npc = cursor.fetchone()
-            if not row_npc:
-                continue
-            npc_name, npc_dom = row_npc
-
-            # Only if dominance >= 50
-            if npc_dom < 50:
-                continue
-
-            # See if any ritual is triggered
-            possible_rituals = []
-            for rit in RELATIONSHIP_RITUALS:
-                if rit["name"] in experienced:
-                    continue
-                triggered = False
-                for dyn_name in rit["dynamics"]:
-                    current_val = dynamics.get(dyn_name, 0)
-                    if current_val >= rit["trigger_level"]:
-                        triggered = True
-                        break
-                if triggered:
-                    possible_rituals.append(rit)
-
-            if possible_rituals:
-                chosen = random.choice(possible_rituals)
-                ritual_txt = chosen["ritual_text"]
-                if "{gift_item}" in ritual_txt:
-                    gift_item = random.choice(SYMBOLIC_GIFTS)
-                    ritual_txt = ritual_txt.format(npc_name=npc_name, gift_item=gift_item)
-                else:
-                    ritual_txt = ritual_txt.format(npc_name=npc_name)
-
-                # Mark as experienced
-                experienced.append(chosen["name"])
-                cursor.execute(
+                # Update the SocialLinks row
+                await conn.execute(
                     """
                     UPDATE SocialLinks
-                    SET experienced_rituals=%s
-                    WHERE link_id=%s
+                    SET dynamics = $1,
+                        experienced_crossroads = $2,
+                        link_type = $3,
+                        link_level = $4
+                    WHERE link_id = $5
                     """,
-                    (json.dumps(experienced), link_id),
+                    json.dumps(dynamics), json.dumps(experienced), primary_type, primary_level, link_id
                 )
 
-                # Add history
-                event_text = f"Ritual '{chosen['name']}': {ritual_txt}"
-                cursor.execute(
-                    """
-                    UPDATE SocialLinks
-                    SET link_history = link_history || %s::jsonb
-                    WHERE link_id=%s
-                    """,
-                    (json.dumps([event_text]), link_id),
+                # Add event to link history
+                event_text = (
+                    f"Crossroads '{crossroads_name}' chosen: {choice['text']}. "
+                    f"Outcome: {choice['outcome'].format(npc_name=npc_name)}"
+                )
+                # Use the already awaited add_link_event function (needs connection passed or its own context)
+                # For simplicity within transaction, append directly:
+                await conn.execute(
+                   """
+                   UPDATE SocialLinks
+                   SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
+                   WHERE link_id = $2
+                   """,
+                   json.dumps(event_text), link_id
                 )
 
-                # Journal entry
-                cursor.execute(
+
+                # Add Journal Entry
+                journal_entry = (
+                    f"Crossroads: {crossroads_name} with {npc_name}. "
+                    f"Choice: {choice['text']} => {choice['outcome'].format(npc_name=npc_name)}"
+                )
+                await conn.execute(
                     """
                     INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
-                    VALUES (%s, %s, 'relationship_ritual', %s, CURRENT_TIMESTAMP)
+                    VALUES ($1, $2, 'relationship_crossroads', $3, CURRENT_TIMESTAMP)
                     """,
-                    (user_id, conversation_id, f"Ritual with {npc_name}: {chosen['name']}. {ritual_txt}"),
+                    user_id, conversation_id, journal_entry
                 )
 
-                # Increase relevant dynamics by +10
-                for dyn_name in chosen["dynamics"]:
-                    old_val = dynamics.get(dyn_name, 0)
-                    new_val = min(100, old_val + 10)
-                    dynamics[dyn_name] = new_val
+            # Transaction commits automatically if no exceptions were raised
+            return {"success": True, "outcome_text": choice["outcome"].format(npc_name=npc_name)}
 
-                cursor.execute(
-                    """
-                    UPDATE SocialLinks
-                    SET dynamics=%s
-                    WHERE link_id=%s
-                    """,
-                    (json.dumps(dynamics), link_id),
+    except (asyncpg.PostgresError, ConnectionError, ValueError) as e:
+        # ValueError raised internally on data inconsistency
+        logger.error(f"Error applying crossroads choice for link {link_id}: {e}", exc_info=True)
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Unexpected error applying crossroads choice for link {link_id}: {e}", exc_info=True)
+        return {"error": "An unexpected error occurred."}
+
+
+async def check_for_relationship_ritual(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Async check if any relationship triggers a Ritual event. Uses a transaction.
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            # Gather all player-related links
+            links = await conn.fetch(
+                 """
+                 SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
+                        dynamics, experienced_rituals
+                 FROM SocialLinks
+                 WHERE user_id = $1 AND conversation_id = $2
+                 AND (
+                     (entity1_type='player' AND entity1_id = $1)
+                     OR (entity2_type='player' AND entity2_id = $1)
+                 )
+                 """,
+                 user_id, conversation_id
+             )
+
+            for link_record in links:
+                link_id = link_record['link_id']
+                e1t, e1id, e2t, e2id = link_record['entity1_type'], link_record['entity1_id'], link_record['entity2_type'], link_record['entity2_id']
+                dyn_data = link_record['dynamics']
+                rit_data = link_record['experienced_rituals']
+
+                dynamics = dyn_data if isinstance(dyn_data, dict) else (json.loads(dyn_data) if isinstance(dyn_data, str) else {})
+                experienced = rit_data if isinstance(rit_data, list) else (json.loads(rit_data) if isinstance(rit_data, str) else [])
+
+                # Identify NPC
+                npc_id = e1id if e1t == "npc" else (e2id if e2t == "npc" else None)
+                if npc_id is None: continue
+
+                # Check NPC dominance
+                npc_info = await conn.fetchrow(
+                     "SELECT npc_name, dominance FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
+                     user_id, conversation_id, npc_id
                 )
+                if not npc_info or npc_info['dominance'] < 50: continue # Trigger requires dominance >= 50
+                npc_name = npc_info['npc_name']
 
-                # Also update PlayerStats
-                cursor.execute(
-                    """
-                    UPDATE PlayerStats
-                    SET corruption=corruption+5,
-                        dependency=dependency+5
-                    WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-                    """,
-                    (user_id, conversation_id),
-                )
+                # Check possible rituals
+                possible_rituals = []
+                for rit_def in RELATIONSHIP_RITUALS:
+                     if rit_def["name"] in experienced: continue
+                     triggered = False
+                     for dyn_name in rit_def["dynamics"]:
+                          if dynamics.get(dyn_name, 0) >= rit_def["trigger_level"]:
+                               triggered = True
+                               break
+                     if triggered:
+                          possible_rituals.append(rit_def)
 
-                conn.commit()
-                return {
-                    "type": "relationship_ritual",
-                    "name": chosen["name"],
-                    "description": chosen["description"],
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "ritual_text": ritual_txt,
-                    "link_id": link_id,
-                }
+                if possible_rituals:
+                    # Choose one and apply it within a transaction
+                    chosen_ritual = random.choice(possible_rituals)
+
+                    async with conn.transaction(): # Start transaction for applying ritual
+                        ritual_txt = chosen_ritual["ritual_text"]
+                        if "{gift_item}" in ritual_txt:
+                             gift_item = random.choice(SYMBOLIC_GIFTS)
+                             ritual_txt = ritual_txt.format(npc_name=npc_name, gift_item=gift_item)
+                        else:
+                             ritual_txt = ritual_txt.format(npc_name=npc_name)
+
+                        # Mark as experienced
+                        experienced.append(chosen_ritual["name"])
+                        await conn.execute(
+                             """
+                             UPDATE SocialLinks SET experienced_rituals = $1
+                             WHERE link_id = $2
+                             """,
+                             json.dumps(experienced), link_id
+                        )
+
+                        # Add history event
+                        event_text = f"Ritual '{chosen_ritual['name']}': {ritual_txt}"
+                        await conn.execute(
+                             """
+                             UPDATE SocialLinks SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
+                             WHERE link_id = $2
+                             """,
+                             json.dumps(event_text), link_id
+                        )
+
+                        # Journal entry
+                        journal_text = f"Ritual with {npc_name}: {chosen_ritual['name']}. {ritual_txt}"
+                        await conn.execute(
+                             """
+                             INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
+                             VALUES ($1, $2, 'relationship_ritual', $3, CURRENT_TIMESTAMP)
+                             """,
+                             user_id, conversation_id, journal_text
+                        )
+
+                        # Increase relevant dynamics by +10
+                        dynamics_changed = False
+                        for dyn_name in chosen_ritual["dynamics"]:
+                             old_val = dynamics.get(dyn_name, 0)
+                             new_val = min(100, old_val + 10) # Clamp at 100
+                             if new_val != old_val:
+                                 dynamics[dyn_name] = new_val
+                                 dynamics_changed = True
+
+                        if dynamics_changed:
+                             await conn.execute(
+                                  """
+                                  UPDATE SocialLinks SET dynamics = $1 WHERE link_id = $2
+                                  """,
+                                  json.dumps(dynamics), link_id
+                             )
+
+                        # Update PlayerStats
+                        await conn.execute(
+                             """
+                             UPDATE PlayerStats
+                             SET corruption = LEAST(100, corruption + 5), -- Clamp 0-100
+                                 dependency = LEAST(100, dependency + 5)
+                             WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+                             """,
+                             user_id, conversation_id
+                        )
+
+                    # If transaction succeeded, return the result
+                    return {
+                         "type": "relationship_ritual",
+                         "name": chosen_ritual["name"],
+                         "description": chosen_ritual["description"],
+                         "npc_id": npc_id,
+                         "npc_name": npc_name,
+                         "ritual_text": ritual_txt,
+                         "link_id": link_id,
+                    }
+            # End loop through links
+            return None # No ritual triggered for any link
+
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error checking for relationship ritual: {e}", exc_info=True)
         return None
     except Exception as e:
-        conn.rollback()
-        logging.error(f"Error checking for relationship ritual: {e}")
+        logger.error(f"Unexpected error checking ritual: {e}", exc_info=True)
         return None
-    finally:
-        cursor.close()
-        conn.close()
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 5) Summaries & Helpers
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def get_entity_name(
-    conn,
+async def get_entity_name(
+    conn: asyncpg.Connection, # Expect an active connection
     entity_type: str,
     entity_id: int,
     user_id: int,
     conversation_id: int
 ) -> str:
     """
-    Get the name of an entity (NPC or player).
+    Async get the name of an entity (NPC or player) using the provided connection.
     """
-    if entity_type == "player":
-        return "Chase"
-    c = conn.cursor()
-    c.execute(
-        """
-        SELECT npc_name FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """,
-        (user_id, conversation_id, entity_id),
-    )
-    row = c.fetchone()
-    c.close()
-    if row:
-        return row[0]
-    return "Unknown"
+    # Allow player ID 0 or matching user_id for flexibility
+    if entity_type == "player" and (entity_id == 0 or entity_id == user_id):
+        # Fetch player name from PlayerStats instead of hardcoding 'Chase'
+        player_name = await conn.fetchval(
+             "SELECT player_name FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 LIMIT 1",
+             user_id, conversation_id
+        )
+        return player_name or "Player" # Fallback if no PlayerStats row
+    elif entity_type == "npc":
+        npc_name = await conn.fetchval(
+             """
+             SELECT npc_name FROM NPCStats
+             WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+             """,
+             user_id, conversation_id, entity_id
+        )
+        return npc_name or f"Unknown NPC {entity_id}"
+    else:
+        return f"Unknown Entity {entity_id}"
 
 
-def get_relationship_summary(
+
+async def get_relationship_summary(
     user_id: int,
     conversation_id: int,
     entity1_type: str,
@@ -972,94 +951,60 @@ def get_relationship_summary(
     entity2_id: int
 ) -> Optional[Dict[str, Any]]:
     """
-    Get a summary of the relationship between two entities.
-    Includes link type, level, recent events, dynamics, etc.
+    Async get a summary of the relationship using asyncpg.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            """
-            SELECT link_id, link_type, link_level, dynamics, link_history,
-                   experienced_crossroads, experienced_rituals
-            FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-              AND entity1_type=%s AND entity1_id=%s
-              AND entity2_type=%s AND entity2_id=%s
-            """,
-            (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                 """
+                 SELECT link_id, link_type, link_level, dynamics, link_history,
+                        experienced_crossroads, experienced_rituals
+                 FROM SocialLinks
+                 WHERE user_id = $1 AND conversation_id = $2
+                   AND entity1_type = $3 AND entity1_id = $4
+                   AND entity2_type = $5 AND entity2_id = $6
+                 """,
+                 user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
+            )
+            if not row:
+                return None
 
-        link_id, link_type, link_level, dyn_json, hist_json, cr_json, rit_json = row
+            link_id, link_type, link_level, dyn_data, hist_data, cr_data, rit_data = \
+                row['link_id'], row['link_type'], row['link_level'], row['dynamics'], \
+                row['link_history'], row['experienced_crossroads'], row['experienced_rituals']
 
-        if isinstance(dyn_json, str):
-            try:
-                dynamics = json.loads(dyn_json)
-            except:
-                dynamics = {}
-        else:
-            dynamics = dyn_json or {}
+            dynamics = dyn_data if isinstance(dyn_data, dict) else (json.loads(dyn_data) if isinstance(dyn_data, str) else {})
+            history = hist_data if isinstance(hist_data, list) else (json.loads(hist_data) if isinstance(hist_data, str) else [])
+            cr_list = cr_data if isinstance(cr_data, list) else (json.loads(cr_data) if isinstance(cr_data, str) else [])
+            rit_list = rit_data if isinstance(rit_data, list) else (json.loads(rit_data) if isinstance(rit_data, str) else [])
 
-        if isinstance(hist_json, str):
-            try:
-                history = json.loads(hist_json)
-            except:
-                history = []
-        else:
-            history = hist_json or []
+            # Use the async helper with the current connection
+            e1_name = await get_entity_name(conn, entity1_type, entity1_id, user_id, conversation_id)
+            e2_name = await get_entity_name(conn, entity2_type, entity2_id, user_id, conversation_id)
 
-        if cr_json:
-            if isinstance(cr_json, str):
-                try:
-                    cr_list = json.loads(cr_json)
-                except:
-                    cr_list = []
-            else:
-                cr_list = cr_json
-        else:
-            cr_list = []
+            dynamic_descriptions = [
+                 f"{dnm.capitalize()} {lvl}/100 => {get_dynamic_description(dnm, lvl)}"
+                 for dnm, lvl in dynamics.items()
+            ]
 
-        if rit_json:
-            if isinstance(rit_json, str):
-                try:
-                    rit_list = json.loads(rit_json)
-                except:
-                    rit_list = []
-            else:
-                rit_list = rit_json
-        else:
-            rit_list = []
-
-        e1_name = get_entity_name(conn, entity1_type, entity1_id, user_id, conversation_id)
-        e2_name = get_entity_name(conn, entity2_type, entity2_id, user_id, conversation_id)
-
-        # Build dynamic descriptions
-        dynamic_descriptions = []
-        for dnm, lvl in dynamics.items():
-            desc = get_dynamic_description(dnm, lvl)
-            dynamic_descriptions.append(f"{dnm.capitalize()} {lvl}/100 => {desc}")
-
-        summary = {
-            "entity1_name": e1_name,
-            "entity2_name": e2_name,
-            "primary_type": link_type,
-            "primary_level": link_level,
-            "dynamics": dynamics,
-            "dynamic_descriptions": dynamic_descriptions,
-            "history": history[-5:],  # last 5 events
-            "experienced_crossroads": cr_list,
-            "experienced_rituals": rit_list,
-        }
-        return summary
-    except Exception as e:
-        logging.error(f"Error getting relationship summary: {e}")
+            return {
+                "entity1_name": e1_name,
+                "entity2_name": e2_name,
+                "primary_type": link_type,
+                "primary_level": link_level,
+                "dynamics": dynamics,
+                "dynamic_descriptions": dynamic_descriptions,
+                "history": history[-5:], # last 5 events
+                "experienced_crossroads": cr_list,
+                "experienced_rituals": rit_list,
+            }
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error getting relationship summary: {e}", exc_info=True)
         return None
-    finally:
-        cursor.close()
-        conn.close()
+    except Exception as e:
+        logger.error(f"Unexpected error getting relationship summary: {e}", exc_info=True)
+        return None
+
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1263,197 +1208,181 @@ class MultiNPCInteractionManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
-    def create_npc_group(
+    async def create_npc_group(
         self, name: str, description: str, member_ids: List[int]
     ) -> Dict[str, Any]:
-        """
-        Create a new NPC group in the DB, set up relationships among members if needed.
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        """ Async create a new NPC group in the DB. """
+        members_data = []
         try:
-            # Validate each NPC
-            members_data = []
-            for npc_id in member_ids:
-                cursor.execute(
+            async with get_db_connection_context() as conn:
+                # Validate NPCs and gather data within the connection context
+                for npc_id in member_ids:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT npc_id, npc_name, dominance, cruelty
+                        FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                        """,
+                        self.user_id, self.conversation_id, npc_id
+                    )
+                    if not row:
+                        return {"error": f"NPC with ID {npc_id} not found."}
+                    members_data.append({
+                        "npc_id": row['npc_id'], "npc_name": row['npc_name'],
+                        "dominance": row['dominance'], "cruelty": row['cruelty'],
+                        "role": "member", "status": "active", "joined_date": datetime.now().isoformat()
+                    })
+
+                # Generate initial dynamics and roles
+                dynamics = {key: random.randint(20, 80) for key in self.GROUP_DYNAMICS.keys()}
+                if len(members_data) > 1 and dynamics.get("hierarchy", 0) > 60:
+                    sorted_mem = sorted(members_data, key=lambda x: x.get("dominance", 0), reverse=True)
+                    sorted_mem[0]["role"] = "leader"
+                    members_data = sorted_mem # Use sorted list
+
+                group_obj = NPCGroup(name, description, members_data, dynamics)
+                group_data_json = json.dumps(group_obj.to_dict())
+
+                # Insert into table
+                group_id = await conn.fetchval(
                     """
-                    SELECT npc_id, npc_name, dominance, cruelty
-                    FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                    INSERT INTO NPCGroups (user_id, conversation_id, group_name, group_data, updated_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                    ON CONFLICT (user_id, conversation_id, group_name) DO NOTHING -- Or DO UPDATE if needed
+                    RETURNING group_id
                     """,
-                    (self.user_id, self.conversation_id, npc_id)
+                    self.user_id, self.conversation_id, name, group_data_json
                 )
-                row = cursor.fetchone()
-                if not row:
-                    return {"error": f"NPC with ID {npc_id} not found in conversation {self.conversation_id}."}
-                members_data.append({
-                    "npc_id": row[0],
-                    "npc_name": row[1],
-                    "dominance": row[2],
-                    "cruelty": row[3],
-                    "role": "member",
-                    "status": "active",
-                    "joined_date": datetime.now().isoformat()
-                })
 
-            # Generate initial group dynamics
-            dynamics = {}
-            for dyn_key in self.GROUP_DYNAMICS.keys():
-                dynamics[dyn_key] = random.randint(20, 80)
+                if group_id is None: # Handle potential conflict where nothing was returned
+                     # Fetch existing group_id if ON CONFLICT DO NOTHING occurred
+                     group_id = await conn.fetchval(
+                          """SELECT group_id FROM NPCGroups
+                             WHERE user_id=$1 AND conversation_id=$2 AND group_name=$3""",
+                          self.user_id, self.conversation_id, name
+                     )
+                     if group_id:
+                          return {"success": True, "group_id": group_id, "message": f"Group '{name}' already exists."}
+                     else:
+                          # This case should be rare if UNIQUE constraint exists
+                          return {"error": "Failed to create or find group after conflict."}
 
-            # Possibly assign a leader if hierarchy is high
-            if len(members_data) > 1 and dynamics["hierarchy"] > 60:
-                # sort by dominance
-                sorted_mem = sorted(members_data, key=lambda x: x["dominance"], reverse=True)
-                # top one is leader, next few can be lieutenants
-                sorted_mem[0]["role"] = "leader"
-                # you can pick additional roles or none
-                # re-assign
-                members_data = sorted_mem
+                return {"success": True, "group_id": group_id, "message": f"Group '{name}' created."}
 
-            # Create NPCGroup object
-            group_obj = NPCGroup(name, description, members_data, dynamics)
-
-            # Insert into table
-            cursor.execute(
-                """
-                INSERT INTO NPCGroups (user_id, conversation_id, group_name, group_data)
-                VALUES (%s, %s, %s, %s)
-                RETURNING group_id
-                """,
-                (self.user_id, self.conversation_id, name, json.dumps(group_obj.to_dict()))
-            )
-            group_id = cursor.fetchone()[0]
-
-            conn.commit()
-            return {"success": True, "group_id": group_id, "message": f"Group '{name}' created successfully."}
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Error creating group: {e}")
+        except (asyncpg.PostgresError, ConnectionError) as e:
+            logger.error(f"Error creating group '{name}': {e}", exc_info=True)
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logger.error(f"Unexpected error creating group '{name}': {e}", exc_info=True)
+            return {"error": "An unexpected error occurred."}
 
-    def get_npc_group(
+    async def get_npc_group(
         self, group_id: Optional[int] = None, group_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Retrieve an NPC group by group_id or group_name. 
-        Returns the group data or an error if not found.
-        """
+        """ Async retrieve an NPC group by ID or name. """
         if not group_id and not group_name:
-            return {"error": "Must provide either group_id or group_name."}
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
+            return {"error": "Must provide group_id or group_name."}
         try:
-            if group_id:
-                cursor.execute(
-                    """
-                    SELECT group_id, group_name, group_data
-                    FROM NPCGroups
-                    WHERE user_id=%s AND conversation_id=%s AND group_id=%s
-                    """,
-                    (self.user_id, self.conversation_id, group_id)
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT group_id, group_name, group_data
-                    FROM NPCGroups
-                    WHERE user_id=%s AND conversation_id=%s AND group_name=%s
-                    """,
-                    (self.user_id, self.conversation_id, group_name)
-                )
-            row = cursor.fetchone()
-            if not row:
-                return {"error": f"Group not found."}
+            async with get_db_connection_context() as conn:
+                query = """SELECT group_id, group_name, group_data FROM NPCGroups
+                           WHERE user_id = $1 AND conversation_id = $2"""
+                params = [self.user_id, self.conversation_id]
+                if group_id:
+                    query += " AND group_id = $3"
+                    params.append(group_id)
+                else:
+                    query += " AND group_name = $3"
+                    params.append(group_name)
 
-            real_group_id, real_group_name, group_data_json = row
-            if isinstance(group_data_json, str):
-                group_dict = json.loads(group_data_json)
-            else:
-                group_dict = group_data_json
-            # Reconstruct NPCGroup object
-            group_obj = NPCGroup.from_dict(group_dict)
-            return {
-                "success": True,
-                "group_id": real_group_id,
-                "group_name": real_group_name,
-                "group_data": group_obj.to_dict(),
-            }
-        except Exception as e:
-            logger.error(f"Error retrieving group: {e}")
+                row = await conn.fetchrow(query, *params)
+                if not row:
+                    lookup = f"ID {group_id}" if group_id else f"name '{group_name}'"
+                    return {"error": f"Group with {lookup} not found."}
+
+                real_group_id, real_group_name, group_data = row['group_id'], row['group_name'], row['group_data']
+                group_dict = group_data if isinstance(group_data, dict) else (json.loads(group_data) if isinstance(group_data, str) else {})
+
+                # Pass group_id when reconstructing
+                group_obj = NPCGroup.from_dict(group_dict, group_id=real_group_id)
+                return {
+                    "success": True,
+                    "group_id": real_group_id,
+                    "group_name": real_group_name,
+                    "group_data": group_obj.to_dict(), # Return the dict form
+                    "group_object": group_obj # Optionally return the object too
+                }
+        except (asyncpg.PostgresError, ConnectionError) as e:
+            logger.error(f"Error retrieving group: {e}", exc_info=True)
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logger.error(f"Unexpected error retrieving group: {e}", exc_info=True)
+            return {"error": "An unexpected error occurred."}
 
-    def update_group_dynamics(
+    async def update_group_dynamics(
         self, group_id: int, changes: Dict[str, int]
     ) -> Dict[str, Any]:
-        """
-        Apply increments/decrements to the group's dynamics. 
-        Example: changes = {"cohesion": +10, "hierarchy": -5}
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        """ Async apply increments/decrements to group dynamics. """
         try:
-            # fetch existing
-            cursor.execute(
-                """
-                SELECT group_data
-                FROM NPCGroups
-                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
-                """,
-                (self.user_id, self.conversation_id, group_id)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return {"error": "Group not found."}
-            group_data_json = row[0]
+            async with get_db_connection_context() as conn:
+                 async with conn.transaction(): # Use transaction
+                    # Fetch existing group data, locking the row
+                    group_data = await conn.fetchval(
+                        """
+                        SELECT group_data FROM NPCGroups
+                        WHERE user_id = $1 AND conversation_id = $2 AND group_id = $3
+                        FOR UPDATE
+                        """,
+                        self.user_id, self.conversation_id, group_id
+                    )
+                    if group_data is None:
+                         raise ValueError("Group not found for update.") # Raise to rollback
 
-            if isinstance(group_data_json, str):
-                group_dict = json.loads(group_data_json)
-            else:
-                group_dict = group_data_json
+                    group_dict = group_data if isinstance(group_data, dict) else (json.loads(group_data) if isinstance(group_data, str) else {})
+                    group_obj = NPCGroup.from_dict(group_dict, group_id=group_id)
 
-            # Update
-            group_obj = NPCGroup.from_dict(group_dict)
-            for dyn_key, delta in changes.items():
-                if dyn_key in group_obj.dynamics:
-                    current = group_obj.dynamics[dyn_key]
-                    new_val = max(0, min(100, current + delta))
-                    group_obj.dynamics[dyn_key] = new_val
+                    dynamics_updated = False
+                    for dyn_key, delta in changes.items():
+                         if dyn_key in self.GROUP_DYNAMICS: # Check if it's a known dynamic
+                             current = group_obj.dynamics.get(dyn_key, 0) # Default to 0 if not present
+                             new_val = max(0, min(100, current + delta)) # Clamp 0-100
+                             if new_val != current:
+                                 group_obj.dynamics[dyn_key] = new_val
+                                 dynamics_updated = True
+                         else:
+                             logger.warning(f"Unknown dynamic key '{dyn_key}' skipped for group {group_id}.")
 
-            # record a quick log
-            group_obj.shared_history.append({
-                "timestamp": datetime.now().isoformat(),
-                "type": "dynamics_update",
-                "details": changes
-            })
-            group_obj.last_activity = datetime.now().isoformat()
+                    if not dynamics_updated:
+                        return {"success": True, "message": "No dynamics changed."}
 
-            # store back
-            updated_json = json.dumps(group_obj.to_dict())
-            cursor.execute(
-                """
-                UPDATE NPCGroups
-                SET group_data = %s
-                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
-                """,
-                (updated_json, self.user_id, self.conversation_id, group_id)
-            )
-            conn.commit()
-            return {"success": True, "message": "Group dynamics updated."}
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Error updating group dynamics: {e}")
+                    # Record history and update timestamp
+                    group_obj.shared_history.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "type": "dynamics_update",
+                        "details": changes,
+                        "new_dynamics": group_obj.dynamics # Log final state
+                    })
+                    group_obj.last_activity = datetime.now().isoformat()
+
+                    # Store back
+                    updated_json = json.dumps(group_obj.to_dict())
+                    await conn.execute(
+                        """
+                        UPDATE NPCGroups SET group_data = $1, updated_at = NOW()
+                        WHERE user_id = $2 AND conversation_id = $3 AND group_id = $4
+                        """,
+                        updated_json, self.user_id, self.conversation_id, group_id
+                    )
+
+                 # Transaction commits here
+                 return {"success": True, "message": "Group dynamics updated.", "updated_dynamics": group_obj.dynamics}
+
+        except (asyncpg.PostgresError, ConnectionError, ValueError) as e:
+            logger.error(f"Error updating dynamics for group {group_id}: {e}", exc_info=True)
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logger.error(f"Unexpected error updating dynamics for group {group_id}: {e}", exc_info=True)
+            return {"error": "An unexpected error occurred."}
+
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # 2) Determining Interaction Styles & Producing Scenes
@@ -1488,273 +1417,240 @@ class MultiNPCInteractionManager:
         # pick first or random
         return random.choice(candidates)
 
-    def produce_multi_npc_scene(
+    async def produce_multi_npc_scene(
         self,
         group_id: int,
         topic: str = "General conversation",
         extra_context: str = ""
     ) -> Dict[str, Any]:
-        """
-        Creates a sample scene or conversation snippet among the NPCs in the group, 
-        reflecting the chosen interaction style.
-        """
-        group_info = self.get_npc_group(group_id=group_id)
-        if "error" in group_info:
-            return {"error": group_info["error"]}
+        """ Async create scene snippet and update group history. """
+        group_info = await self.get_npc_group(group_id=group_id) # Await the async version
+        if "error" in group_info or "group_object" not in group_info:
+             return {"error": group_info.get("error", "Failed to retrieve group object.")}
 
-        group_data = group_info["group_data"]
-        group_obj = NPCGroup.from_dict(group_data)
+        group_obj: NPCGroup = group_info["group_object"]
 
-        # Determine style
         style = self.determine_interaction_style(group_obj)
         style_def = self.INTERACTION_STYLES.get(style, {})
         dialogue_style_desc = style_def.get("dialogue_style", "Plain interaction.")
         desc = style_def.get("description", "")
 
-        # Build a short demonstration of how they'd talk
-        # We'll just do a naive approach: list each NPC's 'line' in order
-        random.shuffle(group_obj.members)
-        lines = []
-        for mem in group_obj.members[:3]:  # limit to 3 for brevity
-            name = mem["npc_name"]
-            role = mem.get("role", "member")
-            line = f"{name} ({role}): " \
-                   f"[Responding to {topic} with style '{style}']"
-            lines.append(line)
+        # Build demo lines
+        members_to_include = random.sample(group_obj.members, k=min(len(group_obj.members), 3))
+        lines = [f"{mem['npc_name']} ({mem.get('role', 'member')}): [Responding to {topic} with style '{style}']" for mem in members_to_include]
+        scene_text = "\n".join(lines)
 
-        # optionally store a small record in the group's shared history
+        # Update history and timestamp
         group_obj.shared_history.append({
-            "timestamp": datetime.now().isoformat(),
-            "type": "scene_example",
-            "style": style,
-            "topic": topic,
-            "lines": lines
+            "timestamp": datetime.now().isoformat(), "type": "scene_example",
+            "style": style, "topic": topic, "lines": lines
         })
         group_obj.last_activity = datetime.now().isoformat()
 
-        # persist changes
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Persist changes
         try:
-            updated_json = json.dumps(group_obj.to_dict())
-            cursor.execute(
-                """
-                UPDATE NPCGroups
-                SET group_data = %s
-                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
-                """,
-                (updated_json, self.user_id, self.conversation_id, group_id)
-            )
-            conn.commit()
+            async with get_db_connection_context() as conn:
+                updated_json = json.dumps(group_obj.to_dict())
+                await conn.execute(
+                    """
+                    UPDATE NPCGroups SET group_data = $1, updated_at = NOW()
+                    WHERE user_id = $2 AND conversation_id = $3 AND group_id = $4
+                    """,
+                    updated_json, self.user_id, self.conversation_id, group_id
+                )
+            return {
+                "success": True, "interaction_style": style, "style_description": desc,
+                "dialogue_style": dialogue_style_desc, "scene_preview": scene_text
+            }
+        except (asyncpg.PostgresError, ConnectionError) as e:
+            logger.error(f"Error storing scene in group {group_id}: {e}", exc_info=True)
+            # Return the scene info even if saving fails, but log error
+            return {
+                "success": False, "error": f"Failed to save history: {e}",
+                "interaction_style": style, "style_description": desc,
+                "dialogue_style": dialogue_style_desc, "scene_preview": scene_text
+            }
         except Exception as e:
-            conn.rollback()
-            logger.error(f"Error storing scene in group: {e}")
-        finally:
-            cursor.close()
-            conn.close()
-
-        scene_text = "\n".join(lines)
-        return {
-            "success": True,
-            "interaction_style": style,
-            "style_description": desc,
-            "dialogue_style": dialogue_style_desc,
-            "scene_preview": scene_text
-        }
+             logger.error(f"Unexpected error producing scene for group {group_id}: {e}", exc_info=True)
+             return {"error": "An unexpected error occurred during scene production."}
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # 3) Additional Utility Methods
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    def list_all_groups(self) -> Dict[str, Any]:
-        """
-        Return a list of all NPC groups for the current user/conversation.
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
+    async def list_all_groups(self) -> Dict[str, Any]:
+        """ Async return a list of all NPC groups. """
+        results = []
         try:
-            cursor.execute(
-                """
-                SELECT group_id, group_name, group_data
-                FROM NPCGroups
-                WHERE user_id=%s AND conversation_id=%s
-                """,
-                (self.user_id, self.conversation_id)
-            )
-            rows = cursor.fetchall()
-            results = []
-            for row in rows:
-                g_id, g_name, g_data = row
-                if isinstance(g_data, str):
-                    g_dict = json.loads(g_data)
-                else:
-                    g_dict = g_data
-                results.append({
-                    "group_id": g_id,
-                    "group_name": g_name,
-                    "data": g_dict
-                })
+            async with get_db_connection_context() as conn:
+                 rows = await conn.fetch(
+                      """
+                      SELECT group_id, group_name, group_data FROM NPCGroups
+                      WHERE user_id = $1 AND conversation_id = $2
+                      ORDER BY group_name
+                      """,
+                      self.user_id, self.conversation_id
+                 )
+                 for row in rows:
+                      g_data = row['group_data']
+                      g_dict = g_data if isinstance(g_data, dict) else (json.loads(g_data) if isinstance(g_data, str) else {})
+                      results.append({
+                           "group_id": row['group_id'],
+                           "group_name": row['group_name'],
+                           "data": g_dict # Return stored dict form
+                      })
             return {"groups": results, "count": len(results)}
-        except Exception as e:
-            logger.error(f"Error listing groups: {e}")
+        except (asyncpg.PostgresError, ConnectionError) as e:
+            logger.error(f"Error listing groups: {e}", exc_info=True)
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logger.error(f"Unexpected error listing groups: {e}", exc_info=True)
+            return {"error": "An unexpected error occurred."}
 
-    def delete_group(self, group_id: int) -> Dict[str, Any]:
-        """
-        Deletes an NPC group from the DB.
-        NOTE: Potentially also handle cleanup of relationships or references.
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
+
+    async def delete_group(self, group_id: int) -> Dict[str, Any]:
+        """ Async delete an NPC group. """
         try:
-            cursor.execute(
-                """
-                DELETE FROM NPCGroups
-                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
-                """,
-                (self.user_id, self.conversation_id, group_id)
-            )
-            if cursor.rowcount < 1:
-                return {"error": "No group found or deletion failed."}
-            conn.commit()
-            return {"success": True, "message": f"Group {group_id} deleted."}
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Error deleting group: {e}")
+            async with get_db_connection_context() as conn:
+                result = await conn.execute(
+                     """
+                     DELETE FROM NPCGroups
+                     WHERE user_id = $1 AND conversation_id = $2 AND group_id = $3
+                     """,
+                     self.user_id, self.conversation_id, group_id
+                )
+                if result == "DELETE 1":
+                    return {"success": True, "message": f"Group {group_id} deleted."}
+                else:
+                    return {"error": f"Group {group_id} not found or not deleted."}
+        except (asyncpg.PostgresError, ConnectionError) as e:
+            logger.error(f"Error deleting group {group_id}: {e}", exc_info=True)
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
-
+        except Exception as e:
+            logger.error(f"Unexpected error deleting group {group_id}: {e}", exc_info=True)
+            return {"error": "An unexpected error occurred."}
+         
     async def update_npc_group_dynamics(
         self,
-        user_id: int,
-        conversation_id: int,
+        # Note: user_id and conversation_id are already attributes of the manager instance
         group_id: int,
-        dynamics_data: Dict[str, Any]
+        dynamics_data: Dict[str, int] # Renamed from 'changes' for clarity, maps dynamic_name -> new_value
     ) -> Dict[str, Any]:
         """
-        Update NPC group dynamics and relationships within a group.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            group_id: Group ID
-            dynamics_data: Dictionary containing dynamics updates
-            
-        Returns:
-            Dictionary of updates applied
+        Async update NPC group dynamics and potentially related relationships.
+        Uses the instance's user_id and conversation_id.
+        Accepts new target values for dynamics.
         """
+        updates_applied = {"group_dynamics": [], "member_relationships": []}
         try:
-            conn = await asyncpg.connect(dsn=get_db_connection())
-            try:
-                updates_applied = []
-                
-                # Get group members
-                group = await self.get_npc_group(group_id=group_id)
-                
-                if not group or "members" not in group:
-                    return {"success": False, "error": "Group not found"}
-                
-                # Process each dynamic update
-                for dynamic, value in dynamics_data.items():
-                    if dynamic not in self.GROUP_DYNAMICS:
-                        continue
-                    
-                    # Update the dynamic in the database
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE NPCGroups
-                        SET dynamics = COALESCE(dynamics, '{}'::jsonb) || 
-                                     jsonb_build_object(%s, %s)
-                        WHERE group_id = %s AND user_id = %s AND conversation_id = %s
-                    """, (dynamic, value, group_id, user_id, conversation_id))
-                    
-                    # Update relationships between group members based on dynamics
-                    for member1 in group["members"]:
-                        for member2 in group["members"]:
-                            if member1["npc_id"] >= member2["npc_id"]:
-                                continue
-                            
-                            # Get current relationship between members
-                            member_link = await get_social_link(
-                                user_id,
-                                conversation_id,
-                                "npc",
-                                member1["npc_id"],
-                                "npc",
-                                member2["npc_id"]
-                            )
-                            
-                            if not member_link:
-                                continue
-                            
-                            # Calculate relationship changes based on dynamics
-                            level_change = 0
-                            new_type = None
-                            
-                            if dynamic == "hierarchy":
-                                # Hierarchy changes affect respect and control
-                                if value > 50:
-                                    level_change = 5
-                                else:
-                                    level_change = -5
-                            elif dynamic == "cohesion":
-                                # Cohesion affects trust and intimacy
-                                if value > 50:
-                                    level_change = 3
-                                else:
-                                    level_change = -3
-                            elif dynamic == "secrecy":
-                                # Secrecy affects trust and manipulation
-                                if value > 50:
-                                    level_change = 2
-                                else:
-                                    level_change = -2
-                            
-                            # Update the relationship
-                            update_result = await update_link_type_and_level(
-                                user_id,
-                                conversation_id,
-                                member_link["link_id"],
-                                new_type,
-                                level_change
-                            )
-                            
-                            if update_result:
-                                updates_applied.append({
-                                    "member1_id": member1["npc_id"],
-                                    "member2_id": member2["npc_id"],
-                                    "dynamic": dynamic,
-                                    "changes": update_result
-                                })
-                                
-                                # Add event to relationship history
-                                event_text = f"Group dynamic '{dynamic}' changed to {value}"
-                                await add_link_event(
-                                    user_id,
-                                    conversation_id,
-                                    member_link["link_id"],
-                                    event_text
-                                )
-                
-                conn.commit()
-                return {
-                    "success": True,
-                    "updates_applied": updates_applied
-                }
-                
-            finally:
-                await conn.close()
+            async with get_db_connection_context() as conn:
+                 async with conn.transaction():
+                    # --- 1. Update Group Dynamics ---
+                    group_data = await conn.fetchval(
+                        """SELECT group_data FROM NPCGroups
+                           WHERE user_id = $1 AND conversation_id = $2 AND group_id = $3 FOR UPDATE""",
+                        self.user_id, self.conversation_id, group_id
+                    )
+                    if group_data is None: raise ValueError("Group not found.")
+
+                    group_dict = group_data if isinstance(group_data, dict) else json.loads(group_data)
+                    group_obj = NPCGroup.from_dict(group_dict, group_id=group_id)
+
+                    changed_dynamics = {}
+                    for dynamic_key, new_value in dynamics_data.items():
+                         if dynamic_key in self.GROUP_DYNAMICS:
+                             # Clamp value to 0-100 (or defined range)
+                             clamped_value = max(0, min(100, new_value))
+                             if group_obj.dynamics.get(dynamic_key) != clamped_value:
+                                 group_obj.dynamics[dynamic_key] = clamped_value
+                                 changed_dynamics[dynamic_key] = clamped_value
+                         else:
+                              logger.warning(f"Unknown dynamic '{dynamic_key}' skipped for group {group_id}")
+
+                    if not changed_dynamics:
+                         logger.info(f"No actual change in dynamics for group {group_id}. Skipping update.")
+                         return {"success": True, "message": "No changes applied.", "updates_applied": updates_applied}
+
+                    group_obj.shared_history.append({
+                         "timestamp": datetime.now().isoformat(),
+                         "type": "dynamics_set", # Changed type
+                         "details": changed_dynamics
+                    })
+                    group_obj.last_activity = datetime.now().isoformat()
+                    updated_json = json.dumps(group_obj.to_dict())
+
+                    await conn.execute(
+                        "UPDATE NPCGroups SET group_data = $1, updated_at = NOW() WHERE group_id = $2",
+                        updated_json, group_id
+                    )
+                    updates_applied["group_dynamics"] = changed_dynamics
+                    logger.info(f"Updated group {group_id} dynamics: {changed_dynamics}")
+
+
+                    # --- 2. Optional: Update Member Relationships (Example Logic) ---
+                    # This part depends heavily on how you want group dynamics to affect pairs
+                    # Example: Higher cohesion slightly increases trust between members
+                    if "cohesion" in changed_dynamics and group_obj.members and len(group_obj.members) > 1:
+                         cohesion_level = changed_dynamics["cohesion"]
+                         level_change = 0
+                         if cohesion_level > 70: level_change = 3 # High cohesion -> more trust
+                         elif cohesion_level < 30: level_change = -3 # Low cohesion -> less trust
+
+                         if level_change != 0:
+                             for i in range(len(group_obj.members)):
+                                 for j in range(i + 1, len(group_obj.members)):
+                                     m1_id = group_obj.members[i]["npc_id"]
+                                     m2_id = group_obj.members[j]["npc_id"]
+
+                                     # Need to handle link directionality or fetch regardless of order
+                                     # Let's assume order doesn't matter for the relationship itself
+                                     link_id = await conn.fetchval(
+                                           """SELECT link_id FROM SocialLinks
+                                              WHERE user_id=$1 AND conversation_id=$2
+                                              AND ((entity1_type='npc' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
+                                                OR (entity1_type='npc' AND entity1_id=$4 AND entity2_type='npc' AND entity2_id=$3))
+                                           """, self.user_id, self.conversation_id, m1_id, m2_id
+                                     )
+
+                                     if link_id:
+                                         # Example: Modify 'trust' dimension within the link's dynamics JSONB
+                                         # Fetch current dynamics
+                                         current_link_dynamics = await conn.fetchval(
+                                               "SELECT dynamics FROM SocialLinks WHERE link_id=$1", link_id
+                                         )
+                                         link_dynamics = current_link_dynamics if isinstance(current_link_dynamics, dict) else json.loads(current_link_dynamics or '{}')
+
+                                         trust_level = link_dynamics.get('trust', 0)
+                                         new_trust = max(-100, min(100, trust_level + level_change)) # Clamp -100 to 100 for trust
+
+                                         if new_trust != trust_level:
+                                             link_dynamics['trust'] = new_trust
+                                             # Update the link's dynamics field
+                                             await conn.execute(
+                                                  "UPDATE SocialLinks SET dynamics=$1 WHERE link_id=$2",
+                                                  json.dumps(link_dynamics), link_id
+                                             )
+                                             # Add event to link history
+                                             event = f"Trust changed to {new_trust} due to group cohesion update."
+                                             await conn.execute(
+                                                 "UPDATE SocialLinks SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb WHERE link_id=$2",
+                                                 json.dumps(event), link_id
+                                             )
+                                             updates_applied["member_relationships"].append({
+                                                  "member1_id": m1_id, "member2_id": m2_id,
+                                                  "change": {"trust": level_change}
+                                             })
+
+
+            # Transaction commits automatically
+            return {"success": True, "updates_applied": updates_applied}
+
+        except (asyncpg.PostgresError, ConnectionError, ValueError) as e:
+            logger.error(f"Error updating group dynamics for {group_id}: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
         except Exception as e:
-            logging.error(f"Error updating NPC group dynamics: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            logger.error(f"Unexpected error updating group dynamics for {group_id}: {e}", exc_info=True)
+            return {"success": False, "error": "An unexpected error occurred."}
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1911,183 +1807,153 @@ async def get_relationship_summary_tool(
 @function_tool
 async def update_relationships_from_conflict(
     ctx: RunContextWrapper,
-    user_id: int,
-    conversation_id: int,
+    # user_id: int, # Use from context
+    # conversation_id: int, # Use from context
     conflict_id: int,
-    resolution_data: Dict[str, Any]
+    resolution_data: Dict[str, Any] # e.g., {"success": True, "winning_faction": "rebels", "outcome": "Rebels won"}
 ) -> dict:
     """
-    Update relationships based on conflict resolution outcomes.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        conflict_id: Conflict ID
-        resolution_data: Resolution data including outcomes and stakeholder impacts
-        
-    Returns:
-        Dictionary of relationship updates applied
+    Update relationships based on conflict resolution outcomes. Uses user_id and conversation_id from context.
     """
+    user_id = ctx.run_context.get("user_id")
+    conversation_id = ctx.run_context.get("conversation_id")
+    if not user_id or not conversation_id:
+        return {"success": False, "error": "user_id and conversation_id required in context."}
+
+    updates_applied = []
     try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        try:
-            updates_applied = []
-            
-            # Get all stakeholders involved in the conflict
-            stakeholders = await get_conflict_stakeholders(
-                RunContextWrapper({"user_id": user_id, "conversation_id": conversation_id}),
-                conflict_id
-            )
-            
-            # Process each stakeholder's relationship changes
-            for stakeholder in stakeholders:
-                npc_id = stakeholder["npc_id"]
-                
-                # Get current relationship with player
-                player_link = await get_social_link(
-                    user_id,
-                    conversation_id,
-                    "player",
-                    0,  # Player ID
-                    "npc",
-                    npc_id
-                )
-                
-                if not player_link:
-                    continue
-                
-                # Calculate relationship changes based on resolution
-                level_change = 0
-                new_type = None
-                
-                # Apply changes based on resolution outcome
-                if resolution_data.get("success", False):
-                    if stakeholder.get("faction_position") == resolution_data.get("winning_faction"):
-                        level_change = 10  # Positive change for aligned stakeholders
-                    else:
-                        level_change = -5  # Slight negative for opposing stakeholders
-                else:
-                    if stakeholder.get("faction_position") == resolution_data.get("winning_faction"):
-                        level_change = -10  # Negative change for failed aligned stakeholders
-                    else:
-                        level_change = 5  # Slight positive for opposing stakeholders
-                
-                # Update the relationship
-                update_result = await update_link_type_and_level(
-                    user_id,
-                    conversation_id,
-                    player_link["link_id"],
-                    new_type,
-                    level_change
-                )
-                
-                if update_result:
-                    updates_applied.append({
-                        "npc_id": npc_id,
-                        "changes": update_result
-                    })
-                    
-                    # Add event to relationship history
-                    event_text = f"Relationship changed due to conflict resolution: {resolution_data.get('outcome', 'unknown')}"
-                    await add_link_event(
-                        user_id,
-                        conversation_id,
-                        player_link["link_id"],
-                        event_text
+        # Await the assumed async function
+        stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
+        if not stakeholders:
+             return {"success": True, "message": "No stakeholders found for conflict.", "updates_applied": []}
+
+        async with get_db_connection_context() as conn:
+            # Optionally run multiple updates in a transaction for consistency
+            async with conn.transaction():
+                for stakeholder in stakeholders:
+                    npc_id = stakeholder.get("npc_id")
+                    if not npc_id: continue
+
+                    # Get player's link with this NPC (assuming player ID is user_id)
+                    # Handle both directions
+                    player_link_id = await conn.fetchval(
+                         """SELECT link_id FROM SocialLinks
+                            WHERE user_id=$1 AND conversation_id=$2
+                            AND ((entity1_type='player' AND entity1_id=$1 AND entity2_type='npc' AND entity2_id=$3)
+                              OR (entity1_type='npc' AND entity1_id=$3 AND entity2_type='player' AND entity2_id=$1))
+                         """, user_id, conversation_id, npc_id
                     )
-            
-            return {
-                "success": True,
-                "updates_applied": updates_applied
-            }
-            
-        finally:
-            await conn.close()
+
+                    if not player_link_id: continue
+
+                    # --- Calculate changes based on resolution_data ---
+                    level_change = 0
+                    # Example logic:
+                    resolution_success = resolution_data.get("success", False)
+                    winning_faction = resolution_data.get("winning_faction")
+                    npc_faction = stakeholder.get("faction_position") # Assuming this field exists
+
+                    if winning_faction:
+                         if npc_faction == winning_faction:
+                              level_change = 10 if resolution_success else -10
+                         else:
+                              level_change = -5 if resolution_success else 5
+                    else: # No specific winner, maybe base on success?
+                         level_change = 3 if resolution_success else -3
+
+                    # --- Apply changes (Example: Update overall level) ---
+                    update_result = await update_link_type_and_level( # Calls the async version
+                         user_id, conversation_id, player_link_id, None, level_change
+                    )
+                    # Note: update_link_type_and_level uses its own connection context.
+                    # If you want this *within* the current transaction, you'd need to
+                    # pass 'conn' to it or reimplement its logic here.
+                    # For simplicity, we'll assume separate connection is acceptable here.
+
+                    if update_result:
+                        updates_applied.append({ "npc_id": npc_id, "changes": update_result })
+                        # Add history event
+                        event_text = f"Relationship changed due to conflict {conflict_id} resolution: {resolution_data.get('outcome', 'unknown')}"
+                        await add_link_event(user_id, conversation_id, player_link_id, event_text) # Also uses its own context
+
+        return {"success": True, "updates_applied": updates_applied}
+
     except Exception as e:
-        logging.error(f"Error updating relationships from conflict: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        logger.error(f"Error updating relationships from conflict {conflict_id}: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
 
 
 @function_tool
 async def update_relationship_context(
     ctx: RunContextWrapper,
-    user_id: int,
-    conversation_id: int,
+    # user_id: int, # Use from context
+    # conversation_id: int, # Use from context
     entity1_type: str,
     entity1_id: int,
     entity2_type: str,
     entity2_id: int,
-    context_data: Dict[str, Any]
+    context_data: Dict[str, Any] # Data to merge into the context JSONB field
 ) -> Dict[str, Any]:
     """
-    Update relationship context with additional information.
-    
-    Args:
-        ctx: Run context wrapper
-        user_id: User ID
-        conversation_id: Conversation ID
-        entity1_type: Type of first entity
-        entity1_id: ID of first entity
-        entity2_type: Type of second entity
-        entity2_id: ID of second entity
-        context_data: Additional context data to store
-        
-    Returns:
-        Dictionary of updates applied
+    Update relationship context (merges JSONB data). Uses user_id and conversation_id from context.
+    Assumes SocialLinks table has a 'context' JSONB column.
     """
+    user_id = ctx.run_context.get("user_id")
+    conversation_id = ctx.run_context.get("conversation_id")
+    if not user_id or not conversation_id:
+        return {"success": False, "error": "user_id and conversation_id required in context."}
+
+    if not context_data:
+         return {"success": False, "error": "No context_data provided."}
+
     try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        try:
-            # Get current relationship
-            relationship = await get_social_link(
-                user_id,
-                conversation_id,
-                entity1_type,
-                entity1_id,
-                entity2_type,
-                entity2_id
+        # Ensure SocialLinks has a 'context' JSONB column
+        # ALTER TABLE SocialLinks ADD COLUMN IF NOT EXISTS context JSONB;
+
+        async with get_db_connection_context() as conn:
+            # Find link_id, handling both directions
+            link_id = await conn.fetchval(
+                 """SELECT link_id FROM SocialLinks
+                    WHERE user_id=$1 AND conversation_id=$2
+                    AND ((entity1_type=$3 AND entity1_id=$4 AND entity2_type=$5 AND entity2_id=$6)
+                      OR (entity1_type=$5 AND entity1_id=$6 AND entity2_type=$3 AND entity2_id=$4))
+                 """, user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
             )
-            
-            if not relationship:
-                return {"success": False, "error": "Relationship not found"}
-            
-            # Update relationship context
-            cursor = conn.cursor()
-            cursor.execute("""
+
+            if not link_id:
+                 # Option: Create the link first if it doesn't exist?
+                 # link_id = await create_social_link(user_id, ...)
+                 # if not link_id: return {"success": False, "error": "Relationship not found and could not be created."}
+                 return {"success": False, "error": "Relationship not found."}
+
+
+            # Merge the new context data into the existing context JSONB
+            # The || operator concatenates/merges JSONB objects
+            await conn.execute(
+                """
                 UPDATE SocialLinks
-                SET context = COALESCE(context, '{}'::jsonb) || %s::jsonb
-                WHERE link_id = %s AND user_id = %s AND conversation_id = %s
-            """, (json.dumps(context_data), relationship["link_id"], user_id, conversation_id))
-            
+                SET context = COALESCE(context, '{}'::jsonb) || $1::jsonb
+                WHERE link_id = $2
+                """,
+                json.dumps(context_data), link_id
+            )
+
             # Add event to relationship history
             event_text = f"Relationship context updated: {json.dumps(context_data)}"
-            await add_link_event(
-                user_id,
-                conversation_id,
-                relationship["link_id"],
-                event_text
-            )
-            
-            conn.commit()
-            return {
-                "success": True,
-                "link_id": relationship["link_id"],
-                "context_updated": context_data
-            }
-            
-        finally:
-            await conn.close()
+            # Call the async helper function
+            await add_link_event(user_id, conversation_id, link_id, event_text)
+
+        return {"success": True, "link_id": link_id, "context_updated": context_data}
+
+    except (asyncpg.PostgresError, ConnectionError) as e:
+        logger.error(f"Error updating relationship context: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
     except Exception as e:
-        logging.error(f"Error updating relationship context: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
+        logger.error(f"Unexpected error updating relationship context: {e}", exc_info=True)
+        return {"success": False, "error": "An unexpected error occurred."}
+     
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 9) The Agent: "SocialLinksAgent"
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
