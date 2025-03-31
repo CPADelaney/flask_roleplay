@@ -213,63 +213,59 @@ class ResourceManager:
         Returns:
             Dict with success status and new balance
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get current value
-            cursor.execute("""
-                SELECT supplies FROM PlayerResources
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                FOR UPDATE
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Create default resources if not found
-                self.create_default_resources()
-                old_value = 20
-            else:
-                old_value = row[0]
-            
-            new_value = max(0, old_value + amount)
-            
-            # Update resources
-            cursor.execute("""
-                UPDATE PlayerResources
-                SET supplies=%s, updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (new_value, self.user_id, self.conversation_id, self.player_name))
-            
-            # Log the change
-            cursor.execute("""
-                INSERT INTO ResourceHistoryLog 
-                (user_id, conversation_id, player_name, resource_type, 
-                 old_value, new_value, amount_changed, source, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.user_id, self.conversation_id, self.player_name, 
-                  "supplies", old_value, new_value, amount, source, description))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT supplies FROM PlayerResources
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                    FOR UPDATE
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Create default resources if not found
+                    await self.create_default_resources()
+                    old_value = 20
+                else:
+                    old_value = row['supplies']
+                
+                new_value = max(0, old_value + amount)
+                
+                # Update resources
+                await conn.execute("""
+                    UPDATE PlayerResources
+                    SET supplies=$1, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                """, new_value, self.user_id, self.conversation_id, self.player_name)
+                
+                # Log the change
+                await conn.execute("""
+                    INSERT INTO ResourceHistoryLog 
+                    (user_id, conversation_id, player_name, resource_type, 
+                     old_value, new_value, amount_changed, source, description)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, self.user_id, self.conversation_id, self.player_name, 
+                      "supplies", old_value, new_value, amount, source, description)
+                
+                return {
+                    "success": True,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": amount
+                }
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error modifying supplies: {db_err}", exc_info=True)
             return {
-                "success": True,
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": amount
+                "success": False,
+                "error": str(db_err)
             }
-            
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error modifying supplies: {e}")
+            logging.error(f"Error modifying supplies: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
             }
-        finally:
-            cursor.close()
-            conn.close()
     
     async def modify_influence(self, amount, source, description=None):
         """
@@ -283,63 +279,59 @@ class ResourceManager:
         Returns:
             Dict with success status and new balance
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get current value
-            cursor.execute("""
-                SELECT influence FROM PlayerResources
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                FOR UPDATE
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Create default resources if not found
-                self.create_default_resources()
-                old_value = 10
-            else:
-                old_value = row[0]
-            
-            new_value = max(0, old_value + amount)
-            
-            # Update resources
-            cursor.execute("""
-                UPDATE PlayerResources
-                SET influence=%s, updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (new_value, self.user_id, self.conversation_id, self.player_name))
-            
-            # Log the change
-            cursor.execute("""
-                INSERT INTO ResourceHistoryLog 
-                (user_id, conversation_id, player_name, resource_type, 
-                 old_value, new_value, amount_changed, source, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.user_id, self.conversation_id, self.player_name, 
-                  "influence", old_value, new_value, amount, source, description))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT influence FROM PlayerResources
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                    FOR UPDATE
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Create default resources if not found
+                    await self.create_default_resources()
+                    old_value = 10
+                else:
+                    old_value = row['influence']
+                
+                new_value = max(0, old_value + amount)
+                
+                # Update resources
+                await conn.execute("""
+                    UPDATE PlayerResources
+                    SET influence=$1, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                """, new_value, self.user_id, self.conversation_id, self.player_name)
+                
+                # Log the change
+                await conn.execute("""
+                    INSERT INTO ResourceHistoryLog 
+                    (user_id, conversation_id, player_name, resource_type, 
+                     old_value, new_value, amount_changed, source, description)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, self.user_id, self.conversation_id, self.player_name, 
+                      "influence", old_value, new_value, amount, source, description)
+                
+                return {
+                    "success": True,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": amount
+                }
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error modifying influence: {db_err}", exc_info=True)
             return {
-                "success": True,
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": amount
+                "success": False,
+                "error": str(db_err)
             }
-            
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error modifying influence: {e}")
+            logging.error(f"Error modifying influence: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
             }
-        finally:
-            cursor.close()
-            conn.close()
     
     async def modify_hunger(self, amount, source=None, description=None):
         """
@@ -353,64 +345,60 @@ class ResourceManager:
         Returns:
             Dict with success status and new hunger level
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get current value
-            cursor.execute("""
-                SELECT hunger FROM PlayerVitals
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                FOR UPDATE
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Create default vitals if not found
-                self.create_default_vitals()
-                old_value = 100
-            else:
-                old_value = row[0]
-            
-            # Hunger is capped between 0 and 100
-            new_value = max(0, min(100, old_value + amount))
-            
-            # Update vitals
-            cursor.execute("""
-                UPDATE PlayerVitals
-                SET hunger=%s, last_update=CURRENT_TIMESTAMP
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (new_value, self.user_id, self.conversation_id, self.player_name))
-            
-            # Log the change
-            cursor.execute("""
-                INSERT INTO ResourceHistoryLog 
-                (user_id, conversation_id, player_name, resource_type, 
-                 old_value, new_value, amount_changed, source, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.user_id, self.conversation_id, self.player_name, 
-                  "hunger", old_value, new_value, amount, source or "activity", description))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT hunger FROM PlayerVitals
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                    FOR UPDATE
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Create default vitals if not found
+                    await self.create_default_vitals()
+                    old_value = 100
+                else:
+                    old_value = row['hunger']
+                
+                # Hunger is capped between 0 and 100
+                new_value = max(0, min(100, old_value + amount))
+                
+                # Update vitals
+                await conn.execute("""
+                    UPDATE PlayerVitals
+                    SET hunger=$1, last_update=CURRENT_TIMESTAMP
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                """, new_value, self.user_id, self.conversation_id, self.player_name)
+                
+                # Log the change
+                await conn.execute("""
+                    INSERT INTO ResourceHistoryLog 
+                    (user_id, conversation_id, player_name, resource_type, 
+                     old_value, new_value, amount_changed, source, description)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, self.user_id, self.conversation_id, self.player_name, 
+                      "hunger", old_value, new_value, amount, source or "activity", description)
+                
+                return {
+                    "success": True,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": amount
+                }
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error modifying hunger: {db_err}", exc_info=True)
             return {
-                "success": True,
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": amount
+                "success": False,
+                "error": str(db_err)
             }
-            
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error modifying hunger: {e}")
+            logging.error(f"Error modifying hunger: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
             }
-        finally:
-            cursor.close()
-            conn.close()
     
     async def modify_energy(self, amount, source=None, description=None):
         """
@@ -424,64 +412,60 @@ class ResourceManager:
         Returns:
             Dict with success status and new energy level
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get current value
-            cursor.execute("""
-                SELECT energy FROM PlayerVitals
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                FOR UPDATE
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Create default vitals if not found
-                self.create_default_vitals()
-                old_value = 100
-            else:
-                old_value = row[0]
-            
-            # Energy is capped between 0 and 100
-            new_value = max(0, min(100, old_value + amount))
-            
-            # Update vitals
-            cursor.execute("""
-                UPDATE PlayerVitals
-                SET energy=%s, last_update=CURRENT_TIMESTAMP
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (new_value, self.user_id, self.conversation_id, self.player_name))
-            
-            # Log the change
-            cursor.execute("""
-                INSERT INTO ResourceHistoryLog 
-                (user_id, conversation_id, player_name, resource_type, 
-                 old_value, new_value, amount_changed, source, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.user_id, self.conversation_id, self.player_name, 
-                  "energy", old_value, new_value, amount, source or "activity", description))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT energy FROM PlayerVitals
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                    FOR UPDATE
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Create default vitals if not found
+                    await self.create_default_vitals()
+                    old_value = 100
+                else:
+                    old_value = row['energy']
+                
+                # Energy is capped between 0 and 100
+                new_value = max(0, min(100, old_value + amount))
+                
+                # Update vitals
+                await conn.execute("""
+                    UPDATE PlayerVitals
+                    SET energy=$1, last_update=CURRENT_TIMESTAMP
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                """, new_value, self.user_id, self.conversation_id, self.player_name)
+                
+                # Log the change
+                await conn.execute("""
+                    INSERT INTO ResourceHistoryLog 
+                    (user_id, conversation_id, player_name, resource_type, 
+                     old_value, new_value, amount_changed, source, description)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, self.user_id, self.conversation_id, self.player_name, 
+                      "energy", old_value, new_value, amount, source or "activity", description)
+                
+                return {
+                    "success": True,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": amount
+                }
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error modifying energy: {db_err}", exc_info=True)
             return {
-                "success": True,
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": amount
+                "success": False,
+                "error": str(db_err)
             }
-            
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error modifying energy: {e}")
+            logging.error(f"Error modifying energy: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
             }
-        finally:
-            cursor.close()
-            conn.close()
     
     async def check_resources(self, money=0, supplies=0, influence=0):
         """
