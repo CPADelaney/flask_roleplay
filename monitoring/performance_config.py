@@ -9,6 +9,9 @@ from typing import Dict, Any
 from dataclasses import dataclass
 from prometheus_client import Counter, Histogram, Gauge
 
+# Import database connections
+from db.connection import get_db_connection_context
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -118,7 +121,7 @@ def record_operation_metrics(operation_type: str, duration: float, success: bool
         endpoint=operation_type
     ).observe(duration)
 
-def update_system_metrics() -> None:
+async def update_system_metrics() -> None:
     """Update system metrics (memory and CPU usage)."""
     import psutil
     
@@ -136,4 +139,18 @@ def update_system_metrics() -> None:
         logger.warning(f"High memory usage: {memory.percent}%")
     
     if cpu_percent > config.cpu_warning_threshold:
-        logger.warning(f"High CPU usage: {cpu_percent}%") 
+        logger.warning(f"High CPU usage: {cpu_percent}%")
+        
+    # Check database connection count
+    try:
+        async with get_db_connection_context() as conn:
+            result = await conn.fetchrow("SELECT COUNT(*) FROM pg_stat_activity")
+            if result and result[0]:
+                db_connections = result[0]
+                logger.info(f"Current database connections: {db_connections}")
+                
+                # Check if connections are high
+                if db_connections > 50:  # Threshold for warning
+                    logger.warning(f"High number of database connections: {db_connections}")
+    except Exception as e:
+        logger.error(f"Error checking database connections: {e}")
