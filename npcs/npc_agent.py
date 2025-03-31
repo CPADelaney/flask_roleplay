@@ -19,7 +19,7 @@ from collections import OrderedDict
 
 from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff
 from agents.tracing import custom_span, generation_span, function_span
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
 
@@ -341,9 +341,10 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
         user_id = ctx.context.user_id
         conversation_id = ctx.context.conversation_id
         
-        def _fetch():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
+        # Updated to use async DB connection
+        async with get_db_connection_context() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
                     """
                     SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
                            hobbies, personality_traits, likes, dislikes, schedule, current_location, sex
@@ -352,11 +353,9 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
                     """,
                     (npc_id, user_id, conversation_id),
                 )
-                return cursor.fetchone()
-
-        row = await asyncio.to_thread(_fetch)
-        if not row:
-            return NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}")
+                row = await cursor.fetchone()
+                if not row:
+                    return NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}")
 
         # Parse JSON fields
         def _parse_json_field(field):
@@ -722,7 +721,7 @@ async def get_nyx_governor(user_id: int, conversation_id: int):
     """
     from nyx.nyx_governance import NyxGovernor
     return NyxGovernor(user_id, conversation_id)
-
+    
 class NPCAgent:
     """
     Core NPC agent implementation using OpenAI Agents SDK.
@@ -1182,16 +1181,20 @@ class NPCAgent:
     async def _get_current_schedule(self) -> Dict[str, Any]:
         """Get the NPC's current schedule."""
         try:
-            async with self.context.db.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT schedule
-                    FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, self.npc_id, self.user_id, self.conversation_id)
-                
-                if row and row["schedule"]:
-                    return row["schedule"]
-                return None
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT schedule
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (self.npc_id, self.user_id, self.conversation_id))
+                    
+                    row = await cursor.fetchone()
+                    
+                    if row and row[0]:
+                        return row[0]
+                    return None
         except Exception as e:
             logger.error(f"Error getting NPC schedule: {e}")
             return None
@@ -1199,21 +1202,25 @@ class NPCAgent:
     async def _get_current_time(self) -> Dict[str, Any]:
         """Get current game time information."""
         try:
-            async with self.context.db.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT year, month, day, time_of_day
-                    FROM GameTime
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, self.user_id, self.conversation_id)
-                
-                if row:
-                    return {
-                        "year": row["year"],
-                        "month": row["month"],
-                        "day": row["day"],
-                        "time_of_day": row["time_of_day"]
-                    }
-                return None
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT year, month, day, time_of_day
+                        FROM GameTime
+                        WHERE user_id = %s AND conversation_id = %s
+                    """, (self.user_id, self.conversation_id))
+                    
+                    row = await cursor.fetchone()
+                    
+                    if row:
+                        return {
+                            "year": row[0],
+                            "month": row[1],
+                            "day": row[2],
+                            "time_of_day": row[3]
+                        }
+                    return None
         except Exception as e:
             logger.error(f"Error getting current time: {e}")
             return None
@@ -1221,19 +1228,24 @@ class NPCAgent:
     async def _get_current_location(self) -> str:
         """Get NPC's current location."""
         try:
-            async with self.context.db.pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT current_location
-                    FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, self.npc_id, self.user_id, self.conversation_id)
-                
-                if row:
-                    return row["current_location"]
-                return "unknown"
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT current_location
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (self.npc_id, self.user_id, self.conversation_id))
+                    
+                    row = await cursor.fetchone()
+                    
+                    if row:
+                        return row[0]
+                    return "unknown"
         except Exception as e:
             logger.error(f"Error getting NPC location: {e}")
             return "unknown"
+
 
     async def _execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an NPC action."""
@@ -1353,19 +1365,23 @@ class NPCAgent:
     async def _get_nearby_npcs(self, location: str) -> List[Dict[str, Any]]:
         """Get NPCs in the same location."""
         try:
-            async with self.context.db.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT npc_id, npc_name, dominance, cruelty
-                    FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                    AND current_location = $3
-                    AND npc_id != $4
-                """, self.user_id, self.conversation_id, location, self.npc_id)
-                
-                return [dict(row) for row in rows]
+            # Refactored to use async connection
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT npc_id, npc_name, dominance, cruelty 
+                        FROM NPCStats
+                        WHERE user_id = %s AND conversation_id = %s
+                        AND current_location = %s
+                        AND npc_id != %s
+                    """, (self.user_id, self.conversation_id, location, self.npc_id))
+                    
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Error getting nearby NPCs: {e}")
             return []
+
 
     def _choose_interaction_target(self, nearby_npcs: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
         """Choose an NPC to interact with."""
