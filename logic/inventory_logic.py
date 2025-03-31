@@ -1,198 +1,210 @@
 # logic/inventory_logic.py
-from db.connection import get_db_connection
+import logging
+import asyncio
+import asyncpg
+from db.connection import get_db_connection_context
 
-def fetch_inventory_item(user_id, conversation_id, item_name):
+async def fetch_inventory_item(user_id, conversation_id, item_name):
     """
     Lookup a specific item in the player's inventory by item_name.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT player_name, item_description, item_effect, quantity, category
-        FROM PlayerInventory
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND item_name=%s
-        LIMIT 1
-    """, (user_id, conversation_id, item_name))
-    
-    row = cursor.fetchone()
-    if not row:
-        cursor.close()
-        conn.close()
-        return {"error": f"No item named '{item_name}' found in inventory"}
-    
-    (pname, idesc, ifx, qty, cat) = row
-    
-    item_data = {
-        "item_name": item_name,
-        "player_name": pname,
-        "item_description": idesc,
-        "item_effect": ifx,
-        "quantity": qty,
-        "category": cat
-    }
-    
-    cursor.close()
-    conn.close()
-    
-    return item_data
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT player_name, item_description, item_effect, quantity, category
+                FROM PlayerInventory
+                WHERE user_id=$1
+                  AND conversation_id=$2
+                  AND item_name=$3
+                LIMIT 1
+            """, user_id, conversation_id, item_name)
+            
+            if not row:
+                return {"error": f"No item named '{item_name}' found in inventory"}
+            
+            item_data = {
+                "item_name": item_name,
+                "player_name": row['player_name'],
+                "item_description": row['item_description'],
+                "item_effect": row['item_effect'],
+                "quantity": row['quantity'],
+                "category": row['category']
+            }
+            
+            return item_data
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error fetching inventory item '{item_name}': {db_err}", exc_info=True)
+        return {"error": f"Database error: {db_err}"}
+    except Exception as e:
+        logging.error(f"Error fetching inventory item '{item_name}': {e}", exc_info=True)
+        return {"error": str(e)}
 
-def add_item_to_inventory(user_id, conversation_id, player_name,
-                          item_name, description=None, effect=None,
-                          category=None, quantity=1):
+async def add_item_to_inventory(user_id, conversation_id, player_name,
+                              item_name, description=None, effect=None,
+                              category=None, quantity=1):
     """
     Adds an item to the player's inventory for a specific user & conversation.
     If the item already exists (for that user_id, conversation_id, player_name, item_name),
     increments the quantity. Otherwise, inserts a new row.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
     try:
-        # Check if this item already exists for the same (user_id, conv_id, player_name, item_name)
-        cursor.execute("""
-            SELECT id, quantity
-            FROM PlayerInventory
-            WHERE user_id=%s AND conversation_id=%s
-              AND player_name=%s
-              AND item_name=%s
-        """, (user_id, conversation_id, player_name, item_name))
-        row = cursor.fetchone()
+        async with get_db_connection_context() as conn:
+            # Check if this item already exists
+            row = await conn.fetchrow("""
+                SELECT id, quantity
+                FROM PlayerInventory
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND player_name=$3
+                  AND item_name=$4
+            """, user_id, conversation_id, player_name, item_name)
 
-        if row:
-            # Update the quantity
-            existing_id, existing_qty = row
-            new_qty = existing_qty + quantity
-            cursor.execute("""
-                UPDATE PlayerInventory
-                SET quantity=%s
-                WHERE id=%s
-            """, (new_qty, existing_id))
-        else:
-            # Insert brand new row
-            cursor.execute("""
-                INSERT INTO PlayerInventory (
+            if row:
+                # Update the quantity
+                existing_id, existing_qty = row['id'], row['quantity']
+                new_qty = existing_qty + quantity
+                await conn.execute("""
+                    UPDATE PlayerInventory
+                    SET quantity=$1
+                    WHERE id=$2
+                """, new_qty, existing_id)
+            else:
+                # Insert brand new row
+                await conn.execute("""
+                    INSERT INTO PlayerInventory (
+                        user_id, conversation_id,
+                        player_name, item_name,
+                        item_description, item_effect,
+                        category, quantity
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, 
                     user_id, conversation_id,
                     player_name, item_name,
-                    item_description, item_effect,
+                    description, effect,
                     category, quantity
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                user_id, conversation_id,
-                player_name, item_name,
-                description, effect,
-                category, quantity
-            ))
-
-        conn.commit()
+            
+            return {"success": True, "item_name": item_name, "quantity": quantity}
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error adding item '{item_name}': {db_err}", exc_info=True)
+        return {"success": False, "error": f"Database error: {db_err}"}
     except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+        logging.error(f"Error adding item '{item_name}': {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
-def remove_item_from_inventory(user_id, conversation_id,
-                               player_name, item_name, quantity=1):
+async def remove_item_from_inventory(user_id, conversation_id,
+                                   player_name, item_name, quantity=1):
     """
     Removes a certain quantity of the given item from the player's inventory
     (scoped to user_id + conversation_id).
     If the resulting quantity <= 0, the row is deleted entirely.
     Returns True if something changed, or False if the item wasn't found.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT id, quantity
-            FROM PlayerInventory
-            WHERE user_id=%s AND conversation_id=%s
-              AND player_name=%s
-              AND item_name=%s
-        """, (user_id, conversation_id, player_name, item_name))
-        row = cursor.fetchone()
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, quantity
+                FROM PlayerInventory
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND player_name=$3
+                  AND item_name=$4
+            """, user_id, conversation_id, player_name, item_name)
 
-        if not row:
-            # The user doesn't have this item in this conversation
-            return False
+            if not row:
+                # The user doesn't have this item in this conversation
+                return False
 
-        item_id, existing_qty = row
-        new_qty = existing_qty - quantity
+            item_id, existing_qty = row['id'], row['quantity']
+            new_qty = existing_qty - quantity
 
-        if new_qty > 0:
-            # Just update the quantity
-            cursor.execute("""
-                UPDATE PlayerInventory
-                SET quantity=%s
-                WHERE id=%s
-            """, (new_qty, item_id))
-        else:
-            # Remove the row entirely
-            cursor.execute("""
-                DELETE FROM PlayerInventory
-                WHERE id=%s
-            """, (item_id,))
+            if new_qty > 0:
+                # Just update the quantity
+                await conn.execute("""
+                    UPDATE PlayerInventory
+                    SET quantity=$1
+                    WHERE id=$2
+                """, new_qty, item_id)
+            else:
+                # Remove the row entirely
+                await conn.execute("""
+                    DELETE FROM PlayerInventory
+                    WHERE id=$1
+                """, item_id)
 
-        conn.commit()
-        return True
+            return True
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error removing item '{item_name}': {db_err}", exc_info=True)
+        return False
     except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+        logging.error(f"Error removing item '{item_name}': {e}", exc_info=True)
+        return False
 
-def get_player_inventory(user_id, conversation_id, player_name):
+async def get_player_inventory(user_id, conversation_id, player_name):
     """
     Returns a list of dicts for all items the player currently holds,
     scoped to user_id + conversation_id.
     Each dict has keys: item_name, description, effect, category, quantity.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT item_name, item_description, item_effect, category, quantity
-            FROM PlayerInventory
-            WHERE user_id=%s AND conversation_id=%s
-              AND player_name=%s
-            ORDER BY item_name
-        """, (user_id, conversation_id, player_name))
-        rows = cursor.fetchall()
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT item_name, item_description, item_effect, category, quantity
+                FROM PlayerInventory
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND player_name=$3
+                ORDER BY item_name
+            """, user_id, conversation_id, player_name)
 
-        inventory = []
-        for (iname, idesc, ieffect, cat, qty) in rows:
-            inventory.append({
-                "item_name": iname,
-                "description": idesc,
-                "effect": ieffect,
-                "category": cat,
-                "quantity": qty
-            })
-        return inventory
-    finally:
-        conn.close()
-
-def update_item_effect(user_id, conversation_id,
-                       player_name, item_name, new_effect):
+            inventory = []
+            for row in rows:
+                inventory.append({
+                    "item_name": row['item_name'],
+                    "description": row['item_description'],
+                    "effect": row['item_effect'],
+                    "category": row['category'],
+                    "quantity": row['quantity']
+                })
+            return inventory
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error getting player inventory: {db_err}", exc_info=True)
+        return []
+    except Exception as e:
+        logging.error(f"Error getting player inventory: {e}", exc_info=True)
+        return []
+        
+async def update_item_effect(user_id, conversation_id,
+                           player_name, item_name, new_effect):
     """
     Updates the 'item_effect' field of an existing item for a specific user+conversation,
     in case we want to store new or changed effects over time.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            UPDATE PlayerInventory
-            SET item_effect=%s
-            WHERE user_id=%s AND conversation_id=%s
-              AND player_name=%s
-              AND item_name=%s
-        """, (new_effect, user_id, conversation_id, player_name, item_name))
-        conn.commit()
-    except:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        async with get_db_connection_context() as conn:
+            result = await conn.execute("""
+                UPDATE PlayerInventory
+                SET item_effect=$1
+                WHERE user_id=$2 AND conversation_id=$3
+                  AND player_name=$4
+                  AND item_name=$5
+            """, new_effect, user_id, conversation_id, player_name, item_name)
+            
+            # Parse the result string (e.g., "UPDATE 1")
+            affected = 0
+            if result and result.startswith("UPDATE"):
+                try:
+                    affected = int(result.split()[1])
+                except (IndexError, ValueError):
+                    pass
+                    
+            return {"success": affected > 0, "affected_rows": affected}
+            
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logging.error(f"DB Error updating item effect: {db_err}", exc_info=True)
+        return {"success": False, "error": f"Database error: {db_err}"}
+    except Exception as e:
+        logging.error(f"Error updating item effect: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
