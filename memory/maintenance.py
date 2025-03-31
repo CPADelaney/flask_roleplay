@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import psutil
 
-from .connection import DBConnectionManager
+from db.connection import get_db_connection_context
 from .telemetry import MemoryTelemetry
 from prometheus_client import Histogram
 
@@ -41,7 +41,7 @@ class MemoryMaintenance:
         }
         
         try:
-            async with DBConnectionManager.get_connection() as conn:
+            async with get_db_connection_context() as conn:
                 # Delete old, unimportant memories
                 threshold_date = datetime.now() - timedelta(days=self.retention_days)
                 result = await conn.execute("""
