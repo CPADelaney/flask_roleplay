@@ -3,6 +3,7 @@
 import logging
 import json
 import time
+import contextlib
 from flask import Blueprint, request, jsonify, session
 from typing import Dict, Any, Optional
 
@@ -13,6 +14,7 @@ from logic.addiction_system import process_addiction_effects, get_addiction_stat
 from logic.rule_enforcement import enforce_all_rules_on_player
 from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
+from db.connection import get_db_connection_context
 
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
@@ -216,7 +218,7 @@ async def process_time_advancement(
 ) -> Dict[str, Any]:
     """Process time advancement with proper verification."""
     # Check if activity should advance time or if the agent requested advancement
-    advance_info = should_advance_time(activity_type)
+    advance_info = await should_advance_time(activity_type)
     should_advance = advance_info["should_advance"] or agent_requested_advancement
     
     # Default time result
@@ -310,3 +312,28 @@ async def process_relationship_events(
         result["result"] = choice_result
     
     return result
+
+@contextlib.asynccontextmanager
+async def get_db_transaction(user_id, conv_id):
+    """Context manager for database transactions."""
+    async with get_db_connection_context() as conn:
+        try:
+            yield conn
+            await conn.commit()
+        except Exception as e:
+            logging.error(f"Transaction error: {e}")
+            raise
+
+async def store_message(user_id, conv_id, sender, content, structured_content=None):
+    """Store a message in the database."""
+    async with get_db_transaction(user_id, conv_id) as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute("""
+                INSERT INTO messages (conversation_id, sender, content, structured_content)
+                VALUES (%s, %s, %s, %s)
+            """, (
+                conv_id,
+                sender,
+                content,
+                json.dumps(structured_content) if structured_content else None
+            ))
