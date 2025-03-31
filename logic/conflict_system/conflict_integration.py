@@ -17,6 +17,7 @@ from agents import function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from db.connection import get_db_connection_context
 
 from logic.conflict_system.conflict_agents import (
     triage_agent, conflict_generation_agent, stakeholder_agent,
@@ -44,6 +45,7 @@ class ConflictSystemIntegration:
         self.lore_system = None
         self.npc_system = None
         self.story_context = None
+        self.db_dsn = None
         
     async def initialize(self):
         """Initialize the conflict system with all necessary systems."""
@@ -427,156 +429,166 @@ class ConflictSystemIntegration:
         Args:
             consequences: List of consequences including rewards
         """
-        from db.connection import get_db_connection
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Process each consequence
-            for consequence in consequences:
-                consequence_type = consequence.get("type")
-                
-                # Apply stat changes
-                if consequence_type == "player_stat" and "stat_changes" in consequence:
-                    for stat_name, stat_change in consequence["stat_changes"].items():
-                        # Update player stats
-                        cursor.execute("""
-                            UPDATE PlayerStats 
-                            SET {}=%s + {}
-                            WHERE user_id=%s AND conversation_id=%s
-                        """.format(stat_name, stat_name), 
-                        (stat_change, self.user_id, self.conversation_id))
+            async with get_db_connection_context() as conn:
+                # Begin transaction
+                async with conn.transaction():
+                    # Process each consequence
+                    for consequence in consequences:
+                        consequence_type = consequence.get("type")
                         
-                        logger.info(f"Updated player stat {stat_name} by {stat_change} for user {self.user_id}")
-                
-                # Add item rewards to inventory
-                elif consequence_type == "item_reward" and "item" in consequence:
-                    item = consequence["item"]
-                    
-                    cursor.execute("""
-                        INSERT INTO PlayerInventory
-                        (user_id, conversation_id, item_name, item_description, 
-                         item_category, item_properties, quantity, equipped)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        self.user_id, 
-                        self.conversation_id,
-                        item["name"],
-                        item["description"],
-                        item.get("category", "conflict_reward"),
-                        json.dumps({
-                            "rarity": item.get("rarity", "common"),
-                            "resolution_style": item.get("resolution_style", "neutral"),
-                            "source": "conflict_resolution"
-                        }),
-                        1,  # quantity
-                        False  # not equipped by default
-                    ))
-                    
-                    logger.info(f"Added item {item['name']} to inventory for user {self.user_id}")
-                
-                # Add perks to player status
-                elif consequence_type == "perk_reward" and "perk" in consequence:
-                    perk = consequence["perk"]
-                    
-                    # Check if perk already exists
-                    cursor.execute("""
-                        SELECT perk_id FROM PlayerPerks
-                        WHERE user_id=%s AND conversation_id=%s AND perk_name=%s
-                    """, (self.user_id, self.conversation_id, perk["name"]))
-                    
-                    if cursor.fetchone():
-                        # Perk exists, update tier if the new one is higher
-                        cursor.execute("""
-                            UPDATE PlayerPerks
-                            SET perk_tier = GREATEST(perk_tier, %s),
-                                perk_description = %s
-                            WHERE user_id=%s AND conversation_id=%s AND perk_name=%s
-                        """, (
-                            perk.get("tier", 1),
-                            perk["description"],
-                            self.user_id,
-                            self.conversation_id,
-                            perk["name"]
-                        ))
-                    else:
-                        # New perk, insert it
-                        cursor.execute("""
-                            INSERT INTO PlayerPerks
-                            (user_id, conversation_id, perk_name, perk_description, 
-                             perk_category, perk_tier, perk_properties)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            self.user_id,
-                            self.conversation_id,
-                            perk["name"],
-                            perk["description"],
-                            perk.get("category", "conflict_resolution"),
-                            perk.get("tier", 1),
-                            json.dumps({
-                                "resolution_style": perk.get("resolution_style", "neutral"),
-                                "source": "conflict_resolution"
-                            })
-                        ))
-                    
-                    logger.info(f"Added/updated perk {perk['name']} for user {self.user_id}")
-                
-                # Add special rewards
-                elif consequence_type == "special_reward" and "special_reward" in consequence:
-                    special = consequence["special_reward"]
-                    
-                    # Special rewards are unique items with special effects
-                    cursor.execute("""
-                        INSERT INTO PlayerSpecialRewards
-                        (user_id, conversation_id, reward_name, reward_description, 
-                         reward_effect, reward_category, reward_properties, used)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        self.user_id,
-                        self.conversation_id,
-                        special["name"],
-                        special["description"],
-                        special.get("effect", ""),
-                        special.get("category", "unique_conflict_reward"),
-                        json.dumps({
-                            "resolution_style": special.get("resolution_style", "neutral"),
-                            "source": "major_conflict_resolution"
-                        }),
-                        False  # not used yet
-                    ))
-                    
-                    logger.info(f"Added special reward {special['name']} for user {self.user_id}")
-                
-                # Apply NPC relationship changes
-                elif consequence_type == "npc_relationship" and consequence.get("npc_id"):
-                    npc_id = consequence.get("npc_id")
-                    relationship_change = consequence.get("relationship_change", {})
-                    
-                    # Update NPC relationship
-                    for rel_type, change_amount in relationship_change.items():
-                        # Skip if no change
-                        if change_amount == 0:
-                            continue
+                        # Apply stat changes
+                        if consequence_type == "player_stat" and "stat_changes" in consequence:
+                            for stat_name, stat_change in consequence["stat_changes"].items():
+                                # Update player stats
+                                query = f"""
+                                    UPDATE PlayerStats 
+                                    SET {stat_name} = {stat_name} + $1
+                                    WHERE user_id = $2 AND conversation_id = $3
+                                """
+                                await conn.execute(
+                                    query, 
+                                    stat_change, self.user_id, self.conversation_id
+                                )
+                                
+                                logger.info(f"Updated player stat {stat_name} by {stat_change} for user {self.user_id}")
+                        
+                        # Add item rewards to inventory
+                        elif consequence_type == "item_reward" and "item" in consequence:
+                            item = consequence["item"]
                             
-                        cursor.execute(f"""
-                            UPDATE NPCStats
-                            SET {rel_type} = {rel_type} + %s
-                            WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-                        """, (change_amount, npc_id, self.user_id, self.conversation_id))
+                            query = """
+                                INSERT INTO PlayerInventory
+                                (user_id, conversation_id, item_name, item_description, 
+                                 item_category, item_properties, quantity, equipped)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            """
+                            await conn.execute(
+                                query,
+                                self.user_id, 
+                                self.conversation_id,
+                                item["name"],
+                                item["description"],
+                                item.get("category", "conflict_reward"),
+                                json.dumps({
+                                    "rarity": item.get("rarity", "common"),
+                                    "resolution_style": item.get("resolution_style", "neutral"),
+                                    "source": "conflict_resolution"
+                                }),
+                                1,  # quantity
+                                False  # not equipped by default
+                            )
+                            
+                            logger.info(f"Added item {item['name']} to inventory for user {self.user_id}")
                         
-                    logger.info(f"Updated relationship with NPC {npc_id} for user {self.user_id}")
-            
-            # Commit all changes
-            conn.commit()
-            
+                        # Add perks to player status
+                        elif consequence_type == "perk_reward" and "perk" in consequence:
+                            perk = consequence["perk"]
+                            
+                            # Check if perk already exists
+                            query = """
+                                SELECT perk_id FROM PlayerPerks
+                                WHERE user_id = $1 AND conversation_id = $2 AND perk_name = $3
+                            """
+                            existing_perk = await conn.fetchrow(
+                                query, 
+                                self.user_id, self.conversation_id, perk["name"]
+                            )
+                            
+                            if existing_perk:
+                                # Perk exists, update tier if the new one is higher
+                                update_query = """
+                                    UPDATE PlayerPerks
+                                    SET perk_tier = GREATEST(perk_tier, $1),
+                                        perk_description = $2
+                                    WHERE user_id = $3 AND conversation_id = $4 AND perk_name = $5
+                                """
+                                await conn.execute(
+                                    update_query,
+                                    perk.get("tier", 1),
+                                    perk["description"],
+                                    self.user_id,
+                                    self.conversation_id,
+                                    perk["name"]
+                                )
+                            else:
+                                # New perk, insert it
+                                insert_query = """
+                                    INSERT INTO PlayerPerks
+                                    (user_id, conversation_id, perk_name, perk_description, 
+                                     perk_category, perk_tier, perk_properties)
+                                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                """
+                                await conn.execute(
+                                    insert_query,
+                                    self.user_id,
+                                    self.conversation_id,
+                                    perk["name"],
+                                    perk["description"],
+                                    perk.get("category", "conflict_resolution"),
+                                    perk.get("tier", 1),
+                                    json.dumps({
+                                        "resolution_style": perk.get("resolution_style", "neutral"),
+                                        "source": "conflict_resolution"
+                                    })
+                                )
+                            
+                            logger.info(f"Added/updated perk {perk['name']} for user {self.user_id}")
+                        
+                        # Add special rewards
+                        elif consequence_type == "special_reward" and "special_reward" in consequence:
+                            special = consequence["special_reward"]
+                            
+                            # Special rewards are unique items with special effects
+                            query = """
+                                INSERT INTO PlayerSpecialRewards
+                                (user_id, conversation_id, reward_name, reward_description, 
+                                 reward_effect, reward_category, reward_properties, used)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            """
+                            await conn.execute(
+                                query,
+                                self.user_id,
+                                self.conversation_id,
+                                special["name"],
+                                special["description"],
+                                special.get("effect", ""),
+                                special.get("category", "unique_conflict_reward"),
+                                json.dumps({
+                                    "resolution_style": special.get("resolution_style", "neutral"),
+                                    "source": "major_conflict_resolution"
+                                }),
+                                False  # not used yet
+                            )
+                            
+                            logger.info(f"Added special reward {special['name']} for user {self.user_id}")
+                        
+                        # Apply NPC relationship changes
+                        elif consequence_type == "npc_relationship" and consequence.get("npc_id"):
+                            npc_id = consequence.get("npc_id")
+                            relationship_change = consequence.get("relationship_change", {})
+                            
+                            # Update NPC relationship
+                            for rel_type, change_amount in relationship_change.items():
+                                # Skip if no change
+                                if change_amount == 0:
+                                    continue
+                                    
+                                query = f"""
+                                    UPDATE NPCStats
+                                    SET {rel_type} = {rel_type} + $1
+                                    WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+                                """
+                                await conn.execute(
+                                    query, 
+                                    change_amount, npc_id, self.user_id, self.conversation_id
+                                )
+                                
+                            logger.info(f"Updated relationship with NPC {npc_id} for user {self.user_id}")
+                            
         except Exception as e:
-            conn.rollback()
             logger.error(f"Error applying conflict rewards: {str(e)}", exc_info=True)
             raise
-        finally:
-            cursor.close()
-            conn.close()
     
     @with_governance(
         agent_type=AgentType.CONFLICT_ANALYST,
@@ -716,9 +728,7 @@ class ConflictSystemIntegration:
             if not hasattr(self, 'agents') or self.agents is None:
                 await self.initialize()
                 
-            # Query the database for conflicts related to this location
-            conn = await asyncpg.connect(dsn=self.db_dsn)
-            try:
+            async with get_db_connection_context() as conn:
                 # First get location ID if we need it
                 location_id = await conn.fetchval("""
                     SELECT id FROM Locations 
@@ -749,9 +759,6 @@ class ConflictSystemIntegration:
                     conflicts.append(conflict_details)
                 
                 return conflicts
-                
-            finally:
-                await conn.close()
                 
         except Exception as e:
             logger.error(f"Error getting conflicts by location: {e}", exc_info=True)
