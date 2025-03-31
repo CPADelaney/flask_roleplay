@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, RunContextWrapper, function_tool, handoff
 from agents.tracing import custom_span, function_span, generation_span
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import MemoryType, MemorySignificance
 
@@ -148,17 +148,15 @@ class BehaviorEvolution:
 
     async def evaluate_npc_scheming(self, npc_id: int) -> Dict[str, Any]:
         """
-        Periodically evaluate if an NPC should adjust their behavior, escalate plans, or set new secret goals.
-
+        Periodically evaluate if an NPC should adjust their behavior.
         Returns:
-            Dict containing the NPC's updated behavior.
+            Dict containing the NPC's updated behavior factors.
         """
         try:
             memory_system = await self.get_memory_system()
-            
-            # Retrieve NPC history
-            npc_data = await self._get_npc_data(npc_id)
+            npc_data = await self._get_npc_data(npc_id) # Now async
             if not npc_data:
+                logger.warning(f"NPC data not found for {npc_id} during scheming eval.")
                 return {"error": "NPC data not found"}
 
             name = npc_data["npc_name"]
@@ -276,108 +274,133 @@ class BehaviorEvolution:
             logger.error(f"Error evaluating NPC scheming: {e}")
             return {"error": str(e)}
 
-    async def _get_npc_data(self, npc_id: int) -> Dict[str, Any]:
-        """Retrieve NPC data from database."""
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT npc_id, npc_name, dominance, cruelty, personality_traits 
-                FROM NPCStats
-                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                """,
-                (npc_id, self.user_id, self.conversation_id),
-            )
-            row = cursor.fetchone()
-            if row:
-                # Parse personality_traits
-                traits = []
-                if row[4]:
-                    try:
-                        if isinstance(row[4], str):
-                            traits = json.loads(row[4])
-                        else:
-                            traits = row[4]
-                    except json.JSONDecodeError:
-                        traits = []
-                
-                return {
-                    "npc_id": row[0], 
-                    "npc_name": row[1], 
-                    "dominance": row[2], 
-                    "cruelty": row[3], 
-                    "personality_traits": traits
-                }
-        return None
-        
-    async def _get_all_npcs(self) -> List[Dict[str, Any]]:
-        """Get all NPCs for this user/conversation."""
-        npcs = []
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT npc_id, npc_name, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id = %s AND conversation_id = %s
-                """,
-                (self.user_id, self.conversation_id),
-            )
-            for row in cursor.fetchall():
-                npcs.append({
-                    "npc_id": row[0],
-                    "npc_name": row[1],
-                    "dominance": row[2],
-                    "cruelty": row[3]
-                })
-        return npcs
-
-    async def apply_scheming_adjustments(self, npc_id: int, adjustments: Dict[str, Any]) -> None:
-        """
-        Apply scheming adjustments to the NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            adjustments: Dictionary of adjustments to apply
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve NPC data from database asynchronously."""
+        query = """
+            SELECT npc_id, npc_name, dominance, cruelty, personality_traits
+            FROM NPCStats
+            WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
         """
         try:
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                # Example: update an NPCStats column with the new scheme_level
-                new_level = adjustments.get("scheme_level", 0)
-                cursor.execute(
-                    """
-                    UPDATE NPCStats
-                    SET scheming_level = %s
-                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """,
-                    (new_level, npc_id, self.user_id, self.conversation_id)
+            async with get_db_connection_context() as conn:
+                row: Optional[asyncpg.Record] = await conn.fetchrow(
+                    query, npc_id, self.user_id, self.conversation_id
                 )
-        
-                # Optionally, check if NPC is targeting the player
-                if adjustments.get("targeting_player"):
-                    memory_system = await self.get_memory_system()
-                    await memory_system.remember(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        memory_text="I decided to target the player, suspecting them of deception.",
-                        importance="high",
-                        tags=["scheming", "targeting_player"]
-                    )
-        
-                betrayal_planning = adjustments.get("betrayal_planning", False)
-                cursor.execute(
-                    """
-                    UPDATE NPCStats
-                    SET betrayal_planning = %s
-                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                    """,
-                    (betrayal_planning, npc_id, self.user_id, self.conversation_id)
-                )
-        
-                conn.commit()
-        
-            logger.info(f"Applied scheming adjustments for NPC {npc_id}: {adjustments}")
-        
+
+            if row:
+                # Parse personality_traits safely
+                traits = []
+                raw_traits = row['personality_traits']
+                if raw_traits:
+                    try:
+                        # asyncpg might already parse JSONB/JSON, check type
+                        if isinstance(raw_traits, list):
+                            traits = raw_traits
+                        elif isinstance(raw_traits, str):
+                             traits = json.loads(raw_traits)
+                        # Add handling for dict if needed, though list seems expected
+                    except (json.JSONDecodeError, TypeError) as parse_err:
+                        logger.warning(f"Failed to parse personality_traits for NPC {npc_id}: {parse_err}. Data: {raw_traits}")
+                        traits = []
+
+                return {
+                    "npc_id": row['npc_id'],
+                    "npc_name": row['npc_name'],
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty'],
+                    "personality_traits": traits
+                }
+            else:
+                return None # NPC not found
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error fetching NPC data for {npc_id}: {db_err}", exc_info=True)
+            return None
         except Exception as e:
-            logger.error(f"Error applying scheming adjustments for NPC {npc_id}: {e}")
+            logger.error(f"Unexpected error fetching NPC data for {npc_id}: {e}", exc_info=True)
+            return None
+
+    # --- Updated to use asyncpg ---
+    async def _get_all_npcs(self) -> List[Dict[str, Any]]:
+        """Get all NPCs for this user/conversation asynchronously."""
+        npcs = []
+        query = """
+            SELECT npc_id, npc_name, dominance, cruelty
+            FROM NPCStats
+            WHERE user_id = $1 AND conversation_id = $2
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                rows: List[asyncpg.Record] = await conn.fetch(
+                    query, self.user_id, self.conversation_id
+                )
+
+            for row in rows:
+                npcs.append({
+                    "npc_id": row['npc_id'],
+                    "npc_name": row['npc_name'],
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty']
+                })
+            return npcs
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error fetching all NPCs for user {self.user_id}, convo {self.conversation_id}: {db_err}", exc_info=True)
+            return [] # Return empty list on error
+        except Exception as e:
+            logger.error(f"Unexpected error fetching all NPCs: {e}", exc_info=True)
+            return []
+
+    # --- Updated to use asyncpg ---
+    async def apply_scheming_adjustments(self, npc_id: int, adjustments: Dict[str, Any]) -> None:
+        """
+        Apply scheming adjustments to the NPC in the database asynchronously.
+        """
+        new_level = adjustments.get("scheme_level", 0)
+        betrayal_planning = adjustments.get("betrayal_planning", False)
+
+        # Combine updates into one query if possible for efficiency,
+        # or use a transaction if atomicity is strictly needed.
+        # Here, we'll use separate execute calls for simplicity, assuming they don't *need* to be atomic.
+        update_query_level = """
+            UPDATE NPCStats
+            SET scheming_level = $1
+            WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+        """
+        update_query_betrayal = """
+            UPDATE NPCStats
+            SET betrayal_planning = $1
+            WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+        """
+
+        try:
+            async with get_db_connection_context() as conn:
+                # Execute updates
+                await conn.execute(
+                    update_query_level,
+                    new_level, npc_id, self.user_id, self.conversation_id
+                )
+                await conn.execute(
+                    update_query_betrayal,
+                    betrayal_planning, npc_id, self.user_id, self.conversation_id
+                )
+
+            # Optional: Log successful memory update after DB commit
+            if adjustments.get("targeting_player"):
+                memory_system = await self.get_memory_system()
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text="I decided to target the player, suspecting them of deception.",
+                    significance=MemorySignificance.HIGH,
+                    tags=["scheming", "targeting_player"]
+                )
+
+            logger.info(f"Applied scheming adjustments for NPC {npc_id}: level={new_level}, betrayal={betrayal_planning}")
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error applying scheming adjustments for NPC {npc_id}: {db_err}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Unexpected error applying scheming adjustments for NPC {npc_id}: {e}", exc_info=True)
+
 
 # -------------------------------------------------------
 # GPT-based Action Generation
@@ -466,75 +489,99 @@ async def generate_dynamic_actions_with_gpt(
 @function_tool
 async def get_npc_data(ctx: RunContextWrapper[DecisionContext]) -> NPCStats:
     """
-    Get the NPC's stats and traits from the database.
+    Get the NPC's stats and traits from the database asynchronously. Caches result in context.
     """
     with function_span("get_npc_data"):
         npc_id = ctx.context.npc_id
         user_id = ctx.context.user_id
         conversation_id = ctx.context.conversation_id
-        
-        # If cached stats available, return them
-        if ctx.context.npc_stats:
-            return NPCStats(**ctx.context.npc_stats)
-        
-        def _fetch():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
-                           hobbies, personality_traits, likes, dislikes, schedule, current_location, sex
-                    FROM NPCStats
-                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-                    """,
-                    (npc_id, user_id, conversation_id),
-                )
-                return cursor.fetchone()
 
-        row = await asyncio.to_thread(_fetch)
+        # Check cache first
+        if ctx.context.npc_stats:
+            logger.debug(f"Using cached NPC stats for {npc_id}")
+            # Ensure it's the correct Pydantic type for return consistency
+            if isinstance(ctx.context.npc_stats, dict):
+                 try:
+                    return NPCStats(**ctx.context.npc_stats)
+                 except Exception: # Catch potential validation errors if cache is stale/bad
+                    logger.warning(f"Cached NPC stats for {npc_id} failed validation, fetching fresh.")
+                    ctx.context.npc_stats = None # Clear bad cache
+            elif isinstance(ctx.context.npc_stats, NPCStats):
+                 return ctx.context.npc_stats
+
+
+        logger.debug(f"Fetching NPC stats from DB for {npc_id}")
+        query = """
+            SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
+                   hobbies, personality_traits, likes, dislikes, schedule, current_location, sex,
+                   scheming_level, betrayal_planning
+            FROM NPCStats
+            WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+        """
+        row: Optional[asyncpg.Record] = None
+        try:
+            # Use the async context manager directly
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(query, npc_id, user_id, conversation_id)
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error in get_npc_data tool for {npc_id}: {db_err}", exc_info=True)
+            # Fallback to default stats on DB error
+            default_stats = NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}_DB_Error")
+            ctx.context.npc_stats = default_stats.model_dump()
+            return default_stats
+        except Exception as e:
+             logger.error(f"Unexpected error in get_npc_data tool for {npc_id}: {e}", exc_info=True)
+             default_stats = NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}_Error")
+             ctx.context.npc_stats = default_stats.model_dump()
+             return default_stats
+
+
         if not row:
-            default_stats = NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}")
+            logger.warning(f"NPC {npc_id} not found in DB. Returning default stats.")
+            default_stats = NPCStats(npc_id=npc_id, npc_name=f"NPC_{npc_id}_NotFound")
             ctx.context.npc_stats = default_stats.model_dump()
             return default_stats
 
-        # Parse JSON fields
-        def _parse_json_field(field):
-            if field is None:
-                return []
-            if isinstance(field, str):
+        # Helper to safely parse JSON-like fields (list or string)
+        def _parse_json_field(field_data: Any) -> Union[List, Dict]:
+            if field_data is None:
+                return [] # Default to list if usually a list
+            if isinstance(field_data, (list, dict)): # Already parsed by asyncpg?
+                return field_data
+            if isinstance(field_data, str):
                 try:
-                    return json.loads(field)
+                    return json.loads(field_data)
                 except json.JSONDecodeError:
-                    return []
-            if isinstance(field, list):
-                return field
-            return []
+                    logger.warning(f"Failed to decode JSON field: {field_data}")
+                    return [] # Default to list on error
+            logger.warning(f"Unexpected type for JSON field: {type(field_data)}")
+            return [] # Default fallback
 
-        hobbies = _parse_json_field(row[7])
-        personality_traits = _parse_json_field(row[8])
-        likes = _parse_json_field(row[9])
-        dislikes = _parse_json_field(row[10])
-        schedule = _parse_json_field(row[11])
-
+        # Safely access columns by name, providing defaults
         stats = NPCStats(
             npc_id=npc_id,
-            npc_name=row[0],
-            dominance=row[1],
-            cruelty=row[2],
-            closeness=row[3],
-            trust=row[4],
-            respect=row[5],
-            intensity=row[6],
-            hobbies=hobbies,
-            personality_traits=personality_traits,
-            likes=likes,
-            dislikes=dislikes,
-            schedule=schedule,
-            current_location=row[12],
-            sex=row[13]
+            npc_name=row['npc_name'] or f"NPC_{npc_id}_NoName",
+            dominance=row['dominance'] or 50.0,
+            cruelty=row['cruelty'] or 50.0,
+            closeness=row['closeness'] or 50.0,
+            trust=row['trust'] or 50.0,
+            respect=row['respect'] or 50.0,
+            intensity=row['intensity'] or 50.0,
+            hobbies=_parse_json_field(row['hobbies']),
+            personality_traits=_parse_json_field(row['personality_traits']),
+            likes=_parse_json_field(row['likes']),
+            dislikes=_parse_json_field(row['dislikes']),
+            schedule=_parse_json_field(row['schedule']) or {}, # Default schedule to dict
+            current_location=row['current_location'],
+            sex=row['sex'],
+            scheming_level=row['scheming_level'] or 0,
+            betrayal_planning=row['betrayal_planning'] or False
         )
-        
-        # Cache the stats
+
+        # Cache the stats as a dict
         ctx.context.npc_stats = stats.model_dump()
+        logger.debug(f"Fetched and cached NPC stats for {npc_id}")
         return stats
 
 @function_tool
