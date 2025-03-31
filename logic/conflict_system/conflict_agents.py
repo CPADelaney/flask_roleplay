@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from pydantic import BaseModel, Field
 
 from agents import Agent, function_tool, handoff, GuardrailFunctionOutput, RunContextWrapper, InputGuardrail
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
 from logic.npc_relationship_manager import get_relationship_status, get_manipulation_leverage
