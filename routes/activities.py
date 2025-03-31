@@ -2,11 +2,11 @@
 
 from flask import Blueprint, jsonify
 import json
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 activities_bp = Blueprint('activities', __name__)
 
-def insert_missing_activities():
+async def insert_missing_activities():
     """
     Inserts a curated list of Activities into the Activities table,
     if they don't already exist (based on unique activity name).
@@ -1675,44 +1675,46 @@ def insert_missing_activities():
     # ---------------------------------
     # Actual insertion logic
     # ---------------------------------
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    async with get_db_connection_context() as conn:
+        # Check existing activity names
+        existing = set()
+        async with conn.cursor() as cursor:
+            await cursor.execute("SELECT name FROM Activities")
+            rows = await cursor.fetchall()
+            existing = {row[0] for row in rows}
 
-    # Check existing activity names
-    cursor.execute("SELECT name FROM Activities")
-    existing = {row[0] for row in cursor.fetchall()}
+        # Insert new activities
+        for activity in activities_data:
+            # Make sure 'name' is in the activity
+            if activity.get("name") not in existing:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        INSERT INTO Activities
+                          (name, purpose, stat_integration, intensity_tiers, setting_variants)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        activity["name"],
+                        json.dumps(activity["purpose"]),
+                        json.dumps(activity["stat_integration"]),
+                        json.dumps(activity["intensity_tiers"]),
+                        json.dumps(activity["setting_variants"])
+                    ))
+                    print(f"Inserted activity: {activity['name']}")
+            else:
+                print(f"Skipped existing activity: {activity['name']}")
 
-    for activity in activities_data:
-        # Make sure 'name' is in the activity
-        if activity.get("name") not in existing:
-            cursor.execute("""
-                INSERT INTO Activities
-                  (name, purpose, stat_integration, intensity_tiers, setting_variants)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (
-                activity["name"],
-                json.dumps(activity["purpose"]),
-                json.dumps(activity["stat_integration"]),
-                json.dumps(activity["intensity_tiers"]),
-                json.dumps(activity["setting_variants"])
-            ))
-            print(f"Inserted activity: {activity['name']}")
-        else:
-            print(f"Skipped existing activity: {activity['name']}")
-
-    conn.commit()
-    conn.close()
+        await conn.commit()
     print("All activities processed or skipped (already existed).")
 
 
 @activities_bp.route('/insert_activities', methods=['POST'])
-def insert_activities_route():
+async def insert_activities_route():
     """
     Route to trigger the insertion (or update) of the Activities table with the
     curated set of references above.
     """
     try:
-        insert_missing_activities()
+        await insert_missing_activities()
         return jsonify({"message": "Activities inserted/updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
