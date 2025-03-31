@@ -26,7 +26,11 @@ COPY --chown=appuser:appgroup requirements.txt .
 USER root
 
 # Set PATH for user installs
-ENV PATH="/home/appuser/.local/bin:${PATH}"
+# Add the local bin directory (where pip installs scripts) to the PATH
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Now define your ENTRYPOINT or CMD
+ENTRYPOINT ["/app/entrypoint.sh"] # Or whatever your entrypoint is
 
 # Install Python dependencies AS appuser (--user flag)
 # This should now work for mysqlclient if it's in requirements.txt
