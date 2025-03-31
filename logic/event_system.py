@@ -12,10 +12,14 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 import asyncio
 from datetime import datetime
 
+import asyncpg  # Added explicit import for asyncpg
+
 from agents import function_tool, RunContextWrapper, Agent, Runner, trace
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+
+from db.connection import get_db_connection_context  # Updated to use context manager
 
 from logic.conflict_system.conflict_resolution import ConflictResolutionSystem
 from logic.artifact_system.artifact_manager import ArtifactManager
@@ -666,4 +670,4 @@ class EventSystem:
             
         except Exception as e:
             logger.error(f"Error getting event statistics: {e}")
-            return {"error": str(e)} 
+            return {"error": str(e)}
