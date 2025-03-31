@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from pydantic import BaseModel, Field
 from agents import function_tool, RunContextWrapper
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
 from logic.npc_relationship_manager import get_relationship_status, get_manipulation_leverage
@@ -32,169 +32,110 @@ async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     Returns a list of active conflict dictionaries with all related data.
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT c.conflict_id, c.conflict_name, c.conflict_type, 
-                   c.description, c.progress, c.phase, c.start_day,
-                   c.estimated_duration, c.success_rate, c.outcome, c.is_active
-            FROM Conflicts c
-            WHERE c.user_id = %s AND c.conversation_id = %s AND c.is_active = TRUE
-            ORDER BY c.conflict_id DESC
-        """, (context.user_id, context.conversation_id))
-        
-        conflicts = []
-        for row in cursor.fetchall():
-            conflict_id, conflict_name, conflict_type, description, progress, phase, \
-            start_day, estimated_duration, success_rate, outcome, is_active = row
+        async with get_db_connection_context() as conn:
+            # Get conflicts
+            conflicts_rows = await conn.fetch("""
+                SELECT c.conflict_id, c.conflict_name, c.conflict_type, 
+                       c.description, c.progress, c.phase, c.start_day,
+                       c.estimated_duration, c.success_rate, c.outcome, c.is_active
+                FROM Conflicts c
+                WHERE c.user_id = $1 AND c.conversation_id = $2 AND c.is_active = TRUE
+                ORDER BY c.conflict_id DESC
+            """, context.user_id, context.conversation_id)
             
-            # Build conflict dictionary
-            conflict = {
-                "conflict_id": conflict_id,
-                "conflict_name": conflict_name,
-                "conflict_type": conflict_type,
-                "description": description,
-                "progress": progress,
-                "phase": phase,
-                "start_day": start_day,
-                "estimated_duration": estimated_duration,
-                "success_rate": success_rate,
-                "outcome": outcome,
-                "is_active": is_active
-            }
-            
-            # Get stakeholders
-            cursor.execute("""
-                SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name,
-                       s.faction_position, s.public_motivation, s.private_motivation,
-                       s.desired_outcome, s.involvement_level, s.alliances, s.rivalries
-                FROM ConflictStakeholders s
-                JOIN NPCStats n ON s.npc_id = n.npc_id
-                WHERE s.conflict_id = %s
-                ORDER BY s.involvement_level DESC
-            """, (conflict_id,))
-            
-            stakeholders = []
-            for stakeholder_row in cursor.fetchall():
-                npc_id, npc_name, faction_id, faction_name, faction_position, \
-                public_motivation, private_motivation, desired_outcome, \
-                involvement_level, alliances, rivalries = stakeholder_row
+            conflicts = []
+            for row in conflicts_rows:
+                # Build conflict dictionary
+                conflict = dict(row)
+                conflict_id = conflict["conflict_id"]
                 
-                stakeholders.append({
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "faction_id": faction_id,
-                    "faction_name": faction_name,
-                    "faction_position": faction_position,
-                    "public_motivation": public_motivation,
-                    "private_motivation": private_motivation,
-                    "desired_outcome": desired_outcome,
-                    "involvement_level": involvement_level
-                })
-            
-            conflict["stakeholders"] = stakeholders
-            
-            # Get resolution paths
-            cursor.execute("""
-                SELECT path_id, name, description, approach_type, difficulty,
-                       requirements, stakeholders_involved, key_challenges,
-                       progress, is_completed
-                FROM ResolutionPaths
-                WHERE conflict_id = %s
-            """, (conflict_id,))
-            
-            paths = []
-            for path_row in cursor.fetchall():
-                path_id, name, description, approach_type, difficulty, \
-                requirements, stakeholders_involved, key_challenges, \
-                progress, is_completed = path_row
+                # Get stakeholders
+                stakeholders_rows = await conn.fetch("""
+                    SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name,
+                           s.faction_position, s.public_motivation, s.private_motivation,
+                           s.desired_outcome, s.involvement_level, s.alliances, s.rivalries
+                    FROM ConflictStakeholders s
+                    JOIN NPCStats n ON s.npc_id = n.npc_id
+                    WHERE s.conflict_id = $1
+                    ORDER BY s.involvement_level DESC
+                """, conflict_id)
                 
-                paths.append({
-                    "path_id": path_id,
-                    "name": name,
-                    "description": description,
-                    "approach_type": approach_type,
-                    "difficulty": difficulty,
-                    "progress": progress,
-                    "is_completed": is_completed
-                })
-            
-            conflict["resolution_paths"] = paths
-            
-            # Get player involvement
-            cursor.execute("""
-                SELECT involvement_level, faction, money_committed, supplies_committed, 
-                       influence_committed
-                FROM PlayerConflictInvolvement
-                WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-            """, (conflict_id, context.user_id, context.conversation_id))
-            
-            involvement_row = cursor.fetchone()
-            if involvement_row:
-                involvement_level, faction, money, supplies, influence = involvement_row
-                conflict["player_involvement"] = {
-                    "involvement_level": involvement_level,
-                    "faction": faction,
-                    "resources_committed": {
-                        "money": money,
-                        "supplies": supplies,
-                        "influence": influence
+                stakeholders = []
+                for s_row in stakeholders_rows:
+                    stakeholders.append(dict(s_row))
+                
+                conflict["stakeholders"] = stakeholders
+                
+                # Get resolution paths
+                paths_rows = await conn.fetch("""
+                    SELECT path_id, name, description, approach_type, difficulty,
+                           requirements, stakeholders_involved, key_challenges,
+                           progress, is_completed
+                    FROM ResolutionPaths
+                    WHERE conflict_id = $1
+                """, conflict_id)
+                
+                paths = []
+                for p_row in paths_rows:
+                    paths.append(dict(p_row))
+                
+                conflict["resolution_paths"] = paths
+                
+                # Get player involvement
+                involvement_row = await conn.fetchrow("""
+                    SELECT involvement_level, faction, money_committed, supplies_committed, 
+                           influence_committed
+                    FROM PlayerConflictInvolvement
+                    WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, conflict_id, context.user_id, context.conversation_id)
+                
+                if involvement_row:
+                    involvement = dict(involvement_row)
+                    conflict["player_involvement"] = {
+                        "involvement_level": involvement["involvement_level"],
+                        "faction": involvement["faction"],
+                        "resources_committed": {
+                            "money": involvement["money_committed"],
+                            "supplies": involvement["supplies_committed"],
+                            "influence": involvement["influence_committed"]
+                        }
                     }
-                }
-            else:
-                conflict["player_involvement"] = {
-                    "involvement_level": "none",
-                    "faction": "neutral",
-                    "resources_committed": {
-                        "money": 0,
-                        "supplies": 0,
-                        "influence": 0
+                else:
+                    conflict["player_involvement"] = {
+                        "involvement_level": "none",
+                        "faction": "neutral",
+                        "resources_committed": {
+                            "money": 0,
+                            "supplies": 0,
+                            "influence": 0
+                        }
                     }
-                }
-            
-            # Get internal faction conflicts
-            cursor.execute("""
-                SELECT struggle_id, faction_id, conflict_name, description,
-                       primary_npc_id, target_npc_id, prize, approach, 
-                       public_knowledge, current_phase, progress
-                FROM InternalFactionConflicts
-                WHERE parent_conflict_id = %s
-                ORDER BY progress DESC
-            """, (conflict_id,))
-            
-            internal_conflicts = []
-            for internal_row in cursor.fetchall():
-                struggle_id, faction_id, internal_name, internal_desc, primary_npc_id, \
-                target_npc_id, prize, approach, public_knowledge, current_phase, progress = internal_row
                 
-                internal_conflicts.append({
-                    "struggle_id": struggle_id,
-                    "faction_id": faction_id,
-                    "conflict_name": internal_name,
-                    "description": internal_desc,
-                    "primary_npc_id": primary_npc_id,
-                    "target_npc_id": target_npc_id,
-                    "prize": prize,
-                    "approach": approach,
-                    "public_knowledge": public_knowledge,
-                    "current_phase": current_phase,
-                    "progress": progress
-                })
+                # Get internal faction conflicts
+                internal_conflicts_rows = await conn.fetch("""
+                    SELECT struggle_id, faction_id, conflict_name, description,
+                           primary_npc_id, target_npc_id, prize, approach, 
+                           public_knowledge, current_phase, progress
+                    FROM InternalFactionConflicts
+                    WHERE parent_conflict_id = $1
+                    ORDER BY progress DESC
+                """, conflict_id)
+                
+                internal_conflicts = []
+                for ic_row in internal_conflicts_rows:
+                    internal_conflicts.append(dict(ic_row))
+                
+                if internal_conflicts:
+                    conflict["internal_faction_conflicts"] = internal_conflicts
+                
+                conflicts.append(conflict)
             
-            if internal_conflicts:
-                conflict["internal_faction_conflicts"] = internal_conflicts
-            
-            conflicts.append(conflict)
-        
-        return conflicts
+            return conflicts
     except Exception as e:
         logger.error(f"Error getting active conflicts: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_conflict_details(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
@@ -208,193 +149,147 @@ async def get_conflict_details(ctx: RunContextWrapper, conflict_id: int) -> Dict
         Conflict dictionary with all related data
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT c.conflict_id, c.conflict_name, c.conflict_type, 
-                   c.description, c.progress, c.phase, c.start_day,
-                   c.estimated_duration, c.success_rate, c.outcome, c.is_active
-            FROM Conflicts c
-            WHERE c.conflict_id = %s AND c.user_id = %s AND c.conversation_id = %s
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        
-        if not row:
-            return {"error": "Conflict not found"}
-        
-        conflict_id, conflict_name, conflict_type, description, progress, phase, \
-        start_day, estimated_duration, success_rate, outcome, is_active = row
-        
-        # Build conflict dictionary
-        conflict = {
-            "conflict_id": conflict_id,
-            "conflict_name": conflict_name,
-            "conflict_type": conflict_type,
-            "description": description,
-            "progress": progress,
-            "phase": phase,
-            "start_day": start_day,
-            "estimated_duration": estimated_duration,
-            "success_rate": success_rate,
-            "outcome": outcome,
-            "is_active": is_active
-        }
-        
-        # Get stakeholders
-        stakeholders = await get_conflict_stakeholders(ctx, conflict_id)
-        conflict["stakeholders"] = stakeholders
-        
-        # Get resolution paths
-        cursor.execute("""
-            SELECT path_id, name, description, approach_type, difficulty,
-                   requirements, stakeholders_involved, key_challenges,
-                   progress, is_completed
-            FROM ResolutionPaths
-            WHERE conflict_id = %s
-        """, (conflict_id,))
-        
-        paths = []
-        for path_row in cursor.fetchall():
-            path_id, name, description, approach_type, difficulty, \
-            requirements, stakeholders_involved, key_challenges, \
-            progress, is_completed = path_row
+        async with get_db_connection_context() as conn:
+            # Get conflict
+            conflict_row = await conn.fetchrow("""
+                SELECT c.conflict_id, c.conflict_name, c.conflict_type, 
+                       c.description, c.progress, c.phase, c.start_day,
+                       c.estimated_duration, c.success_rate, c.outcome, c.is_active
+                FROM Conflicts c
+                WHERE c.conflict_id = $1 AND c.user_id = $2 AND c.conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
             
-            try:
-                requirements_dict = json.loads(requirements) if isinstance(requirements, str) else requirements or {}
-            except (json.JSONDecodeError, TypeError):
-                requirements_dict = {}
+            if not conflict_row:
+                return {"error": "Conflict not found"}
             
-            try:
-                stakeholders_list = json.loads(stakeholders_involved) if isinstance(stakeholders_involved, str) else stakeholders_involved or []
-            except (json.JSONDecodeError, TypeError):
-                stakeholders_list = []
+            # Build conflict dictionary
+            conflict = dict(conflict_row)
             
-            try:
-                challenges_list = json.loads(key_challenges) if isinstance(key_challenges, str) else key_challenges or []
-            except (json.JSONDecodeError, TypeError):
-                challenges_list = []
+            # Get stakeholders
+            conflict["stakeholders"] = await get_conflict_stakeholders(ctx, conflict_id)
             
-            paths.append({
-                "path_id": path_id,
-                "name": name,
-                "description": description,
-                "approach_type": approach_type,
-                "difficulty": difficulty,
-                "requirements": requirements_dict,
-                "stakeholders_involved": stakeholders_list,
-                "key_challenges": challenges_list,
-                "progress": progress,
-                "is_completed": is_completed
-            })
-        
-        conflict["resolution_paths"] = paths
-        
-        # Get player involvement
-        cursor.execute("""
-            SELECT involvement_level, faction, money_committed, supplies_committed, 
-                   influence_committed, actions_taken, manipulated_by
-            FROM PlayerConflictInvolvement
-            WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        involvement_row = cursor.fetchone()
-        if involvement_row:
-            involvement_level, faction, money, supplies, influence, actions_taken, manipulated_by = involvement_row
+            # Get resolution paths
+            paths_rows = await conn.fetch("""
+                SELECT path_id, name, description, approach_type, difficulty,
+                       requirements, stakeholders_involved, key_challenges,
+                       progress, is_completed
+                FROM ResolutionPaths
+                WHERE conflict_id = $1
+            """, conflict_id)
             
-            # Parse JSON fields
-            try:
-                actions_list = json.loads(actions_taken) if isinstance(actions_taken, str) else actions_taken or []
-            except (json.JSONDecodeError, TypeError):
-                actions_list = []
+            paths = []
+            for row in paths_rows:
+                path = dict(row)
+                
+                # Parse JSON fields
+                try:
+                    path["requirements"] = json.loads(path["requirements"]) if isinstance(path["requirements"], str) else path["requirements"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    path["requirements"] = {}
+                
+                try:
+                    path["stakeholders_involved"] = json.loads(path["stakeholders_involved"]) if isinstance(path["stakeholders_involved"], str) else path["stakeholders_involved"] or []
+                except (json.JSONDecodeError, TypeError):
+                    path["stakeholders_involved"] = []
+                
+                try:
+                    path["key_challenges"] = json.loads(path["key_challenges"]) if isinstance(path["key_challenges"], str) else path["key_challenges"] or []
+                except (json.JSONDecodeError, TypeError):
+                    path["key_challenges"] = []
+                
+                paths.append(path)
             
-            try:
-                manipulated_by_dict = json.loads(manipulated_by) if isinstance(manipulated_by, str) else manipulated_by or None
-            except (json.JSONDecodeError, TypeError):
-                manipulated_by_dict = None
+            conflict["resolution_paths"] = paths
             
-            conflict["player_involvement"] = {
-                "involvement_level": involvement_level,
-                "faction": faction,
-                "resources_committed": {
-                    "money": money,
-                    "supplies": supplies,
-                    "influence": influence
-                },
-                "actions_taken": actions_list,
-                "is_manipulated": manipulated_by_dict is not None,
-                "manipulated_by": manipulated_by_dict
-            }
-        else:
-            conflict["player_involvement"] = {
-                "involvement_level": "none",
-                "faction": "neutral",
-                "resources_committed": {
-                    "money": 0,
-                    "supplies": 0,
-                    "influence": 0
-                },
-                "actions_taken": [],
-                "is_manipulated": False,
-                "manipulated_by": None
-            }
-        
-        # Get internal faction conflicts
-        cursor.execute("""
-            SELECT struggle_id, faction_id, conflict_name, description,
-                   primary_npc_id, target_npc_id, prize, approach, 
-                   public_knowledge, current_phase, progress
-            FROM InternalFactionConflicts
-            WHERE parent_conflict_id = %s
-            ORDER BY progress DESC
-        """, (conflict_id,))
-        
-        internal_conflicts = []
-        for internal_row in cursor.fetchall():
-            struggle_id, faction_id, internal_name, internal_desc, primary_npc_id, \
-            target_npc_id, prize, approach, public_knowledge, current_phase, progress = internal_row
+            # Get player involvement
+            involvement_row = await conn.fetchrow("""
+                SELECT involvement_level, faction, money_committed, supplies_committed, 
+                       influence_committed, actions_taken, manipulated_by
+                FROM PlayerConflictInvolvement
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
             
-            # Get faction name
-            faction_name = await get_faction_name(ctx, faction_id)
+            if involvement_row:
+                involvement = dict(involvement_row)
+                
+                # Parse JSON fields
+                try:
+                    actions_list = json.loads(involvement["actions_taken"]) if isinstance(involvement["actions_taken"], str) else involvement["actions_taken"] or []
+                except (json.JSONDecodeError, TypeError):
+                    actions_list = []
+                
+                try:
+                    manipulated_by_dict = json.loads(involvement["manipulated_by"]) if isinstance(involvement["manipulated_by"], str) else involvement["manipulated_by"] or None
+                except (json.JSONDecodeError, TypeError):
+                    manipulated_by_dict = None
+                
+                conflict["player_involvement"] = {
+                    "involvement_level": involvement["involvement_level"],
+                    "faction": involvement["faction"],
+                    "resources_committed": {
+                        "money": involvement["money_committed"],
+                        "supplies": involvement["supplies_committed"],
+                        "influence": involvement["influence_committed"]
+                    },
+                    "actions_taken": actions_list,
+                    "is_manipulated": manipulated_by_dict is not None,
+                    "manipulated_by": manipulated_by_dict
+                }
+            else:
+                conflict["player_involvement"] = {
+                    "involvement_level": "none",
+                    "faction": "neutral",
+                    "resources_committed": {
+                        "money": 0,
+                        "supplies": 0,
+                        "influence": 0
+                    },
+                    "actions_taken": [],
+                    "is_manipulated": False,
+                    "manipulated_by": None
+                }
             
-            # Get NPC names
-            primary_npc_name = await get_npc_name(ctx, primary_npc_id)
-            target_npc_name = await get_npc_name(ctx, target_npc_id)
+            # Get internal faction conflicts
+            internal_conflicts_rows = await conn.fetch("""
+                SELECT struggle_id, faction_id, conflict_name, description,
+                       primary_npc_id, target_npc_id, prize, approach, 
+                       public_knowledge, current_phase, progress
+                FROM InternalFactionConflicts
+                WHERE parent_conflict_id = $1
+                ORDER BY progress DESC
+            """, conflict_id)
             
-            internal_conflicts.append({
-                "struggle_id": struggle_id,
-                "faction_id": faction_id,
-                "faction_name": faction_name,
-                "conflict_name": internal_name,
-                "description": internal_desc,
-                "primary_npc_id": primary_npc_id,
-                "primary_npc_name": primary_npc_name,
-                "target_npc_id": target_npc_id,
-                "target_npc_name": target_npc_name,
-                "prize": prize,
-                "approach": approach,
-                "public_knowledge": public_knowledge,
-                "current_phase": current_phase,
-                "progress": progress
-            })
-        
-        if internal_conflicts:
-            conflict["internal_faction_conflicts"] = internal_conflicts
-        
-        # Get manipulation attempts
-        manipulation_attempts = await get_player_manipulation_attempts(ctx, conflict_id)
-        if manipulation_attempts:
-            conflict["manipulation_attempts"] = manipulation_attempts
-        
-        return conflict
+            internal_conflicts = []
+            for row in internal_conflicts_rows:
+                internal_conflict = dict(row)
+                
+                # Get faction name
+                faction_name = await get_faction_name(ctx, internal_conflict["faction_id"])
+                
+                # Get NPC names
+                primary_npc_name = await get_npc_name(ctx, internal_conflict["primary_npc_id"])
+                target_npc_name = await get_npc_name(ctx, internal_conflict["target_npc_id"])
+                
+                internal_conflict["faction_name"] = faction_name
+                internal_conflict["primary_npc_name"] = primary_npc_name
+                internal_conflict["target_npc_name"] = target_npc_name
+                
+                internal_conflicts.append(internal_conflict)
+            
+            if internal_conflicts:
+                conflict["internal_faction_conflicts"] = internal_conflicts
+            
+            # Get manipulation attempts
+            manipulation_attempts = await get_player_manipulation_attempts(ctx, conflict_id)
+            if manipulation_attempts:
+                conflict["manipulation_attempts"] = manipulation_attempts
+            
+            return conflict
     except Exception as e:
         logger.error(f"Error getting conflict details for ID {conflict_id}: {e}", exc_info=True)
         return {"error": str(e)}
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_conflict_stakeholders(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
@@ -408,76 +303,50 @@ async def get_conflict_stakeholders(ctx: RunContextWrapper, conflict_id: int) ->
         List of stakeholder dictionaries
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name,
-                   s.faction_position, s.public_motivation, s.private_motivation,
-                   s.desired_outcome, s.involvement_level, s.alliances, s.rivalries,
-                   s.leadership_ambition, s.faction_standing, s.willing_to_betray_faction
-            FROM ConflictStakeholders s
-            JOIN NPCStats n ON s.npc_id = n.npc_id
-            WHERE s.conflict_id = %s
-            ORDER BY s.involvement_level DESC
-        """, (conflict_id,))
-        
-        stakeholders = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, faction_id, faction_name, faction_position, public_motivation, \
-            private_motivation, desired_outcome, involvement_level, alliances, rivalries, \
-            leadership_ambition, faction_standing, willing_to_betray = row
+        async with get_db_connection_context() as conn:
+            stakeholders_rows = await conn.fetch("""
+                SELECT s.npc_id, n.npc_name, s.faction_id, s.faction_name,
+                       s.faction_position, s.public_motivation, s.private_motivation,
+                       s.desired_outcome, s.involvement_level, s.alliances, s.rivalries,
+                       s.leadership_ambition, s.faction_standing, s.willing_to_betray_faction
+                FROM ConflictStakeholders s
+                JOIN NPCStats n ON s.npc_id = n.npc_id
+                WHERE s.conflict_id = $1
+                ORDER BY s.involvement_level DESC
+            """, conflict_id)
             
-            # Parse JSON fields
-            try:
-                alliances_dict = json.loads(alliances) if isinstance(alliances, str) else alliances or {}
-            except (json.JSONDecodeError, TypeError):
-                alliances_dict = {}
+            stakeholders = []
+            for row in stakeholders_rows:
+                stakeholder = dict(row)
+                
+                # Parse JSON fields
+                try:
+                    stakeholder["alliances"] = json.loads(stakeholder["alliances"]) if isinstance(stakeholder["alliances"], str) else stakeholder["alliances"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    stakeholder["alliances"] = {}
+                
+                try:
+                    stakeholder["rivalries"] = json.loads(stakeholder["rivalries"]) if isinstance(stakeholder["rivalries"], str) else stakeholder["rivalries"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    stakeholder["rivalries"] = {}
+                
+                # Get stakeholder secrets
+                stakeholder["secrets"] = await get_stakeholder_secrets(ctx, conflict_id, stakeholder["npc_id"])
+                
+                # Check if stakeholder manipulates player
+                stakeholder["manipulates_player"] = await check_stakeholder_manipulates_player(ctx, conflict_id, stakeholder["npc_id"])
+                
+                # Get relationship with player
+                stakeholder["relationship_with_player"] = await get_npc_relationship_with_player(ctx, stakeholder["npc_id"])
+                
+                stakeholders.append(stakeholder)
             
-            try:
-                rivalries_dict = json.loads(rivalries) if isinstance(rivalries, str) else rivalries or {}
-            except (json.JSONDecodeError, TypeError):
-                rivalries_dict = {}
-            
-            # Get stakeholder secrets
-            secrets = await get_stakeholder_secrets(ctx, conflict_id, npc_id)
-            
-            # Check if stakeholder manipulates player
-            manipulates_player = await check_stakeholder_manipulates_player(ctx, conflict_id, npc_id)
-            
-            # Get relationship with player
-            relationship_with_player = await get_npc_relationship_with_player(ctx, npc_id)
-            
-            stakeholder = {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "faction_id": faction_id,
-                "faction_name": faction_name,
-                "faction_position": faction_position,
-                "public_motivation": public_motivation,
-                "private_motivation": private_motivation,
-                "desired_outcome": desired_outcome,
-                "involvement_level": involvement_level,
-                "alliances": alliances_dict,
-                "rivalries": rivalries_dict,
-                "leadership_ambition": leadership_ambition,
-                "faction_standing": faction_standing,
-                "willing_to_betray_faction": willing_to_betray,
-                "secrets": secrets,
-                "manipulates_player": manipulates_player,
-                "relationship_with_player": relationship_with_player
-            }
-            
-            stakeholders.append(stakeholder)
-        
-        return stakeholders
+            return stakeholders
     except Exception as e:
         logger.error(f"Error getting stakeholders for conflict {conflict_id}: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
@@ -491,63 +360,48 @@ async def get_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: 
         List of manipulation attempt dictionaries
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT attempt_id, npc_id, manipulation_type, content, goal,
-                   success, player_response, leverage_used, intimacy_level,
-                   created_at, resolved_at
-            FROM PlayerManipulationAttempts
-            WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-            ORDER BY created_at DESC
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        attempts = []
-        for row in cursor.fetchall():
-            attempt_id, npc_id, manipulation_type, content, goal, success, \
-            player_response, leverage_used, intimacy_level, created_at, resolved_at = row
+        async with get_db_connection_context() as conn:
+            attempts_rows = await conn.fetch("""
+                SELECT attempt_id, npc_id, manipulation_type, content, goal,
+                       success, player_response, leverage_used, intimacy_level,
+                       created_at, resolved_at
+                FROM PlayerManipulationAttempts
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                ORDER BY created_at DESC
+            """, conflict_id, context.user_id, context.conversation_id)
             
-            # Get NPC name
-            npc_name = await get_npc_name(ctx, npc_id)
+            attempts = []
+            for row in attempts_rows:
+                attempt = dict(row)
+                
+                # Get NPC name
+                npc_name = await get_npc_name(ctx, attempt["npc_id"])
+                attempt["npc_name"] = npc_name
+                
+                # Parse JSON fields
+                try:
+                    attempt["goal"] = json.loads(attempt["goal"]) if isinstance(attempt["goal"], str) else attempt["goal"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    attempt["goal"] = {}
+                
+                try:
+                    attempt["leverage_used"] = json.loads(attempt["leverage_used"]) if isinstance(attempt["leverage_used"], str) else attempt["leverage_used"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    attempt["leverage_used"] = {}
+                
+                # Format dates
+                attempt["created_at"] = attempt["created_at"].isoformat() if attempt["created_at"] else None
+                attempt["resolved_at"] = attempt["resolved_at"].isoformat() if attempt["resolved_at"] else None
+                attempt["is_resolved"] = attempt["resolved_at"] is not None
+                
+                attempts.append(attempt)
             
-            # Parse JSON fields
-            try:
-                goal_dict = json.loads(goal) if isinstance(goal, str) else goal or {}
-            except (json.JSONDecodeError, TypeError):
-                goal_dict = {}
-            
-            try:
-                leverage_dict = json.loads(leverage_used) if isinstance(leverage_used, str) else leverage_used or {}
-            except (json.JSONDecodeError, TypeError):
-                leverage_dict = {}
-            
-            attempt = {
-                "attempt_id": attempt_id,
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "manipulation_type": manipulation_type,
-                "content": content,
-                "goal": goal_dict,
-                "success": success,
-                "player_response": player_response,
-                "leverage_used": leverage_dict,
-                "intimacy_level": intimacy_level,
-                "created_at": created_at.isoformat() if created_at else None,
-                "resolved_at": resolved_at.isoformat() if resolved_at else None,
-                "is_resolved": resolved_at is not None
-            }
-            
-            attempts.append(attempt)
-        
-        return attempts
+            return attempts
     except Exception as e:
         logger.error(f"Error getting player manipulation attempts for conflict {conflict_id}: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 # Conflict Generation Tools
 
@@ -647,79 +501,53 @@ async def generate_conflict(
 async def get_current_day(ctx: RunContextWrapper) -> int:
     """Get the current in-game day."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT value FROM CurrentRoleplay
-            WHERE user_id=%s AND conversation_id=%s AND key='CurrentDay'
-        """, (context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        
-        return int(row[0]) if row else 1
+        async with get_db_connection_context() as conn:
+            value = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
+            """, context.user_id, context.conversation_id)
+            
+            return int(value) if value else 1
     except Exception as e:
         logger.error(f"Error getting current day: {e}", exc_info=True)
         return 1
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_available_npcs(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """Get available NPCs that could be involved in conflicts."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT npc_id, npc_name, dominance, cruelty, closeness, trust,
-                   respect, intensity, sex, current_location, faction_affiliations
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-            ORDER BY dominance DESC
-        """, (context.user_id, context.conversation_id))
-        
-        npcs = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, dominance, cruelty, closeness, trust, \
-            respect, intensity, sex, current_location, faction_affiliations = row
+        async with get_db_connection_context() as conn:
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, closeness, trust,
+                       respect, intensity, sex, current_location, faction_affiliations
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                ORDER BY dominance DESC
+            """, context.user_id, context.conversation_id)
             
-            # Parse faction affiliations
-            try:
-                affiliations = json.loads(faction_affiliations) if isinstance(faction_affiliations, str) else faction_affiliations or []
-            except (json.JSONDecodeError, TypeError):
-                affiliations = []
+            npcs = []
+            for row in npc_rows:
+                npc = dict(row)
+                
+                # Parse faction affiliations
+                try:
+                    npc["faction_affiliations"] = json.loads(npc["faction_affiliations"]) if isinstance(npc["faction_affiliations"], str) else npc["faction_affiliations"] or []
+                except (json.JSONDecodeError, TypeError):
+                    npc["faction_affiliations"] = []
+                
+                # Get relationships with player
+                npc["relationship_with_player"] = await get_npc_relationship_with_player(ctx, npc["npc_id"])
+                
+                npcs.append(npc)
             
-            # Get relationships with player
-            relationship = await get_npc_relationship_with_player(ctx, npc_id)
-            
-            npc = {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "dominance": dominance,
-                "cruelty": cruelty,
-                "closeness": closeness,
-                "trust": trust,
-                "respect": respect,
-                "intensity": intensity,
-                "sex": sex,
-                "current_location": current_location,
-                "faction_affiliations": affiliations,
-                "relationship_with_player": relationship
-            }
-            
-            npcs.append(npc)
-        
-        return npcs
+            return npcs
     except Exception as e:
         logger.error(f"Error getting available NPCs: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_npc_relationship_with_player(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
@@ -935,60 +763,52 @@ async def create_manipulation_attempt(
         The created manipulation attempt
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Check if NPC has relationship with player
-        relationship = await get_npc_relationship_with_player(ctx, npc_id)
-        
-        # Get NPC name
-        npc_name = await get_npc_name(ctx, npc_id)
-        
-        # Insert the manipulation attempt
-        cursor.execute("""
-            INSERT INTO PlayerManipulationAttempts
-            (conflict_id, user_id, conversation_id, npc_id, manipulation_type, 
-             content, goal, success, leverage_used, intimacy_level, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            RETURNING attempt_id
-        """, (
-            conflict_id, context.user_id, context.conversation_id, npc_id,
-            manipulation_type, content, json.dumps(goal), False,
-            json.dumps(leverage_used), intimacy_level
-        ))
-        
-        attempt_id = cursor.fetchone()[0]
-        
-        # Create a memory for this manipulation attempt
-        await create_conflict_memory(
-            ctx,
-            conflict_id,
-            f"{npc_name} attempted to {manipulation_type} the player regarding the conflict.",
-            significance=7
-        )
-        
-        conn.commit()
-        
-        return {
-            "attempt_id": attempt_id,
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "manipulation_type": manipulation_type,
-            "content": content,
-            "goal": goal,
-            "leverage_used": leverage_used,
-            "intimacy_level": intimacy_level,
-            "success": False,
-            "is_resolved": False
-        }
+        async with get_db_connection_context() as conn:
+            # Check if NPC has relationship with player
+            relationship = await get_npc_relationship_with_player(ctx, npc_id)
+            
+            # Get NPC name
+            npc_name = await get_npc_name(ctx, npc_id)
+            
+            # Begin transaction
+            async with conn.transaction():
+                # Insert the manipulation attempt
+                attempt_id = await conn.fetchval("""
+                    INSERT INTO PlayerManipulationAttempts
+                    (conflict_id, user_id, conversation_id, npc_id, manipulation_type, 
+                     content, goal, success, leverage_used, intimacy_level, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+                    RETURNING attempt_id
+                """, 
+                conflict_id, context.user_id, context.conversation_id, npc_id,
+                manipulation_type, content, json.dumps(goal), False,
+                json.dumps(leverage_used), intimacy_level)
+                
+                # Create a memory for this manipulation attempt
+                await create_conflict_memory(
+                    ctx,
+                    conflict_id,
+                    f"{npc_name} attempted to {manipulation_type} the player regarding the conflict.",
+                    significance=7
+                )
+                
+                return {
+                    "attempt_id": attempt_id,
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "manipulation_type": manipulation_type,
+                    "content": content,
+                    "goal": goal,
+                    "leverage_used": leverage_used,
+                    "intimacy_level": intimacy_level,
+                    "success": False,
+                    "is_resolved": False
+                }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating player manipulation attempt: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def resolve_manipulation_attempt(
@@ -1009,142 +829,134 @@ async def resolve_manipulation_attempt(
         Updated manipulation attempt
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get the manipulation attempt
-        cursor.execute("""
-            SELECT conflict_id, npc_id, manipulation_type, goal
-            FROM PlayerManipulationAttempts
-            WHERE attempt_id = %s AND user_id = %s AND conversation_id = %s
-        """, (attempt_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        if not row:
-            return {"error": "Manipulation attempt not found"}
-        
-        conflict_id, npc_id, manipulation_type, goal = row
-        
-        # Update the manipulation attempt
-        cursor.execute("""
-            UPDATE PlayerManipulationAttempts
-            SET success = %s, player_response = %s, resolved_at = CURRENT_TIMESTAMP
-            WHERE attempt_id = %s
-            RETURNING attempt_id
-        """, (success, player_response, attempt_id))
-        
-        # Apply stat changes based on result
-        stat_changes = {}
-        
-        if success:
-            # If player succumbed to manipulation
-            obedience_change = random.randint(2, 5)
-            dependency_change = random.randint(1, 3)
+        async with get_db_connection_context() as conn:
+            # Get the manipulation attempt
+            attempt_row = await conn.fetchrow("""
+                SELECT conflict_id, npc_id, manipulation_type, goal
+                FROM PlayerManipulationAttempts
+                WHERE attempt_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, attempt_id, context.user_id, context.conversation_id)
             
-            await apply_stat_change(context.user_id, context.conversation_id, "obedience", obedience_change)
-            await apply_stat_change(context.user_id, context.conversation_id, "dependency", dependency_change)
+            if not attempt_row:
+                return {"error": "Manipulation attempt not found"}
             
-            stat_changes["obedience"] = obedience_change
-            stat_changes["dependency"] = dependency_change
+            conflict_id = attempt_row["conflict_id"]
+            npc_id = attempt_row["npc_id"]
+            manipulation_type = attempt_row["manipulation_type"]
+            goal = attempt_row["goal"]
             
-            # If successful, update player involvement based on goal
-            try:
-                goal_dict = json.loads(goal) if isinstance(goal, str) else goal or {}
-            except (json.JSONDecodeError, TypeError):
-                goal_dict = {}
-            
-            # Get current involvement
-            cursor.execute("""
-                SELECT involvement_level, faction
-                FROM PlayerConflictInvolvement
-                WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-            """, (conflict_id, context.user_id, context.conversation_id))
-            
-            involvement_row = cursor.fetchone()
-            
-            if involvement_row:
-                current_involvement, current_faction = involvement_row
+            async with conn.transaction():
+                # Update the manipulation attempt
+                await conn.execute("""
+                    UPDATE PlayerManipulationAttempts
+                    SET success = $1, player_response = $2, resolved_at = CURRENT_TIMESTAMP
+                    WHERE attempt_id = $3
+                """, success, player_response, attempt_id)
                 
-                # Update with goal values or keep current if not specified
-                faction = goal_dict.get("faction", current_faction)
-                involvement_level = goal_dict.get("involvement_level", current_involvement)
-            else:
-                # If no involvement yet, set defaults
-                faction = goal_dict.get("faction", "neutral")
-                involvement_level = goal_dict.get("involvement_level", "observing")
-            
-            # Record that player was manipulated
-            cursor.execute("""
-                UPDATE PlayerConflictInvolvement
-                SET involvement_level = %s, faction = %s, manipulated_by = %s
-                WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-            """, (
-                involvement_level, faction, 
-                json.dumps({"npc_id": npc_id, "manipulation_type": manipulation_type, "attempt_id": attempt_id}),
-                conflict_id, context.user_id, context.conversation_id
-            ))
-            
-            # If no rows updated, insert new involvement
-            if cursor.rowcount == 0:
-                cursor.execute("""
-                    INSERT INTO PlayerConflictInvolvement
-                    (conflict_id, user_id, conversation_id, player_name, involvement_level,
-                    faction, money_committed, supplies_committed, influence_committed, 
-                    actions_taken, manipulated_by)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    conflict_id, context.user_id, context.conversation_id, "Player",
-                    involvement_level, faction, 0, 0, 0, "[]",
-                    json.dumps({"npc_id": npc_id, "manipulation_type": manipulation_type, "attempt_id": attempt_id})
-                ))
+                # Apply stat changes based on result
+                stat_changes = {}
                 
-        else:
-            # If player resisted manipulation
-            willpower_change = random.randint(2, 4)
-            confidence_change = random.randint(1, 3)
-            
-            await apply_stat_change(context.user_id, context.conversation_id, "willpower", willpower_change)
-            await apply_stat_change(context.user_id, context.conversation_id, "confidence", confidence_change)
-            
-            stat_changes["willpower"] = willpower_change
-            stat_changes["confidence"] = confidence_change
-        
-        # Get NPC name
-        npc_name = await get_npc_name(ctx, npc_id)
-        
-        # Create a memory for the resolution
-        if success:
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"Player succumbed to {npc_name}'s {manipulation_type} attempt in the conflict.",
-                significance=8
-            )
-        else:
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"Player resisted {npc_name}'s {manipulation_type} attempt in the conflict.",
-                significance=7
-            )
-        
-        conn.commit()
-        
-        return {
-            "attempt_id": attempt_id,
-            "success": success,
-            "player_response": player_response,
-            "is_resolved": True,
-            "stat_changes": stat_changes
-        }
+                if success:
+                    # If player succumbed to manipulation
+                    obedience_change = random.randint(2, 5)
+                    dependency_change = random.randint(1, 3)
+                    
+                    await apply_stat_change(context.user_id, context.conversation_id, "obedience", obedience_change)
+                    await apply_stat_change(context.user_id, context.conversation_id, "dependency", dependency_change)
+                    
+                    stat_changes["obedience"] = obedience_change
+                    stat_changes["dependency"] = dependency_change
+                    
+                    # If successful, update player involvement based on goal
+                    try:
+                        goal_dict = json.loads(goal) if isinstance(goal, str) else goal or {}
+                    except (json.JSONDecodeError, TypeError):
+                        goal_dict = {}
+                    
+                    # Get current involvement
+                    involvement_row = await conn.fetchrow("""
+                        SELECT involvement_level, faction
+                        FROM PlayerConflictInvolvement
+                        WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """, conflict_id, context.user_id, context.conversation_id)
+                    
+                    if involvement_row:
+                        current_involvement = involvement_row["involvement_level"]
+                        current_faction = involvement_row["faction"]
+                        
+                        # Update with goal values or keep current if not specified
+                        faction = goal_dict.get("faction", current_faction)
+                        involvement_level = goal_dict.get("involvement_level", current_involvement)
+                    else:
+                        # If no involvement yet, set defaults
+                        faction = goal_dict.get("faction", "neutral")
+                        involvement_level = goal_dict.get("involvement_level", "observing")
+                    
+                    # Record that player was manipulated
+                    await conn.execute("""
+                        UPDATE PlayerConflictInvolvement
+                        SET involvement_level = $1, faction = $2, manipulated_by = $3
+                        WHERE conflict_id = $4 AND user_id = $5 AND conversation_id = $6
+                    """, 
+                    involvement_level, faction, 
+                    json.dumps({"npc_id": npc_id, "manipulation_type": manipulation_type, "attempt_id": attempt_id}),
+                    conflict_id, context.user_id, context.conversation_id)
+                    
+                    # If no rows updated, insert new involvement
+                    if await conn.fetchval("SELECT 1") is None:  # This is a way to check if any rows were affected
+                        await conn.execute("""
+                            INSERT INTO PlayerConflictInvolvement
+                            (conflict_id, user_id, conversation_id, player_name, involvement_level,
+                            faction, money_committed, supplies_committed, influence_committed, 
+                            actions_taken, manipulated_by)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        """, 
+                        conflict_id, context.user_id, context.conversation_id, "Player",
+                        involvement_level, faction, 0, 0, 0, "[]",
+                        json.dumps({"npc_id": npc_id, "manipulation_type": manipulation_type, "attempt_id": attempt_id}))
+                        
+                else:
+                    # If player resisted manipulation
+                    willpower_change = random.randint(2, 4)
+                    confidence_change = random.randint(1, 3)
+                    
+                    await apply_stat_change(context.user_id, context.conversation_id, "willpower", willpower_change)
+                    await apply_stat_change(context.user_id, context.conversation_id, "confidence", confidence_change)
+                    
+                    stat_changes["willpower"] = willpower_change
+                    stat_changes["confidence"] = confidence_change
+                
+                # Get NPC name
+                npc_name = await get_npc_name(ctx, npc_id)
+                
+                # Create a memory for the resolution
+                if success:
+                    await create_conflict_memory(
+                        ctx,
+                        conflict_id,
+                        f"Player succumbed to {npc_name}'s {manipulation_type} attempt in the conflict.",
+                        significance=8
+                    )
+                else:
+                    await create_conflict_memory(
+                        ctx,
+                        conflict_id,
+                        f"Player resisted {npc_name}'s {manipulation_type} attempt in the conflict.",
+                        significance=7
+                    )
+                
+                return {
+                    "attempt_id": attempt_id,
+                    "success": success,
+                    "player_response": player_response,
+                    "is_resolved": True,
+                    "stat_changes": stat_changes
+                }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error resolving manipulation attempt: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def suggest_manipulation_content(
@@ -1299,82 +1111,70 @@ async def track_story_beat(
         Updated path information
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Create the story beat
-        cursor.execute("""
-            INSERT INTO PathStoryBeats
-            (conflict_id, path_id, description, involved_npcs, progress_value, created_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            RETURNING beat_id
-        """, (
-            conflict_id, path_id, beat_description, 
-            json.dumps(involved_npcs), progress_value
-        ))
-        
-        beat_id = cursor.fetchone()[0]
-        
-        # Get current path progress
-        cursor.execute("""
-            SELECT progress, is_completed
-            FROM ResolutionPaths
-            WHERE conflict_id = %s AND path_id = %s
-        """, (conflict_id, path_id))
-        
-        row = cursor.fetchone()
-        if not row:
-            return {"error": "Resolution path not found"}
-        
-        current_progress, is_completed = row
-        
-        # Calculate new progress
-        new_progress = min(100, current_progress + progress_value)
-        is_now_completed = new_progress >= 100
-        
-        # Update the path progress
-        cursor.execute("""
-            UPDATE ResolutionPaths
-            SET progress = %s, is_completed = %s,
-                completion_date = %s
-            WHERE conflict_id = %s AND path_id = %s
-        """, (
-            new_progress, is_now_completed,
-            "CURRENT_TIMESTAMP" if is_now_completed else None,
-            conflict_id, path_id
-        ))
-        
-        # If path completed, check if conflict should advance
-        if is_now_completed:
-            await check_conflict_advancement(ctx, conflict_id)
-        
-        # Create a memory for this story beat
-        await create_conflict_memory(
-            ctx,
-            conflict_id,
-            f"Progress made on path '{path_id}': {beat_description}",
-            significance=6
-        )
-        
-        conn.commit()
-        
-        return {
-            "beat_id": beat_id,
-            "conflict_id": conflict_id,
-            "path_id": path_id,
-            "description": beat_description,
-            "progress_value": progress_value,
-            "new_progress": new_progress,
-            "is_completed": is_now_completed
-        }
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                # Create the story beat
+                beat_id = await conn.fetchval("""
+                    INSERT INTO PathStoryBeats
+                    (conflict_id, path_id, description, involved_npcs, progress_value, created_at)
+                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+                    RETURNING beat_id
+                """, 
+                conflict_id, path_id, beat_description, 
+                json.dumps(involved_npcs), progress_value)
+                
+                # Get current path progress
+                path_row = await conn.fetchrow("""
+                    SELECT progress, is_completed
+                    FROM ResolutionPaths
+                    WHERE conflict_id = $1 AND path_id = $2
+                """, conflict_id, path_id)
+                
+                if not path_row:
+                    return {"error": "Resolution path not found"}
+                
+                current_progress = path_row["progress"]
+                is_completed = path_row["is_completed"]
+                
+                # Calculate new progress
+                new_progress = min(100, current_progress + progress_value)
+                is_now_completed = new_progress >= 100
+                
+                # Update the path progress
+                await conn.execute("""
+                    UPDATE ResolutionPaths
+                    SET progress = $1, is_completed = $2,
+                        completion_date = CASE WHEN $2 = TRUE THEN CURRENT_TIMESTAMP ELSE NULL END
+                    WHERE conflict_id = $3 AND path_id = $4
+                """, 
+                new_progress, is_now_completed, conflict_id, path_id)
+                
+                # If path completed, check if conflict should advance
+                if is_now_completed:
+                    await check_conflict_advancement(ctx, conflict_id)
+                
+                # Create a memory for this story beat
+                await create_conflict_memory(
+                    ctx,
+                    conflict_id,
+                    f"Progress made on path '{path_id}': {beat_description}",
+                    significance=6
+                )
+                
+                return {
+                    "beat_id": beat_id,
+                    "conflict_id": conflict_id,
+                    "path_id": path_id,
+                    "description": beat_description,
+                    "progress_value": progress_value,
+                    "new_progress": new_progress,
+                    "is_completed": is_now_completed
+                }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error tracking story beat: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def resolve_conflict(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
@@ -1388,118 +1188,110 @@ async def resolve_conflict(ctx: RunContextWrapper, conflict_id: int) -> Dict[str
         Resolution details and consequences
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get conflict details
-        cursor.execute("""
-            SELECT conflict_name, conflict_type, phase, progress
-            FROM Conflicts
-            WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        if not row:
-            return {"error": "Conflict not found"}
-        
-        conflict_name, conflict_type, phase, progress = row
-        
-        # Check if conflict is in a resolvable state
-        if phase != "resolution" and progress < 90:
-            return {"error": "Conflict is not ready to be resolved. Progress must be at least 90%."}
-        
-        # Get player involvement
-        cursor.execute("""
-            SELECT involvement_level, faction
-            FROM PlayerConflictInvolvement
-            WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        player_row = cursor.fetchone()
-        player_involvement = player_row[0] if player_row else "none"
-        player_faction = player_row[1] if player_row else "neutral"
-        
-        # Get completed resolution paths
-        cursor.execute("""
-            SELECT path_id, name
-            FROM ResolutionPaths
-            WHERE conflict_id = %s AND is_completed = TRUE
-        """, (conflict_id, ))
-        
-        completed_paths = cursor.fetchall()
-        
-        # Determine outcome based on completed paths and player involvement
-        if not completed_paths:
-            outcome = "unresolved"
-            description = "The conflict ended without a clear resolution."
-        else:
-            # Determine winning faction based on completed paths
-            # (Simplified logic - in real implementation would be more complex)
-            outcome = "resolved"
-            winning_faction = player_faction if player_involvement != "none" else "neutral"
-            description = f"The conflict was resolved with {winning_faction} faction gaining the advantage."
-        
-        # Update conflict status
-        cursor.execute("""
-            UPDATE Conflicts
-            SET is_active = FALSE, progress = 100, phase = 'concluded',
-                outcome = %s, resolution_description = %s,
-                resolved_at = CURRENT_TIMESTAMP
-            WHERE conflict_id = %s
-        """, (outcome, description, conflict_id))
-        
-        # Generate consequences
-        consequences = generate_conflict_consequences(
-            conflict_type, outcome, player_involvement, player_faction, completed_paths
-        )
-        
-        # Record consequences
-        for consequence in consequences:
-            cursor.execute("""
-                INSERT INTO ConflictConsequences
-                (conflict_id, consequence_type, description, affected_entity_type,
-                 affected_entity_id, magnitude, is_permanent)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (
-                conflict_id,
-                consequence.get("type", "general"),
-                consequence.get("description", ""),
-                consequence.get("affected_entity_type", "player"),
-                consequence.get("affected_entity_id", 0),
-                consequence.get("magnitude", 1),
-                consequence.get("is_permanent", False)
-            ))
+        async with get_db_connection_context() as conn:
+            # Get conflict details
+            conflict_row = await conn.fetchrow("""
+                SELECT conflict_name, conflict_type, phase, progress
+                FROM Conflicts
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
             
-            # Apply stat changes if applicable
-            if consequence.get("affected_entity_type") == "player" and "stat_changes" in consequence:
-                for stat, value in consequence["stat_changes"].items():
-                    await apply_stat_change(context.user_id, context.conversation_id, stat, value)
-        
-        # Create memory
-        await create_conflict_memory(
-            ctx,
-            conflict_id,
-            f"The conflict '{conflict_name}' has been resolved. {description}",
-            significance=9
-        )
-        
-        conn.commit()
-        
-        return {
-            "conflict_id": conflict_id,
-            "outcome": outcome,
-            "description": description,
-            "consequences": consequences,
-            "resolved_at": "now"
-        }
+            if not conflict_row:
+                return {"error": "Conflict not found"}
+            
+            conflict_name = conflict_row["conflict_name"]
+            conflict_type = conflict_row["conflict_type"]
+            phase = conflict_row["phase"]
+            progress = conflict_row["progress"]
+            
+            # Check if conflict is in a resolvable state
+            if phase != "resolution" and progress < 90:
+                return {"error": "Conflict is not ready to be resolved. Progress must be at least 90%."}
+            
+            # Get player involvement
+            player_row = await conn.fetchrow("""
+                SELECT involvement_level, faction
+                FROM PlayerConflictInvolvement
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            player_involvement = player_row["involvement_level"] if player_row else "none"
+            player_faction = player_row["faction"] if player_row else "neutral"
+            
+            # Get completed resolution paths
+            completed_paths = await conn.fetch("""
+                SELECT path_id, name
+                FROM ResolutionPaths
+                WHERE conflict_id = $1 AND is_completed = TRUE
+            """, conflict_id)
+            
+            # Determine outcome based on completed paths and player involvement
+            if not completed_paths:
+                outcome = "unresolved"
+                description = "The conflict ended without a clear resolution."
+            else:
+                # Determine winning faction based on completed paths
+                # (Simplified logic - in real implementation would be more complex)
+                outcome = "resolved"
+                winning_faction = player_faction if player_involvement != "none" else "neutral"
+                description = f"The conflict was resolved with {winning_faction} faction gaining the advantage."
+            
+            async with conn.transaction():
+                # Update conflict status
+                await conn.execute("""
+                    UPDATE Conflicts
+                    SET is_active = FALSE, progress = 100, phase = 'concluded',
+                        outcome = $1, resolution_description = $2,
+                        resolved_at = CURRENT_TIMESTAMP
+                    WHERE conflict_id = $3
+                """, outcome, description, conflict_id)
+                
+                # Generate consequences
+                consequences = generate_conflict_consequences(
+                    conflict_type, outcome, player_involvement, player_faction, [dict(row) for row in completed_paths]
+                )
+                
+                # Record consequences
+                for consequence in consequences:
+                    await conn.execute("""
+                        INSERT INTO ConflictConsequences
+                        (conflict_id, consequence_type, description, affected_entity_type,
+                         affected_entity_id, magnitude, is_permanent)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """, 
+                    conflict_id,
+                    consequence.get("type", "general"),
+                    consequence.get("description", ""),
+                    consequence.get("affected_entity_type", "player"),
+                    consequence.get("affected_entity_id", 0),
+                    consequence.get("magnitude", 1),
+                    consequence.get("is_permanent", False))
+                    
+                    # Apply stat changes if applicable
+                    if consequence.get("affected_entity_type") == "player" and "stat_changes" in consequence:
+                        for stat, value in consequence["stat_changes"].items():
+                            await apply_stat_change(context.user_id, context.conversation_id, stat, value)
+                
+                # Create memory
+                await create_conflict_memory(
+                    ctx,
+                    conflict_id,
+                    f"The conflict '{conflict_name}' has been resolved. {description}",
+                    significance=9
+                )
+                
+                return {
+                    "conflict_id": conflict_id,
+                    "outcome": outcome,
+                    "description": description,
+                    "consequences": consequences,
+                    "resolved_at": "now"
+                }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error resolving conflict: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 # Faction Power Struggle Tools (Added based on review)
 
@@ -1544,83 +1336,72 @@ async def initiate_faction_power_struggle(
     )
     
     # Create in database
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     try:
-        cursor.execute("""
-            INSERT INTO InternalFactionConflicts
-            (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
-             prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING struggle_id
-        """, (
-            faction_id, struggle_details["conflict_name"], struggle_details["description"],
-            challenger_npc_id, target_npc_id, prize, approach, is_public,
-            "brewing", 10, conflict_id
-        ))
-        
-        struggle_id = cursor.fetchone()[0]
-        
-        # Insert faction members positions
-        for member in struggle_details.get("faction_members", []):
-            cursor.execute("""
-                INSERT INTO FactionStruggleMembers
-                (struggle_id, npc_id, position, side, standing, 
-                 loyalty_strength, reason)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (
-                struggle_id, member["npc_id"], member.get("position", "Member"),
-                member.get("side", "neutral"), member.get("standing", 50),
-                member.get("loyalty_strength", 50), member.get("reason", "")
-            ))
-        
-        # Insert ideological differences
-        for diff in struggle_details.get("ideological_differences", []):
-            cursor.execute("""
-                INSERT INTO FactionIdeologicalDifferences
-                (struggle_id, issue, incumbent_position, challenger_position)
-                VALUES (%s, %s, %s, %s)
-            """, (
-                struggle_id, diff.get("issue", ""), 
-                diff.get("incumbent_position", ""),
-                diff.get("challenger_position", "")
-            ))
-        
-        # Create a memory for this power struggle
-        await create_conflict_memory(
-            ctx,
-            conflict_id,
-            f"Internal power struggle has emerged in {faction_name} between {challenger_name} and {target_name}.",
-            significance=7
-        )
-        
-        conn.commit()
-        
-        # Return the created struggle
-        return {
-            "struggle_id": struggle_id,
-            "faction_id": faction_id,
-            "faction_name": faction_name,
-            "conflict_name": struggle_details["conflict_name"],
-            "description": struggle_details["description"],
-            "primary_npc_id": challenger_npc_id,
-            "primary_npc_name": challenger_name,
-            "target_npc_id": target_npc_id,
-            "target_npc_name": target_name,
-            "prize": prize,
-            "approach": approach,
-            "public_knowledge": is_public,
-            "current_phase": "brewing",
-            "progress": 10
-        }
+        async with get_db_connection_context() as conn:
+            async with conn.transaction():
+                # Insert the struggle
+                struggle_id = await conn.fetchval("""
+                    INSERT INTO InternalFactionConflicts
+                    (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
+                     prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING struggle_id
+                """, 
+                faction_id, struggle_details["conflict_name"], struggle_details["description"],
+                challenger_npc_id, target_npc_id, prize, approach, is_public,
+                "brewing", 10, conflict_id)
+                
+                # Insert faction members positions
+                for member in struggle_details.get("faction_members", []):
+                    await conn.execute("""
+                        INSERT INTO FactionStruggleMembers
+                        (struggle_id, npc_id, position, side, standing, 
+                         loyalty_strength, reason)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """, 
+                    struggle_id, member["npc_id"], member.get("position", "Member"),
+                    member.get("side", "neutral"), member.get("standing", 50),
+                    member.get("loyalty_strength", 50), member.get("reason", ""))
+                
+                # Insert ideological differences
+                for diff in struggle_details.get("ideological_differences", []):
+                    await conn.execute("""
+                        INSERT INTO FactionIdeologicalDifferences
+                        (struggle_id, issue, incumbent_position, challenger_position)
+                        VALUES ($1, $2, $3, $4)
+                    """, 
+                    struggle_id, diff.get("issue", ""), 
+                    diff.get("incumbent_position", ""),
+                    diff.get("challenger_position", ""))
+                
+                # Create a memory for this power struggle
+                await create_conflict_memory(
+                    ctx,
+                    conflict_id,
+                    f"Internal power struggle has emerged in {faction_name} between {challenger_name} and {target_name}.",
+                    significance=7
+                )
+                
+                # Return the created struggle
+                return {
+                    "struggle_id": struggle_id,
+                    "faction_id": faction_id,
+                    "faction_name": faction_name,
+                    "conflict_name": struggle_details["conflict_name"],
+                    "description": struggle_details["description"],
+                    "primary_npc_id": challenger_npc_id,
+                    "primary_npc_name": challenger_name,
+                    "target_npc_id": target_npc_id,
+                    "target_npc_name": target_name,
+                    "prize": prize,
+                    "approach": approach,
+                    "public_knowledge": is_public,
+                    "current_phase": "brewing",
+                    "progress": 10
+                }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error initiating faction power struggle: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def attempt_faction_coup(
@@ -1643,180 +1424,172 @@ async def attempt_faction_coup(
         Coup attempt results
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get struggle details
-        cursor.execute("""
-            SELECT faction_id, primary_npc_id, target_npc_id, parent_conflict_id
-            FROM InternalFactionConflicts
-            WHERE struggle_id = %s
-        """, (struggle_id,))
-        
-        row = cursor.fetchone()
-        if not row:
-            return {"error": "Struggle not found"}
-        
-        faction_id, primary_npc_id, target_npc_id, parent_conflict_id = row
-        
-        # Check if player has sufficient resources
-        resource_total = sum(resources_committed.values())
-        if resource_total > 0:
-            resource_manager = ResourceManager(context.user_id, context.conversation_id)
-            resource_check = await resource_manager.check_resources(
-                resources_committed.get("money", 0),
-                resources_committed.get("supplies", 0),
-                resources_committed.get("influence", 0)
+        async with get_db_connection_context() as conn:
+            # Get struggle details
+            struggle_row = await conn.fetchrow("""
+                SELECT faction_id, primary_npc_id, target_npc_id, parent_conflict_id
+                FROM InternalFactionConflicts
+                WHERE struggle_id = $1
+            """, struggle_id)
+            
+            if not struggle_row:
+                return {"error": "Struggle not found"}
+            
+            faction_id = struggle_row["faction_id"]
+            primary_npc_id = struggle_row["primary_npc_id"]
+            target_npc_id = struggle_row["target_npc_id"]
+            parent_conflict_id = struggle_row["parent_conflict_id"]
+            
+            # Check if player has sufficient resources
+            resource_total = sum(resources_committed.values())
+            if resource_total > 0:
+                resource_manager = ResourceManager(context.user_id, context.conversation_id)
+                resource_check = await resource_manager.check_resources(
+                    resources_committed.get("money", 0),
+                    resources_committed.get("supplies", 0),
+                    resources_committed.get("influence", 0)
+                )
+                
+                if not resource_check["has_resources"]:
+                    return {
+                        "error": "Insufficient resources to commit to coup",
+                        "missing": resource_check["missing"],
+                        "current": resource_check["current"]
+                    }
+                
+                # Commit resources
+                await resource_manager.commit_resources(
+                    resources_committed.get("money", 0),
+                    resources_committed.get("supplies", 0),
+                    resources_committed.get("influence", 0),
+                    "Committed to faction coup attempt"
+                )
+            
+            # Calculate coup success chance
+            success_chance = await calculate_coup_success_chance(
+                ctx, struggle_id, approach, supporting_npcs, resources_committed
             )
             
-            if not resource_check["has_resources"]:
+            # Determine outcome
+            success = random.random() * 100 <= success_chance
+            
+            async with conn.transaction():
+                # Record coup attempt
+                coup_id = await conn.fetchval("""
+                    INSERT INTO FactionCoupAttempts
+                    (struggle_id, approach, supporting_npcs, resources_committed,
+                     success, success_chance, timestamp)
+                    VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                    RETURNING id
+                """, 
+                struggle_id, approach, json.dumps(supporting_npcs),
+                json.dumps(resources_committed), success, success_chance)
+                
+                # Get primary and target names
+                primary_name = await get_npc_name(ctx, primary_npc_id)
+                target_name = await get_npc_name(ctx, target_npc_id)
+                faction_name = await get_faction_name(ctx, faction_id)
+                
+                # Generate result based on success
+                if success:
+                    # Update the struggle
+                    await conn.execute("""
+                        UPDATE InternalFactionConflicts
+                        SET current_phase = $1, progress = 100,
+                            resolved_at = CURRENT_TIMESTAMP
+                        WHERE struggle_id = $2
+                    """, "resolved", struggle_id)
+                    
+                    # Create memory for successful coup
+                    await create_conflict_memory(
+                        ctx,
+                        parent_conflict_id,
+                        f"{primary_name}'s coup against {target_name} in {faction_name} has succeeded.",
+                        significance=8
+                    )
+                    
+                    result = {
+                        "outcome": "success",
+                        "description": f"{primary_name} has successfully overthrown {target_name} and taken control of {faction_name}.",
+                        "consequences": [
+                            f"{primary_name} now controls {faction_name}",
+                            f"{target_name} has been removed from power",
+                            "The balance of power in the conflict has shifted"
+                        ]
+                    }
+                    
+                    # Apply stat changes for successful coup
+                    await apply_stat_change(context.user_id, context.conversation_id, "corruption", 3)
+                    await apply_stat_change(context.user_id, context.conversation_id, "confidence", 5)
+                    
+                    stat_changes = {
+                        "corruption": 3,
+                        "confidence": 5
+                    }
+                else:
+                    # Update the struggle
+                    await conn.execute("""
+                        UPDATE InternalFactionConflicts
+                        SET current_phase = $1, primary_npc_id = $2, target_npc_id = $3,
+                            description = $4
+                        WHERE struggle_id = $5
+                    """, 
+                    "aftermath",
+                    target_npc_id,  # Roles reversed now
+                    primary_npc_id, 
+                    f"After a failed coup attempt, {target_name} has consolidated power and {primary_name} is now at their mercy.",
+                    struggle_id)
+                    
+                    # Create memory for failed coup
+                    await create_conflict_memory(
+                        ctx,
+                        parent_conflict_id,
+                        f"{primary_name}'s coup against {target_name} in {faction_name} has failed.",
+                        significance=8
+                    )
+                    
+                    result = {
+                        "outcome": "failure",
+                        "description": f"{primary_name}'s attempt to overthrow {target_name} has failed, leaving them vulnerable to retaliation.",
+                        "consequences": [
+                            f"{target_name} has strengthened their position in {faction_name}",
+                            f"{primary_name} is now in a dangerous position",
+                            "Supporting NPCs may face punishment"
+                        ]
+                    }
+                    
+                    # Apply stat changes for failed coup
+                    await apply_stat_change(context.user_id, context.conversation_id, "mental_resilience", 4)
+                    
+                    stat_changes = {
+                        "mental_resilience": 4
+                    }
+                
+                # Record result in database
+                await conn.execute("""
+                    UPDATE FactionCoupAttempts
+                    SET result = $1
+                    WHERE id = $2
+                """, json.dumps(result), coup_id)
+                
+                # Get updated resources
+                resources = await resource_manager.get_resources()
+                
                 return {
-                    "error": "Insufficient resources to commit to coup",
-                    "missing": resource_check["missing"],
-                    "current": resource_check["current"]
+                    "coup_id": coup_id,
+                    "struggle_id": struggle_id,
+                    "approach": approach,
+                    "success": success,
+                    "success_chance": success_chance,
+                    "result": result,
+                    "stat_changes": stat_changes,
+                    "resources": resources
                 }
-            
-            # Commit resources
-            await resource_manager.commit_resources(
-                resources_committed.get("money", 0),
-                resources_committed.get("supplies", 0),
-                resources_committed.get("influence", 0),
-                "Committed to faction coup attempt"
-            )
-        
-        # Calculate coup success chance
-        success_chance = await calculate_coup_success_chance(
-            ctx, struggle_id, approach, supporting_npcs, resources_committed
-        )
-        
-        # Determine outcome
-        success = random.random() * 100 <= success_chance
-        
-        # Record coup attempt
-        cursor.execute("""
-            INSERT INTO FactionCoupAttempts
-            (struggle_id, approach, supporting_npcs, resources_committed,
-             success, success_chance, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            RETURNING id
-        """, (
-            struggle_id, approach, json.dumps(supporting_npcs),
-            json.dumps(resources_committed), success, success_chance
-        ))
-        
-        coup_id = cursor.fetchone()[0]
-        
-        # Get primary and target names
-        primary_name = await get_npc_name(ctx, primary_npc_id)
-        target_name = await get_npc_name(ctx, target_npc_id)
-        faction_name = await get_faction_name(ctx, faction_id)
-        
-        # Generate result based on success
-        if success:
-            # Update the struggle
-            cursor.execute("""
-                UPDATE InternalFactionConflicts
-                SET current_phase = %s, progress = 100,
-                    resolved_at = CURRENT_TIMESTAMP
-                WHERE struggle_id = %s
-            """, ("resolved", struggle_id))
-            
-            # Create memory for successful coup
-            await create_conflict_memory(
-                ctx,
-                parent_conflict_id,
-                f"{primary_name}'s coup against {target_name} in {faction_name} has succeeded.",
-                significance=8
-            )
-            
-            result = {
-                "outcome": "success",
-                "description": f"{primary_name} has successfully overthrown {target_name} and taken control of {faction_name}.",
-                "consequences": [
-                    f"{primary_name} now controls {faction_name}",
-                    f"{target_name} has been removed from power",
-                    "The balance of power in the conflict has shifted"
-                ]
-            }
-            
-            # Apply stat changes for successful coup
-            await apply_stat_change(context.user_id, context.conversation_id, "corruption", 3)
-            await apply_stat_change(context.user_id, context.conversation_id, "confidence", 5)
-            
-            stat_changes = {
-                "corruption": 3,
-                "confidence": 5
-            }
-        else:
-            # Update the struggle
-            cursor.execute("""
-                UPDATE InternalFactionConflicts
-                SET current_phase = %s, primary_npc_id = %s, target_npc_id = %s,
-                    description = %s
-                WHERE struggle_id = %s
-            """, (
-                "aftermath",
-                target_npc_id,  # Roles reversed now
-                primary_npc_id, 
-                f"After a failed coup attempt, {target_name} has consolidated power and {primary_name} is now at their mercy.",
-                struggle_id
-            ))
-            
-            # Create memory for failed coup
-            await create_conflict_memory(
-                ctx,
-                parent_conflict_id,
-                f"{primary_name}'s coup against {target_name} in {faction_name} has failed.",
-                significance=8
-            )
-            
-            result = {
-                "outcome": "failure",
-                "description": f"{primary_name}'s attempt to overthrow {target_name} has failed, leaving them vulnerable to retaliation.",
-                "consequences": [
-                    f"{target_name} has strengthened their position in {faction_name}",
-                    f"{primary_name} is now in a dangerous position",
-                    "Supporting NPCs may face punishment"
-                ]
-            }
-            
-            # Apply stat changes for failed coup
-            await apply_stat_change(context.user_id, context.conversation_id, "mental_resilience", 4)
-            
-            stat_changes = {
-                "mental_resilience": 4
-            }
-        
-        # Record result in database
-        cursor.execute("""
-            UPDATE FactionCoupAttempts
-            SET result = %s
-            WHERE id = %s
-        """, (json.dumps(result), coup_id))
-        
-        conn.commit()
-        
-        # Get updated resources
-        resources = await resource_manager.get_resources()
-        
-        return {
-            "coup_id": coup_id,
-            "struggle_id": struggle_id,
-            "approach": approach,
-            "success": success,
-            "success_chance": success_chance,
-            "result": result,
-            "stat_changes": stat_changes,
-            "resources": resources
-        }
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error attempting faction coup: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 # Narrative Integration Tool (Added based on review)
 
@@ -1984,198 +1757,135 @@ async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str)
 async def get_npc_details(ctx: RunContextWrapper, npc_id: int) -> Dict[str, Any]:
     """Get details for an NPC."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity, sex
-            FROM NPCStats
-            WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-        """, (npc_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        
-        if not row:
-            return {}
-        
-        npc_name, dominance, cruelty, closeness, trust, respect, intensity, sex = row
-        
-        return {
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "dominance": dominance,
-            "cruelty": cruelty,
-            "closeness": closeness,
-            "trust": trust,
-            "respect": respect,
-            "intensity": intensity,
-            "sex": sex
-        }
+        async with get_db_connection_context() as conn:
+            npc_row = await conn.fetchrow("""
+                SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity, sex
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, context.user_id, context.conversation_id)
+            
+            if not npc_row:
+                return {}
+            
+            npc = dict(npc_row)
+            npc["npc_id"] = npc_id
+            
+            return npc
     except Exception as e:
         logger.error(f"Error getting NPC details: {e}", exc_info=True)
         return {}
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_npc_name(ctx: RunContextWrapper, npc_id: int) -> str:
     """Get an NPC's name by ID."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT npc_name
-            FROM NPCStats
-            WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-        """, (npc_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        
-        return row[0] if row else f"NPC {npc_id}"
+        async with get_db_connection_context() as conn:
+            npc_name = await conn.fetchval("""
+                SELECT npc_name
+                FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, context.user_id, context.conversation_id)
+            
+            return npc_name if npc_name else f"NPC {npc_id}"
     except Exception as e:
         logger.error(f"Error getting NPC name for ID {npc_id}: {e}", exc_info=True)
         return f"NPC {npc_id}"
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_faction_name(ctx: RunContextWrapper, faction_id: int) -> str:
     """Get a faction's name by ID."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT faction_name
-            FROM Factions
-            WHERE faction_id = %s
-        """, (faction_id,))
-        
-        row = cursor.fetchone()
-        
-        return row[0] if row else f"Faction {faction_id}"
+        async with get_db_connection_context() as conn:
+            faction_name = await conn.fetchval("""
+                SELECT faction_name
+                FROM Factions
+                WHERE faction_id = $1
+            """, faction_id)
+            
+            return faction_name if faction_name else f"Faction {faction_id}"
     except Exception as e:
         logger.error(f"Error getting faction name for ID {faction_id}: {e}", exc_info=True)
         return f"Faction {faction_id}"
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_player_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
     """Get player stats."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT corruption, confidence, willpower, obedience, dependency, lust,
-                   mental_resilience, physical_endurance
-            FROM PlayerStats
-            WHERE user_id = %s AND conversation_id = %s
-        """, (context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        
-        if not row:
-            return {}
-        
-        corruption, confidence, willpower, obedience, dependency, lust, mental_resilience, physical_endurance = row
-        
-        return {
-            "corruption": corruption,
-            "confidence": confidence,
-            "willpower": willpower,
-            "obedience": obedience,
-            "dependency": dependency,
-            "lust": lust,
-            "mental_resilience": mental_resilience,
-            "physical_endurance": physical_endurance
-        }
+        async with get_db_connection_context() as conn:
+            stats_row = await conn.fetchrow("""
+                SELECT corruption, confidence, willpower, obedience, dependency, lust,
+                       mental_resilience, physical_endurance
+                FROM PlayerStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, context.user_id, context.conversation_id)
+            
+            if not stats_row:
+                return {}
+            
+            return dict(stats_row)
     except Exception as e:
         logger.error(f"Error getting player stats: {e}", exc_info=True)
         return {}
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def get_stakeholder_secrets(ctx: RunContextWrapper, conflict_id: int, npc_id: int) -> List[Dict[str, Any]]:
     """Get secrets for a stakeholder in a conflict."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT secret_id, secret_type, content, target_npc_id,
-                   is_revealed, revealed_to, is_public
-            FROM StakeholderSecrets
-            WHERE conflict_id = %s AND npc_id = %s
-        """, (conflict_id, npc_id))
-        
-        secrets = []
-        for row in cursor.fetchall():
-            secret_id, secret_type, content, target_npc_id, \
-            is_revealed, revealed_to, is_public = row
+        async with get_db_connection_context() as conn:
+            secrets_rows = await conn.fetch("""
+                SELECT secret_id, secret_type, content, target_npc_id,
+                       is_revealed, revealed_to, is_public
+                FROM StakeholderSecrets
+                WHERE conflict_id = $1 AND npc_id = $2
+            """, conflict_id, npc_id)
             
-            # Only return details if the secret is revealed
-            if is_revealed:
-                secrets.append({
-                    "secret_id": secret_id,
-                    "secret_type": secret_type,
-                    "content": content,
-                    "target_npc_id": target_npc_id,
-                    "is_revealed": is_revealed,
-                    "revealed_to": revealed_to,
-                    "is_public": is_public
-                })
-            else:
-                # Otherwise just return that a secret exists
-                secrets.append({
-                    "secret_id": secret_id,
-                    "secret_type": secret_type,
-                    "is_revealed": False
-                })
-        
-        return secrets
+            secrets = []
+            for row in secrets_rows:
+                secret = dict(row)
+                
+                # Only return details if the secret is revealed
+                if secret["is_revealed"]:
+                    secrets.append(secret)
+                else:
+                    # Otherwise just return that a secret exists
+                    secrets.append({
+                        "secret_id": secret["secret_id"],
+                        "secret_type": secret["secret_type"],
+                        "is_revealed": False
+                    })
+            
+            return secrets
     except Exception as e:
         logger.error(f"Error getting stakeholder secrets: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def check_stakeholder_manipulates_player(ctx: RunContextWrapper, conflict_id: int, npc_id: int) -> bool:
     """Check if a stakeholder has manipulation attempts against the player."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM PlayerManipulationAttempts
-            WHERE conflict_id = %s AND npc_id = %s AND user_id = %s AND conversation_id = %s
-        """, (conflict_id, npc_id, context.user_id, context.conversation_id))
-        
-        count = cursor.fetchone()[0]
-        
-        return count > 0
+        async with get_db_connection_context() as conn:
+            count = await conn.fetchval("""
+                SELECT COUNT(*)
+                FROM PlayerManipulationAttempts
+                WHERE conflict_id = $1 AND npc_id = $2 AND user_id = $3 AND conversation_id = $4
+            """, conflict_id, npc_id, context.user_id, context.conversation_id)
+            
+            return count > 0
     except Exception as e:
         logger.error(f"Error checking if stakeholder manipulates player: {e}", exc_info=True)
         return False
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def create_conflict_memory(
@@ -2196,28 +1906,20 @@ async def create_conflict_memory(
         ID of the created memory
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            INSERT INTO ConflictMemoryEvents 
-            (conflict_id, memory_text, significance, entity_type, entity_id, user_id, conversation_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (conflict_id, memory_text, significance, "conflict", conflict_id, context.user_id, context.conversation_id))
-        
-        memory_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        return memory_id
+        async with get_db_connection_context() as conn:
+            memory_id = await conn.fetchval("""
+                INSERT INTO ConflictMemoryEvents 
+                (conflict_id, memory_text, significance, entity_type, entity_id, user_id, conversation_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+            """, conflict_id, memory_text, significance, "conflict", conflict_id, context.user_id, context.conversation_id)
+            
+            return memory_id
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating conflict memory: {e}", exc_info=True)
         return 0
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def check_conflict_advancement(ctx: RunContextWrapper, conflict_id: int) -> None:
@@ -2228,63 +1930,57 @@ async def check_conflict_advancement(ctx: RunContextWrapper, conflict_id: int) -
         conflict_id: ID of the conflict to check
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get conflict details
-        cursor.execute("""
-            SELECT progress, phase
-            FROM Conflicts
-            WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-        """, (conflict_id, context.user_id, context.conversation_id))
-        
-        row = cursor.fetchone()
-        if not row:
-            return
-        
-        progress, phase = row
-        
-        # Phase transition thresholds
-        phase_thresholds = {
-            "brewing": 30,    # brewing -> active
-            "active": 60,     # active -> climax
-            "climax": 90      # climax -> resolution
-        }
-        
-        # Check if we should transition to a new phase
-        new_phase = phase
-        if phase in phase_thresholds and progress >= phase_thresholds[phase]:
-            if phase == "brewing":
-                new_phase = "active"
-            elif phase == "active":
-                new_phase = "climax"
-            elif phase == "climax":
-                new_phase = "resolution"
-        
-        # If phase changed, update the conflict
-        if new_phase != phase:
-            cursor.execute("""
-                UPDATE Conflicts
-                SET phase = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-            """, (new_phase, conflict_id, context.user_id, context.conversation_id))
+        async with get_db_connection_context() as conn:
+            # Get conflict details
+            conflict_row = await conn.fetchrow("""
+                SELECT progress, phase
+                FROM Conflicts
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
             
-            # Create a memory for the phase transition
-            await create_conflict_memory(
-                ctx,
-                conflict_id,
-                f"The conflict has progressed from {phase} to {new_phase} phase.",
-                significance=7
-            )
+            if not conflict_row:
+                return
             
-            conn.commit()
+            progress = conflict_row["progress"]
+            phase = conflict_row["phase"]
+            
+            # Phase transition thresholds
+            phase_thresholds = {
+                "brewing": 30,    # brewing -> active
+                "active": 60,     # active -> climax
+                "climax": 90      # climax -> resolution
+            }
+            
+            # Check if we should transition to a new phase
+            new_phase = phase
+            if phase in phase_thresholds and progress >= phase_thresholds[phase]:
+                if phase == "brewing":
+                    new_phase = "active"
+                elif phase == "active":
+                    new_phase = "climax"
+                elif phase == "climax":
+                    new_phase = "resolution"
+            
+            # If phase changed, update the conflict
+            if new_phase != phase:
+                async with conn.transaction():
+                    await conn.execute("""
+                        UPDATE Conflicts
+                        SET phase = $1, updated_at = CURRENT_TIMESTAMP
+                        WHERE conflict_id = $2 AND user_id = $3 AND conversation_id = $4
+                    """, new_phase, conflict_id, context.user_id, context.conversation_id)
+                    
+                    # Create a memory for the phase transition
+                    await create_conflict_memory(
+                        ctx,
+                        conflict_id,
+                        f"The conflict has progressed from {phase} to {new_phase} phase.",
+                        significance=7
+                    )
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error checking conflict advancement: {e}", exc_info=True)
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def generate_struggle_details(
@@ -2404,53 +2100,49 @@ async def generate_struggle_details(
 async def get_faction_members(ctx: RunContextWrapper, faction_id: int) -> List[Dict[str, Any]]:
     """Get members of a faction."""
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # This assumes NPCs store faction affiliations in a JSON array field
-        cursor.execute("""
-            SELECT npc_id, npc_name, dominance, cruelty, faction_affiliations
-            FROM NPCStats
-            WHERE user_id = %s AND conversation_id = %s
-        """, (context.user_id, context.conversation_id))
-        
-        members = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, dominance, cruelty, faction_affiliations = row
+        async with get_db_connection_context() as conn:
+            # This assumes NPCs store faction affiliations in a JSON array field
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, faction_affiliations
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, context.user_id, context.conversation_id)
             
-            # Parse faction affiliations
-            try:
-                affiliations = json.loads(faction_affiliations) if isinstance(faction_affiliations, str) else faction_affiliations or []
-            except (json.JSONDecodeError, TypeError):
-                affiliations = []
+            members = []
+            for row in npc_rows:
+                npc = dict(row)
+                
+                # Parse faction affiliations
+                try:
+                    affiliations = json.loads(npc["faction_affiliations"]) if isinstance(npc["faction_affiliations"], str) else npc["faction_affiliations"] or []
+                except (json.JSONDecodeError, TypeError):
+                    affiliations = []
+                
+                # Check if NPC is affiliated with this faction
+                is_member = False
+                position = "Member"
+                
+                for affiliation in affiliations:
+                    if affiliation.get("faction_id") == faction_id:
+                        is_member = True
+                        position = affiliation.get("position", "Member")
+                        break
+                
+                if is_member:
+                    members.append({
+                        "npc_id": npc["npc_id"],
+                        "npc_name": npc["npc_name"],
+                        "dominance": npc["dominance"],
+                        "cruelty": npc["cruelty"],
+                        "position": position
+                    })
             
-            # Check if NPC is affiliated with this faction
-            is_member = False
-            position = "Member"
-            
-            for affiliation in affiliations:
-                if affiliation.get("faction_id") == faction_id:
-                    is_member = True
-                    position = affiliation.get("position", "Member")
-                    break
-            
-            if is_member:
-                members.append({
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "dominance": dominance,
-                    "cruelty": cruelty,
-                    "position": position
-                })
-        
-        return members
+            return members
     except Exception as e:
         logger.error(f"Error getting faction members: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def extract_npcs_from_narrative(ctx: RunContextWrapper, narrative_text: str) -> List[int]:
@@ -2464,33 +2156,31 @@ async def extract_npcs_from_narrative(ctx: RunContextWrapper, narrative_text: st
         List of NPC IDs mentioned in the text
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get all NPCs for this user/conversation
-        cursor.execute("""
-            SELECT npc_id, npc_name
-            FROM NPCStats
-            WHERE user_id = %s AND conversation_id = %s AND introduced = TRUE
-        """, (context.user_id, context.conversation_id))
-        
-        npcs = cursor.fetchall()
-        mentioned_npcs = []
-        
-        # Check each NPC name in the narrative
-        for npc_id, npc_name in npcs:
-            # Simple check - can be improved with more sophisticated NLP
-            if npc_name in narrative_text:
-                mentioned_npcs.append(npc_id)
-        
-        return mentioned_npcs
+        async with get_db_connection_context() as conn:
+            # Get all NPCs for this user/conversation
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, npc_name
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
+            """, context.user_id, context.conversation_id)
+            
+            mentioned_npcs = []
+            
+            # Check each NPC name in the narrative
+            for row in npc_rows:
+                npc_id = row["npc_id"]
+                npc_name = row["npc_name"]
+                
+                # Simple check - can be improved with more sophisticated NLP
+                if npc_name in narrative_text:
+                    mentioned_npcs.append(npc_id)
+            
+            return mentioned_npcs
     except Exception as e:
         logger.error(f"Error extracting NPCs from narrative: {e}", exc_info=True)
         return []
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def create_conflict_record(ctx: RunContextWrapper, conflict_data: Dict[str, Any], current_day: int) -> int:
@@ -2505,26 +2195,25 @@ async def create_conflict_record(ctx: RunContextWrapper, conflict_data: Dict[str
         ID of the created conflict
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Base success rate on conflict type
-        success_rate = {
-            "minor": 0.75,
-            "standard": 0.5,
-            "major": 0.25,
-            "catastrophic": 0.1
-        }.get(conflict_data.get("conflict_type", "standard"), 0.5)
-        
-        cursor.execute("""
-            INSERT INTO Conflicts 
-            (user_id, conversation_id, conflict_name, conflict_type,
-             description, progress, phase, start_day, estimated_duration,
-             success_rate, outcome, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING conflict_id
-        """, (
+        async with get_db_connection_context() as conn:
+            # Base success rate on conflict type
+            success_rate = {
+                "minor": 0.75,
+                "standard": 0.5,
+                "major": 0.25,
+                "catastrophic": 0.1
+            }.get(conflict_data.get("conflict_type", "standard"), 0.5)
+            
+            conflict_id = await conn.fetchval("""
+                INSERT INTO Conflicts 
+                (user_id, conversation_id, conflict_name, conflict_type,
+                 description, progress, phase, start_day, estimated_duration,
+                 success_rate, outcome, is_active)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                RETURNING conflict_id
+            """, 
             context.user_id, context.conversation_id,
             conflict_data.get("conflict_name", "Unnamed Conflict"),
             conflict_data.get("conflict_type", "standard"),
@@ -2536,19 +2225,12 @@ async def create_conflict_record(ctx: RunContextWrapper, conflict_data: Dict[str
             success_rate,
             "pending",  # Initial outcome
             True  # Is active
-        ))
-        
-        conflict_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        return conflict_id
+            )
+            
+            return conflict_id
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating conflict record: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def create_stakeholders(
@@ -2566,96 +2248,88 @@ async def create_stakeholders(
         stakeholder_npcs: List of NPC dictionaries to use as stakeholders
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get stakeholders from conflict data
-        stakeholders = conflict_data.get("stakeholders", [])
-        
-        # If no stakeholders in data, create from NPCs
-        if not stakeholders:
-            stakeholders = []
-            for npc in stakeholder_npcs:
-                stakeholder = {
-                    "npc_id": npc["npc_id"],
-                    "public_motivation": f"{npc['npc_name']} wants to resolve the conflict peacefully.",
-                    "private_motivation": f"{npc['npc_name']} actually wants to gain power through the conflict.",
-                    "desired_outcome": "Control the outcome to their advantage",
-                    "faction_id": npc.get("faction_affiliations", [{}])[0].get("faction_id") if npc.get("faction_affiliations") else None,
-                    "faction_name": npc.get("faction_affiliations", [{}])[0].get("faction_name") if npc.get("faction_affiliations") else None,
-                    "involvement_level": 7 - stakeholder_npcs.index(npc)  # Decreasing involvement
-                }
-                stakeholders.append(stakeholder)
-        
-        # Create stakeholders in database
-        for stakeholder in stakeholders:
-            npc_id = stakeholder.get("npc_id")
+        async with get_db_connection_context() as conn:
+            # Get stakeholders from conflict data
+            stakeholders = conflict_data.get("stakeholders", [])
             
-            # Get NPC from list
-            npc = next((n for n in stakeholder_npcs if n["npc_id"] == npc_id), None)
-            if not npc:
-                continue
+            # If no stakeholders in data, create from NPCs
+            if not stakeholders:
+                stakeholders = []
+                for npc in stakeholder_npcs:
+                    stakeholder = {
+                        "npc_id": npc["npc_id"],
+                        "public_motivation": f"{npc['npc_name']} wants to resolve the conflict peacefully.",
+                        "private_motivation": f"{npc['npc_name']} actually wants to gain power through the conflict.",
+                        "desired_outcome": "Control the outcome to their advantage",
+                        "faction_id": npc.get("faction_affiliations", [{}])[0].get("faction_id") if npc.get("faction_affiliations") else None,
+                        "faction_name": npc.get("faction_affiliations", [{}])[0].get("faction_name") if npc.get("faction_affiliations") else None,
+                        "involvement_level": 7 - stakeholder_npcs.index(npc)  # Decreasing involvement
+                    }
+                    stakeholders.append(stakeholder)
             
-            # Default faction info
-            faction_id = stakeholder.get("faction_id")
-            faction_name = stakeholder.get("faction_name")
-            
-            # If not specified, try to get from NPC
-            if not faction_id and npc.get("faction_affiliations"):
-                faction_id = npc.get("faction_affiliations", [{}])[0].get("faction_id")
-                faction_name = npc.get("faction_affiliations", [{}])[0].get("faction_name")
-            
-            # Default alliances and rivalries
-            alliances = stakeholder.get("alliances", {})
-            rivalries = stakeholder.get("rivalries", {})
-            
-            # Insert stakeholder
-            cursor.execute("""
-                INSERT INTO ConflictStakeholders
-                (conflict_id, npc_id, faction_id, faction_name, faction_position,
-                 public_motivation, private_motivation, desired_outcome,
-                 involvement_level, alliances, rivalries, leadership_ambition,
-                 faction_standing, willing_to_betray_faction)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                conflict_id, npc_id, faction_id, faction_name, stakeholder.get("faction_position", "Member"),
-                stakeholder.get("public_motivation", "Resolve the conflict favorably"),
-                stakeholder.get("private_motivation", "Gain advantage from the conflict"),
-                stakeholder.get("desired_outcome", "Success for their side"),
-                stakeholder.get("involvement_level", 5),
-                json.dumps(alliances),
-                json.dumps(rivalries),
-                stakeholder.get("leadership_ambition", npc.get("dominance", 50) // 10),
-                stakeholder.get("faction_standing", 50),
-                stakeholder.get("willing_to_betray_faction", npc.get("cruelty", 20) > 60)
-            ))
-            
-            # Create secrets if specified
-            if "secrets" in stakeholder:
-                for secret in stakeholder["secrets"]:
-                    cursor.execute("""
-                        INSERT INTO StakeholderSecrets
-                        (conflict_id, npc_id, secret_id, secret_type, content,
-                         target_npc_id, is_revealed, revealed_to, is_public)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        conflict_id, npc_id, 
-                        secret.get("secret_id", f"secret_{npc_id}_{random.randint(1000, 9999)}"),
-                        secret.get("secret_type", "personal"),
-                        secret.get("content", "A hidden secret"),
-                        secret.get("target_npc_id"),
-                        False, None, False
-                    ))
-        
-        conn.commit()
+            async with conn.transaction():
+                # Create stakeholders in database
+                for stakeholder in stakeholders:
+                    npc_id = stakeholder.get("npc_id")
+                    
+                    # Get NPC from list
+                    npc = next((n for n in stakeholder_npcs if n["npc_id"] == npc_id), None)
+                    if not npc:
+                        continue
+                    
+                    # Default faction info
+                    faction_id = stakeholder.get("faction_id")
+                    faction_name = stakeholder.get("faction_name")
+                    
+                    # If not specified, try to get from NPC
+                    if not faction_id and npc.get("faction_affiliations"):
+                        faction_id = npc.get("faction_affiliations", [{}])[0].get("faction_id")
+                        faction_name = npc.get("faction_affiliations", [{}])[0].get("faction_name")
+                    
+                    # Default alliances and rivalries
+                    alliances = stakeholder.get("alliances", {})
+                    rivalries = stakeholder.get("rivalries", {})
+                    
+                    # Insert stakeholder
+                    await conn.execute("""
+                        INSERT INTO ConflictStakeholders
+                        (conflict_id, npc_id, faction_id, faction_name, faction_position,
+                         public_motivation, private_motivation, desired_outcome,
+                         involvement_level, alliances, rivalries, leadership_ambition,
+                         faction_standing, willing_to_betray_faction)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    """, 
+                    conflict_id, npc_id, faction_id, faction_name, stakeholder.get("faction_position", "Member"),
+                    stakeholder.get("public_motivation", "Resolve the conflict favorably"),
+                    stakeholder.get("private_motivation", "Gain advantage from the conflict"),
+                    stakeholder.get("desired_outcome", "Success for their side"),
+                    stakeholder.get("involvement_level", 5),
+                    json.dumps(alliances),
+                    json.dumps(rivalries),
+                    stakeholder.get("leadership_ambition", npc.get("dominance", 50) // 10),
+                    stakeholder.get("faction_standing", 50),
+                    stakeholder.get("willing_to_betray_faction", npc.get("cruelty", 20) > 60))
+                    
+                    # Create secrets if specified
+                    if "secrets" in stakeholder:
+                        for secret in stakeholder["secrets"]:
+                            await conn.execute("""
+                                INSERT INTO StakeholderSecrets
+                                (conflict_id, npc_id, secret_id, secret_type, content,
+                                 target_npc_id, is_revealed, revealed_to, is_public)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            """, 
+                            conflict_id, npc_id, 
+                            secret.get("secret_id", f"secret_{npc_id}_{random.randint(1000, 9999)}"),
+                            secret.get("secret_type", "personal"),
+                            secret.get("content", "A hidden secret"),
+                            secret.get("target_npc_id"),
+                            False, None, False)
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating stakeholders: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def create_resolution_paths(
@@ -2671,43 +2345,37 @@ async def create_resolution_paths(
         conflict_data: Dictionary with conflict details
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get resolution paths from conflict data
-        paths = conflict_data.get("resolution_paths", [])
-        
-        # Create paths in database
-        for path in paths:
-            cursor.execute("""
-                INSERT INTO ResolutionPaths
-                (conflict_id, path_id, name, description, approach_type,
-                 difficulty, requirements, stakeholders_involved, key_challenges,
-                 progress, is_completed)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                conflict_id, 
-                path.get("path_id", f"path_{random.randint(1000, 9999)}"),
-                path.get("name", "Unnamed Path"),
-                path.get("description", "A path to resolve the conflict"),
-                path.get("approach_type", "standard"),
-                path.get("difficulty", 5),
-                json.dumps(path.get("requirements", {})),
-                json.dumps(path.get("stakeholders_involved", [])),
-                json.dumps(path.get("key_challenges", [])),
-                0.0,  # Initial progress
-                False  # Not completed
-            ))
-        
-        conn.commit()
+        async with get_db_connection_context() as conn:
+            # Get resolution paths from conflict data
+            paths = conflict_data.get("resolution_paths", [])
+            
+            async with conn.transaction():
+                # Create paths in database
+                for path in paths:
+                    await conn.execute("""
+                        INSERT INTO ResolutionPaths
+                        (conflict_id, path_id, name, description, approach_type,
+                         difficulty, requirements, stakeholders_involved, key_challenges,
+                         progress, is_completed)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """, 
+                    conflict_id, 
+                    path.get("path_id", f"path_{random.randint(1000, 9999)}"),
+                    path.get("name", "Unnamed Path"),
+                    path.get("description", "A path to resolve the conflict"),
+                    path.get("approach_type", "standard"),
+                    path.get("difficulty", 5),
+                    json.dumps(path.get("requirements", {})),
+                    json.dumps(path.get("stakeholders_involved", [])),
+                    json.dumps(path.get("key_challenges", [])),
+                    0.0,  # Initial progress
+                    False  # Not completed
+                    )
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating resolution paths: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def create_internal_faction_conflicts(
@@ -2723,77 +2391,66 @@ async def create_internal_faction_conflicts(
         conflict_data: Dictionary with conflict details
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get internal faction conflicts from conflict data
-        internal_conflicts = conflict_data.get("internal_faction_conflicts", [])
-        
-        # Create internal conflicts in database
-        for internal in internal_conflicts:
-            cursor.execute("""
-                INSERT INTO InternalFactionConflicts
-                (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
-                 prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING struggle_id
-            """, (
-                internal.get("faction_id", 0),
-                internal.get("conflict_name", "Internal Faction Struggle"),
-                internal.get("description", "A power struggle within the faction"),
-                internal.get("primary_npc_id", 0),
-                internal.get("target_npc_id", 0),
-                internal.get("prize", "Leadership"),
-                internal.get("approach", "subtle"),
-                internal.get("public_knowledge", False),
-                "brewing",  # Initial phase
-                10,  # Initial progress
-                conflict_id
-            ))
+        async with get_db_connection_context() as conn:
+            # Get internal faction conflicts from conflict data
+            internal_conflicts = conflict_data.get("internal_faction_conflicts", [])
             
-            struggle_id = cursor.fetchone()[0]
-            
-            # Create faction members if specified
-            if "faction_members" in internal:
-                for member in internal["faction_members"]:
-                    cursor.execute("""
-                        INSERT INTO FactionStruggleMembers
-                        (struggle_id, npc_id, position, side, standing, 
-                         loyalty_strength, reason)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        struggle_id,
-                        member.get("npc_id", 0),
-                        member.get("position", "Member"),
-                        member.get("side", "neutral"),
-                        member.get("standing", 50),
-                        member.get("loyalty_strength", 50),
-                        member.get("reason", "")
-                    ))
-            
-            # Create ideological differences if specified
-            if "ideological_differences" in internal:
-                for diff in internal["ideological_differences"]:
-                    cursor.execute("""
-                        INSERT INTO FactionIdeologicalDifferences
-                        (struggle_id, issue, incumbent_position, challenger_position)
-                        VALUES (%s, %s, %s, %s)
-                    """, (
-                        struggle_id,
-                        diff.get("issue", ""),
-                        diff.get("incumbent_position", ""),
-                        diff.get("challenger_position", "")
-                    ))
-        
-        conn.commit()
+            async with conn.transaction():
+                # Create internal conflicts in database
+                for internal in internal_conflicts:
+                    struggle_id = await conn.fetchval("""
+                        INSERT INTO InternalFactionConflicts
+                        (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
+                         prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        RETURNING struggle_id
+                    """, 
+                    internal.get("faction_id", 0),
+                    internal.get("conflict_name", "Internal Faction Struggle"),
+                    internal.get("description", "A power struggle within the faction"),
+                    internal.get("primary_npc_id", 0),
+                    internal.get("target_npc_id", 0),
+                    internal.get("prize", "Leadership"),
+                    internal.get("approach", "subtle"),
+                    internal.get("public_knowledge", False),
+                    "brewing",  # Initial phase
+                    10,  # Initial progress
+                    conflict_id)
+                    
+                    # Create faction members if specified
+                    if "faction_members" in internal:
+                        for member in internal["faction_members"]:
+                            await conn.execute("""
+                                INSERT INTO FactionStruggleMembers
+                                (struggle_id, npc_id, position, side, standing, 
+                                 loyalty_strength, reason)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            """, 
+                            struggle_id,
+                            member.get("npc_id", 0),
+                            member.get("position", "Member"),
+                            member.get("side", "neutral"),
+                            member.get("standing", 50),
+                            member.get("loyalty_strength", 50),
+                            member.get("reason", ""))
+                    
+                    # Create ideological differences if specified
+                    if "ideological_differences" in internal:
+                        for diff in internal["ideological_differences"]:
+                            await conn.execute("""
+                                INSERT INTO FactionIdeologicalDifferences
+                                (struggle_id, issue, incumbent_position, challenger_position)
+                                VALUES ($1, $2, $3, $4)
+                            """, 
+                            struggle_id,
+                            diff.get("issue", ""),
+                            diff.get("incumbent_position", ""),
+                            diff.get("challenger_position", ""))
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error creating internal faction conflicts: {e}", exc_info=True)
         raise
-    finally:
-        cursor.close()
-        conn.close()
 
 @function_tool
 async def generate_player_manipulation_attempts(
@@ -3192,13 +2849,14 @@ def generate_conflict_consequences(
             # Determine resolution style from completed paths
             resolution_styles = []
             for path in completed_paths:
-                if "violence" in path.lower() or "force" in path.lower():
+                path_name = path.get("name", "").lower()
+                if "violence" in path_name or "force" in path_name:
                     resolution_styles.append("forceful")
-                elif "negotiation" in path.lower() or "diplomacy" in path.lower():
+                elif "negotiation" in path_name or "diplomacy" in path_name:
                     resolution_styles.append("diplomatic")
-                elif "manipulation" in path.lower() or "deception" in path.lower():
+                elif "manipulation" in path_name or "deception" in path_name:
                     resolution_styles.append("manipulative")
-                elif "submission" in path.lower() or "obedience" in path.lower():
+                elif "submission" in path_name or "obedience" in path_name:
                     resolution_styles.append("submissive")
                 else:
                     resolution_styles.append("neutral")
@@ -3492,73 +3150,68 @@ async def calculate_coup_success_chance(
         Success chance (0-100)
     """
     context = ctx.context
-    conn = get_db_connection()
-    cursor = conn.cursor()
     
     try:
-        # Get struggle details
-        cursor.execute("""
-            SELECT primary_npc_id, target_npc_id
-            FROM InternalFactionConflicts
-            WHERE struggle_id = %s
-        """, (struggle_id,))
-        
-        row = cursor.fetchone()
-        if not row:
-            return 0
-        
-        primary_npc_id, target_npc_id = row
-        
-        # Get challenger and target stats
-        challenger = await get_npc_details(ctx, primary_npc_id)
-        target = await get_npc_details(ctx, target_npc_id)
-        
-        # Base success chance based on challenger vs target
-        base_chance = 50 + (challenger.get("dominance", 50) - target.get("dominance", 50)) / 5
-        
-        # Adjust based on approach
-        approach_modifiers = {
-            "direct": 0,       # Neutral modifier
-            "subtle": 10,      # Subtle approaches have advantage
-            "force": -5,       # Force is risky
-            "blackmail": 15    # Blackmail has high success chance
-        }
-        base_chance += approach_modifiers.get(approach, 0)
-        
-        # Adjust for supporting NPCs
-        support_power = 0
-        for npc_id in supporting_npcs:
-            npc = await get_npc_details(ctx, npc_id)
-            support_power += npc.get("dominance", 50) / 10
-        
-        base_chance += min(25, support_power)  # Cap at +25
-        
-        # Adjust for resources committed
-        resource_total = sum(resources_committed.values())
-        resource_modifier = min(15, resource_total / 10)  # Cap at +15
-        base_chance += resource_modifier
-        
-        # Get faction members and their loyalty to incumbent
-        cursor.execute("""
-            SELECT npc_id, loyalty_strength
-            FROM FactionStruggleMembers
-            WHERE struggle_id = %s AND side = 'incumbent'
-        """, (struggle_id,))
-        
-        total_loyalty = 0
-        for row in cursor.fetchall():
-            _, loyalty = row
-            total_loyalty += loyalty
-        
-        # Loyalty to incumbent reduces success chance
-        loyalty_modifier = min(30, total_loyalty / 20)  # Cap at -30
-        base_chance -= loyalty_modifier
-        
-        # Ensure chance is between 5 and 95
-        return max(5, min(95, base_chance))
+        async with get_db_connection_context() as conn:
+            # Get struggle details
+            struggle_row = await conn.fetchrow("""
+                SELECT primary_npc_id, target_npc_id
+                FROM InternalFactionConflicts
+                WHERE struggle_id = $1
+            """, struggle_id)
+            
+            if not struggle_row:
+                return 0
+            
+            primary_npc_id = struggle_row["primary_npc_id"]
+            target_npc_id = struggle_row["target_npc_id"]
+            
+            # Get challenger and target stats
+            challenger = await get_npc_details(ctx, primary_npc_id)
+            target = await get_npc_details(ctx, target_npc_id)
+            
+            # Base success chance based on challenger vs target
+            base_chance = 50 + (challenger.get("dominance", 50) - target.get("dominance", 50)) / 5
+            
+            # Adjust based on approach
+            approach_modifiers = {
+                "direct": 0,       # Neutral modifier
+                "subtle": 10,      # Subtle approaches have advantage
+                "force": -5,       # Force is risky
+                "blackmail": 15    # Blackmail has high success chance
+            }
+            base_chance += approach_modifiers.get(approach, 0)
+            
+            # Adjust for supporting NPCs
+            support_power = 0
+            for npc_id in supporting_npcs:
+                npc = await get_npc_details(ctx, npc_id)
+                support_power += npc.get("dominance", 50) / 10
+            
+            base_chance += min(25, support_power)  # Cap at +25
+            
+            # Adjust for resources committed
+            resource_total = sum(resources_committed.values())
+            resource_modifier = min(15, resource_total / 10)  # Cap at +15
+            base_chance += resource_modifier
+            
+            # Get faction members and their loyalty to incumbent
+            faction_members = await conn.fetch("""
+                SELECT npc_id, loyalty_strength
+                FROM FactionStruggleMembers
+                WHERE struggle_id = $1 AND side = 'incumbent'
+            """, struggle_id)
+            
+            total_loyalty = 0
+            for row in faction_members:
+                total_loyalty += row["loyalty_strength"]
+            
+            # Loyalty to incumbent reduces success chance
+            loyalty_modifier = min(30, total_loyalty / 20)  # Cap at -30
+            base_chance -= loyalty_modifier
+            
+            # Ensure chance is between 5 and 95
+            return max(5, min(95, base_chance))
     except Exception as e:
         logger.error(f"Error calculating coup success chance: {e}", exc_info=True)
         return 30  # Default moderate chance on error
-    finally:
-        cursor.close()
-        conn.close()
