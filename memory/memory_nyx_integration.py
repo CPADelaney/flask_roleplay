@@ -120,6 +120,7 @@ class MemoryNyxBridge:
             logger.error(f"Failed to initialize MemoryNyxBridge: {str(e)}")
             raise
 
+    # In the _process_significant_memory method
     async def _process_significant_memory(self, memory: Memory) -> Dict[str, Any]:
         """Process a significant memory with proper error handling and state tracking."""
         try:
@@ -130,33 +131,37 @@ class MemoryNyxBridge:
                 "start_time": datetime.now()
             })
             
-            # Validate memory
-            if not self._validate_memory(memory):
-                raise ValueError("Invalid memory format")
+            # Using the new connection pattern directly here
+            from db.connection import get_db_connection_context
             
-            # Process memory with emotional context
-            emotional_context = await self._get_emotional_context(memory)
-            
-            # Update memory with emotional context
-            memory.emotional_intensity = emotional_context.get("intensity", 0)
-            memory.metadata["emotional_context"] = emotional_context
-            
-            # Propagate memory to related systems
-            propagation_results = await self._propagate_memory(memory)
-            
-            # Track state change
-            self._track_state_change("memory_processing", {
-                "memory_id": memory.id,
-                "emotional_intensity": memory.emotional_intensity,
-                "propagation_success": bool(propagation_results)
-            })
-            
-            return {
-                "memory": memory.to_dict(),
-                "emotional_context": emotional_context,
-                "propagation_results": propagation_results
-            }
-            
+            async with get_db_connection_context() as conn:
+                # Validate memory
+                if not self._validate_memory(memory):
+                    raise ValueError("Invalid memory format")
+                
+                # Process memory with emotional context
+                emotional_context = await self._get_emotional_context(memory)
+                
+                # Update memory with emotional context
+                memory.emotional_intensity = emotional_context.get("intensity", 0)
+                memory.metadata["emotional_context"] = emotional_context
+                
+                # Propagate memory to related systems
+                propagation_results = await self._propagate_memory(memory, conn)
+                
+                # Track state change
+                self._track_state_change("memory_processing", {
+                    "memory_id": memory.id,
+                    "emotional_intensity": memory.emotional_intensity,
+                    "propagation_success": bool(propagation_results)
+                })
+                
+                return {
+                    "memory": memory.to_dict(),
+                    "emotional_context": emotional_context,
+                    "propagation_results": propagation_results
+                }
+                
         except Exception as e:
             self._track_error("memory_processing", str(e))
             await self._rollback_transaction()
@@ -254,11 +259,15 @@ class MemoryNyxBridge:
     async def _rollback_memory_changes(self, memory_id: int):
         """Rollback changes to a specific memory."""
         try:
+            from db.connection import get_db_connection_context
+            
             # Restore memory from backup if available
             backup_key = f"memory_backup:{memory_id}"
             backup = await get_cache(backup_key)
+            
             if backup:
-                await self.memory_system.restore_memory(memory_id, backup)
+                async with get_db_connection_context() as conn:
+                    await self.memory_system.restore_memory(memory_id, backup, conn=conn)
             
             # Clear related caches
             await delete_cache(f"emotional_context:{memory_id}")
