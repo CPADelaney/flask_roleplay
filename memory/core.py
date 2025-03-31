@@ -1,3 +1,5 @@
+# memory/core.py
+
 import time
 import logging
 import asyncpg
@@ -325,7 +327,7 @@ class DBConnectionManager:
     @classmethod
     async def release(cls, connection: asyncpg.Connection) -> None:
         pool = await cls.get_pool()
-        await pool.release(connection)
+        await pool.release(connection) 
 
 def with_transaction(func):
     @wraps(func)
