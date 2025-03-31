@@ -1,4 +1,4 @@
-# logic/gpt_utils.py - Enhanced with robust JSON parsing
+# logic/gpt_utils.py - Enhanced with robust JSON parsing and async support
 
 import json
 import re
@@ -32,7 +32,8 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0, max_retri
         await asyncio.sleep(wait_time)
 
         try:
-            result = await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
+            # Now calling the async function directly
+            result = await get_chatgpt_response(conversation_id, context, prompt)
             logging.info("GPT returned response on attempt %d: %s", attempt, result)
             return result  # success
 
@@ -87,7 +88,7 @@ def parse_json_str(text: str) -> dict:
             pass
 
     # Attempt naive replacement of fancy quotes => standard quotes
-    fix_quotes = text.replace("“", '"').replace("”", '"').replace("’", "'")
+    fix_quotes = text.replace(""", '"').replace(""", '"').replace("'", "'")
     try:
         return json.loads(fix_quotes)
     except json.JSONDecodeError:
@@ -136,8 +137,8 @@ def normalize_smart_quotes(text):
     if not text or not isinstance(text, str):
         return text
     return (text
-            .replace("‘", "'").replace("’", "'")
-            .replace("“", '"').replace("”", '"'))
+            .replace("'", "'").replace("'", "'")
+            .replace(""", '"').replace(""", '"'))
 
 def extract_json_from_text(text: str) -> dict:
     """
@@ -146,6 +147,3 @@ def extract_json_from_text(text: str) -> dict:
     """
     # For backward compatibility if needed
     return parse_json_str(text)
-               .replace("'", "'")
-               .replace(""", '"')
-               .replace(""", '"'))
