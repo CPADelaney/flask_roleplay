@@ -2,8 +2,10 @@
 
 import logging
 import json
-from db.connection import get_db_connection
+import asyncio
+import asyncpg
 from datetime import datetime
+from db.connection import get_db_connection_context
 from logic.currency_generator import CurrencyGenerator
 
 class ResourceManager:
@@ -21,69 +23,89 @@ class ResourceManager:
 
     async def get_resources(self):
         """Get current resources for the player."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                SELECT money, supplies, influence, updated_at
-                FROM PlayerResources
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Initialize with defaults if not found
-                self.create_default_resources()
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT money, supplies, influence, updated_at
+                    FROM PlayerResources
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Initialize with defaults if not found
+                    await self.create_default_resources()
+                    return {
+                        "money": 100,
+                        "supplies": 20,
+                        "influence": 10,
+                        "updated_at": datetime.now()
+                    }
+                
                 return {
-                    "money": 100,
-                    "supplies": 20,
-                    "influence": 10,
-                    "updated_at": datetime.now()
+                    "money": row['money'],
+                    "supplies": row['supplies'],
+                    "influence": row['influence'],
+                    "updated_at": row['updated_at']
                 }
-            
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error getting resources: {db_err}", exc_info=True)
             return {
-                "money": row[0],
-                "supplies": row[1],
-                "influence": row[2],
-                "updated_at": row[3]
+                "money": 0,
+                "supplies": 0,
+                "influence": 0,
+                "updated_at": datetime.now(),
+                "error": str(db_err)
             }
-        finally:
-            cursor.close()
-            conn.close()
-    
+        except Exception as e:
+            logging.error(f"Error getting resources: {e}", exc_info=True)
+            return {
+                "money": 0,
+                "supplies": 0,
+                "influence": 0,
+                "updated_at": datetime.now(),
+                "error": str(e)
+            }
+        
     async def get_vitals(self):
         """Get current vitals for the player."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                SELECT energy, hunger, last_update
-                FROM PlayerVitals
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Initialize with defaults if not found
-                self.create_default_vitals()
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT energy, hunger, last_update
+                    FROM PlayerVitals
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Initialize with defaults if not found
+                    await self.create_default_vitals()
+                    return {
+                        "energy": 100,
+                        "hunger": 100,
+                        "last_update": datetime.now()
+                    }
+                
                 return {
-                    "energy": 100,
-                    "hunger": 100,
-                    "last_update": datetime.now()
+                    "energy": row['energy'],
+                    "hunger": row['hunger'],
+                    "last_update": row['last_update']
                 }
-            
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error getting vitals: {db_err}", exc_info=True)
             return {
-                "energy": row[0],
-                "hunger": row[1],
-                "last_update": row[2]
+                "energy": 0,
+                "hunger": 0,
+                "last_update": datetime.now(),
+                "error": str(db_err)
             }
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logging.error(f"Error getting vitals: {e}", exc_info=True)
+            return {
+                "energy": 0,
+                "hunger": 0,
+                "last_update": datetime.now(),
+                "error": str(e)
+            }
     
     async def get_formatted_money(self, amount=None):
         """
@@ -117,63 +139,67 @@ class ResourceManager:
         Returns:
             Dict with success status, new balance, and formatted amounts
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get current value
-            cursor.execute("""
-                SELECT money FROM PlayerResources
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                FOR UPDATE
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            row = cursor.fetchone()
-            
-            if not row:
-                # Create default resources if not found
-                self.create_default_resources()
-                old_value = 100
-            else:
-                old_value = row[0]
-            
-            new_value = max(0, old_value + amount)
-            
-            # Update resources
-            cursor.execute("""
-                UPDATE PlayerResources
-                SET money=%s, updated_at=CURRENT_TIMESTAMP
-                WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-            """, (new_value, self.user_id, self.conversation_id, self.player_name))
-            
-            # Log the change
-            cursor.execute("""
-                INSERT INTO ResourceHistoryLog 
-                (user_id, conversation_id, player_name, resource_type, 
-                 old_value, new_value, amount_changed, source, description)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (self.user_id, self.conversation_id, self.player_name, 
-                  "money", old_value, new_value, amount, source, description))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT money FROM PlayerResources
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
+                    FOR UPDATE
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                if not row:
+                    # Create default resources if not found
+                    await self.create_default_resources()
+                    old_value = 100
+                else:
+                    old_value = row['money']
+                
+                new_value = max(0, old_value + amount)
+                
+                # Update resources
+                await conn.execute("""
+                    UPDATE PlayerResources
+                    SET money=$1, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                """, new_value, self.user_id, self.conversation_id, self.player_name)
+                
+                # Log the change
+                await conn.execute("""
+                    INSERT INTO ResourceHistoryLog 
+                    (user_id, conversation_id, player_name, resource_type, 
+                     old_value, new_value, amount_changed, source, description)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """, self.user_id, self.conversation_id, self.player_name, 
+                      "money", old_value, new_value, amount, source, description)
+                
+                result = {
+                    "success": True,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": amount
+                }
+                
+                # Add formatted currency values
+                currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
+                result["formatted_old_value"] = await currency_generator.format_currency(old_value)
+                result["formatted_new_value"] = await currency_generator.format_currency(new_value)
+                result["formatted_change"] = await currency_generator.format_currency(amount)
+                
+                return result
+                
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error modifying money: {db_err}", exc_info=True)
             return {
-                "success": True,
-                "old_value": old_value,
-                "new_value": new_value,
-                "change": amount
+                "success": False,
+                "error": str(db_err)
             }
-            
-        if "success" in result and result["success"]:
-            # Initialize currency generator
-            currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
-            
-            # Add formatted values
-            result["formatted_old_value"] = await currency_generator.format_currency(result["old_value"])
-            result["formatted_new_value"] = await currency_generator.format_currency(result["new_value"])
-            result["formatted_change"] = await currency_generator.format_currency(result["change"])
-        
-        return result
+        except Exception as e:
+            logging.error(f"Error modifying money: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
     
     async def modify_supplies(self, amount, source, description=None):
         """
@@ -544,44 +570,40 @@ class ResourceManager:
         
         return results
     
-    def create_default_resources(self):
+    async def create_default_resources(self):
         """Create default resources for a player if not exists."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
-                VALUES (%s, %s, %s, 100, 20, 10)
-                ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Note: ON CONFLICT might need to be handled differently in asyncpg depending on the DB schema
+                await conn.execute("""
+                    INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
+                    VALUES ($1, $2, $3, 100, 20, 10)
+                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                return True
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error creating default resources: {db_err}", exc_info=True)
+            return False
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error creating default resources: {e}")
-        finally:
-            cursor.close()
-            conn.close()
+            logging.error(f"Error creating default resources: {e}", exc_info=True)
+            return False
     
-    def create_default_vitals(self):
+    async def create_default_vitals(self):
         """Create default vitals for a player if not exists."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
-                VALUES (%s, %s, %s, 100, 100)
-                ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
-            """, (self.user_id, self.conversation_id, self.player_name))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                # Note: ON CONFLICT might need to be handled differently in asyncpg depending on the DB schema
+                await conn.execute("""
+                    INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
+                    VALUES ($1, $2, $3, 100, 100)
+                    ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+                """, self.user_id, self.conversation_id, self.player_name)
+                
+                return True
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logging.error(f"DB Error creating default vitals: {db_err}", exc_info=True)
+            return False
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error creating default vitals: {e}")
-        finally:
-            cursor.close()
-            conn.close()
+            logging.error(f"Error creating default vitals: {e}", exc_info=True)
+            return False
