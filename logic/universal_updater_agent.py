@@ -29,7 +29,7 @@ from agents import (
 from pydantic import BaseModel, Field
 
 # DB connection
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 import asyncpg
 
 # Nyx governance integration
@@ -294,8 +294,7 @@ async def check_npc_exists(ctx, npc_id: int) -> bool:
         return False
     
     try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        try:
+        async with get_db_connection_context() as conn:
             row = await conn.fetchrow("""
                 SELECT npc_id FROM NPCStats
                 WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
@@ -312,8 +311,6 @@ async def check_npc_exists(ctx, npc_id: int) -> bool:
             )
             
             return exists
-        finally:
-            await conn.close()
     except Exception as e:
         logging.error(f"Error checking if NPC exists: {e}")
         return False
@@ -393,58 +390,59 @@ async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
         return []
     
     # Get existing NPCs
-    conn = await asyncpg.connect(dsn=get_db_connection())
     try:
-        rows = await conn.fetch("""
-            SELECT npc_id, npc_name, current_location
-            FROM NPCStats
-            WHERE user_id = $1 AND conversation_id = $2
-        """, user_id, conversation_id)
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, current_location
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            npcs = {row["npc_name"]: {"npc_id": row["npc_id"], "current_location": row["current_location"]} 
+                   for row in rows}
         
-        npcs = {row["npc_name"]: {"npc_id": row["npc_id"], "current_location": row["current_location"]} 
-               for row in rows}
-    finally:
-        await conn.close()
-    
-    updates = []
-    
-    # Check each NPC for mentions and changes
-    for npc_name, npc_data in npcs.items():
-        # Skip NPCs not mentioned in the narrative
-        if npc_name not in narrative:
-            continue
+        updates = []
         
-        npc_update = {"npc_id": npc_data["npc_id"]}
+        # Check each NPC for mentions and changes
+        for npc_name, npc_data in npcs.items():
+            # Skip NPCs not mentioned in the narrative
+            if npc_name not in narrative:
+                continue
+            
+            npc_update = {"npc_id": npc_data["npc_id"]}
+            
+            # Check for location changes
+            location_indicators = ["moved to", "arrived at", "entered", "stood in", "was at"]
+            for indicator in location_indicators:
+                if f"{npc_name} {indicator}" in narrative:
+                    # Extract location after the indicator
+                    idx = narrative.find(f"{npc_name} {indicator}") + len(f"{npc_name} {indicator}")
+                    end_idx = narrative.find(".", idx)
+                    if end_idx != -1:
+                        location_text = narrative[idx:end_idx].strip()
+                        # Extract just the location name - use a simple approach
+                        for word in ["the", "a", "an"]:
+                            if location_text.startswith(word + " "):
+                                location_text = location_text[len(word) + 1:]
+                        npc_update["current_location"] = location_text.strip()
+                        break
+            
+            # Only add the update if we found changes
+            if len(npc_update) > 1:  # More than just npc_id
+                updates.append(npc_update)
         
-        # Check for location changes
-        location_indicators = ["moved to", "arrived at", "entered", "stood in", "was at"]
-        for indicator in location_indicators:
-            if f"{npc_name} {indicator}" in narrative:
-                # Extract location after the indicator
-                idx = narrative.find(f"{npc_name} {indicator}") + len(f"{npc_name} {indicator}")
-                end_idx = narrative.find(".", idx)
-                if end_idx != -1:
-                    location_text = narrative[idx:end_idx].strip()
-                    # Extract just the location name - use a simple approach
-                    for word in ["the", "a", "an"]:
-                        if location_text.startswith(word + " "):
-                            location_text = location_text[len(word) + 1:]
-                    npc_update["current_location"] = location_text.strip()
-                    break
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="universal_updater",
+            action={"type": "extract_npc_changes"},
+            result={"npc_updates": len(updates)}
+        )
         
-        # Only add the update if we found changes
-        if len(npc_update) > 1:  # More than just npc_id
-            updates.append(npc_update)
-    
-    # Report action to governance
-    await governor.process_agent_action_report(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="universal_updater",
-        action={"type": "extract_npc_changes"},
-        result={"npc_updates": len(updates)}
-    )
-    
-    return updates
+        return updates
+    except Exception as e:
+        logging.error(f"Error extracting NPC changes: {e}")
+        return []
 
 @function_tool
 async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
@@ -473,70 +471,71 @@ async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, An
         return []
     
     # Get existing NPCs
-    conn = await asyncpg.connect(dsn=get_db_connection())
     try:
-        rows = await conn.fetch("""
-            SELECT npc_id, npc_name
-            FROM NPCStats
-            WHERE user_id = $1 AND conversation_id = $2
-        """, user_id, conversation_id)
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            npcs = {row["npc_name"]: row["npc_id"] for row in rows}
         
-        npcs = {row["npc_name"]: row["npc_id"] for row in rows}
-    finally:
-        await conn.close()
-    
-    changes = []
-    
-    # Check for relationship indicators between player and NPCs
-    for npc_name, npc_id in npcs.items():
-        # Skip NPCs not mentioned in the narrative
-        if npc_name not in narrative:
-            continue
+        changes = []
         
-        # Look for relationship indicators
-        positive_indicators = ["smiled at you", "touched your", "praised you", "thanked you"]
-        negative_indicators = ["frowned at you", "scolded you", "ignored you", "dismissed you"]
-        
-        # Check for specific relationship changes
-        relationship_change = None
-        
-        for indicator in positive_indicators:
-            if f"{npc_name} {indicator}" in narrative:
-                relationship_change = {
-                    "entity1_type": "player",
-                    "entity1_id": 0,  # Player ID
-                    "entity2_type": "npc",
-                    "entity2_id": npc_id,
-                    "level_change": 5,  # Modest increase
-                    "new_event": f"{npc_name} {indicator}"
-                }
-                break
-        
-        if not relationship_change:
-            for indicator in negative_indicators:
+        # Check for relationship indicators between player and NPCs
+        for npc_name, npc_id in npcs.items():
+            # Skip NPCs not mentioned in the narrative
+            if npc_name not in narrative:
+                continue
+            
+            # Look for relationship indicators
+            positive_indicators = ["smiled at you", "touched your", "praised you", "thanked you"]
+            negative_indicators = ["frowned at you", "scolded you", "ignored you", "dismissed you"]
+            
+            # Check for specific relationship changes
+            relationship_change = None
+            
+            for indicator in positive_indicators:
                 if f"{npc_name} {indicator}" in narrative:
                     relationship_change = {
                         "entity1_type": "player",
                         "entity1_id": 0,  # Player ID
                         "entity2_type": "npc",
                         "entity2_id": npc_id,
-                        "level_change": -5,  # Modest decrease
+                        "level_change": 5,  # Modest increase
                         "new_event": f"{npc_name} {indicator}"
                     }
                     break
+            
+            if not relationship_change:
+                for indicator in negative_indicators:
+                    if f"{npc_name} {indicator}" in narrative:
+                        relationship_change = {
+                            "entity1_type": "player",
+                            "entity1_id": 0,  # Player ID
+                            "entity2_type": "npc",
+                            "entity2_id": npc_id,
+                            "level_change": -5,  # Modest decrease
+                            "new_event": f"{npc_name} {indicator}"
+                        }
+                        break
+            
+            if relationship_change:
+                changes.append(relationship_change)
         
-        if relationship_change:
-            changes.append(relationship_change)
-    
-    # Report action to governance
-    await governor.process_agent_action_report(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="universal_updater",
-        action={"type": "extract_relationship_changes"},
-        result={"relationship_changes": len(changes)}
-    )
-    
-    return changes
+        # Report action to governance
+        await governor.process_agent_action_report(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="universal_updater",
+            action={"type": "extract_relationship_changes"},
+            result={"relationship_changes": len(changes)}
+        )
+        
+        return changes
+    except Exception as e:
+        logging.error(f"Error extracting relationship changes: {e}")
+        return []
 
 @function_tool
 async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -568,12 +567,11 @@ async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any
         # Import locally to avoid circular import
         from logic.universal_updater import apply_universal_updates_async
         
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        try:
-            # Ensure user_id and conversation_id are set in updates
-            updates["user_id"] = user_id
-            updates["conversation_id"] = conversation_id
-            
+        # Ensure user_id and conversation_id are set in updates
+        updates["user_id"] = user_id
+        updates["conversation_id"] = conversation_id
+        
+        async with get_db_connection_context() as conn:
             # Apply updates
             result = await apply_universal_updates_async(
                 user_id,
@@ -591,8 +589,6 @@ async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any
             )
             
             return result
-        finally:
-            await conn.close()
     except Exception as e:
         logging.error(f"Error applying universal updates: {e}")
         return {"success": False, "error": str(e)}
