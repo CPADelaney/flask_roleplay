@@ -1,30 +1,30 @@
 # logic/activities_logic.py
 
 import random
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
-def get_all_activities():
+# Refactored async code
+async def get_all_activities():
     """Fetches all Activities from DB. Returns a list of dicts."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT name, purpose, stat_integration, intensity_tiers, setting_variants
-        FROM Activities
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-
-    # Convert rows to list of dicts
     activities = []
-    for r in rows:
-        name, purpose, stat_i, tiers, variants = r
-        activities.append({
-            "name": name,
-            "purpose": purpose,  # JSONB => a Python list
-            "stat_integration": stat_i,
-            "intensity_tiers": tiers,
-            "setting_variants": variants
-        })
+    
+    async with get_db_connection_context() as conn:
+        # Direct connection execution with asyncpg
+        rows = await conn.fetch("""
+            SELECT name, purpose, stat_integration, intensity_tiers, setting_variants
+            FROM Activities
+        """)
+        
+        # Convert rows to list of dicts
+        for r in rows:
+            activities.append({
+                "name": r['name'],
+                "purpose": r['purpose'],  # JSONB => a Python list
+                "stat_integration": r['stat_integration'],
+                "intensity_tiers": r['intensity_tiers'],
+                "setting_variants": r['setting_variants']
+            })
+            
     return activities
 
 def filter_activities_for_npc(npc_archetypes=[], meltdown_level=0, user_stats=None, setting=""):
