@@ -661,7 +661,9 @@ class ProgressiveRevealManager:
 # Create the necessary table if it doesn't exist
 async def create_mask_tables():
     """Create the necessary tables for the mask system if they don't exist."""
-    async with TransactionContext() as conn:
+    from db.connection import get_db_connection_context
+    
+    async with get_db_connection_context() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS NPCMasks (
                 user_id INTEGER NOT NULL,
