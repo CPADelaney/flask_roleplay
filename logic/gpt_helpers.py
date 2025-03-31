@@ -3,7 +3,8 @@
 import json
 import logging
 import copy
-from db.connection import get_db_connection
+import asyncio
+from db.connection import get_db_connection_context
 from logic.gpt_utils import spaced_gpt_call  # or spaced_gpt_call_with_retry
 
 # The keys we consider "required" for a complete NPC
@@ -114,23 +115,23 @@ Return strictly JSON, no extra text or function calls.
     # refined_npc now has all required keys
     return refined_npc
 
-def fetch_npc_name(user_id, conversation_id, npc_id) -> str:
+async def fetch_npc_name(user_id, conversation_id, npc_id) -> str:
     """
     Returns the 'npc_name' from NPCStats for the given npc_id/user_id/conversation_id,
     or None if not found.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT npc_name
-        FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        LIMIT 1
-    """, (user_id, conversation_id, npc_id))
-    row = cursor.fetchone()
-    conn.close()
-
-    if row:
-        return row[0]  # the npc_name
-    return None
-
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT npc_name
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                LIMIT 1
+            """, user_id, conversation_id, npc_id)
+            
+            if row:
+                return row['npc_name']
+            return None
+    except Exception as e:
+        logging.error(f"Error fetching NPC name: {e}")
+        return None
