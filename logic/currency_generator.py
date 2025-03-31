@@ -3,6 +3,7 @@
 import json
 import re
 import logging
+import asyncio
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response
 
@@ -71,73 +72,65 @@ class CurrencyGenerator:
         
         return formatted
     
-# Refactored async method
-async def _get_existing_currency(self):
-    """Check if a currency system already exists for this game."""
-    try:
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow("""
-                SELECT currency_name, currency_plural, minor_currency_name, minor_currency_plural,
-                       exchange_rate, currency_symbol, format_template, description
-                FROM CurrencySystem
-                WHERE user_id=$1 AND conversation_id=$2
-                LIMIT 1
-            """, self.user_id, self.conversation_id)
-            
-            if row:
-                return {
-                    "currency_name": row['currency_name'],
-                    "currency_plural": row['currency_plural'],
-                    "minor_currency_name": row['minor_currency_name'],
-                    "minor_currency_plural": row['minor_currency_plural'],
-                    "exchange_rate": row['exchange_rate'],
-                    "currency_symbol": row['currency_symbol'],
-                    "format_template": row['format_template'],
-                    "description": row['description']
-                }
-            
+    async def _get_existing_currency(self):
+        """Check if a currency system already exists for this game."""
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT currency_name, currency_plural, minor_currency_name, minor_currency_plural,
+                           exchange_rate, currency_symbol, format_template, description
+                    FROM CurrencySystem
+                    WHERE user_id=$1 AND conversation_id=$2
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    return {
+                        "currency_name": row['currency_name'],
+                        "currency_plural": row['currency_plural'],
+                        "minor_currency_name": row['minor_currency_name'],
+                        "minor_currency_plural": row['minor_currency_plural'],
+                        "exchange_rate": row['exchange_rate'],
+                        "currency_symbol": row['currency_symbol'],
+                        "format_template": row['format_template'],
+                        "description": row['description']
+                    }
+                
+                return None
+        except Exception as e:
+            logging.error(f"Error getting existing currency: {e}")
             return None
-    except Exception as e:
-        logging.error(f"Error getting currency: {e}")
-        return None
     
     async def _get_setting_context(self):
         """Get the current setting context for currency generation."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
-                SELECT value 
-                FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='EnvironmentDesc'
-                LIMIT 1
-            """, (self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                return row[0]
-            
-            # If no environment description, try getting current setting name
-            cursor.execute("""
-                SELECT value 
-                FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='CurrentSetting'
-                LIMIT 1
-            """, (self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                return row[0]
-            
-            # Fallback
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow("""
+                    SELECT value 
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    return row['value']
+                
+                # If no environment description, try getting current setting name
+                row = await conn.fetchrow("""
+                    SELECT value 
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    return row['value']
+                
+                # Fallback
+                return "A modern setting with a standard economy"
+        except Exception as e:
+            logging.error(f"Error getting setting context: {e}")
             return "A modern setting with a standard economy"
-            
-        finally:
-            cursor.close()
-            conn.close()
     
     async def _generate_currency_system(self, setting_context):
         """
@@ -264,43 +257,35 @@ async def _get_existing_currency(self):
     
     async def _store_currency_system(self, currency_system):
         """Store the currency system in the database."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
             setting_context = await self._get_setting_context()
             
-            cursor.execute("""
-                INSERT INTO CurrencySystem 
-                (user_id, conversation_id, currency_name, currency_plural, 
-                 minor_currency_name, minor_currency_plural, exchange_rate, 
-                 currency_symbol, format_template, description, setting_context)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, conversation_id)
-                DO UPDATE SET 
-                    currency_name = EXCLUDED.currency_name,
-                    currency_plural = EXCLUDED.currency_plural,
-                    minor_currency_name = EXCLUDED.minor_currency_name,
-                    minor_currency_plural = EXCLUDED.minor_currency_plural,
-                    exchange_rate = EXCLUDED.exchange_rate,
-                    currency_symbol = EXCLUDED.currency_symbol,
-                    format_template = EXCLUDED.format_template,
-                    description = EXCLUDED.description,
-                    setting_context = EXCLUDED.setting_context
-            """, (
-                self.user_id, self.conversation_id, 
-                currency_system.get("currency_name"), currency_system.get("currency_plural"),
-                currency_system.get("minor_currency_name"), currency_system.get("minor_currency_plural"),
-                currency_system.get("exchange_rate"), currency_system.get("currency_symbol"),
-                currency_system.get("format_template"), currency_system.get("description"),
-                setting_context
-            ))
-            
-            conn.commit()
-            
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        INSERT INTO CurrencySystem 
+                        (user_id, conversation_id, currency_name, currency_plural, 
+                         minor_currency_name, minor_currency_plural, exchange_rate, 
+                         currency_symbol, format_template, description, setting_context)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (user_id, conversation_id)
+                        DO UPDATE SET 
+                            currency_name = EXCLUDED.currency_name,
+                            currency_plural = EXCLUDED.currency_plural,
+                            minor_currency_name = EXCLUDED.minor_currency_name,
+                            minor_currency_plural = EXCLUDED.minor_currency_plural,
+                            exchange_rate = EXCLUDED.exchange_rate,
+                            currency_symbol = EXCLUDED.currency_symbol,
+                            format_template = EXCLUDED.format_template,
+                            description = EXCLUDED.description,
+                            setting_context = EXCLUDED.setting_context
+                    """, 
+                    self.user_id, self.conversation_id, 
+                    currency_system.get("currency_name"), currency_system.get("currency_plural"),
+                    currency_system.get("minor_currency_name"), currency_system.get("minor_currency_plural"),
+                    currency_system.get("exchange_rate"), currency_system.get("currency_symbol"),
+                    currency_system.get("format_template"), currency_system.get("description"),
+                    setting_context)
+                
         except Exception as e:
-            conn.rollback()
             logging.error(f"Error storing currency system: {e}")
-        finally:
-            cursor.close()
-            conn.close()
