@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 
 from agents import Agent, Runner, RunContextWrapper, function_tool, handoff
 from agents.tracing import custom_span, function_span
-from db.connection import get_db_connection
+# Update the import to use the new async connection context
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class MaintenanceOptions(BaseModel):
     archive_old_memories: bool = True
     update_beliefs: bool = True
     check_mask: bool = True
+
 
 # -------------------------------------------------------
 # Memory Manager Context
@@ -1077,128 +1079,6 @@ async def get_femdom_beliefs(
             return []
 
 @function_tool
-async def run_memory_maintenance(
-    ctx: RunContextWrapper[MemoryContext],
-    options: MaintenanceOptions
-) -> Dict[str, Any]:
-    """
-    Run maintenance tasks on this NPC's memory system (consolidation, decay, etc.).
-    Optimized with batched DB operations.
-    
-    Args:
-        options: Options for what maintenance to perform
-    """
-    with function_span("run_memory_maintenance"):
-        start_time = time.time()
-        
-        results = {
-            "memories_processed": 0,
-            "memories_archived": 0,
-            "memories_updated": 0,
-            "batch_operations": 0
-        }
-        
-        try:
-            memory_system = await ctx.context.get_memory_system()
-            
-            # Collect IDs for memory operations
-            memory_ids_to_archive = []
-            memory_ids_to_consolidate = []
-            memory_ids_to_decay = []
-            
-            # Get candidate memories
-            old_memories = await memory_system.search_memories(
-                entity_type="npc",
-                entity_id=ctx.context.npc_id,
-                query="age_days:>90",  # Memories older than 90 days
-                limit=100
-            )
-            
-            low_importance_memories = await memory_system.search_memories(
-                entity_type="npc",
-                entity_id=ctx.context.npc_id,
-                query="importance:low age_days:>30",  # Low importance memories older than 30 days
-                limit=100
-            )
-            
-            # Process memory sets
-            for memory in old_memories:
-                results["memories_processed"] += 1
-                significance = memory.get("significance", 0)
-                if significance < 4:  # Low significance threshold
-                    memory_ids_to_archive.append(memory.get("id"))
-            
-            for memory in low_importance_memories:
-                if memory.get("id") not in memory_ids_to_archive:  # Avoid duplicates
-                    memory_ids_to_archive.append(memory.get("id"))
-                    results["memories_processed"] += 1
-            
-            # Find candidates for consolidation (similar memories)
-            duplicate_candidates = await memory_system.search_memories(
-                entity_type="npc",
-                entity_id=ctx.context.npc_id,
-                query="duplicate_score:>0.7",  # Memories with high similarity
-                limit=50
-            )
-            
-            # Group by similarity for consolidation
-            similarity_groups = {}
-            for memory in duplicate_candidates:
-                topic = memory.get("topic", "general")
-                if topic not in similarity_groups:
-                    similarity_groups[topic] = []
-                similarity_groups[topic].append(memory)
-            
-            # Collect IDs for each group with more than 2 similar memories
-            for topic, memories in similarity_groups.items():
-                if len(memories) >= 3:  # Need at least 3 to consolidate
-                    memory_ids = [m.get("id") for m in memories]
-                    memory_ids_to_consolidate.extend(memory_ids)
-            
-            # Execute batch operations
-            if memory_ids_to_archive and options.archive_old_memories:
-                await memory_system.update_memory_status_batch(
-                    entity_type="npc",
-                    entity_id=ctx.context.npc_id,
-                    memory_ids=memory_ids_to_archive,
-                    new_status="archived"
-                )
-                results["memories_archived"] = len(memory_ids_to_archive)
-                results["batch_operations"] += 1
-            
-            if memory_ids_to_consolidate and options.consolidate_memories:
-                # Group by topic for meaningful consolidation
-                for topic, mems in similarity_groups.items():
-                    if len(mems) >= 3:
-                        ids = [m.get("id") for m in mems]
-                        await memory_system.consolidate_memories_batch(
-                            entity_type="npc",
-                            entity_id=ctx.context.npc_id,
-                            memory_ids=ids,
-                            consolidated_text=f"I have several similar memories about {topic}"
-                        )
-                        results["batch_operations"] += 1
-            
-            if options.include_femdom_maintenance:
-                femdom_results = await run_femdom_maintenance(ctx)
-                results["femdom_maintenance"] = femdom_results
-            
-            # Clear caches after maintenance
-            ctx.context.invalidate_cache()
-            
-            elapsed = time.time() - start_time
-            logger.info(f"Memory maintenance completed in {elapsed:.2f}s")
-            results["execution_time"] = elapsed
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error running memory maintenance: {e}")
-            elapsed = time.time() - start_time
-            logger.info(f"Memory maintenance failed after {elapsed:.2f}s")
-            return {"error": str(e)}
-
-@function_tool
 async def run_femdom_maintenance(
     ctx: RunContextWrapper[MemoryContext]
 ) -> Dict[str, Any]:
@@ -1333,42 +1213,35 @@ async def propagate_memory(
         result = {"propagated_to": 0}
         
         try:
-            # Get related NPCs
-            def _fetch_related_npcs():
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT entity2_id, link_type, link_level
-                        FROM SocialLinks
-                        WHERE user_id=%s
-                          AND conversation_id=%s
-                          AND entity1_type='npc'
-                          AND entity1_id=%s
-                          AND entity2_type='npc'
-                        """,
-                        (ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id)
-                    )
-                    return [(r[0], r[1], r[2]) for r in cursor.fetchall()]
+            # Get related NPCs - rewritten to use async connection
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id=$1
+                      AND conversation_id=$2
+                      AND entity1_type='npc'
+                      AND entity1_id=$3
+                      AND entity2_type='npc'
+                    """,
+                    ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id
+                )
+                related_npcs = [(row["entity2_id"], row["link_type"], row["link_level"]) for row in rows]
             
-            related_npcs = await asyncio.to_thread(_fetch_related_npcs)
-            
-            # Get this NPC name
-            def _fetch_npc_name():
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT npc_name
-                        FROM NPCStats
-                        WHERE user_id=%s
-                          AND conversation_id=%s
-                          AND npc_id=%s
-                        """,
-                        (ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id)
-                    )
-                    row = cursor.fetchone()
-                    return row[0] if row else f"NPC_{ctx.context.npc_id}"
-            
-            npc_name = await asyncio.to_thread(_fetch_npc_name)
+            # Get this NPC name - rewritten to use async connection
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT npc_name
+                    FROM NPCStats
+                    WHERE user_id=$1
+                      AND conversation_id=$2
+                      AND npc_id=$3
+                    """,
+                    ctx.context.user_id, ctx.context.conversation_id, ctx.context.npc_id
+                )
+                npc_name = row["npc_name"] if row else f"NPC_{ctx.context.npc_id}"
             
             # Check if has femdom context
             femdom_tags = [
@@ -1483,6 +1356,128 @@ def distort_text(original_text: str, severity=0.3) -> str:
     
     # Re-join, removing empties
     return " ".join([w for w in words if w])
+
+@function_tool
+async def run_memory_maintenance(
+    ctx: RunContextWrapper[MemoryContext],
+    options: MaintenanceOptions
+) -> Dict[str, Any]:
+    """
+    Run maintenance tasks on this NPC's memory system (consolidation, decay, etc.).
+    Optimized with batched DB operations.
+    
+    Args:
+        options: Options for what maintenance to perform
+    """
+    with function_span("run_memory_maintenance"):
+        start_time = time.time()
+        
+        results = {
+            "memories_processed": 0,
+            "memories_archived": 0,
+            "memories_updated": 0,
+            "batch_operations": 0
+        }
+        
+        try:
+            memory_system = await ctx.context.get_memory_system()
+            
+            # Collect IDs for memory operations
+            memory_ids_to_archive = []
+            memory_ids_to_consolidate = []
+            memory_ids_to_decay = []
+            
+            # Get candidate memories
+            old_memories = await memory_system.search_memories(
+                entity_type="npc",
+                entity_id=ctx.context.npc_id,
+                query="age_days:>90",  # Memories older than 90 days
+                limit=100
+            )
+            
+            low_importance_memories = await memory_system.search_memories(
+                entity_type="npc",
+                entity_id=ctx.context.npc_id,
+                query="importance:low age_days:>30",  # Low importance memories older than 30 days
+                limit=100
+            )
+            
+            # Process memory sets
+            for memory in old_memories:
+                results["memories_processed"] += 1
+                significance = memory.get("significance", 0)
+                if significance < 4:  # Low significance threshold
+                    memory_ids_to_archive.append(memory.get("id"))
+            
+            for memory in low_importance_memories:
+                if memory.get("id") not in memory_ids_to_archive:  # Avoid duplicates
+                    memory_ids_to_archive.append(memory.get("id"))
+                    results["memories_processed"] += 1
+            
+            # Find candidates for consolidation (similar memories)
+            duplicate_candidates = await memory_system.search_memories(
+                entity_type="npc",
+                entity_id=ctx.context.npc_id,
+                query="duplicate_score:>0.7",  # Memories with high similarity
+                limit=50
+            )
+            
+            # Group by similarity for consolidation
+            similarity_groups = {}
+            for memory in duplicate_candidates:
+                topic = memory.get("topic", "general")
+                if topic not in similarity_groups:
+                    similarity_groups[topic] = []
+                similarity_groups[topic].append(memory)
+            
+            # Collect IDs for each group with more than 2 similar memories
+            for topic, memories in similarity_groups.items():
+                if len(memories) >= 3:  # Need at least 3 to consolidate
+                    memory_ids = [m.get("id") for m in memories]
+                    memory_ids_to_consolidate.extend(memory_ids)
+            
+            # Execute batch operations
+            if memory_ids_to_archive and options.archive_old_memories:
+                await memory_system.update_memory_status_batch(
+                    entity_type="npc",
+                    entity_id=ctx.context.npc_id,
+                    memory_ids=memory_ids_to_archive,
+                    new_status="archived"
+                )
+                results["memories_archived"] = len(memory_ids_to_archive)
+                results["batch_operations"] += 1
+            
+            if memory_ids_to_consolidate and options.consolidate_memories:
+                # Group by topic for meaningful consolidation
+                for topic, mems in similarity_groups.items():
+                    if len(mems) >= 3:
+                        ids = [m.get("id") for m in mems]
+                        await memory_system.consolidate_memories_batch(
+                            entity_type="npc",
+                            entity_id=ctx.context.npc_id,
+                            memory_ids=ids,
+                            consolidated_text=f"I have several similar memories about {topic}"
+                        )
+                        results["batch_operations"] += 1
+            
+            if options.include_femdom_maintenance:
+                femdom_results = await run_femdom_maintenance(ctx)
+                results["femdom_maintenance"] = femdom_results
+            
+            # Clear caches after maintenance
+            ctx.context.invalidate_cache()
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Memory maintenance completed in {elapsed:.2f}s")
+            results["execution_time"] = elapsed
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error running memory maintenance: {e}")
+            elapsed = time.time() - start_time
+            logger.info(f"Memory maintenance failed after {elapsed:.2f}s")
+            return {"error": str(e)}
 
 # -------------------------------------------------------
 # Memory Manager Agent
