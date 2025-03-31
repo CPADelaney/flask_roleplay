@@ -3,10 +3,24 @@
 """
 Pre-defined goals for different interaction modes.
 These can be used by the GoalManager to create appropriate
-goals based on the current interaction context.
+goals based on the current interaction mode distribution.
 """
 
-from typing import Dict, List, Any
+import logging
+import asyncio
+import random
+from typing import Dict, List, Any, Optional, Tuple, Union
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+from agents import (
+    Agent, Runner, function_tool, trace, ModelSettings, RunContextWrapper
+)
+
+from nyx.core.interaction_mode_manager import ModeDistribution, InteractionMode
+
+logger = logging.getLogger(__name__)
 
 # Goal templates for dominant/femdom interaction
 DOMINANT_GOALS = [
@@ -60,7 +74,7 @@ DOMINANT_GOALS = [
             {
                 "description": "Demand verbal acknowledgment of commands",
                 "action": "generate_response",
-                "parameters": {"require_acknowledgment": true, "acceptance_terms": ["Yes, Mistress", "As you wish"]}
+                "parameters": {"require_acknowledgment": True, "acceptance_terms": ["Yes, Mistress", "As you wish"]}
             }
         ]
     },
@@ -87,7 +101,7 @@ DOMINANT_GOALS = [
             {
                 "description": "Reinforce proper protocols and expectations",
                 "action": "generate_response",
-                "parameters": {"include_rules": true, "explicitness": "high", "negotiation": "minimal"}
+                "parameters": {"include_rules": True, "explicitness": "high", "negotiation": "minimal"}
             }
         ]
     },
@@ -114,7 +128,7 @@ DOMINANT_GOALS = [
             {
                 "description": "Remind of feminine authority and power position",
                 "action": "generate_response",
-                "parameters": {"reinforce_hierarchy": true, "power_dynamic": "explicit", "femdom_framing": true}
+                "parameters": {"reinforce_hierarchy": True, "power_dynamic": "explicit", "femdom_framing": True}
             }
         ]
     },
@@ -126,7 +140,7 @@ DOMINANT_GOALS = [
             {
                 "description": "Identify opportunity to assert superiority",
                 "action": "process_input",
-                "parameters": {"focus": "submission_openings", "worthiness_assessment": true}
+                "parameters": {"focus": "submission_openings", "worthiness_assessment": True}
             },
             {
                 "description": "Express inherent superiority confidently",
@@ -168,7 +182,7 @@ DOMINANT_GOALS = [
             {
                 "description": "Reinforce dependence on feminine leadership",
                 "action": "generate_response",
-                "parameters": {"dependency_framing": true, "guidance_value": "emphasize", "self_direction": "discourage"}
+                "parameters": {"dependency_framing": True, "guidance_value": "emphasize", "self_direction": "discourage"}
             }
         ]
     }
@@ -609,6 +623,17 @@ PROFESSIONAL_GOALS = [
     }
 ]
 
+# Map mode names to goal lists for easier lookup
+MODE_GOALS_MAP = {
+    "dominant": DOMINANT_GOALS,
+    "intellectual": INTELLECTUAL_GOALS,
+    "compassionate": COMPASSIONATE_GOALS,
+    "friendly": FRIENDLY_GOALS,
+    "playful": PLAYFUL_GOALS,
+    "creative": CREATIVE_GOALS,
+    "professional": PROFESSIONAL_GOALS
+}
+
 class GoalStep(BaseModel):
     """A step in a goal's plan"""
     description: str = Field(description="Description of the step")
@@ -622,6 +647,14 @@ class InteractionGoal(BaseModel):
     source: str = Field(description="Source/mode of the goal")
     plan: List[GoalStep] = Field(description="Steps to achieve the goal")
 
+class BlendedGoal(BaseModel):
+    """A goal blended from multiple mode goals"""
+    description: str = Field(description="Description of the blended goal")
+    priority: float = Field(description="Priority of the goal (0.0-1.0)")
+    sources: List[Tuple[str, float]] = Field(description="Source modes with weights")
+    original_descriptions: List[str] = Field(description="Original descriptions of source goals")
+    plan: List[GoalStep] = Field(description="Steps to achieve the goal")
+
 class ModeType(str, Enum):
     """Types of interaction modes"""
     DOMINANT = "dominant"
@@ -633,76 +666,164 @@ class ModeType(str, Enum):
     PROFESSIONAL = "professional"
     DEFAULT = "default"
 
+class GoalSelectorContext:
+    """Context object for goal selection operations"""
+    
+    def __init__(self, mode_manager=None, goal_manager=None):
+        self.mode_manager = mode_manager
+        self.goal_manager = goal_manager
+
+class GoalBlendingOutput(BaseModel):
+    """Output schema for goal blending"""
+    blended_goals: List[BlendedGoal] = Field(..., description="List of blended goals")
+    blend_coherence: float = Field(..., description="Coherence of the goal blend (0.0-1.0)", ge=0.0, le=1.0)
+    mode_contributions: Dict[str, float] = Field(..., description="Contribution of each mode to goal set")
+    total_goals: int = Field(..., description="Total number of goals in the blend")
+
+class GoalRankingOutput(BaseModel):
+    """Output schema for goal ranking"""
+    ranked_goals: List[Dict[str, Any]] = Field(..., description="Ranked goals with adjusted priorities")
+    prioritization_rationale: str = Field(..., description="Explanation of prioritization decisions")
+    mode_alignment: Dict[str, float] = Field(..., description="How goals align with active modes")
+
 class GoalSelector:
     """
-    Agent-based system for selecting and managing interaction goals
-    based on the current mode and context.
+    Selects and blends interaction goals based on the current mode distribution.
+    Provides goals that proportionally represent all active modes.
     """
     
-    def __init__(self):
-        # Load goal templates
-        self.goal_templates = {
-            ModeType.INTELLECTUAL: INTELLECTUAL_GOALS,
-            ModeType.COMPASSIONATE: COMPASSIONATE_GOALS,
-            ModeType.DOMINANT: DOMINANT_GOALS,
-            ModeType.FRIENDLY: FRIENDLY_GOALS,
-            ModeType.PLAYFUL: PLAYFUL_GOALS,
-            ModeType.CREATIVE: CREATIVE_GOALS,
-            ModeType.PROFESSIONAL: PROFESSIONAL_GOALS,
-            ModeType.DEFAULT: FRIENDLY_GOALS + DOMINANT_GOALS + PLAYFUL_GOALS
-        }
+    def __init__(self, mode_manager=None, goal_manager=None):
+        self.context = GoalSelectorContext(
+            mode_manager=mode_manager,
+            goal_manager=goal_manager
+        )
         
         # Initialize agents
         self.goal_selector_agent = self._create_goal_selector()
-        self.goal_adapter_agent = self._create_goal_adapter()
+        self.goal_blender_agent = self._create_goal_blender()
+        self.goal_ranking_agent = self._create_goal_ranker()
+        
+        # Goal cache for performance
+        self.goal_templates = {}
+        self.initialize_goal_templates()
+        
+        logger.info("GoalSelector initialized with blended goal capabilities")
+    
+    def initialize_goal_templates(self):
+        """Initialize goal templates for each mode"""
+        for mode_type in ModeType:
+            mode_name = mode_type.value
+            if mode_name == "default":
+                # Default mode uses a blend of other modes
+                continue
+                
+            self.goal_templates[mode_name] = MODE_GOALS_MAP.get(mode_name, [])
     
     def _create_goal_selector(self) -> Agent:
         """Create an agent specialized in selecting appropriate goals"""
         return Agent(
             name="Goal Selector",
             instructions="""
-            You select appropriate interaction goals based on the current mode and context.
+            You select appropriate interaction goals based on the current mode distribution.
             
             Your role is to:
-            1. Analyze the current interaction mode
-            2. Consider the conversation context and user needs
-            3. Select the most appropriate goals from available templates
-            4. Prioritize goals based on relevance and importance
+            1. Analyze the current mode distribution
+            2. Select goals that proportionally represent all active modes
+            3. Consider the coherence and complementarity of selected goals
+            4. Ensure each active mode is represented in the goal set
             
-            Choose goals that align with the current interaction mode while
-            addressing the specific needs of the conversation.
+            Choose goals that reflect the blended nature of the interaction,
+            rather than just selecting goals from the primary mode.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.3),
             tools=[
-                self._get_goals_for_mode
+                function_tool(self._get_current_mode_distribution),
+                function_tool(self._get_goals_for_mode)
             ],
-            output_type=List[InteractionGoal]
+            output_type=List[Dict[str, Any]]
         )
     
-    def _create_goal_adapter(self) -> Agent:
-        """Create an agent specialized in adapting goals to specific contexts"""
+    def _create_goal_blender(self) -> Agent:
+        """Create an agent specialized in blending and adapting goals"""
         return Agent(
-            name="Goal Adapter",
+            name="Goal Blender",
             instructions="""
-            You adapt interaction goals to specific contexts and parameters.
+            You blend and adapt goals from multiple modes into coherent, integrated goals.
             
             Your role is to:
-            1. Take a selected goal and modify it for the current context
-            2. Replace placeholder variables with actual values
-            3. Adjust priorities based on context importance
-            4. Refine step descriptions and parameters for clarity
+            1. Identify compatible goals across different modes
+            2. Merge similar goals into unified blended goals
+            3. Ensure the blended goals maintain coherence and clarity
+            4. Track the contribution of each mode to the goal blend
             
-            Ensure the adapted goal is concrete, actionable, and directly
-            relevant to the current conversation.
+            Create goal blends that naturally integrate aspects from different modes,
+            rather than simply listing goals from each mode separately.
+            """,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.3),
+            tools=[
+                function_tool(self._analyze_goal_compatibility),
+                function_tool(self._blend_goal_steps)
+            ],
+            output_type=GoalBlendingOutput
+        )
+    
+    def _create_goal_ranker(self) -> Agent:
+        """Create an agent specialized in ranking blended goals"""
+        return Agent(
+            name="Goal Ranker",
+            instructions="""
+            You rank and prioritize blended goals based on mode distribution and context.
+            
+            Your role is to:
+            1. Assign appropriate priorities to blended goals
+            2. Ensure goals from higher-weighted modes receive higher priority
+            3. Consider goal compatibility and coherence in the ranking
+            4. Provide rationale for prioritization decisions
+            
+            Create a prioritized goal list that aligns with the mode distribution
+            while maintaining a coherent goal structure.
             """,
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.2),
-            output_type=InteractionGoal
+            tools=[
+                function_tool(self._evaluate_goal_mode_alignment),
+                function_tool(self._calculate_goal_priority)
+            ],
+            output_type=GoalRankingOutput
         )
     
     @function_tool
-    async def _get_goals_for_mode(self, mode: str) -> List[Dict[str, Any]]:
+    async def _get_current_mode_distribution(self, ctx: RunContextWrapper[GoalSelectorContext]) -> Dict[str, Any]:
+        """
+        Get the current mode distribution from the mode manager
+        
+        Returns:
+            Current mode distribution information
+        """
+        mode_manager = ctx.context.mode_manager
+        if mode_manager and hasattr(mode_manager, 'context'):
+            try:
+                return {
+                    "mode_distribution": mode_manager.context.mode_distribution.dict(),
+                    "active_modes": [(m, w) for m, w in mode_manager.context.mode_distribution.active_modes],
+                    "primary_mode": mode_manager.context.current_mode.value,
+                    "overall_confidence": mode_manager.context.overall_confidence
+                }
+            except Exception as e:
+                logger.error(f"Error getting mode distribution: {e}")
+        
+        # Fallback to default mode distribution
+        return {
+            "mode_distribution": {"default": 1.0},
+            "active_modes": [("default", 1.0)],
+            "primary_mode": "default",
+            "overall_confidence": 0.5
+        }
+    
+    @function_tool
+    async def _get_goals_for_mode(self, ctx: RunContextWrapper[GoalSelectorContext], mode: str) -> List[Dict[str, Any]]:
         """
         Get appropriate goals for a specific interaction mode
         
@@ -713,44 +834,390 @@ class GoalSelector:
             List of goal templates for the mode
         """
         try:
-            mode_type = ModeType(mode.lower())
-            return self.goal_templates.get(mode_type, self.goal_templates[ModeType.DEFAULT])
-        except ValueError:
-            # If mode isn't a valid enum value, use default
-            return self.goal_templates[ModeType.DEFAULT]
+            mode_name = mode.lower()
+            # Get from cache first
+            if mode_name in self.goal_templates:
+                return self.goal_templates[mode_name]
+                
+            # Fallback to map
+            if mode_name in MODE_GOALS_MAP:
+                return MODE_GOALS_MAP[mode_name]
+                
+            # If not found, try using mode enum
+            try:
+                mode_type = ModeType(mode_name)
+                return MODE_GOALS_MAP.get(mode_type.value, [])
+            except:
+                # If mode isn't a valid enum value, use default
+                return []
+        except Exception as e:
+            logger.error(f"Error getting goals for mode {mode}: {e}")
+            return []
     
-    async def select_goals(self, mode: str, context: Dict[str, Any], limit: int = 3) -> List[InteractionGoal]:
+    @function_tool
+    async def _analyze_goal_compatibility(
+        self, 
+        ctx: RunContextWrapper[GoalSelectorContext],
+        goal1: Dict[str, Any],
+        goal2: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Select appropriate goals based on mode and context
+        Analyze the compatibility between two goals
         
         Args:
-            mode: Current interaction mode
-            context: Conversation context
+            goal1: First goal to analyze
+            goal2: Second goal to analyze
+            
+        Returns:
+            Compatibility analysis
+        """
+        # Extract key information
+        desc1 = goal1.get("description", "")
+        desc2 = goal2.get("description", "")
+        source1 = goal1.get("source", "")
+        source2 = goal2.get("source", "")
+        
+        # Define compatibility matrix for mode pairs
+        # Higher values indicate more compatible goals between modes
+        mode_compatibility = {
+            ("dominant", "playful"): 0.7,
+            ("dominant", "creative"): 0.6,
+            ("dominant", "intellectual"): 0.5,
+            ("dominant", "compassionate"): 0.3,
+            ("dominant", "professional"): 0.3,
+            
+            ("friendly", "playful"): 0.9,
+            ("friendly", "compassionate"): 0.8,
+            ("friendly", "creative"): 0.7,
+            ("friendly", "intellectual"): 0.6,
+            
+            ("intellectual", "creative"): 0.8,
+            ("intellectual", "professional"): 0.7,
+            
+            ("compassionate", "playful"): 0.6,
+            ("compassionate", "creative"): 0.7,
+            
+            ("playful", "creative"): 0.9,
+            
+            # Default for unlisted pairs is 0.5 (moderate compatibility)
+        }
+        
+        # Get base mode compatibility
+        mode1 = source1.replace("_mode", "") if source1.endswith("_mode") else source1
+        mode2 = source2.replace("_mode", "") if source2.endswith("_mode") else source2
+        
+        # Check compatibility for either order
+        key = (mode1, mode2)
+        reverse_key = (mode2, mode1)
+        
+        if key in mode_compatibility:
+            mode_compat = mode_compatibility[key]
+        elif reverse_key in mode_compatibility:
+            mode_compat = mode_compatibility[reverse_key]
+        else:
+            mode_compat = 0.5  # Default moderate compatibility
+        
+        # Check for similarity in goals
+        # Simple keyword matching (could be more sophisticated in real system)
+        keywords1 = set(desc1.lower().split())
+        keywords2 = set(desc2.lower().split())
+        
+        # Calculate similarity (Jaccard similarity of keywords)
+        if keywords1 and keywords2:
+            keyword_similarity = len(keywords1.intersection(keywords2)) / len(keywords1.union(keywords2))
+        else:
+            keyword_similarity = 0.0
+        
+        # Calculate overall compatibility
+        overall_compatibility = (mode_compat * 0.6) + (keyword_similarity * 0.4)
+        
+        # Determine if goals can be blended
+        can_blend = overall_compatibility >= 0.5 and keyword_similarity >= 0.3
+        
+        return {
+            "mode_compatibility": mode_compat,
+            "keyword_similarity": keyword_similarity,
+            "overall_compatibility": overall_compatibility,
+            "can_blend": can_blend,
+            "mode1": mode1,
+            "mode2": mode2
+        }
+    
+    @function_tool
+    async def _blend_goal_steps(
+        self, 
+        ctx: RunContextWrapper[GoalSelectorContext],
+        goals: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Blend steps from multiple goals into a unified goal
+        
+        Args:
+            goals: List of goals to blend
+            
+        Returns:
+            Blended goal
+        """
+        if not goals:
+            return {"error": "No goals provided for blending"}
+            
+        if len(goals) == 1:
+            # No blending needed for a single goal
+            goal = goals[0]
+            return {
+                "description": goal.get("description", ""),
+                "priority": goal.get("priority", 0.5),
+                "sources": [(goal.get("source", "unknown"), 1.0)],
+                "original_descriptions": [goal.get("description", "")],
+                "plan": goal.get("plan", [])
+            }
+        
+        # Extract descriptions and sources
+        descriptions = [goal.get("description", "") for goal in goals]
+        sources = [goal.get("source", "unknown") for goal in goals]
+        
+        # Create a description that encompasses all goals
+        # In a real system, this would use more sophisticated NLP
+        all_keywords = set()
+        for desc in descriptions:
+            all_keywords.update(desc.lower().split())
+            
+        # Remove common words and sort by length (longer words first)
+        filtered_keywords = sorted(
+            [word for word in all_keywords if len(word) > 3],
+            key=len,
+            reverse=True
+        )[:15]  # Limit to top 15 keywords
+        
+        # Create a blended description
+        if filtered_keywords:
+            blended_description = f"Blend of {' '.join(filtered_keywords[:5])}"
+        else:
+            # Fallback to combining first parts of descriptions
+            blended_description = " and ".join([d.split()[0:3] for d in descriptions])
+        
+        # Calculate average priority (weighted by source count)
+        source_counts = {}
+        for source in sources:
+            source_counts[source] = source_counts.get(source, 0) + 1
+            
+        total_priority = sum(goal.get("priority", 0.5) * (source_counts.get(goal.get("source", "unknown"), 0) / len(goals)) for goal in goals)
+        
+        # Blend plans - select steps from each goal
+        # In a real system, this would be more sophisticated
+        blended_plan = []
+        
+        # For simplicity, take first 2 steps from the first goal, 1 from others
+        for i, goal in enumerate(goals):
+            plan = goal.get("plan", [])
+            if not plan:
+                continue
+                
+            if i == 0:
+                # Take first 2 steps (or all if less than 2)
+                steps_to_take = min(2, len(plan))
+                blended_plan.extend(plan[:steps_to_take])
+            else:
+                # Take 1 step that doesn't overlap with existing steps
+                for step in plan:
+                    step_desc = step.get("description", "")
+                    # Check if similar step already exists
+                    if not any(step_desc.lower() in existing.get("description", "").lower() for existing in blended_plan):
+                        blended_plan.append(step)
+                        break
+        
+        # Create sources list with weights
+        # Weight is proportional to number of goals from each source
+        total_sources = len(sources)
+        weighted_sources = [(source, count / total_sources) for source, count in source_counts.items()]
+        
+        return {
+            "description": blended_description,
+            "priority": total_priority,
+            "sources": weighted_sources,
+            "original_descriptions": descriptions,
+            "plan": blended_plan
+        }
+    
+    @function_tool
+    async def _evaluate_goal_mode_alignment(
+        self, 
+        ctx: RunContextWrapper[GoalSelectorContext],
+        goal: Dict[str, Any],
+        mode_distribution: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        Evaluate how well a goal aligns with the current mode distribution
+        
+        Args:
+            goal: Goal to evaluate
+            mode_distribution: Current mode distribution
+            
+        Returns:
+            Alignment evaluation
+        """
+        # Extract goal sources
+        sources = goal.get("sources", [])
+        
+        # If no sources specified, check source field
+        if not sources and "source" in goal:
+            source = goal["source"]
+            if source.endswith("_mode"):
+                source = source[:-5]  # Remove "_mode" suffix
+            sources = [(source, 1.0)]
+        
+        total_alignment = 0.0
+        alignments = {}
+        
+        # For each source in the goal
+        for source, source_weight in sources:
+            if source.endswith("_mode"):
+                source = source[:-5]  # Remove "_mode" suffix
+                
+            # Check alignment with each mode in the distribution
+            for mode, mode_weight in mode_distribution.items():
+                if mode_weight < 0.1:
+                    continue  # Skip negligible modes
+                    
+                # Calculate source-mode alignment
+                if source == mode:
+                    alignment = 1.0 * source_weight * mode_weight
+                else:
+                    # Check compatibility
+                    # Simple heuristic - could be more sophisticated
+                    alignment = 0.3 * source_weight * mode_weight
+                
+                # Add to total and record
+                total_alignment += alignment
+                alignments[mode] = alignments.get(mode, 0) + alignment
+        
+        return {
+            "goal_description": goal.get("description", ""),
+            "total_alignment": total_alignment,
+            "alignments_by_mode": alignments
+        }
+    
+    @function_tool
+    async def _calculate_goal_priority(
+        self, 
+        ctx: RunContextWrapper[GoalSelectorContext],
+        goal: Dict[str, Any],
+        mode_distribution: Dict[str, float],
+        alignment_score: float
+    ) -> float:
+        """
+        Calculate adjusted priority for a goal based on mode alignment
+        
+        Args:
+            goal: Goal to calculate priority for
+            mode_distribution: Current mode distribution
+            alignment_score: Alignment score from evaluation
+            
+        Returns:
+            Adjusted priority
+        """
+        # Get base priority
+        base_priority = goal.get("priority", 0.5)
+        
+        # Calculate contribution from primary mode
+        primary_mode = max(mode_distribution.items(), key=lambda x: x[1]) if mode_distribution else (None, 0)
+        
+        if primary_mode[0] is None:
+            primary_boost = 0
+        else:
+            primary_boost = 0.1 if any(s[0] == primary_mode[0] for s in goal.get("sources", [])) else 0
+        
+        # Adjust based on alignment and primary mode
+        adjusted_priority = (base_priority * 0.6) + (alignment_score * 0.3) + primary_boost
+        
+        # Ensure in range 0-1
+        adjusted_priority = max(0.1, min(1.0, adjusted_priority))
+        
+        return adjusted_priority
+    
+    async def select_goals(self, mode_distribution: Dict[str, float], limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Select appropriate goals based on the mode distribution
+        
+        Args:
+            mode_distribution: Current mode distribution
             limit: Maximum number of goals to select
             
         Returns:
             List of selected interaction goals
         """
-        with trace(workflow_name="select_interaction_goals"):
+        with trace(workflow_name="select_blended_goals"):
             # Prepare prompt for goal selection
             prompt = f"""
             Select the most appropriate interaction goals based on:
             
-            MODE: {mode}
+            MODE DISTRIBUTION: {mode_distribution}
             
-            CONTEXT: {context}
-            
-            Select up to {limit} goals that best match the current interaction.
-            Prioritize goals based on relevance and importance to the current conversation.
+            Select up to {limit} goals that best represent the current mode distribution.
+            Consider how different modes can be represented proportionally in the goal set.
             """
             
             # Run the goal selector agent
-            result = await Runner.run(self.goal_selector_agent, prompt)
+            result = await Runner.run(
+                self.goal_selector_agent, 
+                prompt, 
+                context=self.context,
+                run_config={
+                    "workflow_name": "GoalSelection",
+                    "trace_metadata": {"active_modes": [m for m, w in mode_distribution.items() if w >= 0.2]}
+                }
+            )
             selected_goals = result.final_output
             
-            return selected_goals[:limit]  # Ensure we don't exceed the limit
+            # Blend similar goals
+            blend_prompt = f"""
+            Blend the selected goals into coherent, unified goals:
+            
+            SELECTED GOALS: {selected_goals}
+            MODE DISTRIBUTION: {mode_distribution}
+            
+            Identify compatible goals and blend them into unified goals that
+            represent multiple modes, rather than keeping separate goals for each mode.
+            """
+            
+            blend_result = await Runner.run(
+                self.goal_blender_agent, 
+                blend_prompt, 
+                context=self.context,
+                run_config={
+                    "workflow_name": "GoalBlending",
+                    "trace_metadata": {"num_goals": len(selected_goals)}
+                }
+            )
+            blended_goals = blend_result.final_output.blended_goals
+            
+            # Rank and prioritize goals
+            ranking_prompt = f"""
+            Rank and prioritize the blended goals:
+            
+            BLENDED GOALS: {[g.dict() for g in blended_goals]}
+            MODE DISTRIBUTION: {mode_distribution}
+            
+            Assign priorities that align with the mode distribution,
+            giving higher priorities to goals from dominant modes.
+            """
+            
+            ranking_result = await Runner.run(
+                self.goal_ranking_agent, 
+                ranking_prompt, 
+                context=self.context,
+                run_config={
+                    "workflow_name": "GoalRanking",
+                    "trace_metadata": {"num_goals": len(blended_goals)}
+                }
+            )
+            
+            ranked_goals = ranking_result.final_output.ranked_goals
+            
+            # Limit to requested number of goals
+            return ranked_goals[:limit]
     
-    async def adapt_goal(self, goal: InteractionGoal, context: Dict[str, Any]) -> InteractionGoal:
+    async def adapt_goal(self, goal: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Adapt a goal to a specific context
         
@@ -761,29 +1228,59 @@ class GoalSelector:
         Returns:
             Adapted goal
         """
-        with trace(workflow_name="adapt_interaction_goal"):
-            # Prepare prompt for goal adaptation
-            prompt = f"""
-            Adapt this interaction goal to the specific context:
-            
-            GOAL: {goal.dict()}
-            
-            CONTEXT: {context}
-            
-            Replace any placeholder variables with actual values.
-            Adjust priorities and parameters based on the specific context.
-            Ensure the goal is concrete and directly applicable to the current situation.
-            """
-            
-            # Run the goal adapter agent
-            result = await Runner.run(self.goal_adapter_agent, prompt)
-            adapted_goal = result.final_output
-            
-            return adapted_goal
+        # Simple adaptation logic - replace placeholders with context values
+        adapted_goal = goal.copy()
+        
+        # Adapt description
+        if "description" in adapted_goal and isinstance(adapted_goal["description"], str):
+            for key, value in context.items():
+                if isinstance(value, str):
+                    placeholder = f"${key}"
+                    adapted_goal["description"] = adapted_goal["description"].replace(placeholder, value)
+        
+        # Adapt plan steps
+        if "plan" in adapted_goal and isinstance(adapted_goal["plan"], list):
+            for step in adapted_goal["plan"]:
+                # Adapt step description
+                if "description" in step and isinstance(step["description"], str):
+                    for key, value in context.items():
+                        if isinstance(value, str):
+                            placeholder = f"${key}"
+                            step["description"] = step["description"].replace(placeholder, value)
+                
+                # Adapt step parameters
+                if "parameters" in step and isinstance(step["parameters"], dict):
+                    for param_key, param_value in step["parameters"].items():
+                        if isinstance(param_value, str):
+                            for key, value in context.items():
+                                if isinstance(value, str):
+                                    placeholder = f"${key}"
+                                    step["parameters"][param_key] = param_value.replace(placeholder, value)
+        
+        return adapted_goal
 
-# Function to get goals for a mode (backward compatibility)
+# Legacy function for backward compatibility
 async def get_goals_for_mode(mode: str) -> List[Dict[str, Any]]:
     """Get appropriate goals for a specific interaction mode"""
-    selector = GoalSelector()
-    goals = await selector._get_goals_for_mode(mode)
-    return goals
+    try:
+        mode_name = mode.lower()
+        
+        # If it's a single mode, return direct goals
+        if mode_name in MODE_GOALS_MAP:
+            return MODE_GOALS_MAP[mode_name]
+            
+        # Try handling mode enum
+        try:
+            mode_type = ModeType(mode_name)
+            return MODE_GOALS_MAP.get(mode_type.value, [])
+        except:
+            # Return default set of goals for unknown modes
+            # Combine some common goals from different modes
+            default_goals = []
+            default_goals.extend(FRIENDLY_GOALS[:1])      # First friendly goal
+            default_goals.extend(INTELLECTUAL_GOALS[:1])  # First intellectual goal
+            default_goals.extend(PLAYFUL_GOALS[:1])       # First playful goal
+            return default_goals
+    except Exception as e:
+        logger.error(f"Error in legacy get_goals_for_mode: {e}")
+        return []
