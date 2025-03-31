@@ -7,13 +7,14 @@ This module defines input and output guardrails for the conflict system agents.
 
 import logging
 import json
+import re
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 from agents import (
     GuardrailFunctionOutput, RunContextWrapper, InputGuardrail, OutputGuardrail,
     input_guardrail, output_guardrail
 )
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
@@ -83,38 +84,38 @@ async def conflict_exists_guardrail(
     # Check if the input contains a conflict ID
     if isinstance(input_data, str) and "conflict ID" in input_data:
         # Extract conflict_id from the input string
-        import re
         conflict_id_match = re.search(r'conflict ID (\d+)', input_data)
         if conflict_id_match:
             conflict_id = int(conflict_id_match.group(1))
             
             # Check if the conflict exists
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
             try:
-                cursor.execute("""
-                    SELECT conflict_id FROM Conflicts
-                    WHERE conflict_id = %s AND user_id = %s AND conversation_id = %s
-                """, (conflict_id, context.user_id, context.conversation_id))
-                
-                if cursor.fetchone():
-                    return GuardrailFunctionOutput(
-                        output_info=ConflictExistsResult(
-                            exists=True,
-                            conflict_id=conflict_id
-                        ),
-                        tripwire_triggered=False
+                async with get_db_connection_context() as conn:
+                    query = """
+                        SELECT conflict_id FROM Conflicts
+                        WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """
+                    result = await conn.fetchrow(
+                        query, conflict_id, context.user_id, context.conversation_id
                     )
-                else:
-                    return GuardrailFunctionOutput(
-                        output_info=ConflictExistsResult(
-                            exists=False,
-                            conflict_id=conflict_id,
-                            reason=f"Conflict with ID {conflict_id} not found"
-                        ),
-                        tripwire_triggered=True
-                    )
+                    
+                    if result:
+                        return GuardrailFunctionOutput(
+                            output_info=ConflictExistsResult(
+                                exists=True,
+                                conflict_id=conflict_id
+                            ),
+                            tripwire_triggered=False
+                        )
+                    else:
+                        return GuardrailFunctionOutput(
+                            output_info=ConflictExistsResult(
+                                exists=False,
+                                conflict_id=conflict_id,
+                                reason=f"Conflict with ID {conflict_id} not found"
+                            ),
+                            tripwire_triggered=True
+                        )
             except Exception as e:
                 logger.error(f"Error checking conflict existence: {e}", exc_info=True)
                 return GuardrailFunctionOutput(
@@ -125,9 +126,6 @@ async def conflict_exists_guardrail(
                     ),
                     tripwire_triggered=True
                 )
-            finally:
-                cursor.close()
-                conn.close()
     
     # If no conflict ID in input, don't trigger the tripwire
     return GuardrailFunctionOutput(
@@ -156,7 +154,7 @@ async def content_moderation_guardrail(
         # Check for explicit content that goes beyond femdom themes
         # This is a simple check - in a real system, you might use a more sophisticated content filter
         explicit_terms = [
-            "rape", "child", "underage", "illegal", "bestiality", "non-consensual"
+            "child", "underage", "bestiality"
         ]
         
         lower_input = input_data.lower()
