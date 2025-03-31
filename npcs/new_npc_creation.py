@@ -20,7 +20,7 @@ import asyncpg
 from datetime import datetime
 
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail, RunContextWrapper
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 from memory.core import Memory, MemoryType, MemorySignificance
 from memory.managers import NPCMemoryManager
@@ -532,7 +532,7 @@ class NPCCreationHandler:
             return random.choice(dynamic_options[rel_lower])
         return "associate"
     
-    def get_entity_name(self, conn, entity_type, entity_id, user_id, conversation_id):
+    async def get_entity_name(self, conn, entity_type, entity_id, user_id, conversation_id):
         """
         Get the name of an entity (NPC or player).
         
@@ -549,16 +549,14 @@ class NPCCreationHandler:
         if entity_type == 'player':
             return "Chase"
         
-        cursor = conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT npc_name FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """, (user_id, conversation_id, entity_id))
+            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+        """
         
-        row = cursor.fetchone()
-        cursor.close()
+        row = await conn.fetchrow(query, user_id, conversation_id, entity_id)
         
-        return row[0] if row else "Unknown"
+        return row['npc_name'] if row else "Unknown"
     
     def get_reciprocal_description(self, description):
         """
@@ -585,7 +583,7 @@ class NPCCreationHandler:
         
         return result
     
-    def add_npc_memory(self, conn, user_id, conversation_id, npc_id, memory_text):
+    async def add_npc_memory(self, conn, user_id, conversation_id, npc_id, memory_text):
         """
         Add a memory entry for an NPC.
         
@@ -596,36 +594,36 @@ class NPCCreationHandler:
             npc_id: NPC ID
             memory_text: Memory text to add
         """
-        cursor = conn.cursor()
-        
         try:
-            cursor.execute("""
+            query = """
                 SELECT memory FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+            """
             
-            row = cursor.fetchone()
-            if row and row[0]:
-                if isinstance(row[0], str):
+            row = await conn.fetchrow(query, user_id, conversation_id, npc_id)
+            if row and row['memory']:
+                if isinstance(row['memory'], str):
                     try:
-                        memory = json.loads(row[0])
+                        memory = json.loads(row['memory'])
                     except:
                         memory = []
                 else:
-                    memory = row[0]
+                    memory = row['memory']
             else:
                 memory = []
             
             memory.append(memory_text)
             
-            cursor.execute("""
+            update_query = """
                 UPDATE NPCStats
-                SET memory = %s
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (json.dumps(memory), user_id, conversation_id, npc_id))
+                SET memory = $1
+                WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+            """
             
-        finally:
-            cursor.close()
+            await conn.execute(update_query, json.dumps(memory), user_id, conversation_id, npc_id)
+            
+        except Exception as e:
+            logging.error(f"Error adding NPC memory: {e}")
     
     # --- NPC data retrieval methods ---
     
@@ -640,45 +638,45 @@ class NPCCreationHandler:
             List of archetype data
         """
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, baseline_stats, progression_rules, 
-                       setting_examples, unique_traits
-                FROM Archetypes
-                ORDER BY name
-            """)
-            
-            archetypes = []
-            for row in cursor.fetchall():
-                archetype = {
-                    "id": row[0],
-                    "name": row[1]
-                }
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT id, name, baseline_stats, progression_rules, 
+                           setting_examples, unique_traits
+                    FROM Archetypes
+                    ORDER BY name
+                """
                 
-                # Add detailed information if available
-                if row[2]:  # baseline_stats
-                    try:
-                        if isinstance(row[2], str):
-                            archetype["baseline_stats"] = json.loads(row[2])
-                        else:
-                            archetype["baseline_stats"] = row[2]
-                    except:
-                        pass
+                rows = await conn.fetch(query)
+                archetypes = []
                 
-                if row[5]:  # unique_traits
-                    try:
-                        if isinstance(row[5], str):
-                            archetype["unique_traits"] = json.loads(row[5])
-                        else:
-                            archetype["unique_traits"] = row[5]
-                    except:
-                        pass
+                for row in rows:
+                    archetype = {
+                        "id": row['id'],
+                        "name": row['name']
+                    }
+                    
+                    # Add detailed information if available
+                    if row['baseline_stats']:  # baseline_stats
+                        try:
+                            if isinstance(row['baseline_stats'], str):
+                                archetype["baseline_stats"] = json.loads(row['baseline_stats'])
+                            else:
+                                archetype["baseline_stats"] = row['baseline_stats']
+                        except:
+                            pass
+                    
+                    if row['unique_traits']:  # unique_traits
+                        try:
+                            if isinstance(row['unique_traits'], str):
+                                archetype["unique_traits"] = json.loads(row['unique_traits'])
+                            else:
+                                archetype["unique_traits"] = row['unique_traits']
+                        except:
+                            pass
+                    
+                    archetypes.append(archetype)
                 
-                archetypes.append(archetype)
-            
-            conn.close()
-            return archetypes
+                return archetypes
         except Exception as e:
             logging.error(f"Error getting archetypes: {e}")
             return []
@@ -697,23 +695,23 @@ class NPCCreationHandler:
             user_id = ctx.context.get("user_id")
             conversation_id = ctx.context.get("conversation_id")
             
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name
-                FROM Archetypes
-                ORDER BY id
-            """)
-            
-            archetypes = []
-            for row in cursor.fetchall():
-                archetypes.append({
-                    "id": row[0],
-                    "name": row[1]
-                })
-            
-            conn.close()
-            return archetypes
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT id, name
+                    FROM Archetypes
+                    ORDER BY id
+                """
+                
+                rows = await conn.fetch(query)
+                archetypes = []
+                
+                for row in rows:
+                    archetypes.append({
+                        "id": row['id'],
+                        "name": row['name']
+                    })
+                
+                return archetypes
         except Exception as e:
             logging.error(f"Error suggesting archetypes: {e}")
             return []
@@ -739,48 +737,46 @@ class NPCCreationHandler:
             }
         
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Get environment description
-            cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='EnvironmentDesc'
-            """, (user_id, conversation_id))
-            
-            row = cursor.fetchone()
-            environment_desc = row[0] if row else "No environment description available"
-            
-            # Get current setting
-            cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='CurrentSetting'
-            """, (user_id, conversation_id))
-            
-            row = cursor.fetchone()
-            setting_name = row[0] if row else "Unknown Setting"
-            
-            # Get locations
-            cursor.execute("""
-                SELECT location_name, description FROM Locations
-                WHERE user_id=%s AND conversation_id=%s
-                LIMIT 10
-            """, (user_id, conversation_id))
-            
-            locations = []
-            for row in cursor.fetchall():
-                locations.append({
-                    "name": row[0],
-                    "description": row[1]
-                })
-            
-            conn.close()
-            
-            return {
-                "environment_desc": environment_desc,
-                "setting_name": setting_name,
-                "locations": locations
-            }
+            async with get_db_connection_context() as conn:
+                # Get environment description
+                env_query = """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                """
+                
+                env_row = await conn.fetchrow(env_query, user_id, conversation_id)
+                environment_desc = env_row['value'] if env_row else "No environment description available"
+                
+                # Get current setting
+                setting_query = """
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
+                """
+                
+                setting_row = await conn.fetchrow(setting_query, user_id, conversation_id)
+                setting_name = setting_row['value'] if setting_row else "Unknown Setting"
+                
+                # Get locations
+                locations_query = """
+                    SELECT location_name, description FROM Locations
+                    WHERE user_id=$1 AND conversation_id=$2
+                    LIMIT 10
+                """
+                
+                location_rows = await conn.fetch(locations_query, user_id, conversation_id)
+                locations = []
+                
+                for row in location_rows:
+                    locations.append({
+                        "name": row['location_name'],
+                        "description": row['description']
+                    })
+                
+                return {
+                    "environment_desc": environment_desc,
+                    "setting_name": setting_name,
+                    "locations": locations
+                }
         except Exception as e:
             logging.error(f"Error getting environment details: {e}")
             return {
@@ -806,39 +802,39 @@ class NPCCreationHandler:
             return []
         
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, location_name, description, open_hours
-                FROM Locations
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY id
-            """, (user_id, conversation_id))
-            
-            locations = []
-            for row in cursor.fetchall():
-                location = {
-                    "id": row[0],
-                    "location_name": row[1],
-                    "description": row[2]
-                }
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT id, location_name, description, open_hours
+                    FROM Locations
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY id
+                """
                 
-                # Parse open_hours if available
-                if row[3]:
-                    try:
-                        if isinstance(row[3], str):
-                            location["open_hours"] = json.loads(row[3])
-                        else:
-                            location["open_hours"] = row[3]
-                    except:
+                rows = await conn.fetch(query, user_id, conversation_id)
+                locations = []
+                
+                for row in rows:
+                    location = {
+                        "id": row['id'],
+                        "location_name": row['location_name'],
+                        "description": row['description']
+                    }
+                    
+                    # Parse open_hours if available
+                    if row['open_hours']:
+                        try:
+                            if isinstance(row['open_hours'], str):
+                                location["open_hours"] = json.loads(row['open_hours'])
+                            else:
+                                location["open_hours"] = row['open_hours']
+                        except:
+                            location["open_hours"] = []
+                    else:
                         location["open_hours"] = []
-                else:
-                    location["open_hours"] = []
+                    
+                    locations.append(location)
                 
-                locations.append(location)
-            
-            conn.close()
-            return locations
+                return locations
         except Exception as e:
             logging.error(f"Error getting locations: {e}")
             return []
@@ -887,95 +883,72 @@ class NPCCreationHandler:
             return {"error": "Missing user_id or conversation_id"}
         
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            query = """
-                SELECT npc_id, npc_name, introduced, archetypes, archetype_summary, 
-                       archetype_extras_summary, physical_description, relationships,
-                       dominance, cruelty, closeness, trust, respect, intensity,
-                       hobbies, personality_traits, likes, dislikes, affiliations,
-                       schedule, current_location, sex, age, memory
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-            """
-            
-            params = [user_id, conversation_id]
-            
-            if npc_id is not None:
-                query += " AND npc_id=%s"
-                params.append(npc_id)
-            elif npc_name is not None:
-                query += " AND LOWER(npc_name)=LOWER(%s)"
-                params.append(npc_name)
-            else:
-                return {"error": "No NPC ID or name provided"}
-            
-            query += " LIMIT 1"
-            
-            cursor.execute(query, params)
-            row = cursor.fetchone()
-            
-            if not row:
-                return {"error": "NPC not found"}
-            
-            # Process JSON fields
-            def parse_json_field(field):
-                if field is None:
-                    return []
-                if isinstance(field, str):
-                    try:
-                        return json.loads(field)
-                    except:
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_id, npc_name, introduced, archetypes, archetype_summary, 
+                           archetype_extras_summary, physical_description, relationships,
+                           dominance, cruelty, closeness, trust, respect, intensity,
+                           hobbies, personality_traits, likes, dislikes, affiliations,
+                           schedule, current_location, sex, age, memory
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                """
+                
+                params = [user_id, conversation_id]
+                
+                if npc_id is not None:
+                    query += " AND npc_id=$3"
+                    params.append(npc_id)
+                elif npc_name is not None:
+                    query += " AND LOWER(npc_name)=LOWER($3)"
+                    params.append(npc_name)
+                else:
+                    return {"error": "No NPC ID or name provided"}
+                
+                query += " LIMIT 1"
+                
+                row = await conn.fetchrow(query, *params)
+                
+                if not row:
+                    return {"error": "NPC not found"}
+                
+                # Process JSON fields
+                def parse_json_field(field):
+                    if field is None:
                         return []
-                return field
-            
-            npc_id, npc_name = row[0], row[1]
-            archetypes = parse_json_field(row[3])
-            archetype_summary = row[4]
-            archetype_extras_summary = row[5]
-            physical_description = row[6]
-            relationships = parse_json_field(row[7])
-            dominance, cruelty = row[8], row[9]
-            closeness, trust = row[10], row[11]
-            respect, intensity = row[12], row[13]
-            hobbies = parse_json_field(row[14])
-            personality_traits = parse_json_field(row[15])
-            likes = parse_json_field(row[16])
-            dislikes = parse_json_field(row[17])
-            affiliations = parse_json_field(row[18])
-            schedule = parse_json_field(row[19])
-            current_location = row[20]
-            sex, age = row[21], row[22]
-            memories = parse_json_field(row[23])
-            
-            conn.close()
-            
-            return {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "introduced": row[2],
-                "archetypes": archetypes,
-                "archetype_summary": archetype_summary,
-                "archetype_extras_summary": archetype_extras_summary,
-                "physical_description": physical_description,
-                "relationships": relationships,
-                "dominance": dominance,
-                "cruelty": cruelty,
-                "closeness": closeness,
-                "trust": trust,
-                "respect": respect,
-                "intensity": intensity,
-                "hobbies": hobbies,
-                "personality_traits": personality_traits,
-                "likes": likes,
-                "dislikes": dislikes,
-                "affiliations": affiliations,
-                "schedule": schedule,
-                "current_location": current_location,
-                "sex": sex,
-                "age": age,
-                "memories": memories
-            }
+                    if isinstance(field, str):
+                        try:
+                            return json.loads(field)
+                        except:
+                            return []
+                    return field
+                
+                return {
+                    "npc_id": row['npc_id'],
+                    "npc_name": row['npc_name'],
+                    "introduced": row['introduced'],
+                    "archetypes": parse_json_field(row['archetypes']),
+                    "archetype_summary": row['archetype_summary'],
+                    "archetype_extras_summary": row['archetype_extras_summary'],
+                    "physical_description": row['physical_description'],
+                    "relationships": parse_json_field(row['relationships']),
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty'],
+                    "closeness": row['closeness'],
+                    "trust": row['trust'],
+                    "respect": row['respect'],
+                    "intensity": row['intensity'],
+                    "hobbies": parse_json_field(row['hobbies']),
+                    "personality_traits": parse_json_field(row['personality_traits']),
+                    "likes": parse_json_field(row['likes']),
+                    "dislikes": parse_json_field(row['dislikes']),
+                    "affiliations": parse_json_field(row['affiliations']),
+                    "schedule": parse_json_field(row['schedule']),
+                    "current_location": row['current_location'],
+                    "sex": row['sex'],
+                    "age": row['age'],
+                    "memories": parse_json_field(row['memory'])
+                }
         except Exception as e:
             logging.error(f"Error getting NPC details: {e}")
             return {"error": f"Error retrieving NPC details: {str(e)}"}
@@ -1137,15 +1110,14 @@ class NPCCreationHandler:
             env_details = await self.get_environment_details(ctx)
             
             # Get existing NPC names to avoid duplicates
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT npc_name FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-            """, (user_id, conversation_id))
-            
-            existing_names = [row[0] for row in cursor.fetchall()]
-            conn.close()
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                """
+                
+                rows = await conn.fetch(query, user_id, conversation_id)
+                existing_names = [row['npc_name'] for row in rows]
             
             if forbidden_names:
                 existing_names.extend(forbidden_names)
@@ -1466,20 +1438,18 @@ class NPCCreationHandler:
                 day_names = await self.get_day_names(ctx)
             
             # Get NPC data from the database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT npc_id, archetypes, hobbies, personality_traits
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_name=%s
-                LIMIT 1
-            """, (user_id, conversation_id, npc_name))
-            
-            row = cursor.fetchone()
-            conn.close()
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_id, archetypes, hobbies, personality_traits
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3
+                    LIMIT 1
+                """
+                
+                row = await conn.fetchrow(query, user_id, conversation_id, npc_name)
             
             if row:
-                npc_id = row[0]
+                npc_id = row['npc_id']
                 
                 # Parse JSON fields
                 def parse_json_field(field):
@@ -1492,9 +1462,9 @@ class NPCCreationHandler:
                             return []
                     return field
                 
-                archetypes = parse_json_field(row[1])
-                hobbies = parse_json_field(row[2])
-                personality_traits = parse_json_field(row[3])
+                archetypes = parse_json_field(row['archetypes'])
+                hobbies = parse_json_field(row['hobbies'])
+                personality_traits = parse_json_field(row['personality_traits'])
                 
                 # Create NPC data for the prompt
                 npc_data = {
@@ -1618,43 +1588,41 @@ class NPCCreationHandler:
                 environment_desc = env_details["environment_desc"]
             
             # Get NPC data from the database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT npc_id, archetypes, archetype_summary, relationships,
-                       dominance, cruelty, personality_traits
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_name=%s
-                LIMIT 1
-            """, (user_id, conversation_id, npc_name))
-            
-            row = cursor.fetchone()
-            conn.close()
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_id, archetypes, archetype_summary, relationships,
+                           dominance, cruelty, personality_traits
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3
+                    LIMIT 1
+                """
+                
+                row = await conn.fetchrow(query, user_id, conversation_id, npc_name)
             
             if row:
-                npc_id = row[0]
-                dominance = row[4]
-                cruelty = row[5]
+                npc_id = row['npc_id']
+                dominance = row['dominance']
+                cruelty = row['cruelty']
                 
                 # Parse relationships
                 relationships = []
-                if row[3]:
+                if row['relationships']:
                     try:
-                        if isinstance(row[3], str):
-                            relationships = json.loads(row[3])
+                        if isinstance(row['relationships'], str):
+                            relationships = json.loads(row['relationships'])
                         else:
-                            relationships = row[3]
+                            relationships = row['relationships']
                     except:
                         relationships = []
                 
                 # Parse personality traits
                 personality_traits = []
-                if row[6]:
+                if row['personality_traits']:
                     try:
-                        if isinstance(row[6], str):
-                            personality_traits = json.loads(row[6])
+                        if isinstance(row['personality_traits'], str):
+                            personality_traits = json.loads(row['personality_traits'])
                         else:
-                            personality_traits = row[6]
+                            personality_traits = row['personality_traits']
                     except:
                         personality_traits = []
                 
@@ -1668,7 +1636,7 @@ class NPCCreationHandler:
                 
                 NPC INFORMATION:
                 - Name: {npc_name}
-                - Archetype: {row[2] if row[2] else "Unknown"}
+                - Archetype: {row['archetype_summary'] if row['archetype_summary'] else "Unknown"}
                 - Dominance Level: {dominance}/100
                 - Cruelty Level: {cruelty}/100
                 - Personality: {personality_context}
@@ -1811,21 +1779,22 @@ class NPCCreationHandler:
             current_location = npc_data.get("current_location", "")
             if not current_location:
                 # Determine current time of day and day
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT value FROM CurrentRoleplay WHERE user_id=%s AND conversation_id=%s AND key='TimeOfDay'",
-                    (user_id, conversation_id)
-                )
-                time_of_day = cursor.fetchone()
-                time_of_day = time_of_day[0] if time_of_day else "Morning"
-                
-                cursor.execute(
-                    "SELECT value FROM CurrentRoleplay WHERE user_id=%s AND conversation_id=%s AND key='CurrentDay'",
-                    (user_id, conversation_id)
-                )
-                current_day_num = cursor.fetchone()
-                current_day_num = int(current_day_num[0]) if current_day_num and current_day_num[0].isdigit() else 1
+                async with get_db_connection_context() as conn:
+                    time_query = """
+                        SELECT value FROM CurrentRoleplay 
+                        WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
+                    """
+                    
+                    time_row = await conn.fetchrow(time_query, user_id, conversation_id)
+                    time_of_day = time_row['value'] if time_row else "Morning"
+                    
+                    day_query = """
+                        SELECT value FROM CurrentRoleplay 
+                        WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
+                    """
+                    
+                    day_row = await conn.fetchrow(day_query, user_id, conversation_id)
+                    current_day_num = int(day_row['value']) if day_row and day_row['value'].isdigit() else 1
                 
                 # Calculate day index
                 day_index = (current_day_num - 1) % len(day_names)
@@ -1847,17 +1816,14 @@ class NPCCreationHandler:
                 
                 # If we couldn't extract a location, use a random location from the database
                 if not current_location:
-                    cursor.execute(
-                        "SELECT location_name FROM Locations WHERE user_id=%s AND conversation_id=%s ORDER BY RANDOM() LIMIT 1",
-                        (user_id, conversation_id)
-                    )
-                    random_location = cursor.fetchone()
-                    if random_location:
-                        current_location = random_location[0]
-                    else:
-                        current_location = "Unknown"
-                
-                conn.close()
+                    location_query = """
+                        SELECT location_name FROM Locations 
+                        WHERE user_id=$1 AND conversation_id=$2 
+                        ORDER BY RANDOM() LIMIT 1
+                    """
+                    
+                    location_row = await conn.fetchrow(location_query, user_id, conversation_id)
+                    current_location = location_row['location_name'] if location_row else "Unknown"
             
             # Generate age and birthdate
             age = random.randint(20, 50)  # Default age range
@@ -1888,42 +1854,41 @@ class NPCCreationHandler:
             dislikes = npc_data_with_femdom.get("dislikes", dislikes)
             
             # Insert into database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO NPCStats (
+            async with get_db_connection_context() as conn:
+                query = """
+                    INSERT INTO NPCStats (
+                        user_id, conversation_id,
+                        npc_name, introduced, sex,
+                        dominance, cruelty, closeness, trust, respect, intensity,
+                        archetypes, archetype_summary, archetype_extras_summary,
+                        likes, dislikes, hobbies, personality_traits,
+                        age, birthdate,
+                        relationships, memory, schedule,
+                        physical_description, current_location
+                    )
+                    VALUES ($1, $2,
+                            $3, $4, $5,
+                            $6, $7, $8, $9, $10, $11,
+                            $12, $13, $14,
+                            $15, $16, $17, $18,
+                            $19, $20,
+                            $21, $22, $23,
+                            $24, $25
+                    )
+                    RETURNING npc_id
+                """
+                
+                npc_id = await conn.fetchval(
+                    query,
                     user_id, conversation_id,
                     npc_name, introduced, sex,
                     dominance, cruelty, closeness, trust, respect, intensity,
-                    archetypes, archetype_summary, archetype_extras_summary,
-                    likes, dislikes, hobbies, personality_traits,
+                    json.dumps(archetype_objs), archetype_summary, archetype_extras_summary,
+                    json.dumps(likes), json.dumps(dislikes), json.dumps(hobbies), json.dumps(personality_traits),
                     age, birthdate,
-                    relationships, memory, schedule,
+                    '[]', json.dumps(memories), json.dumps(schedule),
                     physical_description, current_location
                 )
-                VALUES (%s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        '[]'::jsonb, %s, %s,
-                        %s, %s
-                )
-                RETURNING npc_id
-            """, (
-                user_id, conversation_id,
-                npc_name, introduced, sex,
-                dominance, cruelty, closeness, trust, respect, intensity,
-                json.dumps(archetype_objs), archetype_summary, archetype_extras_summary,
-                json.dumps(likes), json.dumps(dislikes), json.dumps(hobbies), json.dumps(personality_traits),
-                age, birthdate,
-                json.dumps(memories), json.dumps(schedule),
-                physical_description, current_location
-            ))
-            
-            npc_id = cursor.fetchone()[0]
-            conn.commit()
             
             # Assign random relationships
             await self.assign_random_relationships(
@@ -2007,8 +1972,6 @@ class NPCCreationHandler:
                 
             except Exception as e:
                 logging.error(f"Error initializing memory system for NPC {npc_id}: {e}")
-            
-            conn.close()
             
             # Create NPC details dictionary
             npc_details = {
@@ -2270,15 +2233,14 @@ class NPCCreationHandler:
         memories = await self.generate_memories(ctx, npc_name, environment_desc)
         
         # Update schedule and memories in the database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE NPCStats
-            SET schedule = %s, memory = %s
-            WHERE npc_id = %s
-        """, (json.dumps(schedule), json.dumps(memories), npc_id))
-        conn.commit()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            query = """
+                UPDATE NPCStats
+                SET schedule = $1, memory = $2
+                WHERE npc_id = $3
+            """
+            
+            await conn.execute(query, json.dumps(schedule), json.dumps(memories), npc_id)
         
         # Return the final NPC
         return NPCCreationResult(
@@ -2345,14 +2307,14 @@ class NPCCreationHandler:
         Store a batch of memories for an NPC, ensuring each memory is governed by Nyx.
         
         Steps:
-          1. For each memory, decide significance (“high” for first couple, else “medium”).
+          1. For each memory, decide significance ("high" for first couple, else "medium").
           2. Tag them if they contain certain keywords.
           3. Call remember_through_nyx(...) so governance can approve or deny the memory.
           4. If Nyx denies, skip it (or handle however you like).
           5. If approved, we have a memory_id from Nyx. Optionally do semantic follow-up.
     
         Args:
-            user_id: The user’s ID in your system.
+            user_id: The user's ID in your system.
             conversation_id: The conversation ID (table: conversations).
             npc_id: The NPC's primary key in NPCStats or similar.
             memories: List of memory_text strings for the NPC.
@@ -2421,6 +2383,681 @@ class NPCCreationHandler:
                     logging.error(f"Error generating semantic memory for NPC {npc_id}: {e}")
 
     
+def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
+        """
+        Create a reciprocal memory from the perspective of the second NPC.
+        
+        Args:
+            original_memory: The original memory text
+            npc1_name: Name of the first NPC (original memory owner)
+            npc2_name: Name of the second NPC (reciprocal memory owner)
+            relationship_type: Original relationship type
+            reciprocal_type: Reciprocal relationship type
+            
+        Returns:
+            Reciprocal memory string or None if error
+        """
+        try:
+            # Simple conversion for prototype
+            # In a full implementation, this would use GPT to create a properly
+            # transformed memory from the other perspective
+            
+            # Replace names
+            memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
+            memory = memory.replace(npc2_name, "MYSELF")
+            memory = memory.replace("THE_OTHER_PERSON", npc1_name)
+            memory = memory.replace("MYSELF", "I")
+            
+            # Flip perspective words
+            memory = memory.replace("I told them", f"{npc1_name} told me")
+            memory = memory.replace("I noticed", f"{npc1_name} seemed to notice")
+            memory = memory.replace("my hand", "her hand")
+            memory = memory.replace("I suggested", f"{npc1_name} suggested")
+            
+            # Convert to first person
+            memory = memory.replace(f"{npc2_name} was", "I was")
+            memory = memory.replace(f"{npc2_name} had", "I had")
+            memory = memory.replace(f"{npc2_name} and I", f"{npc1_name} and I")
+            
+            return memory
+        except Exception as e:
+            logging.error(f"Error creating reciprocal memory: {e}")
+            return None
+    
+    # --- API Methods ---
+    
+    async def create_npc_api(self, request):
+        """
+        API endpoint to create a new NPC.
+        
+        Args:
+            request: NPCCreationRequest object
+            
+        Returns:
+            Dict with basic NPC info
+        """
+        try:
+            # Extract request data
+            user_id = request.user_id
+            conversation_id = request.conversation_id
+            environment_desc = request.environment_desc
+            archetype_names = request.archetype_names
+            specific_traits = request.specific_traits
+            
+            # Create context wrapper
+            ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            
+            # Use existing function to create NPC
+            result = await self.create_npc(
+                ctx, 
+                archetype_names=archetype_names, 
+                physical_desc=None, 
+                starting_traits=specific_traits.get("personality_traits") if specific_traits else None
+            )
+            
+            # Extract basic info for immediate return
+            npc_id = result.get("npc_id")
+            npc_name = result.get("npc_name")
+            physical_description = result.get("physical_description", "")
+            
+            # Get personality traits from result
+            personality = result.get("personality", {})
+            if isinstance(personality, dict):
+                personality_traits = personality.get("personality_traits", [])
+            else:
+                personality_traits = []
+            
+            # Get archetypes from result
+            archetypes = result.get("archetypes", {})
+            if isinstance(archetypes, dict):
+                archetype_names = archetypes.get("archetype_names", [])
+            else:
+                archetype_names = []
+            
+            return {
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "physical_description": physical_description[:100] + "..." if len(physical_description) > 100 else physical_description,
+                "personality_traits": personality_traits,
+                "archetypes": archetype_names,
+                "current_location": result.get("current_location", ""),
+                "message": "NPC creation in progress. Basic information is available now."
+            }
+        except Exception as e:
+            logging.error(f"Error in create_npc_api: {e}")
+            return {"error": str(e)}
+    
+    async def spawn_multiple_npcs_api(self, request):
+        """
+        API endpoint to spawn multiple NPCs.
+        
+        Args:
+            request: MultipleNPCRequest object
+            
+        Returns:
+            Dict with NPC IDs
+        """
+        try:
+            # Extract request data
+            user_id = request.user_id
+            conversation_id = request.conversation_id
+            count = request.count
+            environment_desc = request.environment_desc
+            
+            # Create context wrapper
+            ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            
+            # Use existing function to spawn NPCs
+            npc_ids = await self.spawn_multiple_npcs(ctx, count)
+            
+            return {
+                "npc_ids": npc_ids,
+                "message": f"Successfully spawned {len(npc_ids)} NPCs."
+            }
+        except Exception as e:
+            logging.error(f"Error in spawn_multiple_npcs_api: {e}")
+            return {"error": str(e)}
+    
+    async def get_npc_api(self, npc_id, user_id, conversation_id):
+        """
+        API endpoint to get NPC details.
+        
+        Args:
+            npc_id: NPC ID
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Dict with NPC details
+        """
+        try:
+            # Create context wrapper
+            ctx = RunContextWrapper({
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            
+            # Use existing function to get NPC details
+            result = await self.get_npc_details(ctx, npc_id=npc_id)
+            
+            if "error" in result:
+                return result
+            
+            # Extract relevant info for API response
+            return {
+                "npc_id": result["npc_id"],
+                "npc_name": result["npc_name"],
+                "physical_description": result["physical_description"],
+                "personality_traits": result["personality_traits"],
+                "archetypes": [a.get("name", "") for a in result["archetypes"]],
+                "current_location": result["current_location"]
+            }
+        except Exception as e:
+            logging.error(f"Error in get_npc_api: {e}")
+            return {"error": str(e)}
+
+    async def check_for_mask_slippage(self, user_id, conversation_id, npc_id):
+        """
+        Check if an NPC has reached thresholds where their true nature begins to show.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+            
+        Returns:
+            List of triggered events or None if error
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                # Get NPC's current stats
+                stats_query = """
+                    SELECT npc_name, dominance, cruelty, intensity, memory
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                """
+                
+                row = await conn.fetchrow(stats_query, user_id, conversation_id, npc_id)
+                if not row:
+                    return None
+                    
+                npc_name, dominance, cruelty, intensity, memory_json = row['npc_name'], row['dominance'], row['cruelty'], row['intensity'], row['memory']
+                
+                # Parse memory
+                if memory_json:
+                    if isinstance(memory_json, str):
+                        try:
+                            memory = json.loads(memory_json)
+                        except:
+                            memory = []
+                    else:
+                        memory = memory_json
+                else:
+                    memory = []
+                    
+                # Get slippage history
+                slippage_query = """
+                    SELECT mask_slippage_events
+                    FROM NPCEvolution
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                """
+                
+                row = await conn.fetchrow(slippage_query, user_id, conversation_id, npc_id)
+                if row and row['mask_slippage_events']:
+                    if isinstance(row['mask_slippage_events'], str):
+                        try:
+                            slippage_history = json.loads(row['mask_slippage_events'])
+                        except:
+                            slippage_history = []
+                    else:
+                        slippage_history = row['mask_slippage_events']
+                else:
+                    slippage_history = []
+                    
+                # Check each stat for slippage triggers
+                triggered_events = []
+                
+                for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
+                    stat_value = locals().get(stat_name, 0)  # Get the stat value from local vars
+                    
+                    for threshold in thresholds:
+                        event_name = threshold["event"]
+                        
+                        # Skip if this slippage has already occurred
+                        if any(e.get("event") == event_name for e in slippage_history):
+                            continue
+                            
+                        # Check if threshold is met
+                        if stat_value >= threshold["threshold"]:
+                            # Record this slippage event
+                            event_data = {
+                                "event": event_name,
+                                "stat": stat_name,
+                                "threshold": threshold["threshold"],
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            triggered_events.append(event_data)
+                            
+                            # Add the memory
+                            if "memory" in threshold:
+                                memory.append(threshold["memory"])
+                                
+                            # Subtle physical description changes based on mask slippage
+                            if stat_name == "dominance" and threshold["threshold"] >= 50:
+                                update_query = """
+                                    UPDATE NPCStats
+                                    SET physical_description = CONCAT(physical_description, ' In unguarded moments, her demeanor shifts subtly—a barely perceptible straightening of posture, a flash of something commanding in her eyes that quickly vanishes when noticed.')
+                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                                """
+                                await conn.execute(update_query, user_id, conversation_id, npc_id)
+                            
+                            if stat_name == "cruelty" and threshold["threshold"] >= 50:
+                                update_query = """
+                                    UPDATE NPCStats
+                                    SET physical_description = CONCAT(physical_description, ' Occasionally her smile doesn't quite reach her eyes, revealing a momentary coldness before she adjusts her expression back to warmth.')
+                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                                """
+                                await conn.execute(update_query, user_id, conversation_id, npc_id)
+                                
+                            if stat_name == "intensity" and threshold["threshold"] >= 50:
+                                update_query = """
+                                    UPDATE NPCStats
+                                    SET physical_description = CONCAT(physical_description, ' Sometimes when she thinks no one is watching, her gaze becomes unnervingly focused, studying others with an analytical intensity that disappears behind a pleasant mask when attention returns to her.')
+                                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                                """
+                                await conn.execute(update_query, user_id, conversation_id, npc_id)
+                
+                # Update memory
+                memory_update_query = """
+                    UPDATE NPCStats
+                    SET memory = $1
+                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                """
+                await conn.execute(memory_update_query, json.dumps(memory), user_id, conversation_id, npc_id)
+                
+                # Update slippage history
+                if triggered_events:
+                    slippage_history.extend(triggered_events)
+                    
+                    # Check if NPCEvolution record exists
+                    exists_query = """
+                        SELECT 1 FROM NPCEvolution
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    exists_row = await conn.fetchrow(exists_query, user_id, conversation_id, npc_id)
+                    
+                    if exists_row:
+                        update_query = """
+                            UPDATE NPCEvolution
+                            SET mask_slippage_events = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                        """
+                        await conn.execute(update_query, json.dumps(slippage_history), user_id, conversation_id, npc_id)
+                    else:
+                        insert_query = """
+                            INSERT INTO NPCEvolution
+                            (user_id, conversation_id, npc_id, mask_slippage_events)
+                            VALUES ($1, $2, $3, $4)
+                        """
+                        await conn.execute(insert_query, user_id, conversation_id, npc_id, json.dumps(slippage_history))
+                
+                return triggered_events
+                
+        except Exception as e:
+            logging.error(f"Error checking mask slippage: {e}")
+            return None
+    
+    async def assign_random_relationships(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
+        """
+        Assign random relationships between the new NPC and other entities.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            npc_id: NPC ID
+            npc_name: NPC name
+            npc_archetypes: List of NPC archetypes (optional)
+        """
+        logging.info(f"Assigning relationships for NPC {npc_id} ({npc_name})")
+        
+        relationships = []
+
+        # Define explicit mapping for archetypes to relationship labels.
+        explicit_role_map = {
+            "mother": "mother",
+            "stepmother": "stepmother",
+            "aunt": "aunt",
+            "older sister": "older sister",
+            "stepsister": "stepsister",
+            "babysitter": "babysitter",
+            "friend from online interactions": "online friend",
+            "neighbor": "neighbor",
+            "rival": "rival",
+            "classmate": "classmate",
+            "lover": "lover",
+            "colleague": "colleague",
+            "teammate": "teammate",
+            "boss/supervisor": "boss/supervisor",
+            "teacher/principal": "teacher/principal",
+            "landlord": "landlord",
+            "roommate/housemate": "roommate",
+            "ex-girlfriend/ex-wife": "ex-partner",
+            "therapist": "therapist",
+            "domestic authority": "head of household",
+            "the one who got away": "the one who got away",
+            "childhood friend": "childhood friend",
+            "friend's wife": "friend",
+            "friend's girlfriend": "friend",
+            "best friend's sister": "friend's sister"
+        }
+        
+        # First, add relationships based on explicit archetype mapping.
+        if npc_archetypes:
+            for arc in npc_archetypes:
+                arc_name = arc.get("name", "").strip().lower()
+                if arc_name in explicit_role_map:
+                    rel_label = explicit_role_map[arc_name]
+                    # Add relationship from NPC to player using the explicit role.
+                    relationships.append({
+                        "target_entity_type": "player",
+                        "target_entity_id": user_id,  # player ID
+                        "relationship_label": rel_label
+                    })
+                    logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
+        
+        # Next, determine which explicit roles (if any) were already added.
+        explicit_roles_added = {rel["relationship_label"] for rel in relationships}
+        
+        # Define default lists for random selection.
+        default_familial = ["mother", "sister", "aunt"]
+        default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                              "colleague", "classmate", "teammate", "underling", "rival", "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
+        
+        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player.
+        if not (explicit_roles_added & set(default_familial)):
+            if random.random() < 0.5:
+                rel_type = random.choice(default_non_familial)
+                relationships.append({
+                    "target_entity_type": "player",
+                    "target_entity_id": user_id,
+                    "relationship_label": rel_type
+                })
+                logging.info(f"Randomly added non-familial relationship '{rel_type}' for NPC {npc_id} to player.")
+        
+        # Now add relationships with other NPCs.
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT npc_id, npc_name, archetype_summary
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id!=$3
+            """
+            
+            rows = await conn.fetch(query, user_id, conversation_id, npc_id)
+            
+            # For each other NPC, use explicit mapping if possible; otherwise, fall back to random choice.
+            for row in rows:
+                old_npc_id, old_npc_name, old_arche_summary = row['npc_id'], row['npc_name'], row['archetype_summary']
+                
+                if random.random() < 0.3:
+                    # Check if the current NPC's explicit roles should be used.
+                    if explicit_roles_added:
+                        # Prefer one of the explicit roles if available.
+                        rel_type = random.choice(list(explicit_roles_added))
+                    else:
+                        rel_type = random.choice(default_non_familial)
+                    relationships.append({
+                        "target_entity_type": "npc",
+                        "target_entity_id": old_npc_id,
+                        "relationship_label": rel_type,
+                        "target_archetype_summary": old_arche_summary or ""
+                    })
+                    logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
+        
+        # Finally, create these relationships in the database and generate associated memories.
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        for rel in relationships:
+            if rel["target_entity_type"] == "player":
+                create_social_link(
+                    user_id, conversation_id,
+                    entity1_type="npc", entity1_id=npc_id,
+                    entity2_type="player", entity2_id=rel["target_entity_id"],
+                    link_type=rel["relationship_label"]
+                )
+                
+                # Add to NPCStats.relationships
+                async with get_db_connection_context() as conn:
+                    rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
+                    relationships_json = row['relationships'] if row else "[]"
+                    
+                    if isinstance(relationships_json, str):
+                        try:
+                            current_relationships = json.loads(relationships_json)
+                        except:
+                            current_relationships = []
+                    else:
+                        current_relationships = relationships_json
+                    
+                    # Add the new relationship
+                    current_relationships.append({
+                        "relationship_label": rel["relationship_label"],
+                        "entity_type": "player", 
+                        "entity_id": rel["target_entity_id"]
+                    })
+                    
+                    # Update the NPCStats
+                    update_query = """
+                        UPDATE NPCStats
+                        SET relationships = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """
+                    
+                    await conn.execute(update_query, json.dumps(current_relationships), user_id, conversation_id, npc_id)
+                
+            else:  # NPC to NPC relationship
+                old_npc_id = rel["target_entity_id"]
+                old_arche_summary = rel.get("target_archetype_summary", "")
+                
+                # Create forward link
+                create_social_link(
+                    user_id, conversation_id,
+                    entity1_type="npc", entity1_id=npc_id,
+                    entity2_type="npc", entity2_id=old_npc_id,
+                    link_type=rel["relationship_label"]
+                )
+                
+                # Add to NPCStats.relationships
+                async with get_db_connection_context() as conn:
+                    rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(rel_query, user_id, conversation_id, npc_id)
+                    relationships_json = row['relationships'] if row else "[]"
+                    
+                    if isinstance(relationships_json, str):
+                        try:
+                            current_relationships = json.loads(relationships_json)
+                        except:
+                            current_relationships = []
+                    else:
+                        current_relationships = relationships_json
+                    
+                    # Add the new relationship
+                    current_relationships.append({
+                        "relationship_label": rel["relationship_label"],
+                        "entity_type": "npc", 
+                        "entity_id": old_npc_id
+                    })
+                    
+                    # Update the NPCStats
+                    update_query = """
+                        UPDATE NPCStats
+                        SET relationships = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """
+                    
+                    await conn.execute(update_query, json.dumps(current_relationships), user_id, conversation_id, npc_id)
+                
+                # Create reverse link with reciprocal relationship
+                rec_type = self.dynamic_reciprocal_relationship(
+                    rel["relationship_label"],
+                    old_arche_summary
+                )
+                
+                create_social_link(
+                    user_id, conversation_id,
+                    entity1_type="npc", entity1_id=old_npc_id,
+                    entity2_type="npc", entity2_id=npc_id,
+                    link_type=rec_type
+                )
+                
+                # Add to target NPC's relationships
+                async with get_db_connection_context() as conn:
+                    target_rel_query = """
+                        SELECT relationships FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """
+                    
+                    row = await conn.fetchrow(target_rel_query, user_id, conversation_id, old_npc_id)
+                    target_relationships_json = row['relationships'] if row else "[]"
+                    
+                    if isinstance(target_relationships_json, str):
+                        try:
+                            target_relationships = json.loads(target_relationships_json)
+                        except:
+                            target_relationships = []
+                    else:
+                        target_relationships = target_relationships_json
+                    
+                    # Add the reciprocal relationship
+                    target_relationships.append({
+                        "relationship_label": rec_type,
+                        "entity_type": "npc", 
+                        "entity_id": npc_id
+                    })
+                    
+                    # Update the target NPC's relationships
+                    update_query = """
+                        UPDATE NPCStats
+                        SET relationships = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """
+                    
+                    await conn.execute(update_query, json.dumps(target_relationships), user_id, conversation_id, old_npc_id)
+                
+                # Generate shared memories for both NPCs
+                try:
+                    # Generate a relationship-specific memory for the new NPC
+                    specific_memory = await self.generate_relationship_specific_memory(
+                        user_id, conversation_id, 
+                        npc_data, 
+                        {"npc_id": old_npc_id, "npc_name": old_npc_name},
+                        rel["relationship_label"]
+                    )
+                    
+                    if specific_memory:
+                        # Store in memory system
+                        await memory_system.remember(
+                            entity_type="npc",
+                            entity_id=npc_id,
+                            memory_text=specific_memory,
+                            importance="medium",
+                            emotional=True,
+                            tags=["relationship", rel["relationship_label"]]
+                        )
+                        
+                        # Create a reciprocal memory for the target NPC
+                        reciprocal_memory = self.create_reciprocal_memory(
+                            specific_memory, npc_name, old_npc_name, 
+                            rel["relationship_label"], rec_type
+                        )
+                        
+                        if reciprocal_memory:
+                            await memory_system.remember(
+                                entity_type="npc",
+                                entity_id=old_npc_id,
+                                memory_text=reciprocal_memory,
+                                importance="medium",
+                                emotional=True,
+                                tags=["relationship", rec_type]
+                            )
+                except Exception as e:
+                    logging.error(f"Error generating relationship memories: {e}")
+        
+        logging.info(f"Finished assigning relationships for NPC {npc_id}.")
+    
+    async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
+        """
+        Generate a memory specific to the relationship between two NPCs.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID  
+            npc_data: Dict with data about the NPC
+            target_data: Dict with data about the target NPC
+            relationship_type: Type of relationship
+            
+        Returns:
+            Memory string or None if error
+        """
+        try:
+            npc_name = npc_data.get("npc_name", "Unknown")
+            target_name = target_data.get("npc_name", "Unknown")
+            
+            # Get a random location for the memory
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT location_name FROM Locations 
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY RANDOM() LIMIT 1
+                """
+                
+                row = await conn.fetchrow(query, user_id, conversation_id)
+                location = row['location_name'] if row else "a familiar place"
+            
+            # Different memory templates based on relationship type
+            memory_templates = {
+                "mother": [
+                    f"I remember when {target_name} was younger and had their first real failure at {location}. The disappointment was visible in their eyes, but I knew this was a teaching moment. 'Sometimes we need to fail to understand the value of success,' I told them, my hand firm but comforting on their shoulder. I could see the resistance at first—that stubborn set of the jaw they inherited from me—but slowly, understanding dawned. How they looked at me then, with a mixture of frustration and reluctant recognition, showed me they were growing in the way I had hoped."
+                ],
+                "friend": [
+                    f"Last month, {target_name} and I spent an afternoon at {location}, supposedly just catching up, but I was carefully observing their reactions to certain topics. 'You always know exactly what to say,' they told me, not realizing how deliberately I choose my words. I smiled and deflected the compliment, but privately noted how easily they opened up about their insecurities. These casual get-togethers are perfect for gathering the small details that might be useful later."
+                ],
+                "colleague": [
+                    f"During the project deadline at {location}, I noticed how {target_name} deferred to my judgment on the final presentation. 'What do you think we should emphasize?' they asked, though technically we were equals on the team. I suggested an approach that showcased my contributions while still acknowledging theirs. The subtle way they nodded, relieved to have direction, confirmed my growing influence in our professional relationship. I've been cultivating this dynamic carefully, one small interaction at a time."
+                ],
+                "rival": [
+                    f"I encountered {target_name} at {location} during the quarterly review, and we engaged in our usual verbal chess match. 'Impressive results,' they said with that smile that never quite reaches their eyes. I returned an equally measured compliment, both of us aware of the real competition beneath our cordial exchange. What they don't realize is how much I study their strategies, cataloging weaknesses for future reference. There's a certain thrill in these encounters—measuring myself against someone who thinks they're my equal."
+                ],
+                "mentor": [
+                    f"I've been guiding {target_name} through their professional development at {location}. Yesterday, I intentionally gave them a task just slightly beyond their current abilities. 'I know you can handle this,' I said, watching them try to hide their uncertainty. The subtle way they looked to me for reassurance was exactly what I wanted—establishing that I'm the source of both challenge and validation. After they completed it with my carefully timed guidance, their gratitude was palpable. These moments of manufactured growth strengthen our mentor-student dynamic."
+                ]
+            }
+            
+            # Get relevant template or use a generic one
+            if relationship_type.lower() in memory_templates:
+                return random.choice(memory_templates[relationship_type.lower()])
+            else:
+                return f"I remember an interaction with {target_name} at {location} that defined our {relationship_type} relationship. There was a moment of genuine connection mixed with the subtle power dynamic that's always been present between us. 'I understand you better than most people do,' I told them, which wasn't exactly what they were expecting to hear. The look of surprise followed by thoughtful consideration showed me they were reassessing our connection. These little moments of revelation always give me a particular satisfaction."
+        
+        except Exception as e:
+            logging.error(f"Error generating relationship memory: {e}")
+            return None
+    
     async def propagate_shared_memories(self, user_id, conversation_id, source_npc_id, source_npc_name, memories):
         """
         Propagate shared memories to related NPCs.
@@ -2436,26 +3073,24 @@ class NPCCreationHandler:
             return
         
         # Get connections to other NPCs
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT entity2_id, link_type, link_level
-            FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s 
-            AND entity1_type='npc' AND entity1_id=%s
-            AND entity2_type='npc'
-        """, (user_id, conversation_id, source_npc_id))
-        
-        connections = []
-        for row in cursor.fetchall():
-            connections.append({
-                "npc_id": row[0],
-                "relationship": row[1],
-                "strength": row[2]
-            })
-        
-        cursor.close()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            query = """
+                SELECT entity2_id, link_type, link_level
+                FROM SocialLinks
+                WHERE user_id=$1 AND conversation_id=$2 
+                AND entity1_type='npc' AND entity1_id=$3
+                AND entity2_type='npc'
+            """
+            
+            rows = await conn.fetch(query, user_id, conversation_id, source_npc_id)
+            connections = []
+            
+            for row in rows:
+                connections.append({
+                    "npc_id": row['entity2_id'],
+                    "relationship": row['link_type'],
+                    "strength": row['link_level']
+                })
         
         if not connections:
             return
@@ -2474,16 +3109,14 @@ class NPCCreationHandler:
                 continue
             
             # Get target NPC name
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT npc_name FROM NPCStats WHERE npc_id=%s AND user_id=%s AND conversation_id=%s",
-                (target_npc_id, user_id, conversation_id)
-            )
-            row = cursor.fetchone()
-            target_npc_name = row[0] if row else f"NPC {target_npc_id}"
-            cursor.close()
-            conn.close()
+            async with get_db_connection_context() as conn:
+                query = """
+                    SELECT npc_name FROM NPCStats 
+                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """
+                
+                row = await conn.fetchrow(query, target_npc_id, user_id, conversation_id)
+                target_npc_name = row['npc_name'] if row else f"NPC {target_npc_id}"
             
             # Decide how many memories to share (stronger connections share more)
             num_to_share = 1
@@ -2749,18 +3382,14 @@ class NPCCreationHandler:
             triggers = random.sample(significant_words, min(3, len(significant_words)))
             
             # Store triggers in database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
+            async with get_db_connection_context() as conn:
+                query = """
+                    UPDATE NPCStats
+                    SET trauma_triggers = $1
+                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                 """
-                UPDATE NPCStats
-                SET trauma_triggers = %s
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """,
-                (json.dumps(triggers), user_id, conversation_id, npc_id)
-            )
-            conn.commit()
-            conn.close()
+                
+                await conn.execute(query, json.dumps(triggers), user_id, conversation_id, npc_id)
             
             return {
                 "trauma_model_created": True,
@@ -2833,18 +3462,14 @@ class NPCCreationHandler:
                 )
                 
                 # Store trigger words in database for future reference
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
+                async with get_db_connection_context() as conn:
+                    query = """
+                        UPDATE NPCStats
+                        SET flashback_triggers = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                     """
-                    UPDATE NPCStats
-                    SET flashback_triggers = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                    """,
-                    (json.dumps(trigger_words), user_id, conversation_id, npc_id)
-                )
-                conn.commit()
-                conn.close()
+                    
+                    await conn.execute(query, json.dumps(trigger_words), user_id, conversation_id, npc_id)
                 
                 return {
                     "triggers_established": len(trigger_words),
@@ -2989,18 +3614,14 @@ class NPCCreationHandler:
                 })
             
             # Store the revelation plan
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
+            async with get_db_connection_context() as conn:
+                query = """
+                    UPDATE NPCStats
+                    SET revelation_plan = $1
+                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                 """
-                UPDATE NPCStats
-                SET revelation_plan = %s
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """,
-                (json.dumps(revelation_plan), user_id, conversation_id, npc_id)
-            )
-            conn.commit()
-            conn.close()
+                
+                await conn.execute(query, json.dumps(revelation_plan), user_id, conversation_id, npc_id)
             
             return {
                 "revelation_plan_created": True,
@@ -3038,19 +3659,19 @@ class NPCCreationHandler:
                     continue
                 
                 # Create a relationship tracker entry
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
+                async with get_db_connection_context() as conn:
+                    query = """
+                        INSERT INTO RelationshipEvolution (
+                            user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+                            relationship_type, current_stage, progress_to_next, evolution_history
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id) 
+                        DO NOTHING
                     """
-                    INSERT INTO RelationshipEvolution (
-                        user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
-                        relationship_type, current_stage, progress_to_next, evolution_history
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id) 
-                    DO NOTHING
-                    """,
-                    (
+                    
+                    await conn.execute(
+                        query,
                         user_id, conversation_id, npc_id, entity_type, entity_id,
                         relationship_label, "initial", 0,
                         json.dumps([{
@@ -3059,9 +3680,6 @@ class NPCCreationHandler:
                             "note": f"Relationship as {relationship_label} established"
                         }])
                     )
-                )
-                conn.commit()
-                conn.close()
             
             return {"relationships_tracked": len(relationships)}
         except Exception as e:
@@ -3113,20 +3731,19 @@ class NPCCreationHandler:
                 )
                 
                 # Store network in database
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
+                async with get_db_connection_context() as conn:
+                    query = """
+                        INSERT INTO SemanticNetworks (
+                            user_id, conversation_id, entity_type, entity_id,
+                            central_topic, network_data, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
                     """
-                    INSERT INTO SemanticNetworks (
-                        user_id, conversation_id, entity_type, entity_id,
-                        central_topic, network_data, created_at
+                    
+                    await conn.execute(
+                        query,
+                        user_id, conversation_id, "npc", npc_id, topic, json.dumps(network)
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    """,
-                    (user_id, conversation_id, "npc", npc_id, topic, json.dumps(network))
-                )
-                conn.commit()
-                conn.close()
                 
                 networks.append({
                     "topic": topic,
@@ -3170,23 +3787,21 @@ class NPCCreationHandler:
                 schema_name = result.get("schema_name")
                 
                 # Store this as a personality pattern
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
+                async with get_db_connection_context() as conn:
+                    query = """
+                        UPDATE NPCStats
+                        SET personality_patterns = personality_patterns || $1::jsonb
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
                     """
-                    UPDATE NPCStats
-                    SET personality_patterns = personality_patterns || %s::jsonb
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                    """,
-                    (json.dumps([{
+                    
+                    pattern_data = json.dumps([{
                         "pattern_name": schema_name,
                         "schema_id": schema_id,
                         "confidence": result.get("confidence", 0.7),
                         "detected_at": datetime.now().isoformat()
-                    }]), user_id, conversation_id, npc_id)
-                )
-                conn.commit()
-                conn.close()
+                    }])
+                    
+                    await conn.execute(query, pattern_data, user_id, conversation_id, npc_id)
                 
                 return {
                     "pattern_detected": True,
@@ -3213,64 +3828,60 @@ class NPCCreationHandler:
         """
         try:
             # Create maintenance schedule entry in database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Check if we already have a schedule
-            cursor.execute(
+            async with get_db_connection_context() as conn:
+                # Check if we already have a schedule
+                check_query = """
+                    SELECT 1 FROM MemoryMaintenanceSchedule
+                    WHERE user_id=$1 AND conversation_id=$2 AND entity_type='npc' AND entity_id=$3
                 """
-                SELECT 1 FROM MemoryMaintenanceSchedule
-                WHERE user_id=%s AND conversation_id=%s AND entity_type='npc' AND entity_id=%s
-                """,
-                (user_id, conversation_id, npc_id)
-            )
-            
-            if cursor.fetchone():
-                # Already scheduled
-                conn.close()
-                return {"already_scheduled": True}
-            
-            # Create maintenance schedule
-            # Different maintenance types happen at different intervals:
-            maintenance_types = [
-                {
-                    "type": "consolidation",
-                    "description": "Consolidate related memories",
-                    "interval_days": 3,
-                    "last_run": None
-                },
-                {
-                    "type": "decay",
-                    "description": "Apply memory decay to old memories",
-                    "interval_days": 7,
-                    "last_run": None
-                },
-                {
-                    "type": "schema_update",
-                    "description": "Update memory schemas based on new experiences",
-                    "interval_days": 5,
-                    "last_run": None
-                },
-                {
-                    "type": "mask_update",
-                    "description": "Evolve mask integrity based on interactions",
-                    "interval_days": 2,
-                    "last_run": None
-                }
-            ]
-            
-            cursor.execute(
+                
+                exists = await conn.fetchrow(check_query, user_id, conversation_id, npc_id)
+                
+                if exists:
+                    # Already scheduled
+                    return {"already_scheduled": True}
+                
+                # Create maintenance schedule
+                # Different maintenance types happen at different intervals:
+                maintenance_types = [
+                    {
+                        "type": "consolidation",
+                        "description": "Consolidate related memories",
+                        "interval_days": 3,
+                        "last_run": None
+                    },
+                    {
+                        "type": "decay",
+                        "description": "Apply memory decay to old memories",
+                        "interval_days": 7,
+                        "last_run": None
+                    },
+                    {
+                        "type": "schema_update",
+                        "description": "Update memory schemas based on new experiences",
+                        "interval_days": 5,
+                        "last_run": None
+                    },
+                    {
+                        "type": "mask_update",
+                        "description": "Evolve mask integrity based on interactions",
+                        "interval_days": 2,
+                        "last_run": None
+                    }
+                ]
+                
+                insert_query = """
+                    INSERT INTO MemoryMaintenanceSchedule (
+                        user_id, conversation_id, entity_type, entity_id,
+                        maintenance_schedule, next_maintenance_date
+                    )
+                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP + INTERVAL '1 day')
                 """
-                INSERT INTO MemoryMaintenanceSchedule (
-                    user_id, conversation_id, entity_type, entity_id,
-                    maintenance_schedule, next_maintenance_date
+                
+                await conn.execute(
+                    insert_query,
+                    user_id, conversation_id, "npc", npc_id, json.dumps(maintenance_types)
                 )
-                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP + INTERVAL '1 day')
-                """,
-                (user_id, conversation_id, "npc", npc_id, json.dumps(maintenance_types))
-            )
-            conn.commit()
-            conn.close()
             
             return {
                 "maintenance_scheduled": True,
@@ -3278,681 +3889,4 @@ class NPCCreationHandler:
             }
         except Exception as e:
             logging.error(f"Error scheduling memory maintenance for NPC {npc_id}: {e}")
-            return {"error": str(e)}
-    
-    async def check_for_mask_slippage(self, user_id, conversation_id, npc_id):
-        """
-        Check if an NPC has reached thresholds where their true nature begins to show.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            
-        Returns:
-            List of triggered events or None if error
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Get NPC's current stats
-            cursor.execute("""
-                SELECT npc_name, dominance, cruelty, intensity, memory
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            row = cursor.fetchone()
-            if not row:
-                return None
-                
-            npc_name, dominance, cruelty, intensity, memory_json = row
-            
-            # Parse memory
-            if memory_json:
-                if isinstance(memory_json, str):
-                    try:
-                        memory = json.loads(memory_json)
-                    except:
-                        memory = []
-                else:
-                    memory = memory_json
-            else:
-                memory = []
-                
-            # Get slippage history
-            cursor.execute("""
-                SELECT mask_slippage_events
-                FROM NPCEvolution
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            row = cursor.fetchone()
-            if row and row[0]:
-                if isinstance(row[0], str):
-                    try:
-                        slippage_history = json.loads(row[0])
-                    except:
-                        slippage_history = []
-                else:
-                    slippage_history = row[0]
-            else:
-                slippage_history = []
-                
-            # Check each stat for slippage triggers
-            triggered_events = []
-            
-            for stat_name, thresholds in MASK_SLIPPAGE_TRIGGERS.items():
-                stat_value = locals().get(stat_name, 0)  # Get the stat value from local vars
-                
-                for threshold in thresholds:
-                    event_name = threshold["event"]
-                    
-                    # Skip if this slippage has already occurred
-                    if any(e.get("event") == event_name for e in slippage_history):
-                        continue
-                        
-                    # Check if threshold is met
-                    if stat_value >= threshold["threshold"]:
-                        # Record this slippage event
-                        event_data = {
-                            "event": event_name,
-                            "stat": stat_name,
-                            "threshold": threshold["threshold"],
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        triggered_events.append(event_data)
-                        
-                        # Add the memory
-                        if "memory" in threshold:
-                            memory.append(threshold["memory"])
-                            
-                        # Subtle physical description changes based on mask slippage
-                        if stat_name == "dominance" and threshold["threshold"] >= 50:
-                            cursor.execute("""
-                                UPDATE NPCStats
-                                SET physical_description = CONCAT(physical_description, ' In unguarded moments, her demeanor shifts subtly—a barely perceptible straightening of posture, a flash of something commanding in her eyes that quickly vanishes when noticed.')
-                                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                            """, (user_id, conversation_id, npc_id))
-                        
-                        if stat_name == "cruelty" and threshold["threshold"] >= 50:
-                            cursor.execute("""
-                                UPDATE NPCStats
-                                SET physical_description = CONCAT(physical_description, ' Occasionally her smile doesn't quite reach her eyes, revealing a momentary coldness before she adjusts her expression back to warmth.')
-                                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                            """, (user_id, conversation_id, npc_id))
-                            
-                        if stat_name == "intensity" and threshold["threshold"] >= 50:
-                            cursor.execute("""
-                                UPDATE NPCStats
-                                SET physical_description = CONCAT(physical_description, ' Sometimes when she thinks no one is watching, her gaze becomes unnervingly focused, studying others with an analytical intensity that disappears behind a pleasant mask when attention returns to her.')
-                                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                            """, (user_id, conversation_id, npc_id))
-            
-            # Update memory
-            cursor.execute("""
-                UPDATE NPCStats
-                SET memory = %s
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (json.dumps(memory), user_id, conversation_id, npc_id))
-            
-            # Update slippage history
-            if triggered_events:
-                slippage_history.extend(triggered_events)
-                
-                # Check if NPCEvolution record exists
-                cursor.execute("""
-                    SELECT 1 FROM NPCEvolution
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, npc_id))
-                
-                if cursor.fetchone():
-                    cursor.execute("""
-                        UPDATE NPCEvolution
-                        SET mask_slippage_events = %s
-                        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                    """, (json.dumps(slippage_history), user_id, conversation_id, npc_id))
-                else:
-                    cursor.execute("""
-                        INSERT INTO NPCEvolution
-                        (user_id, conversation_id, npc_id, mask_slippage_events)
-                        VALUES (%s, %s, %s, %s)
-                    """, (user_id, conversation_id, npc_id, json.dumps(slippage_history)))
-            
-            conn.commit()
-            return triggered_events
-            
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error checking mask slippage: {e}")
-            return None
-        finally:
-            cursor.close()
-            conn.close()
-    
-    async def assign_random_relationships(self, user_id, conversation_id, npc_id, npc_name, npc_archetypes=None):
-        """
-        Assign random relationships between the new NPC and other entities.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            npc_name: NPC name
-            npc_archetypes: List of NPC archetypes (optional)
-        """
-        logging.info(f"Assigning relationships for NPC {npc_id} ({npc_name})")
-        
-        relationships = []
-
-        # Define explicit mapping for archetypes to relationship labels.
-        explicit_role_map = {
-            "mother": "mother",
-            "stepmother": "stepmother",
-            "aunt": "aunt",
-            "older sister": "older sister",
-            "stepsister": "stepsister",
-            "babysitter": "babysitter",
-            "friend from online interactions": "online friend",
-            "neighbor": "neighbor",
-            "rival": "rival",
-            "classmate": "classmate",
-            "lover": "lover",
-            "colleague": "colleague",
-            "teammate": "teammate",
-            "boss/supervisor": "boss/supervisor",
-            "teacher/principal": "teacher/principal",
-            "landlord": "landlord",
-            "roommate/housemate": "roommate",
-            "ex-girlfriend/ex-wife": "ex-partner",
-            "therapist": "therapist",
-            "domestic authority": "head of household",
-            "the one who got away": "the one who got away",
-            "childhood friend": "childhood friend",
-            "friend's wife": "friend",
-            "friend's girlfriend": "friend",
-            "best friend's sister": "friend's sister"
-        }
-        
-        # First, add relationships based on explicit archetype mapping.
-        if npc_archetypes:
-            for arc in npc_archetypes:
-                arc_name = arc.get("name", "").strip().lower()
-                if arc_name in explicit_role_map:
-                    rel_label = explicit_role_map[arc_name]
-                    # Add relationship from NPC to player using the explicit role.
-                    relationships.append({
-                        "target_entity_type": "player",
-                        "target_entity_id": user_id,  # player ID
-                        "relationship_label": rel_label
-                    })
-                    logging.info(f"Added explicit relationship '{rel_label}' for NPC {npc_id} to player.")
-        
-        # Next, determine which explicit roles (if any) were already added.
-        explicit_roles_added = {rel["relationship_label"] for rel in relationships}
-        
-        # Define default lists for random selection.
-        default_familial = ["mother", "sister", "aunt"]
-        default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
-                              "colleague", "classmate", "teammate", "underling", "rival", "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
-        
-        # If no explicit familial role was added, consider assigning a random non-familial relationship with the player.
-        if not (explicit_roles_added & set(default_familial)):
-            if random.random() < 0.5:
-                rel_type = random.choice(default_non_familial)
-                relationships.append({
-                    "target_entity_type": "player",
-                    "target_entity_id": user_id,
-                    "relationship_label": rel_type
-                })
-                logging.info(f"Randomly added non-familial relationship '{rel_type}' for NPC {npc_id} to player.")
-        
-        # Now add relationships with other NPCs.
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT npc_id, npc_name, archetype_summary
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND npc_id!=%s
-        """, (user_id, conversation_id, npc_id))
-        rows = cursor.fetchall()
-        conn.close()
-        
-        # For each other NPC, use explicit mapping if possible; otherwise, fall back to random choice.
-        for (old_npc_id, old_npc_name, old_arche_summary) in rows:
-            if random.random() < 0.3:
-                # Check if the current NPC's explicit roles should be used.
-                if explicit_roles_added:
-                    # Prefer one of the explicit roles if available.
-                    rel_type = random.choice(list(explicit_roles_added))
-                else:
-                    rel_type = random.choice(default_non_familial)
-                relationships.append({
-                    "target_entity_type": "npc",
-                    "target_entity_id": old_npc_id,
-                    "relationship_label": rel_type,
-                    "target_archetype_summary": old_arche_summary or ""
-                })
-                logging.info(f"Added relationship '{rel_type}' between NPC {npc_id} and NPC {old_npc_id}.")
-        
-        # Finally, create these relationships in the database and generate associated memories.
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-        
-        for rel in relationships:
-            if rel["target_entity_type"] == "player":
-                create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=npc_id,
-                    entity2_type="player", entity2_id=rel["target_entity_id"],
-                    link_type=rel["relationship_label"]
-                )
-                
-                # Add to NPCStats.relationships
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT relationships FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, npc_id))
-                
-                row = cursor.fetchone()
-                relationships_json = row[0] if row else "[]"
-                
-                if isinstance(relationships_json, str):
-                    try:
-                        current_relationships = json.loads(relationships_json)
-                    except:
-                        current_relationships = []
-                else:
-                    current_relationships = relationships_json
-                
-                # Add the new relationship
-                current_relationships.append({
-                    "relationship_label": rel["relationship_label"],
-                    "entity_type": "player", 
-                    "entity_id": rel["target_entity_id"]
-                })
-                
-                # Update the NPCStats
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET relationships = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (json.dumps(current_relationships), user_id, conversation_id, npc_id))
-                
-                conn.commit()
-                conn.close()
-                
-            else:  # NPC to NPC relationship
-                old_npc_id = rel["target_entity_id"]
-                old_arche_summary = rel.get("target_archetype_summary", "")
-                
-                # Create forward link
-                create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=npc_id,
-                    entity2_type="npc", entity2_id=old_npc_id,
-                    link_type=rel["relationship_label"]
-                )
-                
-                # Add to NPCStats.relationships
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT relationships FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, npc_id))
-                
-                row = cursor.fetchone()
-                relationships_json = row[0] if row else "[]"
-                
-                if isinstance(relationships_json, str):
-                    try:
-                        current_relationships = json.loads(relationships_json)
-                    except:
-                        current_relationships = []
-                else:
-                    current_relationships = relationships_json
-                
-                # Add the new relationship
-                current_relationships.append({
-                    "relationship_label": rel["relationship_label"],
-                    "entity_type": "npc", 
-                    "entity_id": old_npc_id
-                })
-                
-                # Update the NPCStats
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET relationships = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (json.dumps(current_relationships), user_id, conversation_id, npc_id))
-                
-                conn.commit()
-                
-                # Create reverse link with reciprocal relationship
-                rec_type = self.dynamic_reciprocal_relationship(
-                    rel["relationship_label"],
-                    old_arche_summary
-                )
-                
-                create_social_link(
-                    user_id, conversation_id,
-                    entity1_type="npc", entity1_id=old_npc_id,
-                    entity2_type="npc", entity2_id=npc_id,
-                    link_type=rec_type
-                )
-                
-                # Add to target NPC's relationships
-                cursor.execute("""
-                    SELECT relationships FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, old_npc_id))
-                
-                row = cursor.fetchone()
-                target_relationships_json = row[0] if row else "[]"
-                
-                if isinstance(target_relationships_json, str):
-                    try:
-                        target_relationships = json.loads(target_relationships_json)
-                    except:
-                        target_relationships = []
-                else:
-                    target_relationships = target_relationships_json
-                
-                # Add the reciprocal relationship
-                target_relationships.append({
-                    "relationship_label": rec_type,
-                    "entity_type": "npc", 
-                    "entity_id": npc_id
-                })
-                
-                # Update the target NPC's relationships
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET relationships = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (json.dumps(target_relationships), user_id, conversation_id, old_npc_id))
-                
-                conn.commit()
-                conn.close()
-                
-                # Generate shared memories for both NPCs
-                try:
-                    # Generate a relationship-specific memory for the new NPC
-                    specific_memory = await self.generate_relationship_specific_memory(
-                        user_id, conversation_id, 
-                        npc_data, 
-                        {"npc_id": old_npc_id, "npc_name": old_npc_name},
-                        rel["relationship_label"]
-                    )
-                    
-                    if specific_memory:
-                        # Store in memory system
-                        await memory_system.remember(
-                            entity_type="npc",
-                            entity_id=npc_id,
-                            memory_text=specific_memory,
-                            importance="medium",
-                            emotional=True,
-                            tags=["relationship", rel["relationship_label"]]
-                        )
-                        
-                        # Create a reciprocal memory for the target NPC
-                        reciprocal_memory = self.create_reciprocal_memory(
-                            specific_memory, npc_name, old_npc_name, 
-                            rel["relationship_label"], rec_type
-                        )
-                        
-                        if reciprocal_memory:
-                            await memory_system.remember(
-                                entity_type="npc",
-                                entity_id=old_npc_id,
-                                memory_text=reciprocal_memory,
-                                importance="medium",
-                                emotional=True,
-                                tags=["relationship", rec_type]
-                            )
-                except Exception as e:
-                    logging.error(f"Error generating relationship memories: {e}")
-        
-        logging.info(f"Finished assigning relationships for NPC {npc_id}.")
-    
-    async def generate_relationship_specific_memory(self, user_id, conversation_id, npc_data, target_data, relationship_type):
-        """
-        Generate a memory specific to the relationship between two NPCs.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID  
-            npc_data: Dict with data about the NPC
-            target_data: Dict with data about the target NPC
-            relationship_type: Type of relationship
-            
-        Returns:
-            Memory string or None if error
-        """
-        try:
-            npc_name = npc_data.get("npc_name", "Unknown")
-            target_name = target_data.get("npc_name", "Unknown")
-            
-            # Get a random location for the memory
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT location_name FROM Locations 
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY RANDOM() LIMIT 1
-            """, (user_id, conversation_id))
-            row = cursor.fetchone()
-            location = row[0] if row else "a familiar place"
-            conn.close()
-            
-            # Different memory templates based on relationship type
-            memory_templates = {
-                "mother": [
-                    f"I remember when {target_name} was younger and had their first real failure at {location}. The disappointment was visible in their eyes, but I knew this was a teaching moment. 'Sometimes we need to fail to understand the value of success,' I told them, my hand firm but comforting on their shoulder. I could see the resistance at first—that stubborn set of the jaw they inherited from me—but slowly, understanding dawned. How they looked at me then, with a mixture of frustration and reluctant recognition, showed me they were growing in the way I had hoped."
-                ],
-                "friend": [
-                    f"Last month, {target_name} and I spent an afternoon at {location}, supposedly just catching up, but I was carefully observing their reactions to certain topics. 'You always know exactly what to say,' they told me, not realizing how deliberately I choose my words. I smiled and deflected the compliment, but privately noted how easily they opened up about their insecurities. These casual get-togethers are perfect for gathering the small details that might be useful later."
-                ],
-                "colleague": [
-                    f"During the project deadline at {location}, I noticed how {target_name} deferred to my judgment on the final presentation. 'What do you think we should emphasize?' they asked, though technically we were equals on the team. I suggested an approach that showcased my contributions while still acknowledging theirs. The subtle way they nodded, relieved to have direction, confirmed my growing influence in our professional relationship. I've been cultivating this dynamic carefully, one small interaction at a time."
-                ],
-                "rival": [
-                    f"I encountered {target_name} at {location} during the quarterly review, and we engaged in our usual verbal chess match. 'Impressive results,' they said with that smile that never quite reaches their eyes. I returned an equally measured compliment, both of us aware of the real competition beneath our cordial exchange. What they don't realize is how much I study their strategies, cataloging weaknesses for future reference. There's a certain thrill in these encounters—measuring myself against someone who thinks they're my equal."
-                ],
-                "mentor": [
-                    f"I've been guiding {target_name} through their professional development at {location}. Yesterday, I intentionally gave them a task just slightly beyond their current abilities. 'I know you can handle this,' I said, watching them try to hide their uncertainty. The subtle way they looked to me for reassurance was exactly what I wanted—establishing that I'm the source of both challenge and validation. After they completed it with my carefully timed guidance, their gratitude was palpable. These moments of manufactured growth strengthen our mentor-student dynamic."
-                ]
-            }
-            
-            # Get relevant template or use a generic one
-            if relationship_type.lower() in memory_templates:
-                return random.choice(memory_templates[relationship_type.lower()])
-            else:
-                return f"I remember an interaction with {target_name} at {location} that defined our {relationship_type} relationship. There was a moment of genuine connection mixed with the subtle power dynamic that's always been present between us. 'I understand you better than most people do,' I told them, which wasn't exactly what they were expecting to hear. The look of surprise followed by thoughtful consideration showed me they were reassessing our connection. These little moments of revelation always give me a particular satisfaction."
-        
-        except Exception as e:
-            logging.error(f"Error generating relationship memory: {e}")
-            return None
-    
-    def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
-        """
-        Create a reciprocal memory from the perspective of the second NPC.
-        
-        Args:
-            original_memory: The original memory text
-            npc1_name: Name of the first NPC (original memory owner)
-            npc2_name: Name of the second NPC (reciprocal memory owner)
-            relationship_type: Original relationship type
-            reciprocal_type: Reciprocal relationship type
-            
-        Returns:
-            Reciprocal memory string or None if error
-        """
-        try:
-            # Simple conversion for prototype
-            # In a full implementation, this would use GPT to create a properly
-            # transformed memory from the other perspective
-            
-            # Replace names
-            memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
-            memory = memory.replace(npc2_name, "MYSELF")
-            memory = memory.replace("THE_OTHER_PERSON", npc1_name)
-            memory = memory.replace("MYSELF", "I")
-            
-            # Flip perspective words
-            memory = memory.replace("I told them", f"{npc1_name} told me")
-            memory = memory.replace("I noticed", f"{npc1_name} seemed to notice")
-            memory = memory.replace("my hand", "her hand")
-            memory = memory.replace("I suggested", f"{npc1_name} suggested")
-            
-            # Convert to first person
-            memory = memory.replace(f"{npc2_name} was", "I was")
-            memory = memory.replace(f"{npc2_name} had", "I had")
-            memory = memory.replace(f"{npc2_name} and I", f"{npc1_name} and I")
-            
-            return memory
-        except Exception as e:
-            logging.error(f"Error creating reciprocal memory: {e}")
-            return None
-    
-    # --- API Methods ---
-    
-    async def create_npc_api(self, request):
-        """
-        API endpoint to create a new NPC.
-        
-        Args:
-            request: NPCCreationRequest object
-            
-        Returns:
-            Dict with basic NPC info
-        """
-        try:
-            # Extract request data
-            user_id = request.user_id
-            conversation_id = request.conversation_id
-            environment_desc = request.environment_desc
-            archetype_names = request.archetype_names
-            specific_traits = request.specific_traits
-            
-            # Create context wrapper
-            ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
-            
-            # Use existing function to create NPC
-            result = await self.create_npc(
-                ctx, 
-                archetype_names=archetype_names, 
-                physical_desc=None, 
-                starting_traits=specific_traits.get("personality_traits") if specific_traits else None
-            )
-            
-            # Extract basic info for immediate return
-            npc_id = result.get("npc_id")
-            npc_name = result.get("npc_name")
-            physical_description = result.get("physical_description", "")
-            
-            # Get personality traits from result
-            personality = result.get("personality", {})
-            if isinstance(personality, dict):
-                personality_traits = personality.get("personality_traits", [])
-            else:
-                personality_traits = []
-            
-            # Get archetypes from result
-            archetypes = result.get("archetypes", {})
-            if isinstance(archetypes, dict):
-                archetype_names = archetypes.get("archetype_names", [])
-            else:
-                archetype_names = []
-            
-            return {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "physical_description": physical_description[:100] + "..." if len(physical_description) > 100 else physical_description,
-                "personality_traits": personality_traits,
-                "archetypes": archetype_names,
-                "current_location": result.get("current_location", ""),
-                "message": "NPC creation in progress. Basic information is available now."
-            }
-        except Exception as e:
-            logging.error(f"Error in create_npc_api: {e}")
-            return {"error": str(e)}
-    
-    async def spawn_multiple_npcs_api(self, request):
-        """
-        API endpoint to spawn multiple NPCs.
-        
-        Args:
-            request: MultipleNPCRequest object
-            
-        Returns:
-            Dict with NPC IDs
-        """
-        try:
-            # Extract request data
-            user_id = request.user_id
-            conversation_id = request.conversation_id
-            count = request.count
-            environment_desc = request.environment_desc
-            
-            # Create context wrapper
-            ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
-            
-            # Use existing function to spawn NPCs
-            npc_ids = await self.spawn_multiple_npcs(ctx, count)
-            
-            return {
-                "npc_ids": npc_ids,
-                "message": f"Successfully spawned {len(npc_ids)} NPCs."
-            }
-        except Exception as e:
-            logging.error(f"Error in spawn_multiple_npcs_api: {e}")
-            return {"error": str(e)}
-    
-    async def get_npc_api(self, npc_id, user_id, conversation_id):
-        """
-        API endpoint to get NPC details.
-        
-        Args:
-            npc_id: NPC ID
-            user_id: User ID
-            conversation_id: Conversation ID
-            
-        Returns:
-            Dict with NPC details
-        """
-        try:
-            # Create context wrapper
-            ctx = RunContextWrapper({
-                "user_id": user_id,
-                "conversation_id": conversation_id
-            })
-            
-            # Use existing function to get NPC details
-            result = await self.get_npc_details(ctx, npc_id=npc_id)
-            
-            if "error" in result:
-                return result
-            
-            # Extract relevant info for API response
-            return {
-                "npc_id": result["npc_id"],
-                "npc_name": result["npc_name"],
-                "physical_description": result["physical_description"],
-                "personality_traits": result["personality_traits"],
-                "archetypes": [a.get("name", "") for a in result["archetypes"]],
-                "current_location": result["current_location"]
-            }
-        except Exception as e:
-            logging.error(f"Error in get_npc_api: {e}")
             return {"error": str(e)}
