@@ -1,3 +1,5 @@
+# routes/npc_learning_routes.py
+
 """
 NPC Learning Routes
 
@@ -14,7 +16,7 @@ import random
 
 from npcs.npc_learning_adaptation import NPCLearningManager, NPCLearningAdaptation
 from npcs.npc_handler import NPCHandler
-from db.connection import get_db_connection, execute_with_retry, get_db_connection_context
+from db.connection import get_db_connection_context
 from middleware.validation import validate_request
 from middleware.rate_limiting import rate_limit
 from middleware.error_handling import create_error_response, generate_error_id
@@ -23,7 +25,7 @@ from middleware.error_handling import create_error_response, generate_error_id
 npc_learning_bp = Blueprint("npc_learning_bp", __name__)
 
 @npc_learning_bp.route("/npc/learning/monitor")
-def npc_learning_monitor():
+async def npc_learning_monitor():
     """
     Render the NPC learning monitoring UI.
     """
@@ -53,19 +55,14 @@ async def get_npc_learning_status(npc_id):
     
     try:
         # Get NPC details
-        conn = None
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute("""
+        async with get_db_connection_context() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
                     SELECT npc_name, dominance, cruelty, intensity, aggression, manipulativeness
                     FROM NPCStats 
                     WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
                 """, (npc_id, user_id, conversation_id))
-                row = cur.fetchone()
-        finally:
-            if conn:
-                conn.close()
+                row = await cursor.fetchone()
         
         if not row:
             return create_error_response(
@@ -288,13 +285,12 @@ async def batch_process_npc_learning():
     
     try:
         # Verify NPCs exist and belong to the user/conversation
-        conn = None
         valid_npc_ids = []
         
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                # Get valid NPCs
+        async with get_db_connection_context() as conn:
+            # Get valid NPCs
+            async with conn.cursor() as cursor:
+                # Create placeholders for the IN clause
                 placeholder = ', '.join(['%s'] * len(npc_ids))
                 query = f"""
                     SELECT npc_id 
@@ -304,12 +300,10 @@ async def batch_process_npc_learning():
                     AND npc_id IN ({placeholder})
                 """
                 params = [user_id, conversation_id] + npc_ids
-                cur.execute(query, tuple(params))
+                await cursor.execute(query, tuple(params))
                 
-                valid_npc_ids = [row[0] for row in cur.fetchall()]
-        finally:
-            if conn:
-                conn.close()
+                rows = await cursor.fetchall()
+                valid_npc_ids = [row[0] for row in rows]
         
         # Check if any NPCs were invalid
         invalid_npc_ids = set(npc_ids) - set(valid_npc_ids)
@@ -385,7 +379,7 @@ async def batch_process_npc_learning():
         'required': True
     }
 })
-def get_all_npcs():
+async def get_all_npcs():
     """
     Get all NPCs for a specific user and conversation.
     
@@ -399,12 +393,10 @@ def get_all_npcs():
     
     try:
         npcs = []
-        conn = None
         
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute(
+        async with get_db_connection_context() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
                     """
                     SELECT n.npc_id, n.npc_name, s.dominance, s.cruelty, s.intensity
                     FROM npcs n
@@ -415,7 +407,9 @@ def get_all_npcs():
                     (user_id, conversation_id)
                 )
                 
-                for row in cur.fetchall():
+                rows = await cursor.fetchall()
+                
+                for row in rows:
                     npcs.append({
                         "npc_id": row[0],
                         "npc_name": row[1],
@@ -423,9 +417,6 @@ def get_all_npcs():
                         "cruelty": row[3],
                         "intensity": row[4]
                     })
-        finally:
-            if conn:
-                conn.close()
         
         return jsonify({"success": True, "npcs": npcs})
     except Exception as e:
@@ -606,4 +597,4 @@ async def process_conversation_for_beliefs_api():
         return create_error_response(
             e,
             "An error occurred while processing the conversation for beliefs."
-        ) 
+        )
