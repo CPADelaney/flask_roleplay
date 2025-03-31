@@ -556,9 +556,9 @@ class ReconsolidationManager:
 # Create the necessary tables if they don't exist
 async def create_reconsolidation_tables():
     """Create the necessary tables for the reconsolidation system if they don't exist."""
-    from .connection import TransactionContext
+    from db.connection import get_db_connection_context
     
-    async with TransactionContext() as conn:
+    async with get_db_connection_context() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS MemorySchemas (
                 id SERIAL PRIMARY KEY,
