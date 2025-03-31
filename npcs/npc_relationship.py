@@ -8,10 +8,10 @@ Enhanced with memory-informed relationship management.
 import json
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
@@ -83,22 +83,18 @@ class NPCRelationshipManager:
         Returns 'Unknown' if not found.
         """
         try:
-            def _fetch():
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT npc_name
-                        FROM NPCStats
-                        WHERE npc_id = %s
-                          AND user_id = %s
-                          AND conversation_id = %s
-                        """,
-                        (npc_id, self.user_id, self.conversation_id),
-                    )
-                    row = cursor.fetchone()
-                    return row[0] if row and row[0] else "Unknown"
-                    
-            return await asyncio.to_thread(_fetch)
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT npc_name
+                    FROM NPCStats
+                    WHERE npc_id = $1
+                      AND user_id = $2
+                      AND conversation_id = $3
+                    """,
+                    npc_id, self.user_id, self.conversation_id
+                )
+                return row["npc_name"] if row and row["npc_name"] else "Unknown"
         except Exception as e:
             logger.error(f"Error fetching NPC name for npc_id={npc_id}: {e}")
             return "Unknown"
@@ -135,54 +131,52 @@ class NPCRelationshipManager:
                 return self._relationship_cache[cache_key]
 
         try:
-            def _fetch_relationships():
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    # Query all links from NPC -> other entity
-                    cursor.execute(
-                        """
-                        SELECT entity2_type, entity2_id, link_type, link_level
-                        FROM SocialLinks
-                        WHERE entity1_type = 'npc'
-                          AND entity1_id = %s
-                          AND user_id = %s
-                          AND conversation_id = %s
-                    """,
-                        (self.npc_id, self.user_id, self.conversation_id),
-                    )
+            async with get_db_connection_context() as conn:
+                # Query all links from NPC -> other entity
+                rows = await conn.fetch(
+                    """
+                    SELECT entity2_type, entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = $1
+                      AND user_id = $2
+                      AND conversation_id = $3
+                """,
+                    self.npc_id, self.user_id, self.conversation_id
+                )
+                
+                # Prepare entity names dictionary
+                entity_names = {}
+                for row in rows:
+                    if row["entity2_type"] == "npc":
+                        entity_id = row["entity2_id"]
+                        name_row = await conn.fetchrow(
+                            """
+                            SELECT npc_name
+                            FROM NPCStats
+                            WHERE npc_id = $1
+                              AND user_id = $2
+                              AND conversation_id = $3
+                            """,
+                            entity_id, self.user_id, self.conversation_id
+                        )
+                        entity_names[entity_id] = name_row["npc_name"] if name_row else "Unknown"
+                
+                # Process relationship data
+                for row in rows:
+                    entity_type = row["entity2_type"]
+                    entity_id = row["entity2_id"]
+                    link_type = row["link_type"]
+                    link_level = row["link_level"]
                     
-                    rows = cursor.fetchall()
-                    entity_names = {}
-                    for entity_type, entity_id, _, _ in rows:
-                        if entity_type == "npc":
-                            cursor.execute(
-                                """
-                                SELECT npc_name
-                                FROM NPCStats
-                                WHERE npc_id = %s
-                                  AND user_id = %s
-                                  AND conversation_id = %s
-                                """,
-                                (entity_id, self.user_id, self.conversation_id),
-                            )
-                            name_row = cursor.fetchone()
-                            entity_names[entity_id] = name_row[0] if name_row else "Unknown"
+                    entity_name = entity_names.get(entity_id, "Player") if entity_type == "npc" else "Player"
                     
-                    rel_data = []
-                    for entity_type, entity_id, link_type, link_level in rows:
-                        entity_name = entity_names.get(entity_id, "Player") if entity_type == "npc" else "Player"
-                        rel_data.append((entity_type, entity_id, link_type, link_level, entity_name))
-                    
-                    return rel_data
-                    
-            rel_data = await asyncio.to_thread(_fetch_relationships)
-            
-            for entity_type, entity_id, link_type, link_level, entity_name in rel_data:
-                relationships[entity_type] = {
-                    "entity_id": entity_id,
-                    "entity_name": entity_name,
-                    "link_type": link_type,
-                    "link_level": link_level,
-                }
+                    relationships[entity_type] = {
+                        "entity_id": entity_id,
+                        "entity_name": entity_name,
+                        "link_type": link_type,
+                        "link_level": link_level,
+                    }
 
             logger.debug(
                 "NPC %s relationships updated: %s", self.npc_id, relationships
@@ -242,31 +236,31 @@ class NPCRelationshipManager:
         """
         results = {"decayed_count": 0, "links_processed": 0}
 
-        def _process_decay():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
+        try:
+            async with get_db_connection_context() as conn:
+                # Fetch links to process
+                rows = await conn.fetch(
                     """
                     SELECT link_id, link_type, link_level, entity2_type, entity2_id, last_interaction
                     FROM SocialLinks
                     WHERE entity1_type = 'npc'
-                      AND entity1_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
+                      AND entity1_id = $1
+                      AND user_id = $2
+                      AND conversation_id = $3
                 """,
-                    (self.npc_id, self.user_id, self.conversation_id),
+                    self.npc_id, self.user_id, self.conversation_id
                 )
-
-                links = cursor.fetchall()
+                
                 decayed_count = 0
-
-                for (
-                    link_id,
-                    link_type,
-                    link_level,
-                    entity2_type,
-                    entity2_id,
-                    last_interaction,
-                ) in links:
+                
+                for row in rows:
+                    link_id = row["link_id"]
+                    link_type = row["link_type"]
+                    link_level = row["link_level"]
+                    entity2_type = row["entity2_type"]
+                    entity2_id = row["entity2_id"]
+                    last_interaction = row["last_interaction"]
+                    
                     # If interaction was recent, skip
                     if (
                         last_interaction
@@ -292,13 +286,13 @@ class NPCRelationshipManager:
                     # Update only if there's a significant change
                     if abs(new_level - link_level) >= 0.5:
                         # Update link_level
-                        cursor.execute(
+                        await conn.execute(
                             """
                             UPDATE SocialLinks
-                            SET link_level = %s
-                            WHERE link_id = %s
+                            SET link_level = $1
+                            WHERE link_id = $2
                         """,
-                            (new_level, link_id),
+                            new_level, link_id
                         )
 
                         decayed_count += 1
@@ -315,26 +309,21 @@ class NPCRelationshipManager:
                             new_type = "neutral"
 
                         if new_type != link_type:
-                            cursor.execute(
+                            await conn.execute(
                                 """
                                 UPDATE SocialLinks
-                                SET link_type = %s
-                                WHERE link_id = %s
+                                SET link_type = $1
+                                WHERE link_id = $2
                             """,
-                                (new_type, link_id),
+                                new_type, link_id
                             )
-                
-                conn.commit()
-                return len(links), decayed_count
-        
-        try:
-            links_processed, decayed_count = await asyncio.to_thread(_process_decay)
-            results["links_processed"] = links_processed
-            results["decayed_count"] = decayed_count
             
             # Invalidate cache after decay
             self._relationship_cache = {}
             self._cache_timestamps = {}
+            
+            results["links_processed"] = len(rows)
+            results["decayed_count"] = decayed_count
             
             return results
         except Exception as e:
@@ -441,7 +430,7 @@ class NPCRelationshipManager:
                 },
             }
 
-            # Run the database operations in a separate thread to prevent blocking
+            # Process relationship in database
             db_result = await self._process_relationship_in_db(
                 entity_type, entity_id, player_action, npc_action, change_factors
             )
@@ -501,185 +490,176 @@ class NPCRelationshipManager:
             "new_type": None,
         }
         
-        def _process_db():
-            with get_db_connection() as conn:
-                try:
-                    conn.autocommit = False  # Start transaction
-                    
-                    with conn.cursor() as cursor:
-                        # 1) Check if a social link record already exists
-                        cursor.execute(
-                            """
-                            SELECT link_id, link_type, link_level
-                            FROM SocialLinks
-                            WHERE entity1_type = 'npc'
-                              AND entity1_id = %s
-                              AND entity2_type = %s
-                              AND entity2_id = %s
-                              AND user_id = %s
-                              AND conversation_id = %s
-                            """,
-                            (self.npc_id, entity_type, entity_id, self.user_id, self.conversation_id),
+        try:
+            async with get_db_connection_context() as conn:
+                # 1) Check if a social link record already exists
+                row = await conn.fetchrow(
+                    """
+                    SELECT link_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = $1
+                      AND entity2_type = $2
+                      AND entity2_id = $3
+                      AND user_id = $4
+                      AND conversation_id = $5
+                    """,
+                    self.npc_id, entity_type, entity_id, self.user_id, self.conversation_id
+                )
+
+                if row:
+                    link_id = row["link_id"]
+                    link_type = row["link_type"]
+                    link_level = row["link_level"]
+                else:
+                    # Create a new relationship if none exists
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO SocialLinks (
+                            entity1_type, entity1_id,
+                            entity2_type, entity2_id,
+                            link_type, link_level,
+                            user_id, conversation_id,
+                            last_interaction
                         )
-                        row = cursor.fetchone()
-
-                        if row:
-                            link_id, link_type, link_level = row
-                        else:
-                            # Create a new relationship if none exists
-                            cursor.execute(
-                                """
-                                INSERT INTO SocialLinks (
-                                    entity1_type, entity1_id,
-                                    entity2_type, entity2_id,
-                                    link_type, link_level,
-                                    user_id, conversation_id,
-                                    last_interaction
-                                )
-                                VALUES (
-                                    'npc', %s,
-                                    %s, %s,
-                                    'neutral', 0,
-                                    %s, %s,
-                                    %s
-                                )
-                                RETURNING link_id
-                                """,
-                                (
-                                    self.npc_id,
-                                    entity_type,
-                                    entity_id,
-                                    self.user_id,
-                                    self.conversation_id,
-                                    datetime.now(),
-                                ),
-                            )
-                            link_id = cursor.fetchone()[0]
-                            link_type = "neutral"
-                            link_level = 0
-
-                        # 2) Calculate level changes
-                        player_type = player_action.get("type")
-                        npc_type = npc_action.get("type")
-                        base_key = (player_type, npc_type)
-                        # Try an exact match, or fallback to (player_type, None)
-                        level_change = BASE_REL_CHANGE.get(base_key) or BASE_REL_CHANGE.get(
-                            (player_type, None)
-                        ) or 0
-
-                        # Amplify changes if there's a mask_slippage
-                        if "mask_slippage" in npc_action:
-                            slip_severity = npc_action["mask_slippage"].get("severity", 1)
-                            level_change *= slip_severity if slip_severity >= 3 else 1
-
-                        # Record base level change
-                        change_factors["base_level_change"] = level_change
-
-                        # Apply belief/emotional adjustments
-                        # For positive base, we add both adjustments
-                        # For negative base, we invert emotional
-                        belief_adjustment = change_factors.get("belief_adjustment", 0)
-                        emotional_adjustment = change_factors.get("emotional_adjustment", 0)
-                        
-                        final_level_change = level_change
-                        if level_change > 0:
-                            final_level_change += belief_adjustment + emotional_adjustment
-                        else:
-                            final_level_change += belief_adjustment - emotional_adjustment
-
-                        final_level_change = round(final_level_change)
-                        change_factors["final_level_change"] = final_level_change
-
-                        # 3) Apply changes
-                        new_level = link_level
-                        if final_level_change != 0:
-                            new_level = max(0, min(100, link_level + final_level_change))
-                            cursor.execute(
-                                """
-                                UPDATE SocialLinks
-                                SET link_level = %s
-                                WHERE link_id = %s
-                            """,
-                                (new_level, link_id),
-                            )
-
-                        # Determine new link type based on level
-                        new_link_type = link_type
-                        if new_level > RELATIONSHIP_CLOSE:
-                            new_link_type = "close"
-                        elif new_level > RELATIONSHIP_FRIENDLY:
-                            new_link_type = "friendly"
-                        elif new_level < RELATIONSHIP_HOSTILE:
-                            new_link_type = "hostile"
-                        else:
-                            new_link_type = "neutral"
-
-                        if new_link_type != link_type:
-                            cursor.execute(
-                                """
-                                UPDATE SocialLinks
-                                SET link_type = %s
-                                WHERE link_id = %s
-                            """,
-                                (new_link_type, link_id),
-                            )
-
-                        # Update last_interaction to "now"
-                        cursor.execute(
-                            """
-                            UPDATE SocialLinks
-                            SET last_interaction = %s
-                            WHERE link_id = %s
-                            """,
-                            (datetime.now(), link_id),
+                        VALUES (
+                            'npc', $1,
+                            $2, $3,
+                            'neutral', 0,
+                            $4, $5,
+                            $6
                         )
-
-                        # 4) Add event to the link history
-                        change_description = []
-                        if abs(level_change) > 0:
-                            change_description.append(f"base:{level_change:+d}")
-                        if abs(belief_adjustment) > 0:
-                            change_description.append(f"beliefs:{belief_adjustment:+.1f}")
-                        if abs(emotional_adjustment) > 0:
-                            change_description.append(f"emotions:{emotional_adjustment:+.1f}")
-
-                        change_str = ", ".join(change_description)
-                        event_text = (
-                            f"Interaction: {entity_type.capitalize()} "
-                            f"{player_action.get('description','???')}, "
-                            f"NPC {npc_action.get('description','???')}. "
-                            f"Relationship change: {link_level} → {new_level} "
-                            f"({final_level_change:+d}) [Factors: {change_str}]"
-                        )
-
-                        cursor.execute(
-                            """
-                            UPDATE SocialLinks
-                            SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
-                            WHERE link_id = %s
+                        RETURNING link_id
                         """,
-                            (json.dumps([event_text]), link_id),
-                        )
+                        self.npc_id,
+                        entity_type,
+                        entity_id,
+                        self.user_id,
+                        self.conversation_id,
+                        datetime.now()
+                    )
+                    link_id = row["link_id"]
+                    link_type = "neutral"
+                    link_level = 0
 
-                    conn.commit()
-                    
-                    return {
-                        "success": True,
-                        "link_id": link_id,
-                        "old_level": link_level,
-                        "new_level": new_level,
-                        "old_type": link_type,
-                        "new_type": new_link_type
-                    }
-                except Exception as sql_error:
-                    conn.rollback()
-                    logger.error(f"Database error updating relationship: {sql_error}")
-                    return {
-                        "success": False,
-                        "error": str(sql_error)
-                    }
-        
-        return await asyncio.to_thread(_process_db)
+                # 2) Calculate level changes
+                player_type = player_action.get("type")
+                npc_type = npc_action.get("type")
+                base_key = (player_type, npc_type)
+                # Try an exact match, or fallback to (player_type, None)
+                level_change = BASE_REL_CHANGE.get(base_key) or BASE_REL_CHANGE.get(
+                    (player_type, None)
+                ) or 0
+
+                # Amplify changes if there's a mask_slippage
+                if "mask_slippage" in npc_action:
+                    slip_severity = npc_action["mask_slippage"].get("severity", 1)
+                    level_change *= slip_severity if slip_severity >= 3 else 1
+
+                # Record base level change
+                change_factors["base_level_change"] = level_change
+
+                # Apply belief/emotional adjustments
+                # For positive base, we add both adjustments
+                # For negative base, we invert emotional
+                belief_adjustment = change_factors.get("belief_adjustment", 0)
+                emotional_adjustment = change_factors.get("emotional_adjustment", 0)
+                
+                final_level_change = level_change
+                if level_change > 0:
+                    final_level_change += belief_adjustment + emotional_adjustment
+                else:
+                    final_level_change += belief_adjustment - emotional_adjustment
+
+                final_level_change = round(final_level_change)
+                change_factors["final_level_change"] = final_level_change
+
+                # 3) Apply changes
+                new_level = link_level
+                if final_level_change != 0:
+                    new_level = max(0, min(100, link_level + final_level_change))
+                    await conn.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_level = $1
+                        WHERE link_id = $2
+                    """,
+                        new_level, link_id
+                    )
+
+                # Determine new link type based on level
+                new_link_type = link_type
+                if new_level > RELATIONSHIP_CLOSE:
+                    new_link_type = "close"
+                elif new_level > RELATIONSHIP_FRIENDLY:
+                    new_link_type = "friendly"
+                elif new_level < RELATIONSHIP_HOSTILE:
+                    new_link_type = "hostile"
+                else:
+                    new_link_type = "neutral"
+
+                if new_link_type != link_type:
+                    await conn.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_type = $1
+                        WHERE link_id = $2
+                    """,
+                        new_link_type, link_id
+                    )
+
+                # Update last_interaction to "now"
+                await conn.execute(
+                    """
+                    UPDATE SocialLinks
+                    SET last_interaction = $1
+                    WHERE link_id = $2
+                    """,
+                    datetime.now(), link_id
+                )
+
+                # 4) Add event to the link history
+                change_description = []
+                if abs(level_change) > 0:
+                    change_description.append(f"base:{level_change:+d}")
+                if abs(belief_adjustment) > 0:
+                    change_description.append(f"beliefs:{belief_adjustment:+.1f}")
+                if abs(emotional_adjustment) > 0:
+                    change_description.append(f"emotions:{emotional_adjustment:+.1f}")
+
+                change_str = ", ".join(change_description)
+                event_text = (
+                    f"Interaction: {entity_type.capitalize()} "
+                    f"{player_action.get('description','???')}, "
+                    f"NPC {npc_action.get('description','???')}. "
+                    f"Relationship change: {link_level} → {new_level} "
+                    f"({final_level_change:+d}) [Factors: {change_str}]"
+                )
+
+                await conn.execute(
+                    """
+                    UPDATE SocialLinks
+                    SET link_history = COALESCE(link_history, '[]'::jsonb) || $1::jsonb
+                    WHERE link_id = $2
+                """,
+                    json.dumps([event_text]), link_id
+                )
+                
+                return {
+                    "success": True,
+                    "link_id": link_id,
+                    "old_level": link_level,
+                    "new_level": new_level,
+                    "old_type": link_type,
+                    "new_type": new_link_type
+                }
+                
+        except Exception as e:
+            logger.error(f"Database error updating relationship: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     async def _create_relationship_memory(
         self,
@@ -849,27 +829,26 @@ class NPCRelationshipManager:
         """
         history = []
 
-        def _fetch_history():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
                     """
                     SELECT link_id, link_history
                     FROM SocialLinks
                     WHERE entity1_type = 'npc'
-                      AND entity1_id = %s
-                      AND entity2_type = %s
-                      AND entity2_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
+                      AND entity1_id = $1
+                      AND entity2_type = $2
+                      AND entity2_id = $3
+                      AND user_id = $4
+                      AND conversation_id = $5
                 """,
-                    (self.npc_id, entity_type, entity_id, self.user_id, self.conversation_id),
+                    self.npc_id, entity_type, entity_id, self.user_id, self.conversation_id
                 )
-
-                row = cursor.fetchone()
+                
                 if not row:
                     return []
 
-                link_id, link_history = row
+                link_id, link_history = row["link_id"], row["link_history"]
                 if link_history:
                     if isinstance(link_history, str):
                         try:
@@ -883,11 +862,8 @@ class NPCRelationshipManager:
                     if isinstance(events, list):
                         history = events[-limit:]
                         history.reverse()
-                        
+                
                 return history
-        
-        try:
-            return await asyncio.to_thread(_fetch_history)
         except Exception as e:
             logger.error(f"Error getting relationship history: {e}")
             return []
@@ -940,38 +916,32 @@ class NPCRelationshipManager:
         """
         relationships = {}
         
-        def _fetch_all():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                cursor.execute(
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
                     """
                     SELECT entity2_type, entity2_id, link_type, link_level
                     FROM SocialLinks
                     WHERE entity1_type = 'npc'
-                      AND entity1_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
+                      AND entity1_id = $1
+                      AND user_id = $2
+                      AND conversation_id = $3
                     """,
-                    (self.npc_id, self.user_id, self.conversation_id),
+                    self.npc_id, self.user_id, self.conversation_id
                 )
                 
-                rows = cursor.fetchall()
-                result = {}
-                
-                for entity_type, entity_id, link_type, link_level in rows:
+                for row in rows:
+                    entity_type = row["entity2_type"]
+                    entity_id = row["entity2_id"]
                     key = f"{entity_type}_{entity_id}"
-                    result[key] = {
+                    relationships[key] = {
                         "entity_type": entity_type,
                         "entity_id": entity_id,
-                        "link_type": link_type,
-                        "link_level": link_level
+                        "link_type": row["link_type"],
+                        "link_level": row["link_level"]
                     }
-                    
-                return result
-                
-        try:
-            relationships = await asyncio.to_thread(_fetch_all)
             
-            # Add entity names in a second pass to avoid blocking
+            # Add entity names in a second pass
             for key, rel in relationships.items():
                 entity_type = rel["entity_type"]
                 entity_id = rel["entity_id"]
@@ -985,6 +955,53 @@ class NPCRelationshipManager:
         except Exception as e:
             logger.error(f"Error getting all relationships: {e}")
             return {}
+
+    async def get_relationship_with_player(self) -> Dict[str, Any]:
+        """
+        Get the NPC's relationship with the player.
+        
+        Returns:
+            Dictionary with relationship details
+        """
+        try:
+            async with get_db_connection_context() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT link_id, link_type, link_level, last_interaction
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = $1
+                      AND entity2_type = 'player'
+                      AND user_id = $2
+                      AND conversation_id = $3
+                    LIMIT 1
+                    """,
+                    self.npc_id, self.user_id, self.conversation_id
+                )
+                
+                if row:
+                    return {
+                        "exists": True,
+                        "link_type": row["link_type"],
+                        "link_level": row["link_level"],
+                        "last_interaction": row["last_interaction"],
+                        "closeness": row["link_level"]  # For backward compatibility
+                    }
+                else:
+                    return {
+                        "exists": False,
+                        "link_type": "neutral",
+                        "link_level": 50,
+                        "closeness": 50
+                    }
+        except Exception as e:
+            logger.error(f"Error getting relationship with player: {e}")
+            return {
+                "exists": False,
+                "link_type": "neutral", 
+                "link_level": 50,
+                "error": str(e)
+            }
 
     async def evaluate_coalitions_and_rivalries(self, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -1014,70 +1031,67 @@ class NPCRelationshipManager:
             "co_conspirators": []
         }
         
-        def _process_coalitions():
-            with get_db_connection() as conn, conn.cursor() as cursor:
-                try:
-                    cursor.execute(
-                        """
-                        SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
-                        FROM SocialLinks
-                        WHERE user_id = %s
-                          AND conversation_id = %s
-                          AND entity1_type = 'npc'
-                          AND entity2_type = 'npc'
-                        """,
-                        (self.user_id, self.conversation_id)
-                    )
-                    rows = cursor.fetchall()
-                    
-                    alliance_changes = []
-                    rivalry_changes = []
-                    conspirator_changes = []
-
-                    for link_id, e1_type, e1_id, e2_type, e2_id, link_type, link_level in rows:
-                        old_type = link_type
-                        new_type = old_type
-
-                        # Evaluate alliance / co-conspirator
-                        if link_level >= CO_CONSPIRATOR_THRESHOLD:
-                            new_type = "co_conspirator"
-                        elif link_level >= ALLY_THRESHOLD:
-                            new_type = "ally"
-                        elif link_level <= RIVAL_THRESHOLD:
-                            new_type = "rival"
-                        else:
-                            # If it doesn't meet thresholds, keep whatever it was
-                            # or revert to neutral if you prefer
-                            pass
-
-                        if new_type != old_type:
-                            cursor.execute(
-                                """
-                                UPDATE SocialLinks
-                                SET link_type = %s
-                                WHERE link_id = %s
-                                """,
-                                (new_type, link_id)
-                            )
-                            if new_type == "ally":
-                                alliance_changes.append((e1_id, e2_id, old_type, new_type))
-                            elif new_type == "co_conspirator":
-                                conspirator_changes.append((e1_id, e2_id, old_type, new_type))
-                            elif new_type == "rival":
-                                rivalry_changes.append((e1_id, e2_id, old_type, new_type))
-
-                    conn.commit()
-                    return alliance_changes, rivalry_changes, conspirator_changes
-                except Exception as e:
-                    logger.error(f"Error in evaluate_coalitions_and_rivalries: {e}")
-                    conn.rollback()
-                    return [], [], []
-        
         try:
-            alliances, rivalries, conspirators = await asyncio.to_thread(_process_coalitions)
-            results["alliances"] = alliances
-            results["rivalries"] = rivalries
-            results["co_conspirators"] = conspirators
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id = $1
+                      AND conversation_id = $2
+                      AND entity1_type = 'npc'
+                      AND entity2_type = 'npc'
+                    """,
+                    self.user_id, self.conversation_id
+                )
+                
+                alliance_changes = []
+                rivalry_changes = []
+                conspirator_changes = []
+
+                for row in rows:
+                    link_id = row["link_id"]
+                    e1_type = row["entity1_type"]
+                    e1_id = row["entity1_id"]
+                    e2_type = row["entity2_type"] 
+                    e2_id = row["entity2_id"]
+                    link_type = row["link_type"]
+                    link_level = row["link_level"]
+                    
+                    old_type = link_type
+                    new_type = old_type
+
+                    # Evaluate alliance / co-conspirator
+                    if link_level >= CO_CONSPIRATOR_THRESHOLD:
+                        new_type = "co_conspirator"
+                    elif link_level >= ALLY_THRESHOLD:
+                        new_type = "ally"
+                    elif link_level <= RIVAL_THRESHOLD:
+                        new_type = "rival"
+                    else:
+                        # If it doesn't meet thresholds, keep whatever it was
+                        # or revert to neutral if you prefer
+                        pass
+
+                    if new_type != old_type:
+                        await conn.execute(
+                            """
+                            UPDATE SocialLinks
+                            SET link_type = $1
+                            WHERE link_id = $2
+                            """,
+                            new_type, link_id
+                        )
+                        if new_type == "ally":
+                            alliance_changes.append((e1_id, e2_id, old_type, new_type))
+                        elif new_type == "co_conspirator":
+                            conspirator_changes.append((e1_id, e2_id, old_type, new_type))
+                        elif new_type == "rival":
+                            rivalry_changes.append((e1_id, e2_id, old_type, new_type))
+            
+            results["alliances"] = alliance_changes
+            results["rivalries"] = rivalry_changes
+            results["co_conspirators"] = conspirator_changes
             
             # Invalidate cache after updates
             self._relationship_cache = {}
@@ -1085,5 +1099,5 @@ class NPCRelationshipManager:
             
             return results
         except Exception as e:
-            logger.error(f"Error in evaluate_coalitions_and_rivalries thread: {e}")
+            logger.error(f"Error in evaluate_coalitions_and_rivalries: {e}")
             return results
