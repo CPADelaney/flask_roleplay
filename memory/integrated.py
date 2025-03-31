@@ -14,7 +14,7 @@ from .flashbacks import FlashbackManager
 from .semantic import SemanticMemoryManager
 from .reconsolidation import ReconsolidationManager
 from .masks import ProgressiveRevealManager
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from utils.caching import get, set, delete
 
 logger = logging.getLogger("memory_integrated")
@@ -642,10 +642,8 @@ class IntegratedMemorySystem:
         """
         Get schemas associated with an entity.
         """
-        from .connection import TransactionContext
-        
         schemas = []
-        async with TransactionContext() as conn:
+        async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
                 SELECT id, schema_name, category, schema_data
                 FROM MemorySchemas
