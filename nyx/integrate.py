@@ -48,7 +48,7 @@ from new_game_agent import NewGameAgent
 from agents import trace
 
 # Database connection helper
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 # Caching utilities
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
@@ -197,48 +197,50 @@ class JointMemoryGraph:
         tags: List[str],
         metadata: Dict[str, Any]
     ) -> int:
-        """Store a joint memory in the database."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        """Store a joint memory in the database using asyncpg."""
         try:
-            cursor.execute("""
-                INSERT INTO JointMemories (
-                    user_id, conversation_id, memory_text, 
-                    source_type, source_id, significance, 
-                    tags, metadata, created_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                RETURNING memory_id
-            """, (
-                self.user_id, self.conversation_id, memory_text,
-                source_type, source_id, significance,
-                json.dumps(tags), json.dumps(metadata)
-            ))
-            
-            memory_id = cursor.fetchone()[0]
-            
-            # Store memory sharing relationships
-            for entity in shared_with:
-                cursor.execute("""
-                    INSERT INTO JointMemorySharing (
-                        memory_id, entity_type, entity_id
+            async with get_db_connection_context() as conn:
+                # Use a transaction to ensure atomicity
+                async with conn.transaction():
+                    # Insert the main memory record and get the ID
+                    memory_id = await conn.fetchval("""
+                        INSERT INTO JointMemories (
+                            user_id, conversation_id, memory_text,
+                            source_type, source_id, significance,
+                            tags, metadata, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, NOW())
+                        RETURNING memory_id
+                    """,
+                        self.user_id, self.conversation_id, memory_text,
+                        source_type, source_id, significance,
+                        json.dumps(tags), json.dumps(metadata)
                     )
-                    VALUES (%s, %s, %s)
-                """, (
-                    memory_id, entity.get("entity_type"), entity.get("entity_id")
-                ))
-            
-            conn.commit()
-            return memory_id
-            
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Error storing joint memory: {e}")
+
+                    if memory_id is None:
+                         raise RuntimeError("Failed to insert memory, memory_id is NULL.") # Or handle differently
+
+                    # Store memory sharing relationships
+                    # Consider executemany for potential performance improvement if many entities
+                    for entity in shared_with:
+                        await conn.execute("""
+                            INSERT INTO JointMemorySharing (
+                                memory_id, entity_type, entity_id
+                            )
+                            VALUES ($1, $2, $3)
+                        """,
+                            memory_id, entity.get("entity_type"), entity.get("entity_id")
+                        )
+
+                logger.debug(f"Successfully stored joint memory {memory_id}")
+                return memory_id
+
+        except (asyncpg.PostgresError, ConnectionError, RuntimeError) as e:
+            logger.error(f"Error storing joint memory: {e}", exc_info=True)
             return -1
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e: # Catch unexpected errors
+             logger.error(f"Unexpected error storing joint memory: {e}", exc_info=True)
+             return -1
     
     async def get_shared_memories(
         self,
@@ -249,69 +251,66 @@ class JointMemoryGraph:
         limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
-        Get memories shared with a specific entity.
+        Get memories shared with a specific entity using asyncpg.
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        results = []
         try:
-            # Base query
-            query = """
-                SELECT m.memory_id, m.memory_text, m.source_type, m.source_id,
-                       m.significance, m.tags, m.metadata, m.created_at
-                FROM JointMemories m
-                INNER JOIN JointMemorySharing s ON m.memory_id = s.memory_id
-                WHERE m.user_id = %s AND m.conversation_id = %s
-                AND s.entity_type = %s AND s.entity_id = %s
-                AND m.significance >= %s
-            """
-            
-            params = [self.user_id, self.conversation_id, entity_type, entity_id, min_significance]
-            
-            # Add tag filtering if needed
-            if filter_tags:
-                placeholders = ', '.join(['%s'] * len(filter_tags))
-                tag_condition = f"AND m.tags ?| array[{placeholders}]"
-                query += tag_condition
-                params.extend(filter_tags)
-            
-            # Add ordering and limit
-            query += " ORDER BY m.significance DESC, m.created_at DESC LIMIT %s"
-            params.append(limit)
-            
-            cursor.execute(query, params)
-            
-            results = []
-            for row in cursor.fetchall():
-                memory_id, memory_text, source_type, source_id, significance, tags, metadata, created_at = row
-                
-                try:
-                    tags = json.loads(tags) if isinstance(tags, str) else tags or []
-                    metadata = json.loads(metadata) if isinstance(metadata, str) else metadata or {}
-                except json.JSONDecodeError:
-                    tags = []
-                    metadata = {}
-                
-                results.append({
-                    "memory_id": memory_id,
-                    "memory_text": memory_text,
-                    "source_type": source_type,
-                    "source_id": source_id,
-                    "significance": significance,
-                    "tags": tags,
-                    "metadata": metadata,
-                    "created_at": created_at.isoformat() if created_at else None
-                })
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error getting shared memories: {e}")
-            return []
-        finally:
-            cursor.close()
-            conn.close()
+            async with get_db_connection_context() as conn:
+                # Base query
+                query = """
+                    SELECT m.memory_id, m.memory_text, m.source_type, m.source_id,
+                           m.significance, m.tags, m.metadata, m.created_at
+                    FROM JointMemories m
+                    INNER JOIN JointMemorySharing s ON m.memory_id = s.memory_id
+                    WHERE m.user_id = $1 AND m.conversation_id = $2
+                    AND s.entity_type = $3 AND s.entity_id = $4
+                    AND m.significance >= $5
+                """
+                params = [self.user_id, self.conversation_id, entity_type, entity_id, min_significance]
+                param_index = 6 # Next parameter index
 
+                # Add tag filtering if needed (using JSONB array containment)
+                # Assumes 'tags' column is JSONB and contains an array of strings.
+                # If 'tags' is TEXT[], use `m.tags @> $${param_index}::text[]`
+                if filter_tags:
+                    query += f" AND m.tags::jsonb @> ${param_index}::jsonb"
+                    params.append(json.dumps(filter_tags)) # Pass tags as a JSON string array
+                    param_index += 1
+
+                # Add ordering and limit
+                query += f" ORDER BY m.significance DESC, m.created_at DESC LIMIT ${param_index}"
+                params.append(limit)
+
+                rows = await conn.fetch(query, *params)
+
+                for row in rows:
+                    # asyncpg can often auto-decode JSON/JSONB
+                    tags_data = row['tags'] # Might be already parsed list/dict
+                    metadata_data = row['metadata'] # Might be already parsed list/dict
+
+                    # Optional: Ensure correct type if needed (e.g., if NULL or not auto-parsed)
+                    parsed_tags = tags_data if isinstance(tags_data, list) else (json.loads(tags_data) if isinstance(tags_data, str) else [])
+                    parsed_metadata = metadata_data if isinstance(metadata_data, dict) else (json.loads(metadata_data) if isinstance(metadata_data, str) else {})
+
+                    results.append({
+                        "memory_id": row['memory_id'],
+                        "memory_text": row['memory_text'],
+                        "source_type": row['source_type'],
+                        "source_id": row['source_id'],
+                        "significance": row['significance'],
+                        "tags": parsed_tags,
+                        "metadata": parsed_metadata,
+                        "created_at": row['created_at'].isoformat() if row['created_at'] else None
+                    })
+
+            return results
+
+        except (asyncpg.PostgresError, ConnectionError, json.JSONDecodeError) as e:
+            logger.error(f"Error getting shared memories for entity {entity_type}/{entity_id}: {e}", exc_info=True)
+            return [] # Return empty list on error
+        except Exception as e: # Catch unexpected errors
+             logger.error(f"Unexpected error getting shared memories: {e}", exc_info=True)
+             return []
 
 class GameEventManager:
     """
@@ -781,219 +780,226 @@ class GameEventManager:
 
     async def _update_single_npc(self, npc_id: int, npc_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Update a single NPC's state and information.
-        
-        Args:
-            npc_id: NPC ID
-            npc_data: Updated NPC data including stats, relationships, location, etc.
-            
-        Returns:
-            Updated NPC data with validation results
+        Update a single NPC's state and information using asyncpg.
         """
         try:
-            # Get current NPC data
+            # Get current NPC data (assuming _get_npc_info is also converted)
             current_data = await self._get_npc_info(npc_id)
             if not current_data:
-                logger.error(f"NPC {npc_id} not found")
+                logger.error(f"NPC {npc_id} not found for update.")
                 return {"error": "NPC not found", "status": "failed"}
-            
-            # Validate update data
+
+            # Validate update data (assuming async validation)
             validation_result = await self._validate_npc_update(npc_data)
             if not validation_result["valid"]:
-                logger.warning(f"Invalid NPC update data: {validation_result['errors']}")
+                logger.warning(f"Invalid NPC update data for {npc_id}: {validation_result['errors']}")
                 return {
                     "error": "Invalid update data",
                     "validation_errors": validation_result["errors"],
                     "status": "failed"
                 }
-            
-            # Update NPC in database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            try:
-                # Update basic info
-                cursor.execute("""
-                    UPDATE NPCs 
-                    SET name = %s, location = %s, status = %s,
-                        last_updated = NOW()
-                    WHERE npc_id = %s
-                """, (
-                    npc_data.get("name", current_data["name"]),
-                    npc_data.get("location", current_data["location"]),
-                    npc_data.get("status", current_data["status"]),
-                    npc_id
-                ))
-                
-                # Update stats
-                if "stats" in npc_data:
-                    cursor.execute("""
-                        UPDATE NPCStats 
-                        SET health = %s, energy = %s, influence = %s
-                        WHERE npc_id = %s
-                    """, (
-                        npc_data["stats"].get("health", current_data["stats"]["health"]),
-                        npc_data["stats"].get("energy", current_data["stats"]["energy"]),
-                        npc_data["stats"].get("influence", current_data["stats"]["influence"]),
+
+            # --- Database Update Section ---
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    # Update basic info
+                    await conn.execute("""
+                        UPDATE NPCs
+                        SET name = $1, location = $2, status = $3,
+                            last_updated = NOW()
+                        WHERE npc_id = $4
+                    """,
+                        npc_data.get("name", current_data["name"]),
+                        npc_data.get("location", current_data["location"]),
+                        npc_data.get("status", current_data["status"]),
                         npc_id
-                    ))
-                
-                # Update relationships
-                if "relationships" in npc_data:
-                    # First remove old relationships
-                    cursor.execute("DELETE FROM NPCRelationships WHERE npc_id = %s", (npc_id,))
-                    
-                    # Insert new relationships
-                    for rel in npc_data["relationships"]:
-                        cursor.execute("""
-                            INSERT INTO NPCRelationships 
-                            (npc_id, related_npc_id, relationship_type, strength)
-                            VALUES (%s, %s, %s, %s)
-                        """, (
-                            npc_id,
-                            rel["related_npc_id"],
-                            rel["type"],
-                            rel["strength"]
-                        ))
-                
-                # Update schedule
-                if "schedule" in npc_data:
-                    cursor.execute("""
-                        UPDATE NPCSchedules 
-                        SET schedule_data = %s
-                        WHERE npc_id = %s
-                    """, (
-                        json.dumps(npc_data["schedule"]),
-                        npc_id
-                    ))
-                
-                conn.commit()
-                
-                # Get updated NPC data
-                updated_data = await self._get_npc_info(npc_id)
-                
-                # Let Nyx analyze the update
-                nyx_agent = await self.get_nyx_agent()
-                nyx_analysis = await nyx_agent.analyze_npc_update(
-                    npc_id=npc_id,
-                    old_data=current_data,
-                    new_data=updated_data
-                )
-                
-                return {
-                    "npc_data": updated_data,
-                    "nyx_analysis": nyx_analysis,
-                    "status": "success"
-                }
-                
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Database error updating NPC {npc_id}: {e}")
-                return {
-                    "error": f"Database error: {e}",
+                    )
+
+                    # Update stats
+                    if "stats" in npc_data:
+                        await conn.execute("""
+                            UPDATE NPCStats
+                            SET health = $1, energy = $2, influence = $3
+                            WHERE npc_id = $4
+                        """,
+                            npc_data["stats"].get("health", current_data["stats"]["health"]),
+                            npc_data["stats"].get("energy", current_data["stats"]["energy"]),
+                            npc_data["stats"].get("influence", current_data["stats"]["influence"]),
+                            npc_id
+                        )
+
+                    # Update relationships
+                    if "relationships" in npc_data:
+                        # First remove old relationships for this NPC
+                        await conn.execute("DELETE FROM NPCRelationships WHERE npc_id = $1", npc_id)
+
+                        # Insert new relationships (Consider executemany if performance is critical)
+                        for rel in npc_data["relationships"]:
+                            await conn.execute("""
+                                INSERT INTO NPCRelationships
+                                (npc_id, related_npc_id, relationship_type, strength)
+                                VALUES ($1, $2, $3, $4)
+                            """,
+                                npc_id,
+                                rel.get("related_npc_id"),
+                                rel.get("type"),
+                                rel.get("strength")
+                            )
+
+                    # Update schedule
+                    if "schedule" in npc_data:
+                        await conn.execute("""
+                            UPDATE NPCSchedules
+                            SET schedule_data = $1::jsonb
+                            WHERE npc_id = $2
+                        """,
+                            json.dumps(npc_data["schedule"]),
+                            npc_id
+                        )
+            # --- End Database Update Section ---
+
+            logger.info(f"Successfully updated NPC {npc_id} in database.")
+
+            # Get updated NPC data after successful transaction
+            updated_data = await self._get_npc_info(npc_id)
+            if not updated_data:
+                 # This shouldn't happen if the update succeeded, but handle defensively
+                 logger.error(f"Failed to retrieve updated data for NPC {npc_id} after update.")
+                 return {
+                    "error": "Failed to retrieve updated data post-update",
                     "status": "failed"
-                }
-            finally:
-                cursor.close()
-                conn.close()
-            
+                 }
+
+            # Let Nyx analyze the update
+            nyx_agent = await self.get_nyx_agent()
+            nyx_analysis = await nyx_agent.analyze_npc_update(
+                npc_id=npc_id,
+                old_data=current_data,
+                new_data=updated_data
+            )
+
+            return {
+                "npc_data": updated_data,
+                "nyx_analysis": nyx_analysis,
+                "status": "success"
+            }
+
+        except (asyncpg.PostgresError, ConnectionError) as db_err:
+            logger.error(f"Database error updating NPC {npc_id}: {db_err}", exc_info=True)
+            return {
+                "error": f"Database error: {db_err}",
+                "status": "failed"
+            }
         except Exception as e:
-            logger.error(f"Error updating NPC {npc_id}: {e}")
+            logger.error(f"Unexpected error updating NPC {npc_id}: {e}", exc_info=True)
             return {
                 "error": str(e),
                 "status": "failed"
             }
 
-    async def _get_npc_info(self, npc_id: int) -> Dict[str, Any]:
+
+    async def _get_npc_info(self, npc_id: int) -> Dict[str, Any] | None:
         """
-        Get comprehensive information about a specific NPC.
-        
-        Args:
-            npc_id: NPC ID
-            
-        Returns:
-            NPC information including stats, relationships, schedule, etc.
+        Get comprehensive information about a specific NPC using asyncpg.
         """
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Get basic NPC info
-            cursor.execute("""
-                SELECT name, location, status, created_at, last_updated
-                FROM NPCs
-                WHERE npc_id = %s
-            """, (npc_id,))
-            
-            npc_row = cursor.fetchone()
-            if not npc_row:
-                return None
-            
-            # Get NPC stats
-            cursor.execute("""
-                SELECT health, energy, influence
-                FROM NPCStats
-                WHERE npc_id = %s
-            """, (npc_id,))
-            
-            stats_row = cursor.fetchone()
-            
-            # Get relationships
-            cursor.execute("""
-                SELECT related_npc_id, relationship_type, strength
-                FROM NPCRelationships
-                WHERE npc_id = %s
-            """, (npc_id,))
-            
-            relationships = []
-            for rel_row in cursor.fetchall():
-                relationships.append({
-                    "related_npc_id": rel_row[0],
-                    "type": rel_row[1],
-                    "strength": rel_row[2]
-                })
-            
-            # Get schedule
-            cursor.execute("""
-                SELECT schedule_data
-                FROM NPCSchedules
-                WHERE npc_id = %s
-            """, (npc_id,))
-            
-            schedule_row = cursor.fetchone()
-            
-            # Get recent memories
-            memory_manager = await self.governor.get_memory_manager()
-            memories = await memory_manager.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                limit=5
-            )
-            
+            async with get_db_connection_context() as conn:
+                # Get basic NPC info
+                npc_row = await conn.fetchrow("""
+                    SELECT name, location, status, created_at, last_updated
+                    FROM NPCs
+                    WHERE npc_id = $1
+                """, npc_id)
+
+                if not npc_row:
+                    logger.warning(f"NPC info not found for npc_id: {npc_id}")
+                    return None
+
+                # Get NPC stats
+                stats_row = await conn.fetchrow("""
+                    SELECT health, energy, influence
+                    FROM NPCStats
+                    WHERE npc_id = $1
+                """, npc_id)
+
+                # Get relationships
+                rel_rows = await conn.fetch("""
+                    SELECT related_npc_id, relationship_type, strength
+                    FROM NPCRelationships
+                    WHERE npc_id = $1
+                """, npc_id)
+
+                relationships = [{
+                    "related_npc_id": rel_row['related_npc_id'],
+                    "type": rel_row['relationship_type'],
+                    "strength": rel_row['strength']
+                } for rel_row in rel_rows]
+
+                # Get schedule
+                schedule_row = await conn.fetchrow("""
+                    SELECT schedule_data
+                    FROM NPCSchedules
+                    WHERE npc_id = $1
+                """, npc_id)
+
+                # Process schedule data (assuming it's stored as JSON/JSONB)
+                schedule_data = {}
+                if schedule_row and schedule_row['schedule_data']:
+                    # asyncpg might auto-decode JSONB, otherwise use json.loads
+                    if isinstance(schedule_row['schedule_data'], dict):
+                        schedule_data = schedule_row['schedule_data']
+                    elif isinstance(schedule_row['schedule_data'], str):
+                         try:
+                            schedule_data = json.loads(schedule_row['schedule_data'])
+                         except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse schedule JSON for NPC {npc_id}")
+                            schedule_data = {"error": "invalid JSON format"}
+                    else: # Handle unexpected types
+                        logger.warning(f"Unexpected schedule data type for NPC {npc_id}: {type(schedule_row['schedule_data'])}")
+                        schedule_data = {"error": "unexpected data type"}
+
+
+            # Get recent memories (outside the DB connection block if it doesn't need DB access)
+            # Assuming governor and memory_manager are available via self
+            memories = []
+            if hasattr(self, 'governor') and self.governor:
+                 try:
+                     memory_manager = await self.governor.get_memory_manager() # Assuming this exists and is async
+                     memories = await memory_manager.recall( # Assuming this exists and is async
+                         entity_type="npc",
+                         entity_id=npc_id,
+                         limit=5
+                     )
+                 except Exception as mem_err:
+                     logger.error(f"Failed to recall memories for NPC {npc_id}: {mem_err}", exc_info=True)
+                     memories = [{"error": "Failed to retrieve memories"}] # Indicate memory retrieval failure
+            else:
+                 logger.warning("Governor or memory manager not available for NPC memory recall.")
+
+
             return {
                 "id": npc_id,
-                "name": npc_row[0],
-                "location": npc_row[1],
-                "status": npc_row[2],
-                "created_at": npc_row[3].isoformat() if npc_row[3] else None,
-                "last_updated": npc_row[4].isoformat() if npc_row[4] else None,
+                "name": npc_row['name'],
+                "location": npc_row['location'],
+                "status": npc_row['status'],
+                "created_at": npc_row['created_at'].isoformat() if npc_row['created_at'] else None,
+                "last_updated": npc_row['last_updated'].isoformat() if npc_row['last_updated'] else None,
                 "stats": {
-                    "health": stats_row[0] if stats_row else 100,
-                    "energy": stats_row[1] if stats_row else 100,
-                    "influence": stats_row[2] if stats_row else 0
+                    "health": stats_row['health'] if stats_row else 100,
+                    "energy": stats_row['energy'] if stats_row else 100,
+                    "influence": stats_row['influence'] if stats_row else 0
                 },
                 "relationships": relationships,
-                "schedule": json.loads(schedule_row[0]) if schedule_row else {},
-                "recent_memories": memories
+                "schedule": schedule_data,
+                "recent_memories": memories # Include memories fetched after DB ops
             }
-            
-        except Exception as e:
-            logger.error(f"Error getting NPC info for {npc_id}: {e}")
-            return None
-        finally:
-            cursor.close()
-            conn.close()
 
+        except (asyncpg.PostgresError, ConnectionError) as db_err:
+            logger.error(f"Database error getting NPC info for {npc_id}: {db_err}", exc_info=True)
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting NPC info for {npc_id}: {e}", exc_info=True)
+            return None
     async def _execute_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a directive for a specific NPC.
@@ -1061,161 +1067,168 @@ class GameEventManager:
 
     async def batch_update_npcs(self, npcs_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Batch update multiple NPCs efficiently.
-        
-        Args:
-            npcs_data: List of NPC data dictionaries to update
-            
-        Returns:
-            List of update results for each NPC
+        Batch update multiple NPCs efficiently using asyncpg within a single transaction.
         """
+        results = []
+        valid_updates = [] # Store validated data with IDs for processing
+
+        # --- Pre-processing and Validation ---
+        for npc_data in npcs_data:
+            npc_id = npc_data.get("id")
+            if not npc_id:
+                results.append({"error": "Missing NPC ID", "status": "failed", "original_data": npc_data})
+                continue
+
+            # Validate update data (assuming async validation)
+            validation_result = await self._validate_npc_update(npc_data)
+            if not validation_result["valid"]:
+                results.append({
+                    "npc_id": npc_id,
+                    "error": "Invalid update data",
+                    "validation_errors": validation_result["errors"],
+                    "status": "failed"
+                })
+                continue
+
+            # Add valid data for processing
+            valid_updates.append(npc_data) # Keep original structure with ID
+
+        if not valid_updates:
+            logger.warning("Batch NPC update: No valid updates to process.")
+            return results # Return results accumulated so far (only errors)
+
+        # --- Database Update Section (Single Transaction) ---
+        processed_ids = set()
         try:
-            results = []
-            
-            # Group NPCs by update type for efficiency
-            basic_updates = []
-            stats_updates = []
-            relationship_updates = []
-            schedule_updates = []
-            
-            for npc_data in npcs_data:
-                npc_id = npc_data.get("id")
-                if not npc_id:
-                    results.append({
-                        "error": "Missing NPC ID",
-                        "status": "failed"
-                    })
-                    continue
-                
-                # Validate update data
-                validation_result = await self._validate_npc_update(npc_data)
-                if not validation_result["valid"]:
-                    results.append({
-                        "error": "Invalid update data",
-                        "validation_errors": validation_result["errors"],
-                        "status": "failed"
-                    })
-                    continue
-                
-                # Group updates
-                if "name" in npc_data or "location" in npc_data or "status" in npc_data:
-                    basic_updates.append(npc_data)
-                if "stats" in npc_data:
-                    stats_updates.append(npc_data)
-                if "relationships" in npc_data:
-                    relationship_updates.append(npc_data)
-                if "schedule" in npc_data:
-                    schedule_updates.append(npc_data)
-            
-            # Process updates in batches
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    # Iterate through the validated updates and apply them
+                    for npc_data in valid_updates:
+                        npc_id = npc_data["id"]
+                        processed_ids.add(npc_id) # Track IDs processed in this batch
+
+                        # Apply updates based on keys present in npc_data
+                        # Basic Info
+                        if any(k in npc_data for k in ["name", "location", "status"]):
+                            # Fetch potentially missing values to avoid setting NULL unintentionally
+                            # In a real scenario, you might fetch defaults or require keys
+                            current_name = npc_data.get("name") # simplified: assumes name is always provided if changed
+                            current_location = npc_data.get("location")
+                            current_status = npc_data.get("status")
+                            # A SELECT might be needed here if partial updates are common and defaults complex
+
+                            await conn.execute("""
+                                UPDATE NPCs
+                                SET name = COALESCE($1, name),
+                                    location = COALESCE($2, location),
+                                    status = COALESCE($3, status),
+                                    last_updated = NOW()
+                                WHERE npc_id = $4
+                            """, current_name, current_location, current_status, npc_id)
+
+
+                        # Stats
+                        if "stats" in npc_data:
+                             # Similar COALESCE approach or assume full stats dict if present
+                            await conn.execute("""
+                                UPDATE NPCStats
+                                SET health = COALESCE($1, health),
+                                    energy = COALESCE($2, energy),
+                                    influence = COALESCE($3, influence)
+                                WHERE npc_id = $4
+                            """,
+                                npc_data["stats"].get("health"),
+                                npc_data["stats"].get("energy"),
+                                npc_data["stats"].get("influence"),
+                                npc_id
+                            )
+
+                        # Relationships (Replace logic)
+                        if "relationships" in npc_data:
+                            await conn.execute("DELETE FROM NPCRelationships WHERE npc_id = $1", npc_id)
+                            if npc_data["relationships"]: # Only insert if there are new relationships
+                                for rel in npc_data["relationships"]:
+                                    await conn.execute("""
+                                        INSERT INTO NPCRelationships
+                                        (npc_id, related_npc_id, relationship_type, strength)
+                                        VALUES ($1, $2, $3, $4)
+                                    """,
+                                        npc_id,
+                                        rel.get("related_npc_id"),
+                                        rel.get("type"),
+                                        rel.get("strength")
+                                    )
+
+                        # Schedule
+                        if "schedule" in npc_data:
+                            await conn.execute("""
+                                UPDATE NPCSchedules
+                                SET schedule_data = $1::jsonb
+                                WHERE npc_id = $2
+                            """,
+                                json.dumps(npc_data["schedule"]),
+                                npc_id
+                            )
+
+            logger.info(f"Successfully processed batch update for {len(processed_ids)} NPCs in transaction.")
+
+            # --- Post-processing: Fetch updated data and build results ---
+            for npc_id in processed_ids:
+                 updated_data = await self._get_npc_info(npc_id) # Fetch fresh data
+                 if updated_data:
+                     results.append({
+                         "npc_id": npc_id,
+                         "npc_data": updated_data,
+                         "status": "success"
+                     })
+                 else:
+                     # Should be rare if transaction succeeded and ID was valid
+                     logger.error(f"Batch Update: Failed to retrieve updated data for NPC {npc_id} after successful transaction.")
+                     results.append({
+                         "npc_id": npc_id,
+                         "error": "Failed to retrieve updated data post-commit",
+                         "status": "failed"
+                     })
+
+            # Let Nyx analyze the batch update (optional)
             try:
-                # Process basic updates
-                if basic_updates:
-                    for npc_data in basic_updates:
-                        cursor.execute("""
-                            UPDATE NPCs 
-                            SET name = %s, location = %s, status = %s,
-                                last_updated = NOW()
-                            WHERE npc_id = %s
-                        """, (
-                            npc_data.get("name"),
-                            npc_data.get("location"),
-                            npc_data.get("status"),
-                            npc_data["id"]
-                        ))
-                
-                # Process stats updates
-                if stats_updates:
-                    for npc_data in stats_updates:
-                        cursor.execute("""
-                            UPDATE NPCStats 
-                            SET health = %s, energy = %s, influence = %s
-                            WHERE npc_id = %s
-                        """, (
-                            npc_data["stats"].get("health"),
-                            npc_data["stats"].get("energy"),
-                            npc_data["stats"].get("influence"),
-                            npc_data["id"]
-                        ))
-                
-                # Process relationship updates
-                if relationship_updates:
-                    for npc_data in relationship_updates:
-                        # Remove old relationships
-                        cursor.execute("DELETE FROM NPCRelationships WHERE npc_id = %s", (npc_data["id"],))
-                        
-                        # Insert new relationships
-                        for rel in npc_data["relationships"]:
-                            cursor.execute("""
-                                INSERT INTO NPCRelationships 
-                                (npc_id, related_npc_id, relationship_type, strength)
-                                VALUES (%s, %s, %s, %s)
-                            """, (
-                                npc_data["id"],
-                                rel["related_npc_id"],
-                                rel["type"],
-                                rel["strength"]
-                            ))
-                
-                # Process schedule updates
-                if schedule_updates:
-                    for npc_data in schedule_updates:
-                        cursor.execute("""
-                            UPDATE NPCSchedules 
-                            SET schedule_data = %s
-                            WHERE npc_id = %s
-                        """, (
-                            json.dumps(npc_data["schedule"]),
-                            npc_data["id"]
-                        ))
-                
-                conn.commit()
-                
-                # Get updated data for all NPCs
-                for npc_data in npcs_data:
-                    updated_data = await self._get_npc_info(npc_data["id"])
-                    if updated_data:
-                        results.append({
-                            "npc_id": npc_data["id"],
-                            "npc_data": updated_data,
-                            "status": "success"
-                        })
-                    else:
-                        results.append({
-                            "npc_id": npc_data["id"],
-                            "error": "Failed to retrieve updated data",
-                            "status": "failed"
-                        })
-                
-                # Let Nyx analyze the batch update
                 nyx_agent = await self.get_nyx_agent()
                 nyx_analysis = await nyx_agent.analyze_batch_update(
-                    npcs_data=npcs_data,
-                    results=results
+                    npcs_data=valid_updates, # Pass the data that was attempted
+                    results=results # Pass the outcome
                 )
-                
-                return results
-                
-            except Exception as e:
-                conn.rollback()
-                logger.error(f"Database error in batch update: {e}")
-                return [{
-                    "error": f"Database error: {e}",
-                    "status": "failed"
-                } for _ in npcs_data]
-            finally:
-                cursor.close()
-                conn.close()
-            
+                # You might want to add nyx_analysis to the overall return or log it
+                logger.info(f"Nyx batch analysis completed: {nyx_analysis}")
+            except Exception as nyx_err:
+                logger.error(f"Failed to run Nyx batch analysis: {nyx_err}", exc_info=True)
+
+            return results # Contains success and failure info
+
+        except (asyncpg.PostgresError, ConnectionError) as db_err:
+            logger.error(f"Database error during batch NPC update transaction: {db_err}", exc_info=True)
+            # Add error results for all IDs that were *supposed* to be processed in the failed transaction
+            for npc_id in processed_ids:
+                 # Avoid overwriting existing specific validation errors
+                 if not any(r.get("npc_id") == npc_id for r in results):
+                     results.append({
+                         "npc_id": npc_id,
+                         "error": f"Database transaction error: {db_err}",
+                         "status": "failed"
+                     })
+            return results # Return accumulated validation errors + transaction error results
+
         except Exception as e:
-            logger.error(f"Error in batch update: {e}")
-            return [{
-                "error": str(e),
-                "status": "failed"
-            } for _ in npcs_data]
+            logger.error(f"Unexpected error during batch NPC update: {e}", exc_info=True)
+            # Add generic error results for unprocessed/failed IDs
+            processed_in_error = processed_ids or {upd['id'] for upd in valid_updates} # Best guess at affected IDs
+            for npc_id in processed_in_error:
+                 if not any(r.get("npc_id") == npc_id for r in results):
+                    results.append({
+                        "npc_id": npc_id,
+                        "error": f"Unexpected batch error: {str(e)}",
+                        "status": "failed"
+                    })
+            return results
 
 async def process_universal_update_with_governance(
     user_id: int,
