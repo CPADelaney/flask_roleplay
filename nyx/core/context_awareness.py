@@ -4,6 +4,7 @@ import logging
 import asyncio
 import datetime
 import json
+import math
 from typing import Dict, List, Any, Optional, Set, Union, Tuple
 from enum import Enum
 from pydantic import BaseModel, Field
@@ -576,7 +577,7 @@ class ContextAwarenessSystem:
                 tripwire_triggered=True
             )
     
-    # New helper functions for blended context
+    # Helper functions for blended context
     
     @function_tool
     async def _calculate_context_distribution(self, 
