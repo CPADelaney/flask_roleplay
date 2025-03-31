@@ -4,17 +4,21 @@ import os
 import json
 import random
 import logging
-import psycopg2
+# Removed: import psycopg2
+import asyncpg # Added
+import asyncio # Added (potentially needed for to_thread if OpenAI client is sync)
 from flask import Blueprint, request, jsonify, session
-from db.connection import get_db_connection
-from logic.chatgpt_integration import get_openai_client
+from contextlib import asynccontextmanager # Added just in case, though not used directly here
+from db.connection import get_db_connection_context
+from logic.chatgpt_integration import get_openai_client # Ensure this provides an ASYNC client or use asyncio.to_thread
 
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__) # Use module-specific logger
 
 memory_bp = Blueprint('memory_bp', __name__)
 
 @memory_bp.route('/get_current_roleplay', methods=['GET'])
-def get_current_roleplay():
+async def get_current_roleplay(): # Changed to async def
     """
     Returns an array of {key, value} objects from CurrentRoleplay,
     scoped to user_id + conversation_id.
@@ -28,53 +32,74 @@ def get_current_roleplay():
     if not conversation_id:
         return jsonify({"error": "No conversation_id provided"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT key, value
-            FROM currentroleplay
-            WHERE user_id=%s AND conversation_id=%s
-            ORDER BY key
-        """, (user_id, conversation_id))
-        rows = cursor.fetchall()
-        data = [{"key": r[0], "value": r[1]} for r in rows]
-        return jsonify(data), 200
-    finally:
-        conn.close()
+        async with get_db_connection_context() as conn: # Use async context manager
+            rows = await conn.fetch("""
+                SELECT key, value
+                FROM currentroleplay
+                WHERE user_id=$1 AND conversation_id=$2
+                ORDER BY key
+            """, user_id, conversation_id) # Use $ placeholders and conn.fetch
+            data = [{"key": r['key'], "value": r['value']} for r in rows] # Access by key
+            return jsonify(data), 200
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error in get_current_roleplay: {e}", exc_info=True)
+        return jsonify({"error": "Database error"}), 500
+    except ConnectionError as e:
+        logger.error(f"Pool error in get_current_roleplay: {e}", exc_info=True)
+        return jsonify({"error": "Could not connect to database"}), 503
+    except asyncio.TimeoutError:
+        logger.error("Timeout getting DB connection in get_current_roleplay", exc_info=True)
+        return jsonify({"error": "Database timeout"}), 504
+    except Exception as e:
+        logger.error(f"Unexpected error in get_current_roleplay: {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
-def record_npc_event(user_id, conversation_id, npc_id, event_description):
+
+
+async def record_npc_event(user_id: int, conversation_id: int, npc_id: int, event_description: str): # Changed to async def
     """
-    Appends a new event to the NPC's memory field for a given user_id + conversation_id.
+    Appends a new event to the NPC's memory field (JSONB array) for a given user_id + conversation_id.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            UPDATE NPCStats
-            SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s::text)
-            WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            RETURNING memory
-        """, (event_description, npc_id, user_id, conversation_id))
-        updated_row = cursor.fetchone()
-        if not updated_row:
-            logging.warning(f"NPC with ID={npc_id} (user_id={user_id}, conversation_id={conversation_id}) not found.")
-        else:
-            logging.info(f"Updated memory for NPC {npc_id} => {updated_row[0]}")
-        conn.commit()
-    except psycopg2.Error as e:
-        conn.rollback()
-        logging.error(f"Error recording NPC event: {e}")
-    finally:
-        conn.close()
+        async with get_db_connection_context() as conn:
+            # asyncpg handles JSON serialization automatically for jsonb columns usually
+            # Ensure event_description is a serializable object/string
+            # Using json.dumps explicitly can ensure it's valid JSON text for the || operator
+            event_json_text = json.dumps(event_description)
+
+            # Using a transaction isn't strictly necessary for a single UPDATE
+            # but good practice if logic becomes more complex
+            # async with conn.transaction():
+            updated_row = await conn.fetchrow("""
+                UPDATE NPCStats
+                SET memory = COALESCE(memory, '[]'::jsonb) || $1::jsonb
+                WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
+                RETURNING memory
+            """, event_json_text, npc_id, user_id, conversation_id) # Use $ placeholders
+
+            if not updated_row:
+                logger.warning(f"Attempted to record event for non-existent NPC ID={npc_id} (user_id={user_id}, conversation_id={conversation_id}).")
+            else:
+                # Be careful logging potentially large memory fields
+                logger.info(f"Recorded event for NPC {npc_id}. New memory field length (if list): {len(updated_row['memory']) if isinstance(updated_row['memory'], list) else 'N/A'}")
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error recording NPC event for NPC {npc_id}: {e}", exc_info=True)
+        # No explicit rollback needed, context manager handles connection release
+    except ConnectionError as e:
+        logger.error(f"Pool error recording NPC event: {e}", exc_info=True)
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection for recording NPC event", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error recording NPC event: {e}", exc_info=True)
 
 @memory_bp.route('/store_roleplay_segment', methods=['POST'], endpoint="store_roleplay_segment_endpoint")
-def store_roleplay_segment():
+async def store_roleplay_segment(): # Changed to async def
     """
     Stores or updates a key-value pair in the CurrentRoleplay table,
     scoped to user_id + conversation_id.
-    The payload should include:
-      { "conversation_id": X, "key": "abc", "value": "..." }
+    Payload: { "conversation_id": X, "key": "abc", "value": "..." }
     """
     user_id = session.get("user_id")
     if not user_id:
@@ -84,46 +109,44 @@ def store_roleplay_segment():
         payload = request.get_json() or {}
         conversation_id = payload.get("conversation_id")
         segment_key = payload.get("key")
-        segment_value = payload.get("value")
+        segment_value = payload.get("value") # Can be any JSON-serializable type
 
         if not conversation_id:
             return jsonify({"error": "No conversation_id provided"}), 400
-        if not segment_key or segment_value is None:
+        if not segment_key or segment_value is None: # Check for None explicitly
             return jsonify({"error": "Missing 'key' or 'value'"}), 400
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO currentroleplay (user_id, conversation_id, key, value)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, (user_id, conversation_id, segment_key, segment_value))
-        conn.commit()
+        async with get_db_connection_context() as conn:
+            # Value can be stored directly if column type is appropriate (e.g., TEXT, JSONB)
+            # If value is complex and column is TEXT, use json.dumps(segment_value)
+            await conn.execute("""
+                INSERT INTO currentroleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value = EXCLUDED.value
+            """, user_id, conversation_id, segment_key, segment_value) # Use $ placeholders
+            # No commit needed for single statement outside explicit transaction
+
         return jsonify({"message": "Stored successfully"}), 200
-    except Exception as e:
-        logging.error(f"Error in store_roleplay_segment: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error in store_roleplay_segment: {e}", exc_info=True)
+        return jsonify({"error": "Database error"}), 500
+    except ConnectionError as e:
+        logger.error(f"Pool error in store_roleplay_segment: {e}", exc_info=True)
+        return jsonify({"error": "Could not connect to database"}), 503
+    except asyncio.TimeoutError:
+        logger.error("Timeout getting DB connection in store_roleplay_segment", exc_info=True)
+        return jsonify({"error": "Database timeout"}), 504
+    except Exception as e: # Catch potential JSON errors from request.get_json() too
+        logger.error(f"Error in store_roleplay_segment: {e}", exc_info=True)
+        return jsonify({"error": "An internal error occurred"}), 500
+
 
 @memory_bp.route('/update_npc_memory', methods=['POST'])
-def update_npc_memory():
+async def update_npc_memory(): # Changed to async def
     """
-    Accepts a JSON payload containing:
-      {
-         "conversation_id": X,
-         "npc_id": Y,
-         "relationship": {
-             "type": "mother",
-             "target": "player",
-             "target_name": "Chase"
-         }
-      }
-    Retrieves the NPC's name along with their synthesized archetype fields,
-    then calls GPT to generate a shared memory.
-    The generated memory is appended to the NPC's memory field.
+    Generates and stores a shared memory for an NPC based on relationship and context.
+    Payload: { "conversation_id": X, "npc_id": Y, "relationship": {...} }
     """
     user_id = session.get("user_id")
     if not user_id:
@@ -136,34 +159,87 @@ def update_npc_memory():
     if not conversation_id or not npc_id or not relationship:
         return jsonify({"error": "Missing conversation_id, npc_id, or relationship data"}), 400
 
-    # Retrieve the NPC's name and synthesized archetype fields
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT npc_name, archetype_summary, archetype_extras_summary
-        FROM NPCStats
-        WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-    """, (npc_id, user_id, conversation_id))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return jsonify({"error": f"NPC with id {npc_id} not found"}), 404
-    npc_name, archetype_summary, archetype_extras_summary = row
-    conn.close()
-
-    # Generate a shared memory using GPT, now including the NPC's background details.
-    from logic.memory import get_shared_memory
-    memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary or "", archetype_extras_summary or "")
     try:
-        await add_npc_memory_with_embedding(
-            npc_id=npc_id,
-            memory_text=memory_text,
-            tags=["some_tag"]  # optional
-        )    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Retrieve the NPC's name and synthesized archetype fields
+        npc_name = None
+        archetype_summary = None
+        archetype_extras_summary = None
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT npc_name, archetype_summary, archetype_extras_summary
+                FROM NPCStats
+                WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+            """, npc_id, user_id, conversation_id) # Use $ placeholders
+            if not row:
+                return jsonify({"error": f"NPC with id {npc_id} not found"}), 404
+            npc_name = row['npc_name']
+            archetype_summary = row['archetype_summary']
+            archetype_extras_summary = row['archetype_extras_summary']
 
-    return jsonify({"message": "NPC memory updated", "memory": memory_text}), 200
+        # Generate a shared memory using GPT
+        # This now calls the async version of get_shared_memory
+        memory_json_str = await get_shared_memory(
+            user_id,
+            conversation_id,
+            relationship,
+            npc_name,
+            archetype_summary or "",
+            archetype_extras_summary or ""
+        )
+
+        if not memory_json_str:
+             return jsonify({"error": "Failed to generate NPC memory via AI"}), 500
+
+        try:
+             memory_data = json.loads(memory_json_str)
+             memories_list = memory_data.get("memory", [])
+        except json.JSONDecodeError:
+             logger.error(f"Failed to decode JSON memory from GPT for NPC {npc_id}: {memory_json_str[:200]}...")
+             return jsonify({"error": "AI returned invalid memory format"}), 500
+
+        if not memories_list:
+            logger.warning(f"AI returned empty memory list for NPC {npc_id}")
+            return jsonify({"message": "No new memories generated", "memory": []}), 200 # Or maybe 204 No Content
+
+        # Store each generated memory using the MemoryManager (assuming it handles individual additions)
+        # Or adapt record_npc_event if you want to append the whole list structure
+        memory_added_count = 0
+        for mem_text in memories_list:
+            if isinstance(mem_text, str) and mem_text.strip():
+                 # Using MemoryManager.add_memory which is now async
+                success = await MemoryManager.add_memory(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    entity_id=npc_id,
+                    entity_type="npc",
+                    memory_text=mem_text,
+                    memory_type=MemoryType.EMOTIONAL, # Or determine type based on content?
+                    significance=MemorySignificance.MEDIUM, # Or determine significance?
+                    tags=["shared_memory", f"related_to:{relationship.get('target_name', 'player')}"]
+                 )
+                if success:
+                    memory_added_count += 1
+                # Optionally: Propagate these new memories if needed
+                # propagate_shared_memories might need adjustment based on how memories are added now
+                await propagate_shared_memories(user_id, conversation_id, npc_id, npc_name, [mem_text])
+
+        logger.info(f"Added {memory_added_count}/{len(memories_list)} generated memories for NPC {npc_id}")
+        return jsonify({"message": f"NPC memory updated with {memory_added_count} entries", "memory_preview": memories_list[0] if memories_list else None}), 200
+
+    # Specific exceptions first
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error in update_npc_memory for NPC {npc_id}: {e}", exc_info=True)
+        return jsonify({"error": "Database error during memory update"}), 500
+    except ConnectionError as e:
+        logger.error(f"Pool error in update_npc_memory: {e}", exc_info=True)
+        return jsonify({"error": "Could not connect to database"}), 503
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection in update_npc_memory", exc_info=True)
+        return jsonify({"error": "Database timeout during memory update"}), 504
+    except Exception as e: # Catch errors from get_shared_memory, json parsing, etc.
+        logger.error(f"Error in update_npc_memory for NPC {npc_id}: {e}", exc_info=True)
+        return jsonify({"error": "An internal error occurred during memory update"}), 500
+
 
 
 async def get_stored_setting(conn, user_id, conversation_id):
@@ -184,116 +260,144 @@ async def get_stored_setting(conn, user_id, conversation_id):
     result.setdefault("EnvironmentDesc", "Default environment description.")
     return result
 
-def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_npc_name, memories):
+async def propagate_shared_memories(user_id: int, conversation_id: int, source_npc_id: int, source_npc_name: str, memories: list[str]): # Changed to async def
     """
-    For each memory in 'memories':
-      1) Check if it references the name of any *other* NPC in this conversation.
-      2) If so, call record_npc_event(...) to add that memory to that NPC's memory as well.
+    For each memory text, check if it mentions other NPCs in the conversation
+    and add the memory to their log using MemoryManager.add_memory.
     """
     if not memories:
-        return  # no new memories => nothing to do
-
-    # 1) Build a map of { npc_name_lower: npc_id }
-    #    for all NPCs in this conversation.
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT npc_id, LOWER(npc_name)
-        FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s
-    """, (user_id, conversation_id))
-    rows = cursor.fetchall()
-    conn.close()
+        return
 
     name_to_id_map = {}
-    for (other_id, other_name_lower) in rows:
-        name_to_id_map[other_name_lower] = other_id
-
-    # 2) For each memory text, see if it references another npc's name
-    for mem_text in memories:
-        # Let's do naive substring matching:
-        mem_text_lower = mem_text.lower()
-
-        for (other_npc_name_lower, other_npc_id) in name_to_id_map.items():
-            if other_npc_id == source_npc_id:
-                continue  # don't replicate to self if you don't want that
-
-            # If the memory references that NPC's name
-            # (maybe it also references the source NPC, but that's expected)
-            if other_npc_name_lower in mem_text_lower:
-                # We found a reference => replicate memory
-                # Use your existing record_npc_event
-                await add_npc_memory_with_embedding(
-                    npc_id=npc_id,
-                    memory_text=memory_text,
-                    tags=["some_tag"]  # optional
-                )
-
-def fetch_formatted_locations(user_id, conversation_id):
-    """
-    Query the Locations table for the given user_id and conversation_id,
-    then format each location into a bullet list string with a truncated description.
-    """
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        query = """
-            SELECT location_name, description
-            FROM Locations
-            WHERE user_id = %s AND conversation_id = %s
-        """
-        cursor.execute(query, (user_id, conversation_id))
-        rows = cursor.fetchall()
-        
-        formatted = ""
-        for loc in rows:
-            location_name = loc[0]
-            # If description exists and is longer than 80 characters, truncate it.
-            if loc[1]:
-                description = loc[1][:80] + "..." if len(loc[1]) > 80 else loc[1]
-            else:
-                description = "No description"
-            formatted += f"- {location_name}: {description}\n"
-        return formatted
+        async with get_db_connection_context() as conn:
+            # 1) Build map of { npc_name_lower: npc_id }
+            rows = await conn.fetch("""
+                SELECT npc_id, LOWER(npc_name) as name_lower
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+            """, user_id, conversation_id)
+            name_to_id_map = {r['name_lower']: r['npc_id'] for r in rows}
+
+        if not name_to_id_map:
+            logger.warning(f"No NPCs found to propagate memories in conv {conversation_id}")
+            return
+
+        # 2) Check each memory against other NPCs
+        propagation_count = 0
+        for mem_text in memories:
+            mem_text_lower = mem_text.lower()
+            for other_npc_name_lower, other_npc_id in name_to_id_map.items():
+                # Don't replicate to self unless intended
+                if other_npc_id == source_npc_id:
+                    continue
+
+                # Simple substring check (can be improved with NLP/NER)
+                if other_npc_name_lower in mem_text_lower:
+                    logger.info(f"Propagating memory from NPC {source_npc_id} ({source_npc_name}) to NPC {other_npc_id} ({other_npc_name_lower}) based on name match.")
+                    # Add as an "overheard" or "secondhand" memory using MemoryManager
+                    success = await MemoryManager.add_memory(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity_id=other_npc_id,
+                        entity_type="npc",
+                        memory_text=f"I heard something about {source_npc_name}: \"{mem_text}\"", # Reformulate as secondhand info
+                        memory_type=MemoryType.OBSERVATION, # Treat as observation/info
+                        significance=MemorySignificance.LOW, # Lower significance than direct experience
+                        tags=["propagated", "secondhand", f"from_npc:{source_npc_id}"]
+                    )
+                    if success:
+                         propagation_count += 1
+
+        if propagation_count > 0:
+             logger.info(f"Propagated {propagation_count} memories in conv {conversation_id}.")
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error during memory propagation in conv {conversation_id}: {e}", exc_info=True)
+    except ConnectionError as e:
+        logger.error(f"Pool error during memory propagation: {e}", exc_info=True)
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection during memory propagation", exc_info=True)
     except Exception as e:
-        logging.error(f"[fetch_formatted_locations] Error fetching locations: {e}")
-        return "No location data available."
-    finally:
-        conn.close()
+        logger.error(f"Unexpected error during memory propagation: {e}", exc_info=True)
 
-
-def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
-    logging.info(f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}")
-    
-    # Fetch stored environment details from CurrentRoleplay.
-    logging.debug("Fetching stored environment details from CurrentRoleplay...")
-    conn = get_db_connection()
+async def fetch_formatted_locations(user_id: int, conversation_id: int) -> str: # Changed to async def
+    """
+    Query Locations table and format results into a bulleted string.
+    """
+    formatted = ""
     try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT key, value FROM CurrentRoleplay 
-            WHERE user_id=%s AND conversation_id=%s 
-              AND key IN ('CurrentSetting', 'EnvironmentDesc')
-        """, (user_id, conversation_id))
-        rows = cursor.fetchall()
-        stored = {row[0]: row[1] for row in rows}
-        mega_description = stored.get("EnvironmentDesc", "an undefined setting")
-        logging.info(f"Retrieved environment description (first 100 chars): {mega_description[:100]}...")
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT location_name, description
+                FROM Locations
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+
+            if not rows:
+                return "No locations found.\n" # Return specific message
+
+            for loc in rows:
+                location_name = loc['location_name']
+                desc = loc['description']
+                if desc:
+                    description = desc[:80] + "..." if len(desc) > 80 else desc
+                else:
+                    description = "No description"
+                formatted += f"- {location_name}: {description}\n"
+            return formatted if formatted else "No locations found.\n"
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"[fetch_formatted_locations] DB error: {e}", exc_info=True)
+        return "Error retrieving location data.\n"
+    except ConnectionError as e:
+        logger.error(f"[fetch_formatted_locations] Pool error: {e}", exc_info=True)
+        return "Error connecting to database for locations.\n"
+    except asyncio.TimeoutError:
+        logger.error(f"[fetch_formatted_locations] Timeout error", exc_info=True)
+        return "Timeout retrieving location data.\n"
     except Exception as e:
-        logging.error(f"Error retrieving stored setting: {e}")
-        mega_description = "an undefined setting"
-    finally:
-        conn.close()
-    
-    # Fetch and format current locations.
-    logging.debug("Fetching and formatting current locations...")
-    locations_table_formatted = fetch_formatted_locations(user_id, conversation_id)
-    logging.info(f"Formatted locations: {locations_table_formatted}")
-    
+        logger.error(f"[fetch_formatted_locations] Unexpected error: {e}", exc_info=True)
+        return "Error processing location data.\n"
+
+
+async def get_shared_memory(user_id: int, conversation_id: int, relationship: dict, npc_name: str, archetype_summary: str = "", archetype_extras_summary: str = "") -> Optional[str]: # Changed to async def
+    """Generates shared memory text using GPT, incorporating DB lookups."""
+    logger.info(f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}")
+
+    mega_description = "an undefined setting"
+    locations_table_formatted = "No location data available.\n"
+
+    try:
+        # Fetch stored environment details within a single context
+        async with get_db_connection_context() as conn:
+            logger.debug("Fetching stored environment details...")
+            # Use the existing async helper function, passing the connection
+            stored_settings = await get_stored_setting(conn, user_id, conversation_id)
+            mega_description = stored_settings.get("EnvironmentDesc", "an undefined setting")
+            current_setting = stored_settings.get("CurrentSetting", "Default Setting Name") # Use this too?
+            logger.info(f"Retrieved environment desc (first 100): {mega_description[:100]}...")
+
+            # Fetch formatted locations using the same connection
+            logger.debug("Fetching and formatting current locations...")
+            # We need fetch_formatted_locations to accept an optional connection or refactor it
+            # For now, let's call the standalone async version (which gets its own connection)
+            # Optimization: Pass `conn` to fetch_formatted_locations if refactored
+        locations_table_formatted = await fetch_formatted_locations(user_id, conversation_id)
+        logger.info(f"Formatted locations retrieved:\n{locations_table_formatted}")
+
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+         logger.error(f"Database error fetching context for get_shared_memory: {db_err}", exc_info=True)
+         # Continue with default descriptions
+
+    except Exception as e:
+        logger.error(f"Unexpected error fetching context in get_shared_memory: {e}", exc_info=True)
+        # Continue with default descriptions
+
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
     rel_type = relationship.get("type", "related")
-    
+
     extra_context = ""
     if archetype_summary:
         extra_context += f"Background: {archetype_summary}. "
@@ -359,58 +463,70 @@ Your response MUST be valid JSON with exactly this structure:
 - DO NOT modify the key name "memory"
 - Return ONLY the JSON object
 """
-    logging.debug(f"Constructed system instructions with length: {len(system_instructions)} characters")
-    
-    messages = [{"role": "system", "content": system_instructions}]
-    logging.info("Calling GPT for shared memory generation...")
-    
-    # Implement retry logic with backoff
-    max_retries = 2
-    for attempt in range(1, max_retries + 1):
-        try:
-            logging.info(f"Memory generation attempt {attempt}/{max_retries}")
-            response = get_openai_client().chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                temperature=0.7,
-                response_format={"type": "json_object"}  # Force JSON output
-            )
-            
-            # Extract and process the content
-            memory_output = response.choices[0].message.content.strip()
-            logging.info(f"GPT response received (length: {len(memory_output)})")
-            
-            # Basic validation - check if it looks like JSON
-            if memory_output.startswith("{") and memory_output.endswith("}"):
-                try:
-                    # Parse the JSON to validate it
-                    memory_data = json.loads(memory_output)
-                    # Check if it has the expected structure
-                    if "memory" in memory_data and isinstance(memory_data["memory"], list):
-                        if len(memory_data["memory"]) >= 3:
-                            return memory_output
-                        else:
-                            logging.warning(f"Memory list too short, only {len(memory_data['memory'])} entries")
-                    else:
-                        logging.warning("Response missing 'memory' array")
-                except json.JSONDecodeError as e:
-                    logging.error(f"Invalid JSON in response: {e}")
-            else:
-                logging.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
-                
-            # If we're here, validation failed but we have a response
-            if attempt == max_retries:
-                # Last attempt, try to salvage what we can
-                return extract_or_create_memory_fallback(memory_output, npc_name, target_name)
-                
-        except Exception as e:
-            logging.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}")
-            if attempt == max_retries:
-                # Generate a fallback on final attempt
-                return create_memory_fallback(npc_name, target_name)
-    
-    # If we somehow get here, provide a basic fallback
-    return create_memory_fallback(npc_name, target_name)
+messages = [{"role": "system", "content": system_instructions}]
+logger.info("Calling GPT for shared memory generation...")
+
+# Implement retry logic with backoff (async sleep)
+max_retries = 2
+last_exception = None
+for attempt in range(1, max_retries + 1):
+    try:
+        logger.info(f"Memory generation attempt {attempt}/{max_retries}")
+        # *** CRITICAL: Ensure get_openai_client() returns an ASYNC client ***
+        # If it returns a SYNC client, use asyncio.to_thread:
+        # response = await asyncio.to_thread(
+        #      get_openai_client().chat.completions.create,
+        #      model="gpt-4o",
+        #      messages=messages,
+        #      temperature=0.7,
+        #      response_format={"type": "json_object"}
+        # )
+        # Assuming ASYNC client:
+        response = await get_openai_client().chat.completions.create(
+            model="gpt-4o", # Or your preferred model
+            messages=messages,
+            temperature=0.7,
+            response_format={"type": "json_object"} # Force JSON output if using compatible models
+        )
+
+        memory_output = response.choices[0].message.content.strip()
+        logger.info(f"GPT response received (length: {len(memory_output)})")
+
+        # Validate JSON structure
+        if memory_output.startswith("{") and memory_output.endswith("}"):
+            try:
+                memory_data = json.loads(memory_output)
+                if "memory" in memory_data and isinstance(memory_data["memory"], list) and len(memory_data["memory"]) >= 1: # Allow fewer than 3?
+                     # Pad if necessary? Or just return what we got? Let's return what we got.
+                     # while len(memory_data["memory"]) < 3:
+                     #    memory_data["memory"].append(f"A simple memory involving {target_name} was formed.")
+                     # return json.dumps(memory_data)
+                    return memory_output # Return valid JSON string
+                else:
+                    logger.warning("Response missing 'memory' array or array too short.")
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in response: {e}")
+        else:
+            logger.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
+
+        # If validation failed, maybe retry or fallback
+        last_exception = ValueError("Invalid response format from AI") # Set placeholder error
+
+    except Exception as e: # Catch API errors, timeouts, etc.
+        last_exception = e
+        logger.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}", exc_info=True)
+
+    # Wait before retrying
+    if attempt < max_retries:
+        wait_time = 2 ** attempt # Exponential backoff (2, 4 seconds)
+        logger.info(f"Retrying in {wait_time} seconds...")
+        await asyncio.sleep(wait_time) # Use async sleep
+
+# If all retries failed
+logger.error(f"Failed to generate memory after {max_retries} attempts. Last error: {last_exception}")
+# Return a fallback JSON string or None
+# return create_memory_fallback(npc_name, target_name) # This is sync, fine
+return None # Indicate failure more clearly than fallback sometimes
 
 def extract_or_create_memory_fallback(text_output, npc_name, target_name):
     """
@@ -529,308 +645,334 @@ class MemoryManager:
     contextual recall.
     """
     
-    @staticmethod
-    async def add_memory(user_id, conversation_id, entity_id, entity_type, 
-                        memory_text, memory_type=MemoryType.INTERACTION, 
-                        significance=MemorySignificance.MEDIUM, 
-                        emotional_valence=0, tags=None):
-        """Add a new memory to an entity (NPC or player)"""
-        tags = tags or []
-        
-        # Create the memory object
-        memory = EnhancedMemory(memory_text, memory_type, significance)
-        memory.emotional_valence = emotional_valence
-        memory.tags = tags
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Get current memories
-            if entity_type == "npc":
-                cursor.execute("""
-                    SELECT memory FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, entity_id))
-            else:  # player
-                cursor.execute("""
-                    SELECT memories FROM PlayerStats
-                    WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                """, (user_id, conversation_id, entity_id))
-                
-            row = cursor.fetchone()
-            
-            memories = []
-            if row and row[0]:
-                if isinstance(row[0], str):
-                    try:
-                        memories = json.loads(row[0])
-                    except json.JSONDecodeError:
-                        memories = []
+@staticmethod
+async def add_memory(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
+                    memory_text: str, memory_type: str = MemoryType.INTERACTION,
+                    significance: int = MemorySignificance.MEDIUM,
+                    emotional_valence: int = 0, tags: Optional[list] = None) -> bool: # Changed to async def
+    """Add a new memory to an entity (NPC or player) using asyncpg."""
+    tags = tags or []
+    memory = EnhancedMemory(memory_text, memory_type, significance)
+    memory.emotional_valence = emotional_valence
+    memory.tags = tags
+    memory_dict = memory.to_dict()
+
+    try:
+        async with get_db_connection_context() as conn:
+            # Use transaction for read-then-write safety
+            async with conn.transaction():
+                # 1. Get current memories
+                current_memories_json = None
+                if entity_type == "npc":
+                    current_memories_json = await conn.fetchval("""
+                        SELECT memory FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
+                    """, user_id, conversation_id, entity_id) # Use FOR UPDATE within transaction
+                elif entity_type == "player": # Assume player identified by name 'entity_id'
+                     current_memories_json = await conn.fetchval("""
+                        SELECT memories FROM PlayerStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
+                    """, user_id, conversation_id, entity_id)
                 else:
-                    memories = row[0]
-            
-            # Add new memory
-            memories.append(memory.to_dict())
-            
-            # Update the database
-            if entity_type == "npc":
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET memory = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (json.dumps(memories), user_id, conversation_id, entity_id))
-            else:  # player
-                cursor.execute("""
-                    UPDATE PlayerStats
-                    SET memories = %s
-                    WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                """, (json.dumps(memories), user_id, conversation_id, entity_id))
-                
-            conn.commit()
-            
-            # Determine if this memory should propagate to other NPCs
-            if memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC] and significance >= MemorySignificance.HIGH:
-                await MemoryManager.propagate_significant_memory(user_id, conversation_id, entity_id, entity_type, memory)
-                
-            return True
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error adding memory: {e}")
-            return False
-        finally:
-            cursor.close()
-            conn.close()
+                    logger.error(f"Invalid entity_type '{entity_type}' in add_memory")
+                    return False
+
+                # 2. Append new memory
+                memories = []
+                if current_memories_json:
+                    # asyncpg might return list/dict directly for jsonb, or string
+                    if isinstance(current_memories_json, list):
+                         memories = current_memories_json
+                    elif isinstance(current_memories_json, str):
+                         try:
+                            memories = json.loads(current_memories_json)
+                            if not isinstance(memories, list): memories = [] # Ensure it's a list
+                         except json.JSONDecodeError:
+                            logger.warning(f"Could not decode existing memories for {entity_type} {entity_id}, starting fresh.")
+                            memories = []
+                    else:
+                         logger.warning(f"Unexpected type for existing memories: {type(current_memories_json)}, starting fresh.")
+                         memories = []
+
+                memories.append(memory_dict)
+                updated_memories_json = json.dumps(memories) # Serialize for DB update
+
+                # 3. Update the database
+                if entity_type == "npc":
+                    await conn.execute("""
+                        UPDATE NPCStats SET memory = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """, updated_memories_json, user_id, conversation_id, entity_id)
+                else: # player
+                    await conn.execute("""
+                        UPDATE PlayerStats SET memories = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                    """, updated_memories_json, user_id, conversation_id, entity_id)
+
+        # 4. Propagation (outside the transaction for adding the memory itself)
+        # Check propagation condition AFTER successfully adding memory
+        if memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC] and significance >= MemorySignificance.HIGH:
+            # Call the async version of propagate
+            await MemoryManager.propagate_significant_memory(user_id, conversation_id, entity_id, entity_type, memory)
+
+        return True
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error adding memory for {entity_type} {entity_id}: {e}", exc_info=True)
+        return False
+    except ConnectionError as e:
+        logger.error(f"Pool error adding memory: {e}", exc_info=True)
+        return False
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection for adding memory", exc_info=True)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error adding memory: {e}", exc_info=True)
+        return False
+
     
-    @staticmethod
-    async def propagate_significant_memory(user_id, conversation_id, source_entity_id, source_entity_type, memory):
-        """Propagate significant memories to related NPCs based on social links"""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Find strong social links
-            cursor.execute("""
+@staticmethod
+async def propagate_significant_memory(user_id: int, conversation_id: int, source_entity_id: Union[int, str], source_entity_type: str, memory: EnhancedMemory): # Changed to async def
+    """Propagate significant memories to related NPCs using asyncpg."""
+    links = []
+    try:
+        async with get_db_connection_context() as conn:
+            # Find strong social links (adapt table/column names if needed)
+            links = await conn.fetch("""
                 SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
                 FROM SocialLinks
-                WHERE user_id=%s AND conversation_id=%s AND link_level >= 50
-                AND ((entity1_type=%s AND entity1_id=%s) OR (entity2_type=%s AND entity2_id=%s))
-            """, (user_id, conversation_id, 
-                 source_entity_type, source_entity_id, 
-                 source_entity_type, source_entity_id))
-                
-            links = cursor.fetchall()
-            
-            for link in links:
-                e1_type, e1_id, e2_type, e2_id, link_type, link_level = link
-                
-                # Determine the target entity
-                if e1_type == source_entity_type and e1_id == source_entity_id:
-                    target_type = e2_type
-                    target_id = e2_id
-                else:
-                    target_type = e1_type
-                    target_id = e1_id
-                
-                # Skip if target is not an NPC (don't propagate to player)
-                if target_type != "npc":
-                    continue
-                
-                # Modify the memory for the target's perspective
-                # This creates a "heard about" memory rather than direct experience
-                target_memory = EnhancedMemory(
-                    f"I heard that {memory.text}",
-                    memory_type="observation",
-                    significance=max(MemorySignificance.LOW, memory.significance - 2)
-                )
-                target_memory.emotional_valence = memory.emotional_valence * 0.7  # Reduced emotional impact
-                target_memory.tags = memory.tags + ["secondhand"]
-                
-                # Add the modified memory to the target
-                await MemoryManager.add_memory(
-                    user_id, conversation_id, 
-                    target_id, target_type,
+                WHERE user_id=$1 AND conversation_id=$2 AND link_level >= 50
+                AND ((entity1_type=$3 AND entity1_id::text=$4::text) OR (entity2_type=$3 AND entity2_id::text=$4::text))
+            """, user_id, conversation_id,
+                 source_entity_type, str(source_entity_id)) # Ensure IDs are compared correctly (casting might be needed if types differ)
+
+        if not links:
+             # logger.debug(f"No strong links found for {source_entity_type} {source_entity_id} to propagate memory.")
+             return True # Not an error if no links exist
+
+        propagation_tasks = []
+        for link in links:
+            e1_type, e1_id, e2_type, e2_id, link_type, link_level = link['entity1_type'], str(link['entity1_id']), link['entity2_type'], str(link['entity2_id']), link['link_type'], link['link_level']
+
+            target_type, target_id = (e2_type, e2_id) if e1_type == source_entity_type and e1_id == str(source_entity_id) else (e1_type, e1_id)
+
+            if target_type != "npc": # Don't propagate back to player this way
+                continue
+            if target_id == str(source_entity_id) and target_type == source_entity_type: # Skip self
+                 continue
+
+            # Create modified memory for target's perspective
+            target_memory = EnhancedMemory(
+                f"I heard that {memory.text}",
+                memory_type=MemoryType.OBSERVATION,
+                significance=max(MemorySignificance.LOW, memory.significance - 2),
+                emotional_valence = int(memory.emotional_valence * 0.7), # Keep as int
+                tags = memory.tags + ["secondhand", f"link:{link_type}"]
+            )
+
+            # Create a task to add the memory to the target NPC
+            # Avoid awaiting each add_memory sequentially inside the loop
+            propagation_tasks.append(
+                MemoryManager.add_memory(
+                    user_id, conversation_id,
+                    int(target_id) if target_id.isdigit() else target_id, # Convert back to int if needed
+                    target_type,
                     target_memory.text,
                     target_memory.memory_type,
                     target_memory.significance,
                     target_memory.emotional_valence,
                     target_memory.tags
                 )
-                
-            return True
-        except Exception as e:
-            logging.error(f"Error propagating memory: {e}")
-            return False
-        finally:
-            cursor.close()
-            conn.close()
+            )
+
+        # Run all propagation additions concurrently
+        if propagation_tasks:
+            results = await asyncio.gather(*propagation_tasks, return_exceptions=True)
+            # Log any errors from propagation attempts
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                     logger.error(f"Error propagating memory during gather task {i}: {result}", exc_info=result)
+            logger.info(f"Attempted to propagate memory to {len(propagation_tasks)} linked NPCs.")
+
+        return True # Indicate propagation attempt finished
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error propagating memory from {source_entity_type} {source_entity_id}: {e}", exc_info=True)
+        return False
+    except ConnectionError as e:
+        logger.error(f"Pool error propagating memory: {e}", exc_info=True)
+        return False
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection for propagating memory", exc_info=True)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error propagating memory: {e}", exc_info=True)
+        return False
     
-    @staticmethod
-    async def retrieve_relevant_memories(user_id, conversation_id, entity_id, entity_type, 
-                                       context=None, tags=None, limit=5):
-        """
-        Retrieve memories relevant to the given context or tags.
-        Applies weighting based on significance, recency, and emotional impact.
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Get all memories
-            if entity_type == "npc":
-                cursor.execute("""
-                    SELECT memory FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, entity_id))
-            else:  # player
-                cursor.execute("""
-                    SELECT memories FROM PlayerStats
-                    WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                """, (user_id, conversation_id, entity_id))
-                
-            row = cursor.fetchone()
-            
-            if not row or not row[0]:
-                return []
-                
-            memories = []
-            if isinstance(row[0], str):
-                try:
-                    memories = json.loads(row[0])
-                except json.JSONDecodeError:
-                    memories = []
-            else:
-                memories = row[0]
-            
-            # Convert to EnhancedMemory objects
-            memory_objects = [EnhancedMemory.from_dict(m) for m in memories]
-            
-            # Filter by tags if provided
-            if tags:
-                memory_objects = [m for m in memory_objects if any(tag in m.tags for tag in tags)]
-            
-            # Score memories based on relevance
-            scored_memories = []
-            for memory in memory_objects:
-                score = memory.significance  # Base score is significance
-                
-                # Recency bonus
-                try:
-                    memory_date = datetime.fromisoformat(memory.timestamp)
-                    days_old = (datetime.now() - memory_date).days
-                    recency_score = max(0, 10 - days_old/30)  # Higher score for more recent memories
-                    score += recency_score
-                except (ValueError, TypeError):
-                    pass
-                
-                # Context relevance if context is provided
-                if context:
-                    context_words = context.lower().split()
-                    memory_words = memory.text.lower().split()
-                    common_words = set(context_words) & set(memory_words)
-                    context_score = len(common_words) * 0.5
-                    score += context_score
-                
-                # Emotional impact bonus
-                emotion_score = abs(memory.emotional_valence) * 0.3
-                score += emotion_score
-                
-                # Penalize frequently recalled memories slightly to ensure variety
-                recall_penalty = min(memory.recall_count * 0.2, 2)
-                score -= recall_penalty
-                
-                scored_memories.append((memory, score))
-            
-            # Sort by score and take top 'limit'
-            scored_memories.sort(key=lambda x: x[1], reverse=True)
-            top_memories = [m[0] for m in scored_memories[:limit]]
-            
-            # Update recall count for selected memories
-            for memory in top_memories:
-                memory.recall_count += 1
-                memory.last_recalled = datetime.now().isoformat()
-            
-            # Update the stored memories
-            updated_memories = []
-            for memory in memory_objects:
-                # Check if this memory is in top_memories
-                matching_memory = next((m for m in top_memories if m.timestamp == memory.timestamp), None)
-                if matching_memory:
-                    updated_memories.append(matching_memory.to_dict())
+@staticmethod
+async def retrieve_relevant_memories(user_id: int, conversation_id: int, entity_id: Union[int, str], entity_type: str,
+                                     context: Optional[str] = None, tags: Optional[list] = None, limit: int = 5) -> list[EnhancedMemory]: # Changed to async def
+    """Retrieve and score relevant memories using asyncpg, updating recall counts."""
+    try:
+        async with get_db_connection_context() as conn:
+             # Use transaction to ensure read and update consistency for recall counts
+             async with conn.transaction():
+                # 1. Get all memories
+                current_memories_json = None
+                if entity_type == "npc":
+                    current_memories_json = await conn.fetchval("""
+                        SELECT memory FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
+                    """, user_id, conversation_id, entity_id)
+                elif entity_type == "player":
+                    current_memories_json = await conn.fetchval("""
+                        SELECT memories FROM PlayerStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 FOR UPDATE
+                    """, user_id, conversation_id, entity_id)
                 else:
-                    updated_memories.append(memory.to_dict())
+                     logger.error(f"Invalid entity_type '{entity_type}' in retrieve_relevant_memories")
+                     return []
+
+                if not current_memories_json:
+                    return []
+
+                memories_data = []
+                if isinstance(current_memories_json, list):
+                    memories_data = current_memories_json
+                elif isinstance(current_memories_json, str):
+                     try:
+                         memories_data = json.loads(current_memories_json)
+                         if not isinstance(memories_data, list): memories_data = []
+                     except json.JSONDecodeError:
+                          logger.warning(f"Could not decode memories for retrieve_relevant_memories {entity_type} {entity_id}")
+                          memories_data = []
+                else:
+                     logger.warning(f"Unexpected type for memories data: {type(current_memories_json)}")
+                     memories_data = []
+
+                if not memories_data:
+                     return []
+
+                # 2. Convert to EnhancedMemory objects and score (Sync logic)
+                memory_objects = [EnhancedMemory.from_dict(m) for m in memories_data]
+                # (Filter by tags - sync)
+                if tags:
+                    memory_objects = [m for m in memory_objects if any(tag in m.tags for tag in tags)]
+                # (Score memories - sync)
+                scored_memories = []
+                for memory in memory_objects:
+                    # Scoring logic remains the same (sync)
+                    score = memory.significance
+                    try: # Recency bonus
+                        memory_date = datetime.fromisoformat(memory.timestamp)
+                        days_old = (datetime.now(memory_date.tzinfo) - memory_date).days # Timezone aware if possible
+                        recency_score = max(0, 10 - days_old / 30)
+                        score += recency_score
+                    except (ValueError, TypeError): pass
+                    if context: # Context bonus
+                        context_words = set(context.lower().split())
+                        memory_words = set(memory.text.lower().split())
+                        common_words = context_words.intersection(memory_words)
+                        context_score = len(common_words) * 0.5
+                        score += context_score
+                    score += abs(memory.emotional_valence) * 0.3 # Emotion bonus
+                    score -= min(memory.recall_count * 0.2, 2) # Recall penalty
+                    scored_memories.append((memory, score))
+                # (Sort and limit - sync)
+                scored_memories.sort(key=lambda x: x[1], reverse=True)
+                top_memory_tuples = scored_memories[:limit]
+
+                # 3. Update recall counts for the selected memories
+                updated_memory_dict = {m.timestamp: m for m in memory_objects} # Map for quick lookup
+                top_memories_list = []
+                now_iso = datetime.now().isoformat()
+                for memory, score in top_memory_tuples:
+                    if memory.timestamp in updated_memory_dict:
+                         mem_obj = updated_memory_dict[memory.timestamp]
+                         mem_obj.recall_count += 1
+                         mem_obj.last_recalled = now_iso
+                         top_memories_list.append(mem_obj) # Add the updated object
+
+                # 4. Convert all back to dicts for storage
+                updated_memories_for_db = [m.to_dict() for m in updated_memory_dict.values()]
+                updated_memories_json = json.dumps(updated_memories_for_db)
+
+                # 5. Save updated memories back to DB
+                if entity_type == "npc":
+                    await conn.execute("""
+                        UPDATE NPCStats SET memory = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                    """, updated_memories_json, user_id, conversation_id, entity_id)
+                else: # player
+                    await conn.execute("""
+                        UPDATE PlayerStats SET memories = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4
+                    """, updated_memories_json, user_id, conversation_id, entity_id)
+
+             # Transaction commits here automatically on successful exit
+             return top_memories_list # Return the list of EnhancedMemory objects
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error retrieving memories for {entity_type} {entity_id}: {e}", exc_info=True)
+        return []
+    except ConnectionError as e:
+        logger.error(f"Pool error retrieving memories: {e}", exc_info=True)
+        return []
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout getting DB connection for retrieving memories", exc_info=True)
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving memories: {e}", exc_info=True)
+        return []
             
-            # Save back to database
-            if entity_type == "npc":
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET memory = %s
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (json.dumps(updated_memories), user_id, conversation_id, entity_id))
-            else:  # player
-                cursor.execute("""
-                    UPDATE PlayerStats
-                    SET memories = %s
-                    WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-                """, (json.dumps(updated_memories), user_id, conversation_id, entity_id))
-                
-            conn.commit()
-            
-            return top_memories
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error retrieving memories: {e}")
-            return []
-        finally:
-            cursor.close()
-            conn.close()
-            
-    @staticmethod
-    async def generate_flashback(user_id, conversation_id, npc_id, current_context):
-        """
-        Generate a flashback moment for an NPC to reference a significant past memory
-        that relates to the current context.
-        """
-        # First, retrieve relevant memories
+@staticmethod
+async def generate_flashback(user_id: int, conversation_id: int, npc_id: int, current_context: str) -> Optional[dict]: # Changed to async def
+    """Generate a flashback moment for an NPC based on relevant memories."""
+    try:
+        # Retrieve memories using the async method
         memories = await MemoryManager.retrieve_relevant_memories(
-            user_id, conversation_id, npc_id, "npc", 
+            user_id, conversation_id, npc_id, "npc",
             context=current_context, limit=3
         )
-        
+
         if not memories:
             return None
-            
-        # Select a memory, favoring emotional or traumatic ones
+
+        # Select memory (sync logic)
         emotional_memories = [m for m in memories if m.memory_type in [MemoryType.EMOTIONAL, MemoryType.TRAUMATIC]]
         selected_memory = random.choice(emotional_memories) if emotional_memories else random.choice(memories)
-        
-        # Get the NPC's name
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT npc_name FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """, (user_id, conversation_id, npc_id))
-        row = cursor.fetchone()
-        conn.close()
-        
-        npc_name = row[0] if row else "the NPC"
-        
-        # Format the flashback
-        flashback_text = f"{npc_name}'s expression shifts momentarily, a distant look crossing their face. \"This reminds me of {selected_memory.text}\""
-        
+
+        # Get NPC name (async DB call)
+        npc_name = "the NPC" # Default
+        async with get_db_connection_context() as conn:
+             name_record = await conn.fetchval("""
+                SELECT npc_name FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+             """, user_id, conversation_id, npc_id)
+             if name_record:
+                  npc_name = name_record
+
+        # Format flashback (sync logic)
+        flashback_text = f"{npc_name}'s expression shifts momentarily, a distant look crossing their face. \"This reminds me of... {selected_memory.text}\""
         if selected_memory.emotional_valence < -5:
             flashback_text += " A shadow crosses their face at the memory."
         elif selected_memory.emotional_valence > 5:
-            flashback_text += " Their eyes light up at the pleasant memory."
-            
+            flashback_text += " Their eyes seem to light up for a moment."
+
         return {
             "type": "flashback",
             "npc_id": npc_id,
             "npc_name": npc_name,
             "text": flashback_text,
-            "memory": selected_memory.text
+            "memory": selected_memory.text # Include the raw memory text
         }
+
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logger.error(f"Database error during flashback generation for NPC {npc_id}: {db_err}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error during flashback generation for NPC {npc_id}: {e}", exc_info=True)
+        return None
 
 class RevealType:
     """Types of revelations for progressive character development"""
@@ -920,197 +1062,179 @@ class ProgressiveRevealManager:
         "deceptive": ["The lie is perfect-- I mean, the explanation is clear", "They never suspect that-- they seem to understand completely", "I've fabricated-- formulated a perfect response"]
     }
     
-    @staticmethod
-    async def initialize_npc_mask(user_id, conversation_id, npc_id, overwrite=False):
-        """
-        Create an initial mask for an NPC based on their attributes,
-        generating contrasting presented vs. hidden traits
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # First check if mask already exists
-            if not overwrite:
-                cursor.execute("""
-                    SELECT mask_data FROM NPCMasks
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, npc_id))
+@staticmethod
+async def initialize_npc_mask(user_id: int, conversation_id: int, npc_id: int, overwrite: bool = False) -> dict: # Changed to async def
+    """Create initial mask for NPC using asyncpg."""
+    try:
+        async with get_db_connection_context() as conn:
+            async with conn.transaction(): # Use transaction for consistency checks and writes
+                # 1. Check if mask exists (if not overwriting)
+                if not overwrite:
+                    existing_mask = await conn.fetchval("""
+                        SELECT 1 FROM NPCMasks
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """, user_id, conversation_id, npc_id)
+                    if existing_mask:
+                        return {"message": "Mask already exists", "already_exists": True, "npc_id": npc_id}
+
+                # 2. Get NPC data (lock row if overwriting?)
+                # Add FOR UPDATE if overwrite is true and you want to prevent concurrent init?
+                npc_row = await conn.fetchrow("""
+                    SELECT npc_name, dominance, cruelty, personality_traits, archetype_summary
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                """, user_id, conversation_id, npc_id)
+
+                if not npc_row:
+                    return {"error": f"NPC with id {npc_id} not found", "npc_id": npc_id}
+
+                npc_name, dominance, cruelty, personality_traits_json, archetype_summary = npc_row['npc_name'], npc_row['dominance'], npc_row['cruelty'], npc_row['personality_traits'], npc_row['archetype_summary']
+
+            
+                # 3. Generate traits (Sync logic)
+                # Parse personality traits
+                personality_traits = []
+                if personality_traits_json:
+                     # asyncpg might auto-decode JSONB, check type
+                     if isinstance(personality_traits_json, list):
+                          personality_traits = personality_traits_json
+                     elif isinstance(personality_traits_json, str):
+                         try: personality_traits = json.loads(personality_traits_json)
+                         except: pass
+                     if not isinstance(personality_traits, list): personality_traits = [] # Ensure list
+
+                # Trait generation logic remains the same (sync)
+                presented_traits, hidden_traits = {}, {}
+                mask_depth = (dominance + cruelty) / 2
+                num_masked_traits = int(mask_depth / 20) + 1 # 1-6 traits
+                trait_candidates = {}
+                reversed_opposites = {v: k for k, v in ProgressiveRevealManager.OPPOSING_TRAITS.items()}
                 
-                row = cursor.fetchone()
-                if row:
-                    return {"message": "Mask already exists for this NPC", "already_exists": True}
-            
-            # Get NPC data
-            cursor.execute("""
-                SELECT npc_name, dominance, cruelty, personality_traits, archetype_summary
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            row = cursor.fetchone()
-            if not row:
-                return {"error": f"NPC with id {npc_id} not found"}
-                
-            npc_name, dominance, cruelty, personality_traits_json, archetype_summary = row
-            
-            # Parse personality traits
-            personality_traits = []
-            if personality_traits_json:
-                if isinstance(personality_traits_json, str):
-                    try:
-                        personality_traits = json.loads(personality_traits_json)
-                    except json.JSONDecodeError:
-                        personality_traits = []
-                else:
-                    personality_traits = personality_traits_json
-            
-            # Generate presented and hidden traits
-            presented_traits = {}
-            hidden_traits = {}
-            
-            # Use dominance and cruelty to determine mask severity
-            mask_depth = (dominance + cruelty) / 2
-            
-            # More dominant/cruel NPCs have more to hide
-            num_masked_traits = int(mask_depth / 20) + 1  # 1-5 masked traits
-            
-            # Generate contrasting traits based on existing personality
-            trait_candidates = {}
-            for trait in personality_traits:
-                trait_lower = trait.lower()
-                
-                # Find traits that have opposites in our OPPOSING_TRAITS dictionary
-                reversed_dict = {v: k for k, v in ProgressiveRevealManager.OPPOSING_TRAITS.items()}
-                
-                if trait_lower in ProgressiveRevealManager.OPPOSING_TRAITS:
-                    # This is a "good" trait that could mask a "bad" one
-                    opposite = ProgressiveRevealManager.OPPOSING_TRAITS[trait_lower]
-                    trait_candidates[trait] = opposite
-                elif trait_lower in reversed_dict:
-                    # This is already a "bad" trait, so it's part of the hidden nature
-                    hidden_traits[trait] = {"intensity": random.randint(60, 90)}
+                for trait in personality_traits:
+                    trait_lower = trait.lower()
                     
-                    # Generate a presented trait to mask it
-                    presented_traits[reversed_dict[trait_lower]] = {"confidence": random.randint(60, 90)}
-            
-            # If we don't have enough contrasting traits, add some
-            if len(trait_candidates) < num_masked_traits:
-                additional_needed = num_masked_traits - len(trait_candidates)
-                
-                # Choose random traits from OPPOSING_TRAITS
-                available_traits = list(ProgressiveRevealManager.OPPOSING_TRAITS.keys())
-                random.shuffle(available_traits)
-                
-                for i in range(min(additional_needed, len(available_traits))):
-                    trait = available_traits[i]
-                    opposite = ProgressiveRevealManager.OPPOSING_TRAITS[trait]
+                    # Find traits that have opposites in our OPPOSING_TRAITS dictionary
+                    reversed_dict = {v: k for k, v in ProgressiveRevealManager.OPPOSING_TRAITS.items()}
                     
-                    if trait not in trait_candidates and trait not in presented_traits:
+                    if trait_lower in ProgressiveRevealManager.OPPOSING_TRAITS:
+                        # This is a "good" trait that could mask a "bad" one
+                        opposite = ProgressiveRevealManager.OPPOSING_TRAITS[trait_lower]
                         trait_candidates[trait] = opposite
-            
-            # Select traits to mask
-            masked_traits = dict(list(trait_candidates.items())[:num_masked_traits])
-            
-            # Add to presented and hidden traits
-            for presented, hidden in masked_traits.items():
-                if presented not in presented_traits:
-                    presented_traits[presented] = {"confidence": random.randint(60, 90)}
+                    elif trait_lower in reversed_dict:
+                        # This is already a "bad" trait, so it's part of the hidden nature
+                        hidden_traits[trait] = {"intensity": random.randint(60, 90)}
+                        
+                        # Generate a presented trait to mask it
+                        presented_traits[reversed_dict[trait_lower]] = {"confidence": random.randint(60, 90)}
                 
-                if hidden not in hidden_traits:
-                    hidden_traits[hidden] = {"intensity": random.randint(60, 90)}
-            
-            # Create mask object
-            mask = NPCMask(presented_traits, hidden_traits, [])
-            
-            # Store in database
-            cursor.execute("""
-                INSERT INTO NPCMasks (user_id, conversation_id, npc_id, mask_data)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, conversation_id, npc_id)
-                DO UPDATE SET mask_data = EXCLUDED.mask_data
-            """, (user_id, conversation_id, npc_id, json.dumps(mask.to_dict())))
-            
-            conn.commit()
-            
+                # If we don't have enough contrasting traits, add some
+                if len(trait_candidates) < num_masked_traits:
+                    additional_needed = num_masked_traits - len(trait_candidates)
+                    
+                    # Choose random traits from OPPOSING_TRAITS
+                    available_traits = list(ProgressiveRevealManager.OPPOSING_TRAITS.keys())
+                    random.shuffle(available_traits)
+                    
+                    for i in range(min(additional_needed, len(available_traits))):
+                        trait = available_traits[i]
+                        opposite = ProgressiveRevealManager.OPPOSING_TRAITS[trait]
+                        
+                        if trait not in trait_candidates and trait not in presented_traits:
+                            trait_candidates[trait] = opposite
+                
+                # Select traits to mask
+                masked_traits = dict(list(trait_candidates.items())[:num_masked_traits])
+                
+                # Add to presented and hidden traits
+                for presented, hidden in masked_traits.items():
+                    if presented not in presented_traits:
+                        presented_traits[presented] = {"confidence": random.randint(60, 90)}
+                    
+                    if hidden not in hidden_traits:
+                        hidden_traits[hidden] = {"intensity": random.randint(60, 90)}
+                
+                # 4. Create mask object (Sync)
+                mask = NPCMask(presented_traits, hidden_traits, [])
+                mask_json = json.dumps(mask.to_dict()) # Serialize for DB
+
+                # 5. Store in database
+                await conn.execute("""
+                    INSERT INTO NPCMasks (user_id, conversation_id, npc_id, mask_data)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (user_id, conversation_id, npc_id)
+                    DO UPDATE SET mask_data = EXCLUDED.mask_data
+                """, user_id, conversation_id, npc_id, mask_json)
+
+            # Transaction commits automatically
             return {
                 "npc_id": npc_id,
                 "npc_name": npc_name,
                 "mask_created": True,
                 "presented_traits": presented_traits,
                 "hidden_traits": hidden_traits,
-                "message": "NPC mask created successfully"
+                "message": "NPC mask initialized/updated successfully"
             }
-            
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error initializing NPC mask: {e}")
-            return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
-    
-    @staticmethod
-    async def get_npc_mask(user_id, conversation_id, npc_id):
-        """
-        Retrieve an NPC's mask data
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("""
-                SELECT mask_data FROM NPCMasks
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            row = cursor.fetchone()
-            if not row:
-                # Try to initialize a mask
-                result = await ProgressiveRevealManager.initialize_npc_mask(user_id, conversation_id, npc_id)
-                
-                if "error" in result:
-                    return result
-                
-                # Get the new mask
-                cursor.execute("""
-                    SELECT mask_data FROM NPCMasks
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                """, (user_id, conversation_id, npc_id))
-                
-                row = cursor.fetchone()
-                if not row:
-                    return {"error": "Failed to create mask"}
-            
-            mask_data_json = row[0]
-            
-            mask_data = {}
-            if mask_data_json:
-                if isinstance(mask_data_json, str):
-                    try:
-                        mask_data = json.loads(mask_data_json)
-                    except json.JSONDecodeError:
-                        mask_data = {}
-                else:
-                    mask_data = mask_data_json
-            
-            # Get NPC basic info
-            cursor.execute("""
-                SELECT npc_name, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            npc_row = cursor.fetchone()
-            if not npc_row:
-                return {"error": f"NPC with id {npc_id} not found"}
-                
-            npc_name, dominance, cruelty = npc_row
-            
-            # Create mask object
-            mask = NPCMask.from_dict(mask_data)
-            
-            return {
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error initializing NPC mask for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Database error initializing mask for NPC {npc_id}", "npc_id": npc_id}
+    # Handle ConnectionError, TimeoutError etc. as in other functions
+    except Exception as e:
+        logger.error(f"Unexpected error initializing NPC mask for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Unexpected error initializing mask for NPC {npc_id}", "npc_id": npc_id}
+
+@staticmethod
+async def get_npc_mask(user_id: int, conversation_id: int, npc_id: int) -> dict: # Changed to async def
+    """Retrieve an NPC's mask data using asyncpg, initializing if needed."""
+    try:
+        async with get_db_connection_context() as conn:
+             # Fetch mask and NPC data in parallel? Or sequentially is fine.
+             mask_data_json = await conn.fetchval("""
+                  SELECT mask_data FROM NPCMasks
+                  WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+             """, user_id, conversation_id, npc_id)
+
+             if not mask_data_json:
+                  # Mask doesn't exist, try to initialize it
+                  logger.info(f"No mask found for NPC {npc_id}, attempting initialization...")
+                  init_result = await ProgressiveRevealManager.initialize_npc_mask(user_id, conversation_id, npc_id)
+                  if "error" in init_result:
+                       return init_result # Return the error from initialization
+                  if not init_result.get("mask_created"):
+                        return {"error": f"Failed to auto-initialize mask for NPC {npc_id}", "npc_id": npc_id}
+
+                  # Fetch the newly created mask data
+                  mask_data_json = await conn.fetchval("""
+                       SELECT mask_data FROM NPCMasks
+                       WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                  """, user_id, conversation_id, npc_id)
+                  if not mask_data_json:
+                       return {"error": f"Failed to retrieve mask even after initialization for NPC {npc_id}", "npc_id": npc_id}
+
+             # Decode JSON
+             mask_data = {}
+             if isinstance(mask_data_json, dict): # asyncpg might auto-decode
+                  mask_data = mask_data_json
+             elif isinstance(mask_data_json, str):
+                  try: mask_data = json.loads(mask_data_json)
+                  except: pass
+             if not isinstance(mask_data, dict): mask_data = {} # Ensure dict
+
+             # Fetch NPC basic info
+             npc_row = await conn.fetchrow("""
+                  SELECT npc_name, dominance, cruelty FROM NPCStats
+                  WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+             """, user_id, conversation_id, npc_id)
+
+             if not npc_row:
+                  return {"error": f"NPC {npc_id} not found, cannot provide mask context", "npc_id": npc_id}
+
+             npc_name, dominance, cruelty = npc_row['npc_name'], npc_row['dominance'], npc_row['cruelty']
+
+             # Create mask object (Sync)
+             mask = NPCMask.from_dict(mask_data)
+
+             return {
                 "npc_id": npc_id,
                 "npc_name": npc_name,
                 "dominance": dominance,
@@ -1119,36 +1243,50 @@ class ProgressiveRevealManager:
                 "hidden_traits": mask.hidden_traits,
                 "integrity": mask.integrity,
                 "reveal_history": mask.reveal_history
-            }
-            
-        except Exception as e:
-            logging.error(f"Error getting NPC mask: {e}")
-            return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+             }
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error getting NPC mask for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Database error getting mask for NPC {npc_id}", "npc_id": npc_id}
+    # Handle ConnectionError, TimeoutError etc.
+    except Exception as e:
+        logger.error(f"Unexpected error getting NPC mask for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Unexpected error getting mask for NPC {npc_id}", "npc_id": npc_id}
+
     
-    @staticmethod
-    async def generate_mask_slippage(user_id, conversation_id, npc_id, trigger=None, 
-                                   severity=None, reveal_type=None):
-        """
-        Generate a mask slippage event for an NPC based on their true nature
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Get mask data
-            mask_result = await ProgressiveRevealManager.get_npc_mask(user_id, conversation_id, npc_id)
-            
-            if "error" in mask_result:
-                return mask_result
-                
-            npc_name = mask_result["npc_name"]
-            presented_traits = mask_result["presented_traits"]
-            hidden_traits = mask_result["hidden_traits"]
-            integrity = mask_result["integrity"]
-            reveal_history = mask_result["reveal_history"]
+@staticmethod
+async def generate_mask_slippage(user_id: int, conversation_id: int, npc_id: int,
+                                 trigger: Optional[str] = None,
+                                 severity: Optional[int] = None,
+                                 reveal_type: Optional[str] = None) -> dict: # Changed to async def
+    """Generate and record a mask slippage event using asyncpg."""
+    try:
+        async with get_db_connection_context() as conn:
+            # Use transaction for read-update-insert consistency
+            async with conn.transaction():
+                # 1. Get current mask data (lock the row)
+                mask_data_json = await conn.fetchval("""
+                    SELECT mask_data FROM NPCMasks
+                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE
+                """, user_id, conversation_id, npc_id)
+
+                if not mask_data_json:
+                    # Optionally try to initialize mask here? Or return error.
+                    return {"error": f"Cannot generate slippage, mask not found for NPC {npc_id}", "npc_id": npc_id}
+
+                # Get NPC name for context (could be fetched outside transaction if preferred)
+                npc_name = await conn.fetchval("""
+                     SELECT npc_name FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                """, user_id, conversation_id, npc_id) or f"NPC {npc_id}"
+                # Decode JSON and create mask object (Sync)
+                mask_data = {}
+                if isinstance(mask_data_json, dict): mask_data = mask_data_json
+                elif isinstance(mask_data_json, str):
+                     try: mask_data = json.loads(mask_data_json)
+                     except: pass
+                if not isinstance(mask_data, dict): mask_data = {}
+                mask = NPCMask.from_dict(mask_data)
+
             
             # Choose a severity level if not provided
             if severity is None:
@@ -1308,137 +1446,134 @@ class ProgressiveRevealManager:
                 }
             
             return {
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "reveal_type": reveal_type,
-                "severity": severity,
-                "trait_revealed": trait,
-                "description": reveal_description,
-                "integrity_before": integrity,
-                "integrity_after": new_integrity,
+                "npc_id": npc_id, "npc_name": npc_name, "reveal_type": reveal_type,
+                "severity": severity, "trait_revealed": trait, "description": reveal_description,
+                "integrity_before": event['integrity_before'], "integrity_after": new_integrity,
                 "special_event": special_event
             }
-            
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error generating mask slippage: {e}")
-            return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
-    
-    @staticmethod
-    async def check_for_automated_reveals(user_id, conversation_id):
-        """
-        Check for automatic reveals based on various triggers
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error generating mask slippage for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Database error generating slippage for NPC {npc_id}", "npc_id": npc_id}
+    # Handle ConnectionError, TimeoutError etc.
+    except Exception as e:
+        logger.error(f"Unexpected error generating mask slippage for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Unexpected error generating slippage for NPC {npc_id}", "npc_id": npc_id}
         
-        try:
-            # Get all NPCs with masks
-            cursor.execute("""
-                SELECT m.npc_id, m.mask_data, n.npc_name, n.dominance, n.cruelty
-                FROM NPCMasks m
-                JOIN NPCStats n ON m.npc_id = n.npc_id 
-                    AND m.user_id = n.user_id 
-                    AND m.conversation_id = n.conversation_id
-                WHERE m.user_id=%s AND m.conversation_id=%s
-            """, (user_id, conversation_id))
-            
-            npc_masks = cursor.fetchall()
-            
-            # Get current time
-            cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='TimeOfDay'
-            """, (user_id, conversation_id))
-            
-            time_row = cursor.fetchone()
-            time_of_day = time_row[0] if time_row else "Morning"
-            
-            # Each time period has a chance of reveal for each NPC
-            reveal_chance = {
-                "Morning": 0.1,
-                "Afternoon": 0.15,
-                "Evening": 0.2,
-                "Night": 0.25  # Higher chance at night when guards are down
-            }
-            
-            base_chance = reveal_chance.get(time_of_day, 0.15)
-            reveals = []
-            
-            for npc_id, mask_data_json, npc_name, dominance, cruelty in npc_masks:
-                mask_data = {}
-                if mask_data_json:
-                    if isinstance(mask_data_json, str):
-                        try:
-                            mask_data = json.loads(mask_data_json)
-                        except json.JSONDecodeError:
-                            mask_data = {}
-                    else:
-                        mask_data = mask_data_json
-                
-                mask = NPCMask.from_dict(mask_data)
-                
-                # Higher dominance/cruelty increases chance of slip
-                modifier = (dominance + cruelty) / 200  # 0.0 to 1.0
-                
-                # Lower integrity increases chance of slip
-                integrity_factor = (100 - mask.integrity) / 100  # 0.0 to 1.0
-                
-                # Calculate final chance
-                final_chance = base_chance + (modifier * 0.2) + (integrity_factor * 0.3)
-                
-                # Roll for reveal
-                if random.random() < final_chance:
-                    # Generate a reveal
-                    reveal_result = await ProgressiveRevealManager.generate_mask_slippage(
-                        user_id, conversation_id, npc_id
-                    )
-                    
-                    if "error" not in reveal_result:
-                        reveals.append(reveal_result)
-            
-            return reveals
-            
-        except Exception as e:
-            logging.error(f"Error checking for automated reveals: {e}")
-            return []
-        finally:
-            cursor.close()
-            conn.close()
+@staticmethod
+async def check_for_automated_reveals(user_id: int, conversation_id: int) -> list[dict]: # Changed to async def
+    """Check for and trigger automated reveals using asyncpg."""
+    reveals = []
+    try:
+         async with get_db_connection_context() as conn:
+              # 1. Get all NPCs with masks + relevant stats
+              npc_data = await conn.fetch("""
+                  SELECT m.npc_id, m.mask_data, n.npc_name, n.dominance, n.cruelty
+                  FROM NPCMasks m
+                  JOIN NPCStats n ON m.npc_id = n.npc_id
+                      AND m.user_id = n.user_id
+                      AND m.conversation_id = n.conversation_id
+                  WHERE m.user_id=$1 AND m.conversation_id=$2
+              """, user_id, conversation_id)
+
+              if not npc_data:
+                   return [] # No NPCs with masks found
+
+              # 2. Get current time (optional, could be passed in)
+              time_of_day = await conn.fetchval("""
+                  SELECT value FROM CurrentRoleplay
+                  WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
+              """, user_id, conversation_id) or "Afternoon" # Default time
+
+         # 3. Iterate through NPCs and check chance (mostly sync logic, but calls async slippage)
+         reveal_chance_map = { "Morning": 0.1, "Afternoon": 0.15, "Evening": 0.2, "Night": 0.25 }
+         base_chance = reveal_chance_map.get(time_of_day, 0.15)
+
+         generation_tasks = []
+         for record in npc_data:
+              npc_id, mask_data_json, npc_name, dominance, cruelty = record['npc_id'], record['mask_data'], record['npc_name'], record['dominance'], record['cruelty']
+
+              mask_data = {}
+              if isinstance(mask_data_json, dict): mask_data = mask_data_json
+              elif isinstance(mask_data_json, str):
+                  try: mask_data = json.loads(mask_data_json)
+                  except: pass
+              if not isinstance(mask_data, dict): mask_data = {}
+              mask = NPCMask.from_dict(mask_data)
+
+              # Calculate chance (sync)
+              modifier = (dominance + cruelty) / 200
+              integrity_factor = (100 - mask.integrity) / 100
+              final_chance = base_chance + (modifier * 0.2) + (integrity_factor * 0.3)
+
+              # Roll for reveal (sync)
+              if random.random() < final_chance:
+                   logger.info(f"Automated reveal triggered for NPC {npc_id} ({npc_name}) with chance {final_chance:.2f}")
+                   # Schedule the slippage generation (which involves DB writes)
+                   generation_tasks.append(
+                        ProgressiveRevealManager.generate_mask_slippage(
+                             user_id, conversation_id, npc_id, trigger="automated check"
+                        )
+                   )
+
+         # 4. Run all triggered reveals concurrently
+         if generation_tasks:
+              results = await asyncio.gather(*generation_tasks, return_exceptions=True)
+              for result in results:
+                   if isinstance(result, dict) and "error" not in result:
+                        reveals.append(result)
+                   elif isinstance(result, Exception):
+                        logger.error(f"Error during automated reveal generation task: {result}", exc_info=result)
+                   elif isinstance(result, dict) and "error" in result:
+                       logger.error(f"Failed automated reveal generation for NPC {result.get('npc_id', '?')}: {result['error']}")
+
+         return reveals
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error checking automated reveals: {e}", exc_info=True)
+        return []
+    # Handle ConnectionError, TimeoutError etc.
+    except Exception as e:
+        logger.error(f"Unexpected error checking automated reveals: {e}", exc_info=True)
+        return []
     
-    @staticmethod
-    async def get_perception_difficulty(user_id, conversation_id, npc_id):
-        """
-        Calculate how difficult it is to see through an NPC's mask
-        """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Get mask data
-            cursor.execute("""
-                SELECT mask_data FROM NPCMasks
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
-            
-            row = cursor.fetchone()
-            if not row:
-                return {"error": f"No mask found for NPC with id {npc_id}"}
-                
-            mask_data_json = row[0]
-            
-            mask_data = {}
-            if mask_data_json:
-                if isinstance(mask_data_json, str):
-                    try:
-                        mask_data = json.loads(mask_data_json)
-                    except json.JSONDecodeError:
-                        mask_data = {}
-                else:
-                    mask_data = mask_data_json
+@staticmethod
+async def get_perception_difficulty(user_id: int, conversation_id: int, npc_id: int) -> dict: # Changed to async def
+    """Calculate perception difficulty against NPC mask using asyncpg."""
+    try:
+        async with get_db_connection_context() as conn:
+             # Fetch mask, NPC stats, and player stats
+             # Could potentially run these fetches concurrently with asyncio.gather
+             mask_data_json = await conn.fetchval("""
+                  SELECT mask_data FROM NPCMasks
+                  WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+             """, user_id, conversation_id, npc_id)
+
+             if not mask_data_json:
+                  return {"error": f"No mask found for NPC {npc_id}", "npc_id": npc_id}
+
+             npc_row = await conn.fetchrow("""
+                  SELECT dominance, cruelty FROM NPCStats
+                  WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+             """, user_id, conversation_id, npc_id)
+
+             if not npc_row:
+                  return {"error": f"NPC {npc_id} not found", "npc_id": npc_id}
+
+             # Assume player name is 'Chase' - adapt if needed
+             player_row = await conn.fetchrow("""
+                  SELECT mental_resilience, confidence FROM PlayerStats
+                  WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+             """, user_id, conversation_id)
+
+             # Decode mask (Sync)
+             mask_data = {}
+             if isinstance(mask_data_json, dict): mask_data = mask_data_json
+             elif isinstance(mask_data_json, str):
+                  try: mask_data = json.loads(mask_data_json)
+                  except: pass
+             if not isinstance(mask_data, dict): mask_data = {}
+             mask = NPCMask.from_dict(mask_data)
             
             # Get NPC stats
             cursor.execute("""
@@ -1499,18 +1634,18 @@ class ProgressiveRevealManager:
             else:
                 difficulty_rating = "Very Difficult"
             
-            return {
-                "npc_id": npc_id,
-                "mask_integrity": mask.integrity,
-                "difficulty_score": total_difficulty,
-                "player_perception": perception_ability,
-                "relative_difficulty": relative_difficulty,
-                "difficulty_rating": difficulty_rating
-            }
-            
-        except Exception as e:
-            logging.error(f"Error calculating perception difficulty: {e}")
-            return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+             return {
+                  "npc_id": npc_id, "mask_integrity": mask.integrity,
+                  "difficulty_score": round(total_difficulty, 1),
+                  "player_perception": round(perception_ability, 1),
+                  "relative_difficulty": round(relative_difficulty, 2),
+                  "difficulty_rating": difficulty_rating
+             }
+
+    except asyncpg.PostgresError as e:
+        logger.error(f"Database error calculating perception difficulty for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Database error calculating difficulty for NPC {npc_id}", "npc_id": npc_id}
+    # Handle ConnectionError, TimeoutError etc.
+    except Exception as e:
+        logger.error(f"Unexpected error calculating perception difficulty for {npc_id}: {e}", exc_info=True)
+        return {"error": f"Unexpected error calculating difficulty for NPC {npc_id}", "npc_id": npc_id}
