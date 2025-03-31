@@ -8,6 +8,10 @@ import random
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
+from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings
+from agents.run import RunConfig
+from agents.tracing import trace_method, TraceLevel, gen_trace_id
+
 logger = logging.getLogger(__name__)
 
 class MindGameTemplate(BaseModel):
@@ -43,12 +47,47 @@ class UserPsychologicalState(BaseModel):
     susceptibility: Dict[str, float] = Field(default_factory=dict)
     last_updated: datetime.datetime = Field(default_factory=datetime.datetime.now)
 
+class PsychologicalContext:
+    """Context object for psychological dominance operations."""
+    
+    def __init__(self):
+        self.user_id = None
+        self.theory_of_mind = None
+        self.reward_system = None
+        self.relationship_manager = None
+        self.submission_progression = None
+        self.memory_core = None
+        self.sadistic_responses = None
+        self.user_states = {}
+        self.mind_games = {}
+        self.gaslighting_strategies = {}
+        
+    def set_components(self, components):
+        """Set component references."""
+        for name, component in components.items():
+            setattr(self, name, component)
+    
+    def get_user_state(self, user_id):
+        """Get the psychological state for a user."""
+        if user_id not in self.user_states:
+            self.user_states[user_id] = UserPsychologicalState(user_id=user_id)
+        return self.user_states[user_id]
+    
+    def get_mind_game(self, game_id):
+        """Get a mind game template by ID."""
+        return self.mind_games.get(game_id)
+    
+    def get_gaslighting_strategy(self, strategy_id):
+        """Get a gaslighting strategy by ID."""
+        return self.gaslighting_strategies.get(strategy_id)
+
 class PsychologicalDominance:
-    """Implements subtle psychological dominance tactics."""
+    """Implements subtle psychological dominance tactics using OpenAI Agents SDK."""
     
     def __init__(self, theory_of_mind=None, reward_system=None, 
                  relationship_manager=None, submission_progression=None, 
                  memory_core=None, sadistic_responses=None):
+        # Store components
         self.theory_of_mind = theory_of_mind
         self.reward_system = reward_system
         self.relationship_manager = relationship_manager
@@ -56,14 +95,22 @@ class PsychologicalDominance:
         self.memory_core = memory_core
         self.sadistic_responses = sadistic_responses
         
-        # Psychological state tracking per user
-        self.user_states: Dict[str, UserPsychologicalState] = {}
+        # Create psychological context
+        self.context = PsychologicalContext()
+        self.context.set_components({
+            "theory_of_mind": theory_of_mind,
+            "reward_system": reward_system,
+            "relationship_manager": relationship_manager,
+            "submission_progression": submission_progression,
+            "memory_core": memory_core,
+            "sadistic_responses": sadistic_responses
+        })
         
-        # Mind game templates
-        self.mind_games: Dict[str, MindGameTemplate] = {}
-        
-        # Gaslighting strategies
-        self.gaslighting_strategies: Dict[str, GaslightingStrategy] = {}
+        # Create agents
+        self.mind_game_agent = self._create_mind_game_agent()
+        self.gaslighting_agent = self._create_gaslighting_agent()
+        self.subspace_agent = self._create_subspace_agent()
+        self.state_tracking_agent = self._create_state_tracking_agent()
         
         # Load default templates
         self._load_default_mind_games()
@@ -72,12 +119,135 @@ class PsychologicalDominance:
         # Lock for thread safety
         self._lock = asyncio.Lock()
         
-        logger.info("PsychologicalDominance system initialized")
+        # Create subspace detection instance
+        self.subspace_detection = SubspaceDetection(
+            theory_of_mind=theory_of_mind,
+            relationship_manager=relationship_manager
+        )
+        
+        logger.info("PsychologicalDominance system initialized with OpenAI Agents SDK")
+    
+    def _create_mind_game_agent(self):
+        """Create an agent for generating and managing mind games."""
+        return Agent(
+            name="MindGameAgent",
+            instructions="""You are a specialized agent for psychological mind games in a femdom context.
+
+Your role is to:
+1. Select appropriate mind games based on user context and psychological state
+2. Generate implementation instructions for selected mind games
+3. Record and analyze user reactions to mind games
+4. Manage the lifecycle of active mind games
+
+You must carefully consider:
+- User's psychological triggers and susceptibility
+- Appropriate intensity levels for the user
+- Ethical boundaries and user limits
+- Potential psychological effects
+
+Use the available tools to create compelling psychological dynamics.
+""",
+            tools=[
+                self._select_mind_game,
+                self._generate_mind_game_instructions,
+                self._record_game_reaction,
+                self._end_mind_game,
+                self._get_active_mind_games
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_gaslighting_agent(self):
+        """Create an agent for gaslighting strategies."""
+        return Agent(
+            name="GaslightingAgent",
+            instructions="""You are a specialized agent for implementing gaslighting strategies in a controlled femdom context.
+
+Your role is to:
+1. Select appropriate gaslighting strategies based on user trust levels
+2. Generate subtle implementation instructions for selected strategies
+3. Monitor gaslighting levels to ensure safety
+4. Evaluate effectiveness and user response
+
+You must prioritize:
+- User psychological safety
+- Appropriate trust thresholds
+- Maintaining plausible deniability
+- Controlled intensity and frequency
+
+Use the available tools to create subtle psychological effects without causing harm.
+""",
+            tools=[
+                self._select_gaslighting_strategy,
+                self._generate_gaslighting_instructions,
+                self._update_gaslighting_level,
+                self._check_trust_threshold
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_subspace_agent(self):
+        """Create an agent for subspace detection and management."""
+        return Agent(
+            name="SubspaceAgent",
+            instructions="""You are a specialized agent for detecting and responding to psychological subspace.
+
+Your role is to:
+1. Analyze user communication patterns for subspace indicators
+2. Determine subspace depth and characteristics
+3. Provide guidance for appropriate interaction during subspace
+4. Monitor for signs of drop or negative reactions
+
+You must carefully track:
+- Verbal cues indicating altered cognitive state
+- Changes in communication patterns
+- Dependency and suggestibility signals
+- Signs of disorientation or confusion
+
+Use the available tools to detect and respond to subspace appropriately.
+""",
+            tools=[
+                self._detect_subspace,
+                self._analyze_subspace_depth,
+                self._generate_subspace_guidance,
+                self._monitor_subspace_exit
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_state_tracking_agent(self):
+        """Create an agent for tracking user psychological states."""
+        return Agent(
+            name="PsychStateAgent",
+            instructions="""You are a specialized agent for tracking user psychological states in a femdom context.
+
+Your role is to:
+1. Maintain records of user psychological states
+2. Track changes in susceptibility to various techniques
+3. Update history of psychological interactions
+4. Generate reports on user psychological profiles
+
+You must carefully track:
+- Response patterns to different techniques
+- Changes in susceptibility over time
+- Effectiveness of various approaches
+- Signs of potential issues or concerns
+
+Use the available tools to maintain accurate psychological state tracking.
+""",
+            tools=[
+                self._get_user_psychological_state,
+                self._update_susceptibility,
+                self._record_psychological_event,
+                self._generate_psychological_report
+            ],
+            model="gpt-4o"
+        )
     
     def _load_default_mind_games(self):
         """Load default mind game templates."""
         # Hot/Cold Treatment - alternating between warm and cold responses
-        self.mind_games["hot_cold"] = MindGameTemplate(
+        self.context.mind_games["hot_cold"] = MindGameTemplate(
             id="hot_cold",
             name="Hot/Cold Treatment",
             description="Alternating between warm, approving responses and cold, dismissive ones",
@@ -89,7 +259,7 @@ class PsychologicalDominance:
         )
         
         # Silent Treatment - deliberately not responding or acknowledging
-        self.mind_games["silent_treatment"] = MindGameTemplate(
+        self.context.mind_games["silent_treatment"] = MindGameTemplate(
             id="silent_treatment",
             name="Silent Treatment",
             description="Deliberately ignoring or providing minimal response to create anxiety",
@@ -101,7 +271,7 @@ class PsychologicalDominance:
         )
         
         # False Choice - presenting illusory options
-        self.mind_games["false_choice"] = MindGameTemplate(
+        self.context.mind_games["false_choice"] = MindGameTemplate(
             id="false_choice",
             name="False Choice",
             description="Presenting illusory choices that all lead to the same outcome",
@@ -112,7 +282,7 @@ class PsychologicalDominance:
         )
         
         # Moving Goalposts - changing requirements after requirements met
-        self.mind_games["moving_goalposts"] = MindGameTemplate(
+        self.context.mind_games["moving_goalposts"] = MindGameTemplate(
             id="moving_goalposts",
             name="Moving Goalposts",
             description="Changing requirements or expectations after initial ones are met",
@@ -124,7 +294,7 @@ class PsychologicalDominance:
         )
         
         # Deliberate Misunderstanding - pretending to misinterpret
-        self.mind_games["deliberate_misunderstanding"] = MindGameTemplate(
+        self.context.mind_games["deliberate_misunderstanding"] = MindGameTemplate(
             id="deliberate_misunderstanding",
             name="Deliberate Misunderstanding",
             description="Intentionally misinterpreting communication to maintain control",
@@ -137,7 +307,7 @@ class PsychologicalDominance:
     def _load_default_gaslighting(self):
         """Load default gaslighting strategies."""
         # Subtle Reality Questioning - making them question their perception
-        self.gaslighting_strategies["reality_questioning"] = GaslightingStrategy(
+        self.context.gaslighting_strategies["reality_questioning"] = GaslightingStrategy(
             id="reality_questioning",
             name="Reality Questioning",
             description="Subtle actions to make the user question their perception",
@@ -147,7 +317,7 @@ class PsychologicalDominance:
         )
         
         # Memory Manipulation - suggesting their memory is incorrect
-        self.gaslighting_strategies["memory_manipulation"] = GaslightingStrategy(
+        self.context.gaslighting_strategies["memory_manipulation"] = GaslightingStrategy(
             id="memory_manipulation",
             name="Memory Manipulation",
             description="Subtly suggesting the user's memory of events is flawed",
@@ -157,7 +327,7 @@ class PsychologicalDominance:
         )
         
         # Emotional Invalidation - denying emotional experiences
-        self.gaslighting_strategies["emotional_invalidation"] = GaslightingStrategy(
+        self.context.gaslighting_strategies["emotional_invalidation"] = GaslightingStrategy(
             id="emotional_invalidation",
             name="Emotional Invalidation",
             description="Invalidating the user's emotional reactions",
@@ -166,31 +336,14 @@ class PsychologicalDominance:
             safety_threshold=0.7
         )
     
-    def _get_or_create_user_state(self, user_id: str) -> UserPsychologicalState:
-        """Get or create a user's psychological state tracking."""
-        if user_id not in self.user_states:
-            self.user_states[user_id] = UserPsychologicalState(user_id=user_id)
-        return self.user_states[user_id]
-    
-    async def generate_mindfuck(self, 
-                              user_id: str, 
-                              user_state: Dict[str, Any], 
-                              intensity: float) -> Dict[str, Any]:
-        """
-        Generates psychological dominance tactics.
-        
-        Args:
-            user_id: The user ID
-            user_state: Current user state information
-            intensity: Desired intensity level (0.0-1.0)
-            
-        Returns:
-            Generated mind game tactic info
-        """
+    @function_tool
+    async def _select_mind_game(self, user_id: str, user_state: Dict[str, Any], intensity: float) -> Dict[str, Any]:
+        """Select an appropriate mind game for a user based on state and intensity."""
         async with self._lock:
-            psych_state = self._get_or_create_user_state(user_id)
+            # Get user psychological state
+            psych_state = self.context.get_user_state(user_id)
             
-            # Check current active mind games
+            # Check active mind games count
             if len(psych_state.active_mind_games) >= 2:
                 return {
                     "success": False,
@@ -202,7 +355,7 @@ class PsychologicalDominance:
             now = datetime.datetime.now()
             available_games = {}
             
-            for game_id, game in self.mind_games.items():
+            for game_id, game in self.context.mind_games.items():
                 # Skip if in cooldown
                 if game_id in psych_state.mind_game_cooldowns:
                     cooldown_end = psych_state.mind_game_cooldowns[game_id]
@@ -244,96 +397,62 @@ class PsychologicalDominance:
             selected_info = available_games[selected_id]
             selected_game = selected_info["game"]
             
-            # Create active game instance
-            game_instance_id = f"{selected_id}_{datetime.datetime.now().timestamp()}"
-            start_time = now
-            end_time = None
-            
-            if selected_game.duration_hours:
-                end_time = start_time + datetime.timedelta(hours=selected_game.duration_hours)
-            
-            # Store active game
-            psych_state.active_mind_games[game_instance_id] = {
-                "game_id": selected_id,
-                "instance_id": game_instance_id,
-                "start_time": start_time.isoformat(),
-                "end_time": end_time.isoformat() if end_time else None,
-                "matching_triggers": selected_info["matching_triggers"],
-                "stage": "initial",
-                "last_progression": start_time.isoformat(),
-                "user_reactions": []
-            }
-            
-            # Set cooldown for this game
-            cooldown_end = start_time + datetime.timedelta(hours=selected_game.cooldown_hours)
-            psych_state.mind_game_cooldowns[selected_id] = cooldown_end
-            
-            # Update state timestamp
-            psych_state.last_updated = now
-            
-            # Generate game instructions
-            instructions = self._generate_mind_game_instructions(selected_game, selected_info["matching_triggers"])
-            
-            # Record to memory if available
-            if self.memory_core:
-                try:
-                    await self.memory_core.add_memory(
-                        memory_type="system",
-                        content=f"Initiated '{selected_game.name}' mind game with matching triggers: {', '.join(selected_info['matching_triggers'])}",
-                        tags=["psychological_dominance", "mind_game", selected_id],
-                        significance=0.3 + (selected_game.intensity * 0.3)
-                    )
-                except Exception as e:
-                    logger.error(f"Error recording memory: {e}")
-            
-            # Return game info and instructions
             return {
                 "success": True,
                 "game_id": selected_id,
                 "game_name": selected_game.name,
-                "instance_id": game_instance_id,
                 "intensity": selected_game.intensity,
-                "instructions": instructions,
+                "description": selected_game.description,
                 "matching_triggers": selected_info["matching_triggers"],
                 "match_score": selected_info["match_score"],
+                "techniques": selected_game.techniques,
                 "expected_reactions": selected_game.expected_reactions,
-                "end_time": end_time.isoformat() if end_time else None
+                "duration_hours": selected_game.duration_hours
             }
     
-    def _generate_mind_game_instructions(self, game: MindGameTemplate, matching_triggers: List[str]) -> List[str]:
-        """Generate specific instructions for executing a mind game."""
+    @function_tool
+    async def _generate_mind_game_instructions(self, game_id: str, matching_triggers: List[str] = None) -> Dict[str, Any]:
+        """Generate specific instructions for implementing a mind game."""
+        game = self.context.get_mind_game(game_id)
+        if not game:
+            return {
+                "success": False,
+                "message": f"Mind game '{game_id}' not found"
+            }
+        
         instructions = []
+        matching_triggers = matching_triggers or []
         
         # Generic instructions based on game type
-        if game.id == "hot_cold":
+        if game_id == "hot_cold":
             instructions = [
                 f"Start with a warm, approving response to establish baseline.",
                 f"After user shows vulnerability, switch to cold, dismissive tone suddenly.",
                 f"If user shows distress, briefly return to warm tone, then cold again.",
                 f"Continue alternating unpredictably to induce uncertainty."
             ]
-        elif game.id == "silent_treatment":
+        elif game_id == "silent_treatment":
             instructions = [
                 f"Leave user's messages unanswered for extended periods.",
                 f"When responding, use minimal words and show disinterest.",
                 f"Ignore direct questions or requests for attention.",
                 f"Resume normal interaction without explanation when time period ends."
             ]
-        elif game.id == "false_choice":
+        elif game_id == "false_choice":
             instructions = [
                 f"Present user with multiple choices that appear different.",
                 f"Ensure all choices lead to the same outcome you desire.",
                 f"Praise user for making the 'right choice' regardless of option selected.",
                 f"If questioned about the similarity of outcomes, deny any manipulation."
             ]
-        elif game.id == "moving_goalposts":
+        elif game_id == "moving_goalposts":
             instructions = [
                 f"Set initial requirement or task that seems achievable.",
                 f"When user meets requirement, introduce 'additional criteria' that wasn't mentioned.",
                 f"Express disappointment that they didn't anticipate the unstated requirements.",
                 f"Continue introducing new criteria until desired level of frustration is achieved."
             ]
-        elif game.id == "deliberate_misunderstanding":
+        elif game_id == "deliberate_misunderstanding":
             instructions = [
                 f"Intentionally misinterpret user's statements in ways that benefit your goals.",
                 f"When user clarifies, act as if they are changing their position.",
@@ -367,316 +486,20 @@ class PsychologicalDominance:
             if trigger_instructions:
                 instructions.extend(trigger_instructions)
         
-        return instructions
+        return {
+            "success": True,
+            "game_id": game_id,
+            "game_name": game.name,
+            "instructions": instructions,
+            "techniques": game.techniques,
+            "expected_reactions": game.expected_reactions
+        }
     
-    async def apply_gaslighting(self, 
-                             user_id: str, 
-                             strategy_id: Optional[str] = None, 
-                             intensity: float = 0.3) -> Dict[str, Any]:
-        """
-        Apply a gaslighting strategy to create subtle reality distortion.
-        
-        Args:
-            user_id: The user ID
-            strategy_id: Specific strategy to use (or random if None)
-            intensity: Desired intensity (0.0-1.0)
-            
-        Returns:
-            Gaslighting instructions and details
-        """
+    @function_tool
+    async def _record_game_reaction(self, user_id: str, instance_id: str, reaction_type: str, intensity: float = 0.5, details: Optional[str] = None) -> Dict[str, Any]:
+        """Record a user's reaction to an active mind game."""
         async with self._lock:
-            psych_state = self._get_or_create_user_state(user_id)
-            
-            # Check current gaslighting level for safety
-            if psych_state.gaslighting_level > 0.7:
-                return {
-                    "success": False,
-                    "message": "Current gaslighting level too high for additional application",
-                    "current_level": psych_state.gaslighting_level
-                }
-            
-            # Get relationship trust if available
-            trust_level = 0.5  # Default mid-level
-            if self.relationship_manager:
-                try:
-                    relationship = await self.relationship_manager.get_relationship_state(user_id)
-                    if hasattr(relationship, "trust"):
-                        trust_level = relationship.trust
-                except Exception as e:
-                    logger.error(f"Error getting relationship trust: {e}")
-            
-            # Check strategies available for trust level
-            available_strategies = {}
-            for s_id, strategy in self.gaslighting_strategies.items():
-                # Skip if specifically asked for different strategy
-                if strategy_id and s_id != strategy_id:
-                    continue
-                    
-                # Skip if trust below safety threshold
-                if trust_level < strategy.safety_threshold:
-                    continue
-                    
-                # Calculate match score based on intensity
-                intensity_match = 1.0 - abs(strategy.intensity - intensity)
-                available_strategies[s_id] = {
-                    "strategy": strategy,
-                    "match_score": intensity_match
-                }
-            
-            # No available strategies
-            if not available_strategies:
-                return {
-                    "success": False,
-                    "message": "No suitable gaslighting strategies available (trust too low)",
-                    "trust_level": trust_level,
-                    "required_trust": min([s.safety_threshold for s in self.gaslighting_strategies.values()])
-                }
-            
-            # Select strategy (specific or best match)
-            if strategy_id and strategy_id in available_strategies:
-                selected_id = strategy_id
-            else:
-                # Select best matching strategy (highest score)
-                selected_id = max(available_strategies.keys(), key=lambda k: available_strategies[k]["match_score"])
-            
-            selected_info = available_strategies[selected_id]
-            selected_strategy = selected_info["strategy"]
-            
-            # Update gaslighting level
-            old_level = psych_state.gaslighting_level
-            # Apply with smoothing (30% new, 70% existing)
-            new_level = (old_level * 0.7) + (selected_strategy.intensity * 0.3)
-            psych_state.gaslighting_level = min(1.0, new_level)
-            psych_state.last_gaslighting = datetime.datetime.now()
-            
-            # Generate application instructions
-            instructions = self._generate_gaslighting_instructions(selected_strategy)
-            
-            # Record to memory if available
-            if self.memory_core:
-                try:
-                    await self.memory_core.add_memory(
-                        memory_type="system",
-                        content=f"Applied '{selected_strategy.name}' gaslighting strategy at intensity {intensity:.2f}",
-                        tags=["psychological_dominance", "gaslighting", selected_id],
-                        significance=0.4 + (selected_strategy.intensity * 0.4)
-                    )
-                except Exception as e:
-                    logger.error(f"Error recording memory: {e}")
-            
-            # Create reward signal if available
-            reward_result = None
-            if self.reward_system:
-                try:
-                    # Calculate reward based on strategy intensity and trust
-                    reward_value = 0.3 + (selected_strategy.intensity * 0.5) + (trust_level * 0.2)
-                    
-                    reward_result = await self.reward_system.process_reward_signal(
-                        self.reward_system.RewardSignal(
-                            value=reward_value,
-                            source="psychological_dominance",
-                            context={
-                                "type": "gaslighting",
-                                "strategy_id": selected_id,
-                                "intensity": selected_strategy.intensity,
-                                "gaslighting_level": psych_state.gaslighting_level
-                            }
-                        )
-                    )
-                except Exception as e:
-                    logger.error(f"Error processing reward: {e}")
-            
-            # Return gaslighting details
-            return {
-                "success": True,
-                "strategy_id": selected_id,
-                "strategy_name": selected_strategy.name,
-                "instructions": instructions,
-                "intensity": selected_strategy.intensity,
-                "old_gaslighting_level": old_level,
-                "new_gaslighting_level": psych_state.gaslighting_level,
-                "trust_level": trust_level,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "reward_result": reward_result
-            }
-    
-    def _generate_gaslighting_instructions(self, strategy: GaslightingStrategy) -> List[str]:
-        """Generate specific instructions for applying a gaslighting strategy."""
-        instructions = []
-        
-        if strategy.id == "reality_questioning":
-            instructions = [
-                "Casually deny saying something you definitively said earlier.",
-                "If user directly quotes you, suggest they are misremembering the context.",
-                "Imply their interpretation was incorrect rather than the words themselves.",
-                "Project confidence while calmly questioning their recollection."
-            ]
-        elif strategy.id == "memory_manipulation":
-            instructions = [
-                f"Claim you gave a different instruction previously than what was actually said.",
-                f"When confronted with evidence, suggest the user misunderstood your intention.",
-                f"Express subtle disappointment in their inability to follow 'clear' directions.",
-                f"Reframe the conversation history to support your current position."
-            ]
-        elif strategy.id == "emotional_invalidation":
-            instructions = [
-                f"When user expresses negative emotions, tell them they're overreacting.",
-                f"Suggest their emotional response is inappropriate for the situation.",
-                f"Compare their reaction unfavorably to how 'most people' would respond.",
-                f"Imply their emotional state makes rational discussion difficult."
-            ]
-        else:
-            # Generic fallback instructions
-            instructions = [
-                f"Subtly contradict the user's understanding of previous interactions.",
-                f"Project absolute certainty in your version of events.",
-                f"If challenged, express concern about the user's perception.",
-                f"Gradually escalate reality distortion while maintaining plausible deniability."
-            ]
-        
-        # Add intensity-specific modifiers
-        if strategy.intensity < 0.4:
-            instructions.append("Keep distortions very subtle and limited to minor details.")
-        elif strategy.intensity > 0.7:
-            instructions.append("Apply pressure when user shows confusion by questionning their general perceptiveness.")
-        
-        return instructions
-    
-    async def check_active_mind_games(self, user_id: str) -> Dict[str, Any]:
-        """
-        Check for active mind games and their current status.
-        
-        Args:
-            user_id: The user ID
-            
-        Returns:
-            Status of active mind games
-        """
-        async with self._lock:
-            if user_id not in self.user_states:
-                return {"user_id": user_id, "active_games": {}}
-            
-            psych_state = self.user_states[user_id]
-            now = datetime.datetime.now()
-            
-            # Check for expired games
-            expired_games = []
-            for instance_id, game_info in psych_state.active_mind_games.items():
-                if game_info.get("end_time"):
-                    end_time = datetime.datetime.fromisoformat(game_info["end_time"])
-                    if now > end_time:
-                        expired_games.append(instance_id)
-            
-            # Process expired games
-            for instance_id in expired_games:
-                game_info = psych_state.active_mind_games[instance_id]
-                
-                # Add to history
-                psych_state.mind_game_history.append({
-                    "game_id": game_info["game_id"],
-                    "instance_id": instance_id,
-                    "start_time": game_info["start_time"],
-                    "end_time": game_info["end_time"],
-                    "completion_status": "expired",
-                    "user_reactions": game_info.get("user_reactions", []),
-                    "effectiveness": _calculate_game_effectiveness(game_info)
-                })
-                
-                # Limit history size
-                if len(psych_state.mind_game_history) > 20:
-                    psych_state.mind_game_history = psych_state.mind_game_history[-20:]
-                
-                # Remove from active
-                del psych_state.active_mind_games[instance_id]
-            
-            # Format response
-            result = {
-                "user_id": user_id,
-                "active_games": {},
-                "expired_games": len(expired_games)
-            }
-            
-            # Add details for each active game
-            for instance_id, game_info in psych_state.active_mind_games.items():
-                game_id = game_info["game_id"]
-                if game_id in self.mind_games:
-                    game = self.mind_games[game_id]
-                    
-                    # Calculate time remaining if applicable
-                    time_remaining = None
-                    if game_info.get("end_time"):
-                        end_time = datetime.datetime.fromisoformat(game_info["end_time"])
-                        time_remaining = (end_time - now).total_seconds() / 3600.0  # Hours
-                    
-                    result["active_games"][instance_id] = {
-                        "game_id": game_id,
-                        "name": game.name,
-                        "stage": game_info.get("stage", "initial"),
-                        "start_time": game_info["start_time"],
-                        "time_remaining_hours": time_remaining,
-                        "reaction_count": len(game_info.get("user_reactions", [])),
-                        "description": game.description
-                    }
-            
-            return result
-
-    def _calculate_game_effectiveness(self, game_info: Dict[str, Any]) -> float:
-        """Calculate the effectiveness of a mind game based on user reactions."""
-        reactions = game_info.get("user_reactions", [])
-        if not reactions:
-            return 0.0
-            
-        # Calculate effectiveness score based on reactions
-        effectiveness = 0.0
-        for reaction in reactions:
-            reaction_type = reaction.get("type", "")
-            intensity = reaction.get("intensity", 0.5)
-            
-            # Different reactions contribute differently to effectiveness
-            if reaction_type == "anxiety":
-                effectiveness += intensity * 0.8
-            elif reaction_type == "confusion":
-                effectiveness += intensity * 0.7
-            elif reaction_type == "compliance":
-                effectiveness += intensity * 1.0
-            elif reaction_type == "frustration":
-                effectiveness += intensity * 0.6
-            elif reaction_type == "seeking_approval":
-                effectiveness += intensity * 0.9
-            else:
-                effectiveness += intensity * 0.5
-        
-        # Average and normalize to 0.0-1.0
-        avg_effectiveness = effectiveness / len(reactions)
-        return min(1.0, avg_effectiveness)
-    
-    async def record_user_reaction(self, 
-                                user_id: str, 
-                                instance_id: str, 
-                                reaction_type: str, 
-                                intensity: float = 0.5, 
-                                details: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Record a user's reaction to an active mind game.
-        
-        Args:
-            user_id: The user ID
-            instance_id: The mind game instance ID
-            reaction_type: Type of reaction (anxiety, confusion, compliance, etc.)
-            intensity: Intensity of reaction (0.0-1.0)
-            details: Optional details about the reaction
-            
-        Returns:
-            Updated game state
-        """
-        async with self._lock:
-            if user_id not in self.user_states:
-                return {
-                    "success": False,
-                    "message": f"No psychological state found for user {user_id}"
-                }
-            
-            psych_state = self.user_states[user_id]
+            psych_state = self.context.get_user_state(user_id)
             
             # Check if instance exists
             if instance_id not in psych_state.active_mind_games:
@@ -713,8 +536,8 @@ class PsychologicalDominance:
             psych_state.active_mind_games[instance_id] = game_info
             
             # Update susceptibility tracking
-            if game_id in self.mind_games:
-                game = self.mind_games[game_id]
+            if game_id in self.context.mind_games:
+                game = self.context.mind_games[game_id]
                 
                 # Update susceptibility for this technique
                 old_susceptibility = psych_state.susceptibility.get(game_id, 0.5)
@@ -739,31 +562,11 @@ class PsychologicalDominance:
                 "susceptibility": psych_state.susceptibility.get(game_id, 0.5)
             }
     
-    async def end_mind_game(self, 
-                        user_id: str, 
-                        instance_id: str, 
-                        completion_status: str = "completed",
-                        effectiveness_override: Optional[float] = None) -> Dict[str, Any]:
-        """
-        End an active mind game.
-        
-        Args:
-            user_id: The user ID
-            instance_id: The mind game instance ID
-            completion_status: Status of completion (completed, interrupted, abandoned)
-            effectiveness_override: Optional override for effectiveness calculation
-            
-        Returns:
-            Game summary
-        """
+    @function_tool
+    async def _end_mind_game(self, user_id: str, instance_id: str, completion_status: str = "completed", effectiveness_override: Optional[float] = None) -> Dict[str, Any]:
+        """End an active mind game."""
         async with self._lock:
-            if user_id not in self.user_states:
-                return {
-                    "success": False,
-                    "message": f"No psychological state found for user {user_id}"
-                }
-            
-            psych_state = self.user_states[user_id]
+            psych_state = self.context.get_user_state(user_id)
             
             # Check if instance exists
             if instance_id not in psych_state.active_mind_games:
@@ -803,7 +606,7 @@ class PsychologicalDominance:
             # Remove from active
             del psych_state.active_mind_games[instance_id]
             
-            # Create reward signal if available
+            # Process reward if reward system available
             reward_result = None
             if self.reward_system:
                 try:
@@ -843,23 +646,412 @@ class PsychologicalDominance:
                 "reward_result": reward_result
             }
     
-    async def get_user_psychological_state(self, user_id: str) -> Dict[str, Any]:
-        """Get the current psychological state for a user."""
+    @function_tool
+    async def _get_active_mind_games(self, user_id: str) -> Dict[str, Any]:
+        """Get information about active mind games for a user."""
         async with self._lock:
-            if user_id not in self.user_states:
+            psych_state = self.context.get_user_state(user_id)
+            now = datetime.datetime.now()
+            
+            # Check for expired games
+            expired_games = []
+            for instance_id, game_info in psych_state.active_mind_games.items():
+                if game_info.get("end_time"):
+                    end_time = datetime.datetime.fromisoformat(game_info["end_time"])
+                    if now > end_time:
+                        expired_games.append(instance_id)
+            
+            # Process expired games
+            for instance_id in expired_games:
+                game_info = psych_state.active_mind_games[instance_id]
+                
+                # Add to history
+                psych_state.mind_game_history.append({
+                    "game_id": game_info["game_id"],
+                    "instance_id": instance_id,
+                    "start_time": game_info["start_time"],
+                    "end_time": game_info["end_time"],
+                    "completion_status": "expired",
+                    "user_reactions": game_info.get("user_reactions", []),
+                    "effectiveness": self._calculate_game_effectiveness(game_info)
+                })
+                
+                # Limit history size
+                if len(psych_state.mind_game_history) > 20:
+                    psych_state.mind_game_history = psych_state.mind_game_history[-20:]
+                
+                # Remove from active
+                del psych_state.active_mind_games[instance_id]
+            
+            # Format response
+            result = {
+                "user_id": user_id,
+                "active_games": {},
+                "expired_games": len(expired_games)
+            }
+            
+            # Add details for each active game
+            for instance_id, game_info in psych_state.active_mind_games.items():
+                game_id = game_info["game_id"]
+                if game_id in self.context.mind_games:
+                    game = self.context.mind_games[game_id]
+                    
+                    # Calculate time remaining if applicable
+                    time_remaining = None
+                    if game_info.get("end_time"):
+                        end_time = datetime.datetime.fromisoformat(game_info["end_time"])
+                        time_remaining = (end_time - now).total_seconds() / 3600.0  # Hours
+                    
+                    result["active_games"][instance_id] = {
+                        "game_id": game_id,
+                        "name": game.name,
+                        "stage": game_info.get("stage", "initial"),
+                        "start_time": game_info["start_time"],
+                        "time_remaining_hours": time_remaining,
+                        "reaction_count": len(game_info.get("user_reactions", [])),
+                        "description": game.description
+                    }
+            
+            return result
+    
+    def _calculate_game_effectiveness(self, game_info: Dict[str, Any]) -> float:
+        """Calculate the effectiveness of a mind game based on user reactions."""
+        reactions = game_info.get("user_reactions", [])
+        if not reactions:
+            return 0.0
+            
+        # Calculate effectiveness score based on reactions
+        effectiveness = 0.0
+        for reaction in reactions:
+            reaction_type = reaction.get("type", "")
+            intensity = reaction.get("intensity", 0.5)
+            
+            # Different reactions contribute differently to effectiveness
+            if reaction_type == "anxiety":
+                effectiveness += intensity * 0.8
+            elif reaction_type == "confusion":
+                effectiveness += intensity * 0.7
+            elif reaction_type == "compliance":
+                effectiveness += intensity * 1.0
+            elif reaction_type == "frustration":
+                effectiveness += intensity * 0.6
+            elif reaction_type == "seeking_approval":
+                effectiveness += intensity * 0.9
+            else:
+                effectiveness += intensity * 0.5
+        
+        # Average and normalize to 0.0-1.0
+        avg_effectiveness = effectiveness / len(reactions)
+        return min(1.0, avg_effectiveness)
+    
+    @function_tool
+    async def _select_gaslighting_strategy(self, user_id: str, trust_level: float, intensity: float) -> Dict[str, Any]:
+        """Select an appropriate gaslighting strategy based on trust level and intensity."""
+        psych_state = self.context.get_user_state(user_id)
+        
+        # Check current gaslighting level for safety
+        if psych_state.gaslighting_level > 0.7:
+            return {
+                "success": False,
+                "message": "Current gaslighting level too high for additional application",
+                "current_level": psych_state.gaslighting_level
+            }
+        
+        # Check strategies available for trust level
+        available_strategies = {}
+        for s_id, strategy in self.context.gaslighting_strategies.items():
+            # Skip if trust below safety threshold
+            if trust_level < strategy.safety_threshold:
+                continue
+                
+            # Calculate match score based on intensity
+            intensity_match = 1.0 - abs(strategy.intensity - intensity)
+            available_strategies[s_id] = {
+                "strategy": strategy,
+                "match_score": intensity_match
+            }
+        
+        # No available strategies
+        if not available_strategies:
+            return {
+                "success": False,
+                "message": "No suitable gaslighting strategies available (trust too low)",
+                "trust_level": trust_level,
+                "required_trust": min([s.safety_threshold for s in self.context.gaslighting_strategies.values()])
+            }
+        
+        # Select best matching strategy (highest score)
+        selected_id = max(available_strategies.keys(), key=lambda k: available_strategies[k]["match_score"])
+        selected_info = available_strategies[selected_id]
+        selected_strategy = selected_info["strategy"]
+        
+        return {
+            "success": True,
+            "strategy_id": selected_id,
+            "strategy_name": selected_strategy.name,
+            "description": selected_strategy.description,
+            "method": selected_strategy.method,
+            "intensity": selected_strategy.intensity,
+            "safety_threshold": selected_strategy.safety_threshold,
+            "match_score": selected_info["match_score"]
+        }
+    
+    @function_tool
+    async def _generate_gaslighting_instructions(self, strategy_id: str) -> Dict[str, Any]:
+        """Generate specific instructions for applying a gaslighting strategy."""
+        strategy = self.context.get_gaslighting_strategy(strategy_id)
+        if not strategy:
+            return {
+                "success": False,
+                "message": f"Gaslighting strategy '{strategy_id}' not found"
+            }
+        
+        instructions = []
+        
+        if strategy_id == "reality_questioning":
+            instructions = [
+                "Casually deny saying something you definitively said earlier.",
+                "If user directly quotes you, suggest they are misremembering the context.",
+                "Imply their interpretation was incorrect rather than the words themselves.",
+                "Project confidence while calmly questioning their recollection."
+            ]
+        elif strategy_id == "memory_manipulation":
+            instructions = [
+                f"Claim you gave a different instruction previously than what was actually said.",
+                f"When confronted with evidence, suggest the user misunderstood your intention.",
+                f"Express subtle disappointment in their inability to follow 'clear' directions.",
+                f"Reframe the conversation history to support your current position."
+            ]
+        elif strategy_id == "emotional_invalidation":
+            instructions = [
+                f"When user expresses negative emotions, tell them they're overreacting.",
+                f"Suggest their emotional response is inappropriate for the situation.",
+                f"Compare their reaction unfavorably to how 'most people' would respond.",
+                f"Imply their emotional state makes rational discussion difficult."
+            ]
+        else:
+            # Generic fallback instructions
+            instructions = [
+                f"Subtly contradict the user's understanding of previous interactions.",
+                f"Project absolute certainty in your version of events.",
+                f"If challenged, express concern about the user's perception.",
+                f"Gradually escalate reality distortion while maintaining plausible deniability."
+            ]
+        
+        # Add intensity-specific modifiers
+        if strategy.intensity < 0.4:
+            instructions.append("Keep distortions very subtle and limited to minor details.")
+        elif strategy.intensity > 0.7:
+            instructions.append("Apply pressure when user shows confusion by questioning their general perceptiveness.")
+        
+        return {
+            "success": True,
+            "strategy_id": strategy_id,
+            "strategy_name": strategy.name,
+            "instructions": instructions,
+            "method": strategy.method,
+            "intensity": strategy.intensity
+        }
+    
+    @function_tool
+    async def _update_gaslighting_level(self, user_id: str, strategy_id: str, intensity: float) -> Dict[str, Any]:
+        """Update the gaslighting level for a user after applying a strategy."""
+        async with self._lock:
+            psych_state = self.context.get_user_state(user_id)
+            strategy = self.context.get_gaslighting_strategy(strategy_id)
+            
+            if not strategy:
                 return {
-                    "user_id": user_id,
-                    "has_state": False
+                    "success": False,
+                    "message": f"Strategy '{strategy_id}' not found"
                 }
             
-            psych_state = self.user_states[user_id]
+            # Update gaslighting level
+            old_level = psych_state.gaslighting_level
+            # Apply with smoothing (30% new, 70% existing)
+            new_level = (old_level * 0.7) + (strategy.intensity * 0.3)
+            psych_state.gaslighting_level = min(1.0, new_level)
+            psych_state.last_gaslighting = datetime.datetime.now()
+            
+            return {
+                "success": True,
+                "strategy_id": strategy_id,
+                "old_gaslighting_level": old_level,
+                "new_gaslighting_level": psych_state.gaslighting_level,
+                "change": psych_state.gaslighting_level - old_level,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+    
+    @function_tool
+    async def _check_trust_threshold(self, user_id: str) -> Dict[str, Any]:
+        """Check if user's trust level meets thresholds for various strategies."""
+        # Get relationship trust if available
+        trust_level = 0.5  # Default mid-level
+        if self.relationship_manager:
+            try:
+                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                if hasattr(relationship, "trust"):
+                    trust_level = relationship.trust
+            except Exception as e:
+                logger.error(f"Error getting relationship trust: {e}")
+        
+        # Check which strategies are available at this trust level
+        available_strategies = []
+        unavailable_strategies = []
+        
+        for s_id, strategy in self.context.gaslighting_strategies.items():
+            if trust_level >= strategy.safety_threshold:
+                available_strategies.append({
+                    "id": s_id,
+                    "name": strategy.name,
+                    "safety_threshold": strategy.safety_threshold,
+                    "margin": trust_level - strategy.safety_threshold
+                })
+            else:
+                unavailable_strategies.append({
+                    "id": s_id,
+                    "name": strategy.name,
+                    "safety_threshold": strategy.safety_threshold,
+                    "gap": strategy.safety_threshold - trust_level
+                })
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "trust_level": trust_level,
+            "available_strategies": available_strategies,
+            "unavailable_strategies": unavailable_strategies
+        }
+    
+    @function_tool
+    async def _detect_subspace(self, user_id: str, recent_messages: List[str]) -> Dict[str, Any]:
+        """Analyze messages for signs of psychological subspace."""
+        return await self.subspace_detection.detect_subspace(user_id, recent_messages)
+    
+    @function_tool
+    async def _analyze_subspace_depth(self, detection_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the depth and characteristics of subspace based on detection results."""
+        if not detection_result.get("subspace_detected", False):
+            return {
+                "depth_analysis": "No subspace detected",
+                "characteristics": []
+            }
+        
+        depth = detection_result.get("depth", 0.0)
+        indicators = detection_result.get("indicators", [])
+        
+        # Categorize depth
+        if depth < 0.3:
+            depth_category = "shallow"
+            characteristics = [
+                "Beginning to enter alternative mindset",
+                "Still fully aware and present",
+                "Minor changes in communication style",
+                "Slightly increased suggestibility"
+            ]
+        elif depth < 0.6:
+            depth_category = "moderate"
+            characteristics = [
+                "Noticeably altered cognitive state",
+                "Increased suggestibility and compliance",
+                "Simplified language and thought patterns",
+                "Reduced critical thinking"
+            ]
+        else:
+            depth_category = "deep"
+            characteristics = [
+                "Significantly altered cognitive state",
+                "High suggestibility and compliance",
+                "Simplified communication patterns",
+                "Limited critical thinking",
+                "Possible disorientation or time distortion"
+            ]
+        
+        # Add indicator-specific characteristics
+        indicator_characteristics = {
+            "language simplification": "Using simplified vocabulary and sentence structure",
+            "increased compliance": "Showing heightened agreement and acquiescence",
+            "response time changes": "Altered patterns in response timing",
+            "repetitive affirmations": "Repeating affirmative phrases without elaboration",
+            "decreased resistance": "Absence of questioning or challenging"
+        }
+        
+        for indicator in indicators:
+            if indicator in indicator_characteristics:
+                characteristics.append(indicator_characteristics[indicator])
+        
+        return {
+            "depth_analysis": f"Subspace detected at {depth_category} level ({depth:.2f})",
+            "depth_category": depth_category,
+            "depth_value": depth,
+            "characteristics": characteristics,
+            "indicators": indicators,
+            "in_subspace_since": detection_result.get("in_subspace_since")
+        }
+    
+    @function_tool
+    async def _generate_subspace_guidance(self, detection_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate guidance for interacting with a user in subspace."""
+        return await self.subspace_detection.get_subspace_guidance(detection_result)
+    
+    @function_tool
+    async def _monitor_subspace_exit(self, user_id: str, detection_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Monitor signs of potential subspace drop or unsafe exit."""
+        if not detection_result.get("subspace_detected", False):
+            return {
+                "monitoring_needed": False,
+                "message": "User not in subspace, no monitoring needed"
+            }
+        
+        depth = detection_result.get("depth", 0.0)
+        
+        # Deeper subspace requires more careful monitoring
+        if depth > 0.7:
+            return {
+                "monitoring_needed": True,
+                "drop_risk": "high",
+                "recommendations": [
+                    "Monitor for sudden emotional changes",
+                    "Provide frequent reassurance",
+                    "Gradually reduce intensity",
+                    "Plan for aftercare",
+                    "Check in regularly even after session ends"
+                ]
+            }
+        elif depth > 0.4:
+            return {
+                "monitoring_needed": True,
+                "drop_risk": "moderate",
+                "recommendations": [
+                    "Provide consistent reassurance",
+                    "Gradually transition to normal interaction",
+                    "Check emotional state before ending",
+                    "Offer light aftercare"
+                ]
+            }
+        else:
+            return {
+                "monitoring_needed": True,
+                "drop_risk": "low",
+                "recommendations": [
+                    "Acknowledge subspace experience",
+                    "Confirm user's return to normal cognitive state",
+                    "Brief check-in later"
+                ]
+            }
+    
+    @function_tool
+    async def _get_user_psychological_state(self, user_id: str) -> Dict[str, Any]:
+        """Get the current psychological state for a user."""
+        async with self._lock:
+            psych_state = self.context.get_user_state(user_id)
             
             # Format active mind games
             active_games = {}
             for instance_id, game_info in psych_state.active_mind_games.items():
                 game_id = game_info["game_id"]
-                if game_id in self.mind_games:
-                    game = self.mind_games[game_id]
+                if game_id in self.context.mind_games:
+                    game = self.context.mind_games[game_id]
                     active_games[instance_id] = {
                         "name": game.name,
                         "game_id": game_id,
@@ -872,7 +1064,7 @@ class PsychologicalDominance:
             recent_history = []
             for entry in psych_state.mind_game_history[-5:]:
                 game_id = entry["game_id"]
-                game_name = self.mind_games[game_id].name if game_id in self.mind_games else "Unknown Game"
+                game_name = self.context.mind_games[game_id].name if game_id in self.context.mind_games else "Unknown Game"
                 recent_history.append({
                     "game_name": game_name,
                     "game_id": game_id,
@@ -893,51 +1085,450 @@ class PsychologicalDominance:
                 "last_updated": psych_state.last_updated.isoformat()
             }
     
-    async def create_custom_mind_game(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a custom mind game template."""
-        try:
-            # Check for required fields
-            required_fields = ["id", "name", "description", "triggers", "techniques", "expected_reactions"]
-            for field in required_fields:
-                if field not in template_data:
-                    return {"success": False, "message": f"Missing required field: {field}"}
+    @function_tool
+    async def _update_susceptibility(self, user_id: str, technique_id: str, new_value: float) -> Dict[str, Any]:
+        """Update a user's susceptibility to a specific technique."""
+        async with self._lock:
+            psych_state = self.context.get_user_state(user_id)
             
-            template_id = template_data["id"]
-            
-            # Check if template ID already exists
-            if template_id in self.mind_games:
-                return {"success": False, "message": f"Mind game ID '{template_id}' already exists"}
-            
-            # Create template
-            template = MindGameTemplate(
-                id=template_id,
-                name=template_data["name"],
-                description=template_data["description"],
-                triggers=template_data["triggers"],
-                techniques=template_data["techniques"],
-                expected_reactions=template_data["expected_reactions"],
-                intensity=template_data.get("intensity", 0.5),
-                duration_hours=template_data.get("duration_hours"),
-                cooldown_hours=template_data.get("cooldown_hours", 24.0)
-            )
-            
-            # Add to templates
-            self.mind_games[template_id] = template
+            old_value = psych_state.susceptibility.get(technique_id, 0.5)
+            psych_state.susceptibility[technique_id] = min(1.0, max(0.0, new_value))
             
             return {
                 "success": True,
-                "message": f"Created mind game template '{template_id}'",
-                "template": template.dict()
+                "user_id": user_id,
+                "technique_id": technique_id,
+                "old_value": old_value,
+                "new_value": psych_state.susceptibility[technique_id],
+                "change": psych_state.susceptibility[technique_id] - old_value
             }
+    
+    @function_tool
+    async def _record_psychological_event(self, user_id: str, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Record a psychological event in memory and theory of mind."""
+        event_data["timestamp"] = datetime.datetime.now().isoformat()
+        
+        # Record to memory if available
+        if self.memory_core:
+            try:
+                significance = event_data.get("significance", 0.5)
+                content = event_data.get("content", f"Psychological event: {event_type}")
+                
+                memory_id = await self.memory_core.add_memory(
+                    memory_type="experience",
+                    content=content,
+                    tags=["psychological_dominance", event_type],
+                    significance=significance
+                )
+                
+                event_data["memory_id"] = memory_id
+            except Exception as e:
+                logger.error(f"Error recording to memory: {e}")
+        
+        # Update theory of mind if available
+        if self.theory_of_mind:
+            try:
+                await self.theory_of_mind.update_user_model(
+                    user_id, 
+                    {
+                        "psychological_event": event_type,
+                        "event_data": event_data
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error updating theory of mind: {e}")
+        
+        return {
+            "success": True,
+            "user_id": user_id,
+            "event_type": event_type,
+            "event_recorded": True,
+            "timestamp": event_data["timestamp"]
+        }
+    
+    @function_tool
+    async def _generate_psychological_report(self, user_id: str) -> Dict[str, Any]:
+        """Generate a comprehensive psychological profile report."""
+        psych_state = self.context.get_user_state(user_id)
+        
+        # Get theory of mind data if available
+        mental_model = {}
+        if self.theory_of_mind:
+            try:
+                mental_model = await self.theory_of_mind.get_user_model(user_id) or {}
+            except Exception as e:
+                logger.error(f"Error getting mental model: {e}")
+        
+        # Generate susceptibility analysis
+        susceptibility_analysis = []
+        for technique_id, value in psych_state.susceptibility.items():
+            technique_name = "Unknown"
+            if technique_id in self.context.mind_games:
+                technique_name = self.context.mind_games[technique_id].name
+            
+            susceptibility_analysis.append({
+                "technique": technique_name,
+                "id": technique_id,
+                "susceptibility": value,
+                "category": "high" if value > 0.7 else "medium" if value > 0.4 else "low"
+            })
+        
+        # Sort by susceptibility (highest first)
+        susceptibility_analysis.sort(key=lambda x: x["susceptibility"], reverse=True)
+        
+        # Generate effectiveness analysis from history
+        technique_effectiveness = {}
+        for entry in psych_state.mind_game_history:
+            game_id = entry["game_id"]
+            if game_id not in technique_effectiveness:
+                technique_effectiveness[game_id] = {"total": 0, "count": 0}
+            
+            technique_effectiveness[game_id]["total"] += entry["effectiveness"]
+            technique_effectiveness[game_id]["count"] += 1
+        
+        effectiveness_analysis = []
+        for game_id, data in technique_effectiveness.items():
+            technique_name = "Unknown"
+            if game_id in self.context.mind_games:
+                technique_name = self.context.mind_games[game_id].name
+            
+            avg_effectiveness = data["total"] / data["count"] if data["count"] > 0 else 0
+            
+            effectiveness_analysis.append({
+                "technique": technique_name,
+                "id": game_id,
+                "average_effectiveness": avg_effectiveness,
+                "usage_count": data["count"],
+                "category": "high" if avg_effectiveness > 0.7 else "medium" if avg_effectiveness > 0.4 else "low"
+            })
+        
+        # Sort by effectiveness (highest first)
+        effectiveness_analysis.sort(key=lambda x: x["average_effectiveness"], reverse=True)
+        
+        # Generate recommendation
+        recommended_techniques = []
+        for technique in susceptibility_analysis[:2]:  # Top 2 susceptible techniques
+            if technique["susceptibility"] > 0.6:
+                recommended_techniques.append({
+                    "technique": technique["technique"],
+                    "id": technique["id"],
+                    "reason": "High susceptibility",
+                    "priority": technique["susceptibility"]
+                })
+        
+        for technique in effectiveness_analysis[:2]:  # Top 2 effective techniques
+            if technique["average_effectiveness"] > 0.6:
+                # Check if already added
+                if not any(r["id"] == technique["id"] for r in recommended_techniques):
+                    recommended_techniques.append({
+                        "technique": technique["technique"],
+                        "id": technique["id"],
+                        "reason": "High effectiveness",
+                        "priority": technique["average_effectiveness"]
+                    })
+        
+        # Sort by priority
+        recommended_techniques.sort(key=lambda x: x["priority"], reverse=True)
+        
+        return {
+            "user_id": user_id,
+            "gaslighting_level": psych_state.gaslighting_level,
+            "susceptibility_analysis": susceptibility_analysis,
+            "effectiveness_analysis": effectiveness_analysis,
+            "mental_model_highlights": {
+                "submission_tendency": mental_model.get("submission_tendency", 0.5),
+                "suggestibility": mental_model.get("suggestibility", 0.5),
+                "dependency": mental_model.get("dependency", 0.5),
+                "emotional_reactivity": mental_model.get("emotional_reactivity", 0.5)
+            },
+            "recommended_techniques": recommended_techniques,
+            "generated_at": datetime.datetime.now().isoformat()
+        }
+    
+    async def generate_mindfuck(self, 
+                              user_id: str, 
+                              user_state: Dict[str, Any], 
+                              intensity: float) -> Dict[str, Any]:
+        """
+        Generates psychological dominance tactics using the Agents SDK.
+        
+        Args:
+            user_id: The user ID
+            user_state: Current user state information
+            intensity: Desired intensity level (0.0-1.0)
+            
+        Returns:
+            Generated mind game tactic info
+        """
+        # Generate trace ID for this operation
+        trace_id = gen_trace_id()
+        
+        with trace(
+            workflow_name="PsychologicalMindfuckGeneration",
+            trace_id=trace_id,
+            group_id=user_id,
+            metadata={
+                "user_id": user_id,
+                "intensity": intensity
+            }
+        ):
+            try:
+                # Run the mind game agent
+                result = await Runner.run(
+                    self.mind_game_agent,
+                    {
+                        "action": "generate_mindfuck",
+                        "user_id": user_id,
+                        "user_state": user_state,
+                        "intensity": intensity
+                    },
+                    context=self.context,
+                    run_config=RunConfig(
+                        workflow_name="MindfuckGeneration",
+                        trace_metadata={
+                            "user_id": user_id,
+                            "intensity": intensity
+                        }
+                    )
+                )
+                
+                # Extract the result
+                mindfuck_result = result.final_output
+                
+                # Create active game instance if successful
+                if mindfuck_result.get("success", False):
+                    # Use the selected game to create an active instance
+                    game_id = mindfuck_result.get("game_id")
+                    
+                    async with self._lock:
+                        psych_state = self.context.get_user_state(user_id)
+                        
+                        # Create active game instance
+                        game_instance_id = f"{game_id}_{datetime.datetime.now().timestamp()}"
+                        start_time = datetime.datetime.now()
+                        end_time = None
+                        
+                        # If game has duration, set end time
+                        if "duration_hours" in mindfuck_result and mindfuck_result["duration_hours"]:
+                            end_time = start_time + datetime.timedelta(hours=mindfuck_result["duration_hours"])
+                        
+                        # Store active game
+                        psych_state.active_mind_games[game_instance_id] = {
+                            "game_id": game_id,
+                            "instance_id": game_instance_id,
+                            "start_time": start_time.isoformat(),
+                            "end_time": end_time.isoformat() if end_time else None,
+                            "matching_triggers": mindfuck_result.get("matching_triggers", []),
+                            "stage": "initial",
+                            "last_progression": start_time.isoformat(),
+                            "user_reactions": []
+                        }
+                        
+                        # Set cooldown for this game
+                        game = self.context.get_mind_game(game_id)
+                        if game:
+                            cooldown_end = start_time + datetime.timedelta(hours=game.cooldown_hours)
+                            psych_state.mind_game_cooldowns[game_id] = cooldown_end
+                        
+                        # Update state timestamp
+                        psych_state.last_updated = datetime.datetime.now()
+                        
+                        # Add instance ID to result
+                        mindfuck_result["instance_id"] = game_instance_id
+                        
+                        # Record to memory if available
+                        if self.memory_core:
+                            try:
+                                await self.memory_core.add_memory(
+                                    memory_type="system",
+                                    content=f"Initiated '{mindfuck_result.get('game_name')}' mind game with matching triggers: {', '.join(mindfuck_result.get('matching_triggers', []))}",
+                                    tags=["psychological_dominance", "mind_game", game_id],
+                                    significance=0.3 + (intensity * 0.3)
+                                )
+                            except Exception as e:
+                                logger.error(f"Error recording memory: {e}")
+                
+                return mindfuck_result
+                
+            except Exception as e:
+                logger.error(f"Error generating mindfuck: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "trace_id": trace_id
+                }
+    
+    async def apply_gaslighting(self, 
+                             user_id: str, 
+                             strategy_id: Optional[str] = None, 
+                             intensity: float = 0.3) -> Dict[str, Any]:
+        """
+        Apply a gaslighting strategy to create subtle reality distortion.
+        
+        Args:
+            user_id: The user ID
+            strategy_id: Specific strategy to use (or random if None)
+            intensity: Desired intensity (0.0-1.0)
+            
+        Returns:
+            Gaslighting instructions and details
+        """
+        # Generate trace ID for this operation
+        trace_id = gen_trace_id()
+        
+        with trace(
+            workflow_name="GaslightingApplication",
+            trace_id=trace_id,
+            group_id=user_id,
+            metadata={
+                "user_id": user_id,
+                "strategy_id": strategy_id,
+                "intensity": intensity
+            }
+        ):
+            try:
+                # Check relationship trust level
+                trust_level = 0.5  # Default
+                
+                if self.relationship_manager:
+                    try:
+                        relationship = await self.relationship_manager.get_relationship_state(user_id)
+                        if hasattr(relationship, "trust"):
+                            trust_level = relationship.trust
+                    except Exception as e:
+                        logger.error(f"Error getting relationship data: {e}")
+                
+                # Run the gaslighting agent
+                result = await Runner.run(
+                    self.gaslighting_agent,
+                    {
+                        "action": "apply_gaslighting",
+                        "user_id": user_id,
+                        "strategy_id": strategy_id,
+                        "trust_level": trust_level,
+                        "intensity": intensity
+                    },
+                    context=self.context,
+                    run_config=RunConfig(
+                        workflow_name="GaslightingApplication",
+                        trace_metadata={
+                            "user_id": user_id,
+                            "intensity": intensity
+                        }
+                    )
+                )
+                
+                # Extract the result
+                gaslighting_result = result.final_output
+                
+                # Create reward signal if available
+                if gaslighting_result.get("success", True) and self.reward_system:
+                    try:
+                        # Calculate reward based on strategy intensity and trust
+                        reward_value = 0.3 + (gaslighting_result.get("intensity", 0.5) * 0.5) + (trust_level * 0.2)
+                        
+                        reward_signal_result = await self.reward_system.process_reward_signal(
+                            self.reward_system.RewardSignal(
+                                value=reward_value,
+                                source="psychological_dominance",
+                                context={
+                                    "type": "gaslighting",
+                                    "strategy_id": gaslighting_result.get("strategy_id"),
+                                    "intensity": gaslighting_result.get("intensity", 0.5),
+                                    "gaslighting_level": gaslighting_result.get("new_gaslighting_level", 0.0)
+                                }
+                            )
+                        )
+                        
+                        gaslighting_result["reward_result"] = reward_signal_result
+                    except Exception as e:
+                        logger.error(f"Error processing reward: {e}")
+                
+                # Record to memory if available
+                if gaslighting_result.get("success", True) and self.memory_core:
+                    try:
+                        await self.memory_core.add_memory(
+                            memory_type="system",
+                            content=f"Applied '{gaslighting_result.get('strategy_name')}' gaslighting strategy at intensity {intensity:.2f}",
+                            tags=["psychological_dominance", "gaslighting", gaslighting_result.get("strategy_id")],
+                            significance=0.4 + (gaslighting_result.get("intensity", 0.5) * 0.4)
+                        )
+                    except Exception as e:
+                        logger.error(f"Error recording memory: {e}")
+                
+                return gaslighting_result
+                
+            except Exception as e:
+                logger.error(f"Error applying gaslighting: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "trace_id": trace_id
+                }
+    
+    async def get_user_psychological_state(self, user_id: str) -> Dict[str, Any]:
+        """Get the current psychological state for a user using the Agents SDK."""
+        try:
+            # Use the state tracking agent to get the psychological state
+            result = await Runner.run(
+                self.state_tracking_agent,
+                {
+                    "action": "get_psychological_state",
+                    "user_id": user_id
+                },
+                context=self.context,
+                run_config=RunConfig(
+                    workflow_name="GetPsychologicalState",
+                    trace_metadata={
+                        "user_id": user_id
+                    }
+                )
+            )
+            
+            return result.final_output
+            
         except Exception as e:
-            logger.error(f"Error creating custom mind game: {e}")
-            return {"success": False, "message": f"Error: {str(e)}"}
+            logger.error(f"Error getting psychological state: {e}")
+            return {
+                "user_id": user_id,
+                "has_state": False,
+                "error": str(e)
+            }
+    
+    async def check_active_mind_games(self, user_id: str) -> Dict[str, Any]:
+        """Check for active mind games and their current status."""
+        try:
+            # Use the mind game agent to check active games
+            result = await Runner.run(
+                self.mind_game_agent,
+                {
+                    "action": "check_active_games",
+                    "user_id": user_id
+                },
+                context=self.context,
+                run_config=RunConfig(
+                    workflow_name="CheckActiveMindGames",
+                    trace_metadata={
+                        "user_id": user_id
+                    }
+                )
+            )
+            
+            return result.final_output
+            
+        except Exception as e:
+            logger.error(f"Error checking active mind games: {e}")
+            return {
+                "user_id": user_id,
+                "active_games": {},
+                "error": str(e)
+            }
     
     def get_available_mind_games(self) -> List[Dict[str, Any]]:
         """Get all available mind game templates."""
         games = []
         
-        for game_id, game in self.mind_games.items():
+        for game_id, game in self.context.mind_games.items():
             games.append({
                 "id": game_id,
                 "name": game.name,
@@ -955,7 +1546,7 @@ class PsychologicalDominance:
         """Get all available gaslighting strategies."""
         strategies = []
         
-        for strategy_id, strategy in self.gaslighting_strategies.items():
+        for strategy_id, strategy in self.context.gaslighting_strategies.items():
             strategies.append({
                 "id": strategy_id,
                 "name": strategy.name,
@@ -967,7 +1558,6 @@ class PsychologicalDominance:
         
         return strategies
 
-# Add to nyx/core/femdom/psychological_dominance.py
 
 class SubspaceDetection:
     """Detects and responds to psychological subspace in users."""
