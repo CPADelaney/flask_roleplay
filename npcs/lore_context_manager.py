@@ -1,3 +1,5 @@
+# npcs/lore_context_manager.py
+
 """
 Lore Context Manager for NPCs
 
@@ -18,6 +20,7 @@ from data.npc_dal import NPCDataAccess
 from memory.wrapper import MemorySystem
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
@@ -115,32 +118,222 @@ class LoreImpactAnalyzer:
         
     async def _get_npc_state(self, npc_id: int) -> Dict[str, Any]:
         """Get current state of an NPC."""
-        # Implementation would fetch from NPC data access layer
-        pass
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT npc_name, dominance, cruelty, personality_traits,
+                               current_location, mask_integrity
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                        """,
+                        (npc_id, self.user_id, self.conversation_id)
+                    )
+                    row = await cursor.fetchone()
+                    
+                    if not row:
+                        return {}
+                    
+                    # Parse personality traits if needed
+                    personality_traits = []
+                    if row[3] and isinstance(row[3], str):
+                        try:
+                            personality_traits = json.loads(row[3])
+                        except json.JSONDecodeError:
+                            pass
+                    elif row[3]:
+                        personality_traits = row[3]
+                    
+                    return {
+                        "npc_name": row[0],
+                        "dominance": row[1],
+                        "cruelty": row[2],
+                        "personality_traits": personality_traits,
+                        "current_location": row[4],
+                        "mask_integrity": row[5] if row[5] is not None else 100
+                    }
+        except Exception as e:
+            logger.error(f"Error getting NPC state: {e}")
+            return {}
         
     async def _get_npc_beliefs(self, npc_id: int) -> Dict[str, Any]:
         """Get current beliefs of an NPC."""
-        # Implementation would fetch from belief system
-        pass
+        try:
+            memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            
+            return {
+                "beliefs": beliefs,
+                "count": len(beliefs) if beliefs else 0
+            }
+        except Exception as e:
+            logger.error(f"Error getting NPC beliefs: {e}")
+            return {"beliefs": [], "count": 0}
         
     async def _predict_behavior_changes(self, npc_state: Dict[str, Any], 
                                       npc_beliefs: Dict[str, Any], 
                                       lore_change: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Predict how NPC behavior might change based on lore change."""
-        # Implementation would use AI to predict behavior changes
-        pass
+        # Check if the lore change aligns with or contradicts existing beliefs
+        behavior_changes = []
+        
+        # Get lore impact level
+        impact_level = self._calculate_lore_impact_level(lore_change)
+        
+        # Skip if too low impact
+        if impact_level < 0.2:
+            return behavior_changes
+            
+        # Get relevant beliefs
+        relevant_beliefs = []
+        for belief in npc_beliefs.get("beliefs", []):
+            belief_text = belief.get("belief", "").lower()
+            lore_name = lore_change.get("name", "").lower()
+            
+            # Check if belief relates to the lore change
+            if any(term in belief_text for term in lore_name.split()):
+                relevant_beliefs.append(belief)
+                
+        # If no relevant beliefs, create a behavior change based on personality
+        if not relevant_beliefs:
+            # Use personality to determine reaction
+            dominance = npc_state.get("dominance", 50) / 100.0
+            cruelty = npc_state.get("cruelty", 50) / 100.0
+            
+            # Basic reaction based on personality
+            behavior_changes.append({
+                "type": "general_reaction",
+                "description": self._generate_personality_based_reaction(
+                    dominance, cruelty, lore_change, impact_level
+                ),
+                "likelihood": impact_level * 0.8
+            })
+            
+            return behavior_changes
+            
+        # Otherwise, create behavior changes based on beliefs
+        for belief in relevant_beliefs:
+            belief_text = belief.get("belief", "").lower()
+            confidence = belief.get("confidence", 0.5)
+            
+            # Check if lore change confirms or contradicts belief
+            contradicts = await self._check_lore_contradicts_belief(lore_change, belief_text)
+            
+            if contradicts:
+                # Lore contradicts belief - may cause distress or rejection
+                behavior_changes.append({
+                    "type": "belief_contradiction",
+                    "description": f"May reject or resist information that contradicts belief: '{belief_text}'",
+                    "likelihood": confidence * impact_level
+                })
+                
+                # Possibility of belief change
+                if impact_level > 0.6 and confidence < 0.7:
+                    behavior_changes.append({
+                        "type": "belief_update",
+                        "description": f"May update belief based on new information",
+                        "likelihood": (1 - confidence) * impact_level
+                    })
+            else:
+                # Lore confirms belief - reinforcement
+                behavior_changes.append({
+                    "type": "belief_reinforcement",
+                    "description": f"Will feel vindicated about belief: '{belief_text}'",
+                    "likelihood": confidence * impact_level
+                })
+                
+                # May act more confidently
+                behavior_changes.append({
+                    "type": "confidence_boost",
+                    "description": f"May act more confidently due to belief reinforcement",
+                    "likelihood": confidence * impact_level * 0.8
+                })
+            
+        return behavior_changes
+        
+    def _calculate_lore_impact_level(self, lore_change: Dict[str, Any]) -> float:
+        """Calculate how impactful a lore change is (0.0-1.0)."""
+        # Base impact
+        impact = 0.5
+        
+        # Major lore revelations have higher impact
+        if lore_change.get("is_major_revelation", False):
+            impact += 0.3
+            
+        # Personal relevance increases impact
+        if lore_change.get("personal_relevance", False):
+            impact += 0.2
+            
+        # Emotional content increases impact
+        if lore_change.get("emotional_content", False):
+            impact += 0.1
+            
+        return min(1.0, impact)
+        
+    def _generate_personality_based_reaction(
+        self, dominance: float, cruelty: float, 
+        lore_change: Dict[str, Any], impact_level: float
+    ) -> str:
+        """Generate a personality-based reaction description."""
+        lore_name = lore_change.get("name", "this information")
+        
+        # High dominance reaction
+        if dominance > 0.7:
+            return f"Will seek to control or leverage {lore_name} to maintain power"
+            
+        # High cruelty reaction
+        elif cruelty > 0.7:
+            return f"May exploit {lore_name} to harm rivals or gain advantage"
+            
+        # Balanced reaction
+        elif 0.4 <= dominance <= 0.6 and 0.4 <= cruelty <= 0.6:
+            return f"Will consider how {lore_name} affects their interests and relationships"
+            
+        # Low dominance, low cruelty
+        else:
+            return f"May be cautious about {lore_name} and how others might use it"
+        
+    async def _check_lore_contradicts_belief(self, lore_change: Dict[str, Any], belief_text: str) -> bool:
+        """Check if lore change contradicts a belief."""
+        # Basic keyword contradiction check
+        lore_desc = lore_change.get("description", "").lower()
+        
+        # Simple negation patterns
+        contradiction_pairs = [
+            ("always", "never"),
+            ("all", "none"),
+            ("must", "must not"),
+            ("is", "is not"),
+            ("can", "cannot")
+        ]
+        
+        # Check for direct contradictions
+        for pos, neg in contradiction_pairs:
+            if pos in belief_text and neg in lore_desc:
+                return True
+            if neg in belief_text and pos in lore_desc:
+                return True
+                
+        # If no direct contradiction, assume it doesn't contradict
+        return False
         
     async def _predict_belief_updates(self, npc_beliefs: Dict[str, Any], 
                                     lore_change: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Predict how NPC beliefs might update based on lore change."""
         # Implementation would use AI to predict belief updates
-        pass
+        # Placeholder implementation
+        return []
         
     async def _analyze_relationship_impacts(self, npc_id: int, 
                                           lore_change: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Analyze how lore change affects NPC's relationships."""
         # Implementation would analyze relationship impacts
-        pass
+        # Placeholder implementation
+        return []
 
 class LorePropagationSystem:
     """Manages lore propagation through NPC networks."""
@@ -191,18 +384,88 @@ class LorePropagationSystem:
             
     async def _find_propagation_path(self, source_id: int, target_id: int) -> List[int]:
         """Find the optimal path for lore propagation between NPCs."""
-        # Implementation would use pathfinding algorithm
-        pass
+        # Basic implementation using breadth-first search
+        if source_id == target_id:
+            return [source_id]
+            
+        queue = [[source_id]]
+        visited = {source_id}
+        
+        while queue:
+            path = queue.pop(0)
+            current = path[-1]
+            
+            for neighbor in self.network_graph[current]:
+                if neighbor == target_id:
+                    return path + [neighbor]
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(path + [neighbor])
+                    
+        # If no path found, return direct path as fallback
+        return [source_id, target_id]
         
     async def _calculate_propagation_effectiveness(self, path: List[int], 
                                                  lore_change: Dict[str, Any]) -> float:
         """Calculate how effectively lore propagates through a given path."""
-        # Implementation would consider:
-        # - Path length
-        # - NPC relationships
-        # - Lore complexity
-        # - NPC knowledge levels
-        pass
+        # Baseline effectiveness
+        effectiveness = 1.0
+        
+        # Each hop reduces effectiveness
+        path_length = len(path)
+        if path_length > 1:
+            effectiveness *= (0.9 ** (path_length - 1))
+            
+        # Get relationships between path nodes to further adjust effectiveness
+        for i in range(len(path) - 1):
+            source_id = path[i]
+            target_id = path[i + 1]
+            
+            # Get relationship between these NPCs
+            relationship = await self._get_relationship(source_id, target_id)
+            trust_level = relationship.get("trust", 50) / 100.0
+            
+            # Trust affects propagation
+            effectiveness *= (0.5 + (trust_level * 0.5))
+            
+        # lore complexity reduces effectiveness
+        lore_complexity = lore_change.get("complexity", 0.5)
+        effectiveness *= (1 - (lore_complexity * 0.3))
+        
+        # Cap at sensible range
+        return max(0.1, min(1.0, effectiveness))
+        
+    async def _get_relationship(self, npc1_id: int, npc2_id: int) -> Dict[str, Any]:
+        """Get the relationship between two NPCs."""
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("""
+                        SELECT link_type, link_level 
+                        FROM SocialLinks
+                        WHERE user_id = %s AND conversation_id = %s
+                        AND (
+                            (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                            OR
+                            (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                        )
+                    """, (self.user_id, self.conversation_id, npc1_id, npc2_id, npc2_id, npc1_id))
+                    
+                    row = await cursor.fetchone()
+                    if row:
+                        return {
+                            "link_type": row[0],
+                            "trust": row[1]
+                        }
+                    else:
+                        # Default relationship
+                        return {
+                            "link_type": "neutral",
+                            "trust": 50
+                        }
+        except Exception as e:
+            logger.error(f"Error getting relationship: {e}")
+            return {"link_type": "neutral", "trust": 50}
 
 class LoreContextManager:
     """Main manager for lore context in NPC system."""
@@ -230,8 +493,87 @@ class LoreContextManager:
         
     async def _fetch_lore_context(self, npc_id: int, context_type: str) -> Dict[str, Any]:
         """Fetch lore context from the lore system."""
-        # Implementation would fetch from lore system
-        pass
+        try:
+            async with get_db_connection_context() as conn:
+                async with conn.cursor() as cursor:
+                    # Get basic NPC info
+                    await cursor.execute("""
+                        SELECT npc_name, dominance, cruelty
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (npc_id, self.user_id, self.conversation_id))
+                    
+                    npc_row = await cursor.fetchone()
+                    if not npc_row:
+                        return {}
+                        
+                    npc_name = npc_row[0]
+                    
+                    # Get lore knowledge for this NPC
+                    await cursor.execute("""
+                        SELECT lore_type, lore_id, knowledge_level
+                        FROM LoreKnowledge
+                        WHERE entity_type = 'npc' AND entity_id = %s
+                        AND user_id = %s AND conversation_id = %s
+                    """, (npc_id, self.user_id, self.conversation_id))
+                    
+                    knowledge_rows = await cursor.fetchall()
+                    
+                    # Build context object
+                    context = {
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "context_type": context_type,
+                        "knowledge": []
+                    }
+                    
+                    # Add knowledge items
+                    for row in knowledge_rows:
+                        lore_type, lore_id, knowledge_level = row
+                        
+                        # Get lore details
+                        await cursor.execute("""
+                            SELECT name, description 
+                            FROM Lore
+                            WHERE lore_type = %s AND lore_id = %s
+                            AND user_id = %s AND conversation_id = %s
+                        """, (lore_type, lore_id, self.user_id, self.conversation_id))
+                        
+                        lore_row = await cursor.fetchone()
+                        if lore_row:
+                            context["knowledge"].append({
+                                "lore_type": lore_type,
+                                "lore_id": lore_id,
+                                "name": lore_row[0],
+                                "description": lore_row[1],
+                                "knowledge_level": knowledge_level
+                            })
+                    
+                    # Add additional context based on context_type
+                    if context_type == "change_impact":
+                        # Add relationships
+                        await cursor.execute("""
+                            SELECT entity2_id, link_type, link_level
+                            FROM SocialLinks
+                            WHERE user_id = %s AND conversation_id = %s
+                            AND entity1_type = 'npc' AND entity1_id = %s
+                            AND entity2_type = 'npc'
+                        """, (self.user_id, self.conversation_id, npc_id))
+                        
+                        relationship_rows = await cursor.fetchall()
+                        context["relationships"] = [
+                            {
+                                "npc_id": row[0],
+                                "link_type": row[1],
+                                "link_level": row[2]
+                            }
+                            for row in relationship_rows
+                        ]
+                    
+                    return context
+        except Exception as e:
+            logger.error(f"Error fetching lore context: {e}")
+            return {}
         
     async def handle_lore_change(self, lore_change: Dict[str, Any], 
                                 source_npc_id: int, 
@@ -253,4 +595,4 @@ class LoreContextManager:
         return {
             "impact_analysis": impact_analysis,
             "propagation_result": propagation_result
-        } 
+        }
