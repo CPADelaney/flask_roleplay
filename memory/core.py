@@ -330,46 +330,60 @@ def with_transaction(func):
         conn = kwargs.pop('conn', None)
         external_conn = conn is not None
         if not external_conn:
-            conn = await DBConnectionManager.acquire()
-        start_time = time.time()
-
-        try:
-            if not external_conn:
+            from db.connection import get_db_connection_context
+            async with get_db_connection_context() as conn:
                 tx = conn.transaction()
-                await tx.start()
-
-            result = await func(self, *args, conn=conn, **kwargs)
-
-            if not external_conn:
-                await tx.commit()
-
-            elapsed = time.time() - start_time
-            await MemoryTelemetry.record(
-                operation=func.__name__,
-                success=True,
-                duration=elapsed,
-                data_size=1
-            )
-            return result
-        except Exception as e:
-            if not external_conn:
+                start_time = time.time()
+                
                 try:
+                    await tx.start()
+                    result = await func(self, *args, conn=conn, **kwargs)
+                    await tx.commit()
+                    
+                    elapsed = time.time() - start_time
+                    await MemoryTelemetry.record(
+                        operation=func.__name__,
+                        success=True,
+                        duration=elapsed,
+                        data_size=1
+                    )
+                    return result
+                except Exception as e:
                     await tx.rollback()
-                except Exception as rollback_e:
-                    logger.error(f"Error during transaction rollback: {rollback_e}")
-
-            elapsed = time.time() - start_time
-            await MemoryTelemetry.record(
-                operation=func.__name__,
-                success=False,
-                duration=elapsed,
-                error=str(e)
-            )
-            logger.error(f"Transaction error in {func.__name__}: {e}")
-            raise
-        finally:
-            if not external_conn:
-                await DBConnectionManager.release(conn)
+                    
+                    elapsed = time.time() - start_time
+                    await MemoryTelemetry.record(
+                        operation=func.__name__,
+                        success=False,
+                        duration=elapsed,
+                        error=str(e)
+                    )
+                    logger.error(f"Transaction error in {func.__name__}: {e}")
+                    raise
+        else:
+            # If a connection was provided, just use it
+            start_time = time.time()
+            try:
+                result = await func(self, *args, conn=conn, **kwargs)
+                
+                elapsed = time.time() - start_time
+                await MemoryTelemetry.record(
+                    operation=func.__name__,
+                    success=True,
+                    duration=elapsed,
+                    data_size=1
+                )
+                return result
+            except Exception as e:
+                elapsed = time.time() - start_time
+                await MemoryTelemetry.record(
+                    operation=func.__name__,
+                    success=False,
+                    duration=elapsed,
+                    error=str(e)
+                )
+                logger.error(f"Transaction error in {func.__name__}: {e}")
+                raise
     return wrapper
 
 class UnifiedMemoryManager:
