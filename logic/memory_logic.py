@@ -586,7 +586,6 @@ import logging
 import json
 import random
 from datetime import datetime, timedelta
-from db.connection import get_db_connection
 
 class MemoryType:
     INTERACTION = "interaction"  # Direct interaction between player and NPC
