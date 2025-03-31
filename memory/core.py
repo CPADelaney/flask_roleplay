@@ -289,46 +289,41 @@ class FallbackEmbedding(EmbeddingProvider):
         return [[0.0] * EMBEDDING_DIMENSION for _ in texts]
 
 class DBConnectionManager:
+    """
+    Legacy connection manager for backward compatibility.
+    Now uses the new connection pattern internally.
+    """
     _pool = None
     _lock = asyncio.Lock()
 
     @classmethod
     async def get_pool(cls) -> asyncpg.Pool:
-        async with cls._lock:
-            if cls._pool is None:
-                try:
-                    cls._pool = await asyncpg.create_pool(
-                        dsn=DB_CONFIG["dsn"],
-                        min_size=DB_CONFIG.get("min_connections", 5),
-                        max_size=DB_CONFIG.get("max_connections", 20),
-                        command_timeout=DB_CONFIG.get("command_timeout", 60),
-                        statement_cache_size=DB_CONFIG.get("statement_cache_size", 0),
-                        max_inactive_connection_lifetime=DB_CONFIG.get("max_inactive_connection_lifetime", 300)
-                    )
-                    logger.info("Database connection pool created")
-                except Exception as e:
-                    logger.critical(f"Failed to create database connection pool: {e}")
-                    raise
-            return cls._pool
+        logger.warning("Using deprecated get_pool method, consider migrating to get_db_connection_context")
+        if cls._pool is None:
+            from db.connection import get_db_connection_pool
+            cls._pool = await get_db_connection_pool()
+        return cls._pool
 
     @classmethod
     async def close_pool(cls) -> None:
-        async with cls._lock:
-            if cls._pool is not None:
-                await cls._pool.close()
-                cls._pool = None
-                logger.info("Database connection pool closed")
+        if cls._pool is not None:
+            await cls._pool.close()
+            cls._pool = None
+            logger.info("Database connection pool closed")
 
     @classmethod
     async def acquire(cls) -> asyncpg.Connection:
-        pool = await cls.get_pool()
-        return await pool.acquire()
+        logger.warning("Using deprecated acquire method, consider migrating to get_db_connection_context")
+        from db.connection import get_db_connection_context
+        # This creates a new connection each time, but it's for backward compatibility
+        async with get_db_connection_context() as conn:
+            return conn
 
     @classmethod
     async def release(cls, connection: asyncpg.Connection) -> None:
-        pool = await cls.get_pool()
-        await pool.release(connection) 
-
+        # This is a no-op now since the connection context will handle closing
+        pass
+        
 def with_transaction(func):
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
