@@ -13,13 +13,15 @@ All integrated as a single "TimeCycleAgent" using the OpenAI Agents SDK.
 import logging
 import random
 import json
+import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 from agents import Agent, Runner, function_tool
 from agents.run_context import RunContextWrapper
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
+import asyncpg
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Merged Constants and Data
@@ -101,107 +103,110 @@ logger = logging.getLogger(__name__)
 # Basic DB Helpers
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def remove_expired_planned_events(user_id, conversation_id, current_year, current_month, current_day, current_phase):
+async def remove_expired_planned_events(user_id, conversation_id, current_year, current_month, current_day, current_phase):
     """
     Deletes planned events that are older than the current time.
     """
     current_priority = TIME_PRIORITY.get(current_phase, 0)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        DELETE FROM PlannedEvents
-        WHERE user_id=%s AND conversation_id=%s AND (
-            (year < %s)
-            OR (year = %s AND month < %s)
-            OR (year = %s AND month = %s AND day < %s)
-            OR (year = %s AND month = %s AND day = %s AND 
-                (CASE time_of_day
-                    WHEN 'Morning' THEN 1
-                    WHEN 'Afternoon' THEN 2
-                    WHEN 'Evening' THEN 3
-                    WHEN 'Night' THEN 4
-                    ELSE 0
-                END) < %s)
-        )
-    """, (user_id, conversation_id, current_year,
-          current_year, current_month,
-          current_year, current_month, current_day,
-          current_year, current_month, current_day,
-          current_priority))
-    conn.commit()
-    conn.close()
+    try:
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                DELETE FROM PlannedEvents
+                WHERE user_id=$1 AND conversation_id=$2 AND (
+                    (year < $3)
+                    OR (year = $3 AND month < $4)
+                    OR (year = $3 AND month = $4 AND day < $5)
+                    OR (year = $3 AND month = $4 AND day = $5 AND 
+                        (CASE time_of_day
+                            WHEN 'Morning' THEN 1
+                            WHEN 'Afternoon' THEN 2
+                            WHEN 'Evening' THEN 3
+                            WHEN 'Night' THEN 4
+                            ELSE 0
+                        END) < $6)
+                )
+            """, user_id, conversation_id, current_year,
+                current_year, current_month,
+                current_year, current_month, current_day,
+                current_year, current_month, current_day,
+                current_priority)
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error removing expired events: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error removing expired events: {e}", exc_info=True)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1) Base Time Logic
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str]:
+async def get_current_time(user_id, conversation_id) -> Tuple[int, int, int, str]:
     """
     Returns (year, month, day, time_of_day).
     Defaults to (1,1,1,'Morning') if not found.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        async with get_db_connection_context() as conn:
+            row_year = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentYear'
+            """, user_id, conversation_id)
+            year = int(row_year) if row_year else 1
 
-    cursor.execute("""
-        SELECT value FROM CurrentRoleplay
-        WHERE user_id=%s AND conversation_id=%s AND key='CurrentYear'
-    """, (user_id, conversation_id))
-    row_year = cursor.fetchone()
-    year = int(row_year[0]) if row_year else 1
+            row_month = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentMonth'
+            """, user_id, conversation_id)
+            month = int(row_month) if row_month else 1
 
-    cursor.execute("""
-        SELECT value FROM CurrentRoleplay
-        WHERE user_id=%s AND conversation_id=%s AND key='CurrentMonth'
-    """, (user_id, conversation_id))
-    row_month = cursor.fetchone()
-    month = int(row_month[0]) if row_month else 1
+            row_day = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentDay'
+            """, user_id, conversation_id)
+            day = int(row_day) if row_day else 1
 
-    cursor.execute("""
-        SELECT value FROM CurrentRoleplay
-        WHERE user_id=%s AND conversation_id=%s AND key='CurrentDay'
-    """, (user_id, conversation_id))
-    row_day = cursor.fetchone()
-    day = int(row_day[0]) if row_day else 1
+            row_tod = await conn.fetchval("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='TimeOfDay'
+            """, user_id, conversation_id)
+            tod = row_tod if row_tod else "Morning"
 
-    cursor.execute("""
-        SELECT value FROM CurrentRoleplay
-        WHERE user_id=%s AND conversation_id=%s AND key='TimeOfDay'
-    """, (user_id, conversation_id))
-    row_tod = cursor.fetchone()
-    tod = row_tod[0] if row_tod else "Morning"
+            return (year, month, day, tod)
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error getting current time: {e}", exc_info=True)
+        return (1, 1, 1, "Morning")
+    except Exception as e:
+        logger.error(f"Unexpected error getting current time: {e}", exc_info=True)
+        return (1, 1, 1, "Morning")
 
-    conn.close()
-    return (year, month, day, tod)
-
-def set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase):
+async def set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase):
     """
     Upserts current time info to the DB.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        async with get_db_connection_context() as conn:
+            # Upsert pattern for each of the 4 keys
+            for key, val in [
+                ("CurrentYear", str(new_year)),
+                ("CurrentMonth", str(new_month)),
+                ("CurrentDay", str(new_day)),
+                ("TimeOfDay", new_phase),
+            ]:
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value=EXCLUDED.value
+                """, user_id, conversation_id, key, val)
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error setting current time: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error setting current time: {e}", exc_info=True)
 
-    # Upsert pattern for each of the 4 keys
-    for key, val in [
-        ("CurrentYear", str(new_year)),
-        ("CurrentMonth", str(new_month)),
-        ("CurrentDay", str(new_day)),
-        ("TimeOfDay", new_phase),
-    ]:
-        cursor.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, (user_id, conversation_id, key, val))
-    conn.commit()
-    conn.close()
-
-def advance_time(user_id, conversation_id, increment=1):
+async def advance_time(user_id, conversation_id, increment=1):
     """
     Advances the phase by 'increment' steps. If we wrap past 'Night', we increment day, etc.
     """
-    year, month, day, phase = get_current_time(user_id, conversation_id)
+    year, month, day, phase = await get_current_time(user_id, conversation_id)
     try:
         phase_index = TIME_PHASES.index(phase)
     except ValueError:
@@ -223,56 +228,70 @@ def advance_time(user_id, conversation_id, increment=1):
             new_month = 1
             new_year += 1
 
-    set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase)
+    await set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase)
     return (new_year, new_month, new_day, new_phase)
 
-def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_day):
+async def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_day):
     """
     Updates each NPC's current_location based on either a planned event override or their schedule.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        async with get_db_connection_context() as conn:
+            # Get overrides
+            override_rows = await conn.fetch("""
+                SELECT npc_id, override_location
+                FROM PlannedEvents
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND day=$3 AND time_of_day=$4
+            """, user_id, conversation_id, day, time_of_day)
+            override_dict = {r["npc_id"]: r["override_location"] for r in override_rows}
 
-    cursor.execute("""
-        SELECT npc_id, override_location
-        FROM PlannedEvents
-        WHERE user_id=%s AND conversation_id=%s
-          AND day=%s AND time_of_day=%s
-    """, (user_id, conversation_id, day, time_of_day))
-    override_rows = cursor.fetchall()
-    override_dict = {r[0]: r[1] for r in override_rows}
+            # Get NPCs and update locations
+            npc_rows = await conn.fetch("""
+                SELECT npc_id, schedule
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+            """, user_id, conversation_id)
 
-    cursor.execute("""
-        SELECT npc_id, schedule
-        FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s
-    """, (user_id, conversation_id))
-    npc_rows = cursor.fetchall()
+            for row in npc_rows:
+                npc_id = row["npc_id"]
+                schedule_json = row["schedule"]
+                
+                if npc_id in override_dict:
+                    new_location = override_dict[npc_id]
+                else:
+                    if schedule_json:
+                        # Handle different possible formats
+                        if isinstance(schedule_json, dict):
+                            new_location = schedule_json.get(time_of_day, "Unknown")
+                        elif isinstance(schedule_json, str):
+                            try:
+                                schedule = json.loads(schedule_json)
+                                new_location = schedule.get(time_of_day, "Unknown")
+                            except json.JSONDecodeError:
+                                new_location = "Invalid schedule"
+                        else:
+                            new_location = "Unknown"
+                    else:
+                        new_location = "No schedule"
+                
+                await conn.execute("""
+                    UPDATE NPCStats
+                    SET current_location=$1
+                    WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                """, new_location, user_id, conversation_id, npc_id)
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error updating NPC schedules: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error updating NPC schedules: {e}", exc_info=True)
 
-    for (npc_id, schedule_json) in npc_rows:
-        if npc_id in override_dict:
-            new_location = override_dict[npc_id]
-        else:
-            if schedule_json:
-                new_location = schedule_json.get(time_of_day, "Unknown")
-            else:
-                new_location = "No schedule"
-        cursor.execute("""
-            UPDATE NPCStats
-            SET current_location=%s
-            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """, (new_location, user_id, conversation_id, npc_id))
-
-    conn.commit()
-    conn.close()
-
-def advance_time_and_update(user_id, conversation_id, increment=1):
+async def advance_time_and_update(user_id, conversation_id, increment=1):
     """
     Advances time, updates NPC schedules, removes expired planned events, returns new time.
     """
-    (new_year, new_month, new_day, new_phase) = advance_time(user_id, conversation_id, increment)
-    update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
-    remove_expired_planned_events(user_id, conversation_id, new_year, new_month, new_day, new_phase)
+    (new_year, new_month, new_day, new_phase) = await advance_time(user_id, conversation_id, increment)
+    await update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
+    await remove_expired_planned_events(user_id, conversation_id, new_year, new_month, new_day, new_phase)
     return (new_year, new_month, new_day, new_phase)
 
 def should_advance_time(activity_type):
@@ -306,15 +325,12 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
     )
     from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
     # Create NPCCreationHandler instance
     npc_handler = NPCCreationHandler()
 
     try:
         # Get current time_of_day to see if we need to do anything
-        _, _, _, current_time_of_day = get_current_time(user_id, conversation_id)
+        _, _, _, current_time_of_day = await get_current_time(user_id, conversation_id)
 
         adv_info = should_advance_time(activity_type)
         if not adv_info["should_advance"]:
@@ -325,7 +341,7 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             }
 
         periods_to_advance = adv_info["periods"]
-        (new_year, new_month, new_day, new_time) = advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
+        (new_year, new_month, new_day, new_time) = await advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
 
         events = []
         
@@ -384,22 +400,23 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
 
         # Update mask slippage check to use the new NPCCreationHandler
         if random.random() < SPECIAL_EVENT_CHANCES["mask_slippage"]:
-            cursor.execute("""
-                SELECT npc_id FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-                ORDER BY RANDOM() LIMIT 1
-            """, (user_id, conversation_id))
-            npc_row = cursor.fetchone()
-            if npc_row:
-                npc_id = npc_row[0]
-                # Use the new NPCCreationHandler for mask slippage
-                slip_events = await npc_handler.check_for_mask_slippage(user_id, conversation_id, npc_id)
-                if slip_events:
-                    events.append({
-                        "type": "mask_slippage",
-                        "npc_id": npc_id,
-                        "events": slip_events
-                    })
+            async with get_db_connection_context() as conn:
+                npc_row = await conn.fetchrow("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                    ORDER BY RANDOM() LIMIT 1
+                """, user_id, conversation_id)
+                
+                if npc_row:
+                    npc_id = npc_row["npc_id"]
+                    # Use the new NPCCreationHandler for mask slippage
+                    slip_events = await npc_handler.check_for_mask_slippage(user_id, conversation_id, npc_id)
+                    if slip_events:
+                        events.append({
+                            "type": "mask_slippage",
+                            "npc_id": npc_id,
+                            "events": slip_events
+                        })
 
         npc_rev = await check_for_npc_revelations(user_id, conversation_id)
         if npc_rev:
@@ -411,18 +428,21 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             if stat_changes:
                 updates = []
                 values = []
+                param_idx = 1
                 for stat, delta in stat_changes.items():
-                    updates.append(f"{stat} = {stat} + %s")
+                    updates.append(f"{stat} = {stat} + ${param_idx}")
                     values.append(delta)
+                    param_idx += 1
+                    
                 if updates:
                     values.extend([user_id, conversation_id])
-                    cursor.execute(f"""
-                        UPDATE PlayerStats
-                        SET {", ".join(updates)}
-                        WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-                    """, values)
+                    async with get_db_connection_context() as conn:
+                        await conn.execute(f"""
+                            UPDATE PlayerStats
+                            SET {", ".join(updates)}
+                            WHERE user_id=${param_idx} AND conversation_id=${param_idx+1} AND player_name='Chase'
+                        """, *values)
 
-        conn.commit()
         return {
             "time_advanced": True,
             "new_year": new_year,
@@ -433,12 +453,8 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         }
 
     except Exception as e:
-        conn.rollback()
         logger.error(f"Error in advance_time_with_events: {e}")
         return {"time_advanced": False, "error": str(e)}
-    finally:
-        cursor.close()
-        conn.close()
 
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -451,25 +467,31 @@ async def nightly_maintenance(user_id: int, conversation_id: int):
     """
     from logic.npc_agents.memory_manager import EnhancedMemoryManager
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT npc_id
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-        npc_ids = [row[0] for row in cursor.fetchall()]
-    finally:
-        cursor.close()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT npc_id
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+            """, user_id, conversation_id)
+            
+            npc_ids = [row["npc_id"] for row in rows]
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as e:
+        logger.error(f"Database error fetching NPCs for nightly maintenance: {e}", exc_info=True)
+        return
+    except Exception as e:
+        logger.error(f"Unexpected error fetching NPCs for nightly maintenance: {e}", exc_info=True)
+        return
 
     for nid in npc_ids:
-        mem_mgr = EnhancedMemoryManager(nid, user_id, conversation_id)
-        # e.g. fade/summarize
-        await mem_mgr.prune_old_memories(age_days=14, significance_threshold=3, intensity_threshold=15)
-        await mem_mgr.apply_memory_decay(age_days=30, decay_rate=0.2)
-        await mem_mgr.summarize_repetitive_memories(lookback_days=7, min_count=3)
+        try:
+            mem_mgr = EnhancedMemoryManager(nid, user_id, conversation_id)
+            # e.g. fade/summarize
+            await mem_mgr.prune_old_memories(age_days=14, significance_threshold=3, intensity_threshold=15)
+            await mem_mgr.apply_memory_decay(age_days=30, decay_rate=0.2)
+            await mem_mgr.summarize_repetitive_memories(lookback_days=7, min_count=3)
+        except Exception as e:
+            logger.error(f"Error during memory maintenance for NPC {nid}: {e}", exc_info=True)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4) Conflict Integration
@@ -501,7 +523,7 @@ async def process_conflict_time_advancement(user_id: int, conversation_id: int, 
 
     # If new day (i.e. after 'sleep' → next morning?), run daily update
     # We'll guess if it's a new day if we ended up in 'Morning' after 'sleep'
-    new_year, new_month, new_day, new_time = get_current_time(user_id, conversation_id)
+    new_year, new_month, new_day, new_time = await get_current_time(user_id, conversation_id)
     if activity_type == "sleep" and new_time == "Morning":
         daily_result = await conflict_system.run_daily_update()
         result["daily_update"] = daily_result
@@ -828,6 +850,9 @@ TimeCycleAgent = Agent[TimeCycleContext](
 
 async def register_with_governance(user_id: int, conversation_id: int):
     """Register time cycle agent with Nyx governance system."""
+    from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+    from nyx.integrate import get_central_governance
+    
     governor = await get_central_governance(user_id, conversation_id)
     await governor.register_agent(
         agent_type=AgentType.UNIVERSAL_UPDATER,  # Or create a specific TIME_MANAGER type
