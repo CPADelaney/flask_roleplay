@@ -1,15 +1,16 @@
 # routes/settings_routes.py
+
 import os
 import json
 import logging
 import random
 from flask import Blueprint, request, jsonify, session
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 
 settings_bp = Blueprint('settings_bp', __name__)
 
-def insert_missing_settings():
+async def insert_missing_settings():
     logging.info("[insert_missing_settings] Starting...")
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,48 +27,48 @@ def insert_missing_settings():
         logging.error(f"Error decoding JSON in {settings_json_path}: {e}")
         return
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    async with get_db_connection_context() as conn:
+        async with conn.cursor() as cursor:
+            await cursor.execute("SELECT name FROM Settings")
+            rows = await cursor.fetchall()
+            existing = {row[0] for row in rows}
 
-    cursor.execute("SELECT name FROM Settings")
-    existing = {row[0] for row in cursor.fetchall()}
+            inserted_count = 0
+            for s in settings_data:
+                sname = s["name"]
+                if sname not in existing:
+                    ef = json.dumps(s["enhanced_features"])
+                    sm = json.dumps(s["stat_modifiers"])
+                    ae = json.dumps(s["activity_examples"])
 
-    inserted_count = 0
-    for s in settings_data:
-        sname = s["name"]
-        if sname not in existing:
-            ef = json.dumps(s["enhanced_features"])
-            sm = json.dumps(s["stat_modifiers"])
-            ae = json.dumps(s["activity_examples"])
+                    await cursor.execute("""
+                        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        sname,
+                        s["mood_tone"],
+                        ef,
+                        sm,
+                        ae
+                    ))
+                    logging.info(f"Inserted new setting: {sname}")
+                    inserted_count += 1
+                else:
+                    logging.debug(f"Skipped existing setting: {sname}")
 
-            cursor.execute("""
-                INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (
-                sname,
-                s["mood_tone"],
-                ef,
-                sm,
-                ae
-            ))
-            logging.info(f"Inserted new setting: {sname}")
-            inserted_count += 1
-        else:
-            logging.debug(f"Skipped existing setting: {sname}")
-
-    conn.commit()
-    conn.close()
+        await conn.commit()
     logging.info(f"[insert_missing_settings] Done. Inserted {inserted_count} new settings.")
 
 
 @settings_bp.route('/insert_settings', methods=['POST'])
-def insert_settings_route():
+async def insert_settings_route():
     try:
-        insert_missing_settings()
+        await insert_missing_settings()
         return jsonify({"message": "Settings inserted/updated successfully"}), 200
     except Exception as e:
         logging.exception("Error inserting settings.")
         return jsonify({"error": str(e)}), 500
+
 
 
 def generate_mega_setting_logic():
@@ -184,7 +185,7 @@ def generate_mega_setting_logic():
 
 
 @settings_bp.route('/generate_mega_setting', methods=['POST'])
-def generate_mega_setting_route():
+async def generate_mega_setting_route():
     try:
         user_id = session.get("user_id")
         if not user_id:
@@ -195,7 +196,9 @@ def generate_mega_setting_route():
         if not conversation_id:
             return jsonify({"error": "No conversation_id provided"}), 400
 
-        result = generate_mega_setting_logic()  # ignoring user_id, conv_id if truly global
+        # Note: generate_mega_setting_logic still uses the synchronous approach
+        # It would need its own refactoring, which we're skipping for now
+        result = generate_mega_setting_logic()  # This is still synchronous
         if "error" in result:
             return jsonify(result), 404
         return jsonify(result), 200
