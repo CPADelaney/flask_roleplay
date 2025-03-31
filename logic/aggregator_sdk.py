@@ -19,6 +19,9 @@ from context.context_service import (
 from context.context_config import get_config
 from context.context_performance import PerformanceMonitor, track_performance
 
+# UPDATED: Using new async context manager
+from db.connection import get_db_connection_context
+
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------
@@ -173,11 +176,7 @@ async def fallback_get_context(
     Returns:
         Context dictionary
     """
-    # Get database connection
-    from db.connection import get_db_connection
-    import asyncpg
-    
-    conn = await asyncpg.connect(dsn=get_db_connection())
+    # UPDATED: Using async context manager
     try:
         # Minimal context to return
         context = {
@@ -191,62 +190,72 @@ async def fallback_get_context(
             "time_of_day": "Morning"
         }
         
-        # 1. Get player stats
-        row = await conn.fetchrow("""
-            SELECT corruption, confidence, willpower,
-                   obedience, dependency, lust,
-                   mental_resilience, physical_endurance
-            FROM PlayerStats
-            WHERE user_id=$1 AND conversation_id=$2
-            LIMIT 1
-        """, user_id, conversation_id)
-        
-        if row:
-            context["player_stats"] = dict(row)
-        
-        # 2. Get introduced NPCs
-        rows = await conn.fetch("""
-            SELECT npc_id, npc_name, dominance, cruelty, closeness,
-                   trust, respect, intensity, current_location,
-                   physical_description
-            FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
-            LIMIT 20
-        """, user_id, conversation_id)
-        
-        for row in rows:
-            context["introduced_npcs"].append(dict(row))
-        
-        # 3. Get time info
-        for key, context_key in [
-            ("CurrentYear", "year"),
-            ("CurrentMonth", "month"),
-            ("CurrentDay", "day"),
-            ("TimeOfDay", "time_of_day")
-        ]:
+        async with get_db_connection_context() as conn:
+            # 1. Get player stats
             row = await conn.fetchrow("""
-                SELECT value
-                FROM CurrentRoleplay
-                WHERE user_id=$1 AND conversation_id=$2 AND key=$3
-            """, user_id, conversation_id, key)
+                SELECT corruption, confidence, willpower,
+                       obedience, dependency, lust,
+                       mental_resilience, physical_endurance
+                FROM PlayerStats
+                WHERE user_id=$1 AND conversation_id=$2
+                LIMIT 1
+            """, user_id, conversation_id)
             
             if row:
-                context[context_key] = row["value"]
-        
-        # 4. Get current roleplay data
-        rows = await conn.fetch("""
-            SELECT key, value
-            FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        
-        for row in rows:
-            context["current_roleplay"][row["key"]] = row["value"]
+                context["player_stats"] = dict(row)
+            
+            # 2. Get introduced NPCs
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, closeness,
+                       trust, respect, intensity, current_location,
+                       physical_description
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                LIMIT 20
+            """, user_id, conversation_id)
+            
+            for row in rows:
+                context["introduced_npcs"].append(dict(row))
+            
+            # 3. Get time info
+            time_keys = [
+                ("CurrentYear", "year"),
+                ("CurrentMonth", "month"),
+                ("CurrentDay", "day"),
+                ("TimeOfDay", "time_of_day")
+            ]
+            
+            for key, context_key in time_keys:
+                row = await conn.fetchrow("""
+                    SELECT value
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+                """, user_id, conversation_id, key)
+                
+                if row:
+                    context[context_key] = row["value"]
+            
+            # 4. Get current roleplay data
+            rows = await conn.fetch("""
+                SELECT key, value
+                FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2
+            """, user_id, conversation_id)
+            
+            for row in rows:
+                context["current_roleplay"][row["key"]] = row["value"]
         
         return context
     
-    finally:
-        await conn.close()
+    except Exception as e:
+        logger.error(f"Error in fallback context retrieval: {e}")
+        return {
+            "player_stats": {},
+            "introduced_npcs": [],
+            "unintroduced_npcs": [],
+            "current_roleplay": {},
+            "error": str(e)
+        }
 
 # -------------------------------------------------------------------------------
 # Optimized Context Cache with Multi-Level Support
