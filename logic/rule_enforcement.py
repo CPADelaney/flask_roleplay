@@ -11,9 +11,10 @@ This module demonstrates:
 """
 
 from flask import Blueprint, request, jsonify
-from db.connection import get_db_connection
-import json, random
-import openai 
+from db.connection import get_db_connection_context
+import json, random, asyncio
+import logging
+import asyncpg
 from logic.chatgpt_integration import get_openai_client
 
 """
@@ -22,12 +23,13 @@ from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
 from logic.memory_logic import store_roleplay_segment
 """
 rule_enforcement_bp = Blueprint("rule_enforcement_bp", __name__)
+logger = logging.getLogger(__name__)
 
 ############################
 # 1. Retrieve Stats Helpers
 ############################
 
-def get_player_stats(player_name="Chase"):
+async def get_player_stats(player_name="Chase"):
     """
     Returns a dictionary of the player's relevant stats.
     Example:
@@ -38,33 +40,37 @@ def get_player_stats(player_name="Chase"):
         ...
       }
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT corruption, confidence, willpower, obedience, dependency,
-               lust, mental_resilience, physical_endurance
-        FROM PlayerStats
-        WHERE player_name = %s
-    """, (player_name,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT corruption, confidence, willpower, obedience, dependency,
+                       lust, mental_resilience, physical_endurance
+                FROM PlayerStats
+                WHERE player_name = $1
+            """, player_name)
 
-    if not row:
+        if not row:
+            return {}
+
+        return {
+            "Corruption": row["corruption"],
+            "Confidence": row["confidence"],
+            "Willpower": row["willpower"],
+            "Obedience": row["obedience"],
+            "Dependency": row["dependency"],
+            "Lust": row["lust"],
+            "Mental Resilience": row["mental_resilience"],
+            "Physical Endurance": row["physical_endurance"],
+        }
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logger.error(f"Database error fetching player stats: {db_err}", exc_info=True)
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error fetching player stats: {e}", exc_info=True)
         return {}
 
-    return {
-        "Corruption": row[0],
-        "Confidence": row[1],
-        "Willpower": row[2],
-        "Obedience": row[3],
-        "Dependency": row[4],
-        "Lust": row[5],
-        "Mental Resilience": row[6],
-        "Physical Endurance": row[7],
-    }
 
-
-def get_npc_stats(npc_name):
+async def get_npc_stats(npc_name):
     """
     If you want to check an NPC's stats to evaluate certain rules
     like "Cruelty > 50" or "Dominance > 80", etc.
@@ -78,27 +84,31 @@ def get_npc_stats(npc_name):
       "Intensity": 25
     }
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT dominance, cruelty, closeness, trust, respect, intensity
-        FROM NPCStats
-        WHERE npc_name = %s
-    """, (npc_name,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow("""
+                SELECT dominance, cruelty, closeness, trust, respect, intensity
+                FROM NPCStats
+                WHERE npc_name = $1
+            """, npc_name)
 
-    if not row:
+        if not row:
+            return {}
+
+        return {
+            "Dominance": row["dominance"],
+            "Cruelty": row["cruelty"],
+            "Closeness": row["closeness"],
+            "Trust": row["trust"],
+            "Respect": row["respect"],
+            "Intensity": row["intensity"]
+        }
+    except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+        logger.error(f"Database error fetching NPC stats: {db_err}", exc_info=True)
         return {}
-
-    return {
-        "Dominance": row[0],
-        "Cruelty": row[1],
-        "Closeness": row[2],
-        "Trust": row[3],
-        "Respect": row[4],
-        "Intensity": row[5]
-    }
+    except Exception as e:
+        logger.error(f"Unexpected error fetching NPC stats: {e}", exc_info=True)
+        return {}
 
 
 ############################
@@ -183,7 +193,7 @@ def evaluate_condition(logic_op, parsed_conditions, stats_dict):
 # 3. Applying Effects (Hybrid Approach)
 ############################
 
-def apply_effect(effect_str, player_name, npc_id=None):
+async def apply_effect(effect_str, player_name, npc_id=None):
     """
     Parse and apply a stat or game effect.
     For example: 'You gain +10 Corruption' or 'NPC becomes openly hateful'
@@ -197,190 +207,188 @@ def apply_effect(effect_str, player_name, npc_id=None):
         "npcUsed": npc_id
     }
     
-    conn = get_db_connection()
-    with conn.cursor() as cursor:
-        # 1) Basic DB updates
-        if effect_lower.startswith("locks independent choices"):
-            # Example: raise Obedience to at least 80
-            cursor.execute("""
-                UPDATE PlayerStats
-                SET obedience = GREATEST(obedience, 80)
-                WHERE player_name=%s
-                RETURNING obedience
-            """, (player_name,))
-            row = cursor.fetchone()
-            if row:
-                result["statUpdates"]["obedience"] = row[0]
+    effect_lower = effect_str.lower()
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # 1) Basic DB updates
+            if effect_lower.startswith("locks independent choices"):
+                # Example: raise Obedience to at least 80
+                obedience = await conn.fetchval("""
+                    UPDATE PlayerStats
+                    SET obedience = GREATEST(obedience, 80)
+                    WHERE player_name=$1
+                    RETURNING obedience
+                """, player_name)
+                if obedience:
+                    result["statUpdates"]["obedience"] = obedience
 
-        elif effect_lower.startswith("total compliance"):
-            # Force Obedience=100
-            cursor.execute("""
-                UPDATE PlayerStats
-                SET obedience=100
-                WHERE player_name=%s
-                RETURNING obedience
-            """, (player_name,))
-            row = cursor.fetchone()
-            if row:
-                result["statUpdates"]["obedience"] = row[0]
+            elif effect_lower.startswith("total compliance"):
+                # Force Obedience=100
+                obedience = await conn.fetchval("""
+                    UPDATE PlayerStats
+                    SET obedience=100
+                    WHERE player_name=$1
+                    RETURNING obedience
+                """, player_name)
+                if obedience:
+                    result["statUpdates"]["obedience"] = obedience
 
-        elif effect_lower.startswith("npc cruelty intensifies") and npc_id is not None:
-            # Raise cruelty by 10
-            cursor.execute("""
-                UPDATE NPCStats
-                SET cruelty = LEAST(cruelty + 10, 100)
-                WHERE npc_id=%s
-                RETURNING cruelty
-            """, (npc_id,))
-            row = cursor.fetchone()
-            if row:
-                result["statUpdates"]["npc_cruelty"] = row[0]
+            elif effect_lower.startswith("npc cruelty intensifies") and npc_id is not None:
+                # Raise cruelty by 10
+                cruelty = await conn.fetchval("""
+                    UPDATE NPCStats
+                    SET cruelty = LEAST(cruelty + 10, 100)
+                    WHERE npc_id=$1
+                    RETURNING cruelty
+                """, npc_id)
+                if cruelty:
+                    result["statUpdates"]["npc_cruelty"] = cruelty
 
-        elif effect_lower.startswith("collaborative physical punishments"):
-            # Possibly handle multiple NPC synergy, etc.
-            pass
+            elif effect_lower.startswith("collaborative physical punishments"):
+                # Possibly handle multiple NPC synergy, etc.
+                pass
 
-        # 2) Determine intensity tier based on the specific NPC's intensity value
-        # Get the NPC's intensity if npc_id is provided
-        npc_intensity = None
-        npc_name = None
-        if npc_id is not None:
-            cursor.execute("""
-                SELECT npc_name, intensity
-                FROM NPCStats
-                WHERE npc_id=%s
-            """, (npc_id,))
-            npc_row = cursor.fetchone()
-            if npc_row:
-                npc_name = npc_row[0]
-                npc_intensity = npc_row[1]
-                result["npcName"] = npc_name
-                result["npcIntensity"] = npc_intensity
-        
-        # Determine intensity tier based on NPC's intensity (if available)
-        intensity_range = (0, 30)  # Default to lowest tier
-        
-        if npc_intensity is not None:
-            # Use NPC's specific intensity level
-            if npc_intensity >= 90:
-                intensity_range = (90, 100)
-            elif npc_intensity >= 60:
-                intensity_range = (60, 90)
-            elif npc_intensity >= 30:
-                intensity_range = (30, 60)
-            else:
-                intensity_range = (0, 30)
-        else:
-            # Fallback to player stats if no NPC is provided
-            cursor.execute("""
-                SELECT corruption, obedience
-                FROM PlayerStats
-                WHERE player_name=%s
-            """, (player_name,))
-            p_row = cursor.fetchone()
+            # 2) Determine intensity tier based on the specific NPC's intensity value
+            # Get the NPC's intensity if npc_id is provided
+            npc_intensity = None
+            npc_name = None
+            if npc_id is not None:
+                npc_row = await conn.fetchrow("""
+                    SELECT npc_name, intensity
+                    FROM NPCStats
+                    WHERE npc_id=$1
+                """, npc_id)
+                if npc_row:
+                    npc_name = npc_row["npc_name"]
+                    npc_intensity = npc_row["intensity"]
+                    result["npcName"] = npc_name
+                    result["npcIntensity"] = npc_intensity
             
-            if p_row:
-                (corr, obed) = p_row
-                if corr >= 90 or obed >= 90:
+            # Determine intensity tier based on NPC's intensity (if available)
+            intensity_range = (0, 30)  # Default to lowest tier
+            
+            if npc_intensity is not None:
+                # Use NPC's specific intensity level
+                if npc_intensity >= 90:
                     intensity_range = (90, 100)
-                elif corr >= 60 or obed >= 60:
+                elif npc_intensity >= 60:
                     intensity_range = (60, 90)
-                elif corr >= 30 or obed >= 30:
+                elif npc_intensity >= 30:
                     intensity_range = (30, 60)
                 else:
                     intensity_range = (0, 30)
+            else:
+                # Fallback to player stats if no NPC is provided
+                p_row = await conn.fetchrow("""
+                    SELECT corruption, obedience
+                    FROM PlayerStats
+                    WHERE player_name=$1
+                """, player_name)
+                
+                if p_row:
+                    corr, obed = p_row["corruption"], p_row["obedience"]
+                    if corr >= 90 or obed >= 90:
+                        intensity_range = (90, 100)
+                    elif corr >= 60 or obed >= 60:
+                        intensity_range = (60, 90)
+                    elif corr >= 30 or obed >= 30:
+                        intensity_range = (30, 60)
+                    else:
+                        intensity_range = (0, 30)
 
-        # Query IntensityTiers
-        cursor.execute("""
-            SELECT tier_name, key_features, activity_examples, permanent_effects
-            FROM IntensityTiers
-            WHERE range_min = %s AND range_max = %s
-        """, (intensity_range[0], intensity_range[1]))
-        row = cursor.fetchone()
-        
-        chosen_intensity_tier = None
-        if row:
-            tier_name, key_features, activity_examples, permanent_effects = row
-            result["intensityTier"] = tier_name
-            result["intensitySource"] = "NPC-specific" if npc_intensity is not None else "Player-derived"
-        else:
-            tier_name = "Unknown Intensity"
-            key_features, activity_examples, permanent_effects = "[]", "[]", "{}"
+            # Query IntensityTiers
+            row = await conn.fetchrow("""
+                SELECT tier_name, key_features, activity_examples, permanent_effects
+                FROM IntensityTiers
+                WHERE range_min = $1 AND range_max = $2
+            """, intensity_range[0], intensity_range[1])
+            
+            chosen_intensity_tier = None
+            if row:
+                tier_name, key_features, activity_examples, permanent_effects = row["tier_name"], row["key_features"], row["activity_examples"], row["permanent_effects"]
+                result["intensityTier"] = tier_name
+                result["intensitySource"] = "NPC-specific" if npc_intensity is not None else "Player-derived"
+            else:
+                tier_name = "Unknown Intensity"
+                key_features, activity_examples, permanent_effects = "[]", "[]", "{}"
 
-        # Possibly pick an example from activity_examples
-        if activity_examples and isinstance(activity_examples, str):
-            try:
-                ex_list = json.loads(activity_examples)
-                if ex_list:
-                    chosen_intensity_tier = random.choice(ex_list)
-            except:
-                chosen_intensity_tier = None
+            # Possibly pick an example from activity_examples
+            if activity_examples and isinstance(activity_examples, str):
+                try:
+                    ex_list = json.loads(activity_examples)
+                    if ex_list:
+                        chosen_intensity_tier = random.choice(ex_list)
+                except:
+                    chosen_intensity_tier = None
 
-        # 3) If effect says "no defiance possible," treat it like endgame
-        if "no defiance possible" in effect_lower:
-            cursor.execute("""
-                SELECT title, examples
-                FROM PlotTriggers
-                WHERE stage='Endgame'
-            """)
-            rows = cursor.fetchall()
-            if rows:
-                chosen = random.choice(rows)
-                t_title, ex_json = chosen
-                ex_list = json.loads(ex_json) if ex_json else []
-                picked_example = random.choice(ex_list) if ex_list else "(No example found)"
-                endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
-                result["plotTriggerEvent"] = endgame_line
+            # 3) If effect says "no defiance possible," treat it like endgame
+            if "no defiance possible" in effect_lower:
+                rows = await conn.fetch("""
+                    SELECT title, examples
+                    FROM PlotTriggers
+                    WHERE stage='Endgame'
+                """)
+                if rows:
+                    chosen = random.choice(rows)
+                    t_title, ex_json = chosen["title"], chosen["examples"]
+                    ex_list = json.loads(ex_json) if ex_json else []
+                    picked_example = random.choice(ex_list) if ex_list else "(No example found)"
+                    endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
+                    result["plotTriggerEvent"] = endgame_line
 
-                # store in memory
-                store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
+                    # store in memory
+                    # Replace with async version:
+                    # await store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
+                    pass
 
-        if "punishment" in effect_lower:
-            system_prompt = f"""
-            You are a punishment scenario generator.
-            The player's stats suggest intensity tier: {result['intensityTier']}.
-            Provide a short brand-new humiliating scenario for effect: '{effect_str}'.
-            """
-            try:
-                # Acquire the client from your chatgpt_integration module
-                client = get_openai_client()
-        
-                # Now call the ChatCompletion endpoint via client.chat.completions.create
-                gpt_resp = client.chat.completions.create(
-                    model="gpt-4o",  # or whichever model you're using
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": "Generate a unique punishment scenario."}
-                    ],
-                    max_tokens=200,
-                    temperature=1.0
-                )
-                scenario = gpt_resp.choices[0].message.content.strip()
-                result["punishmentScenario"] = scenario
-        
-            except Exception as e:
-                result["punishmentScenario"] = f"(GPT error: {e})"
+            if "punishment" in effect_lower:
+                system_prompt = f"""
+                You are a punishment scenario generator.
+                The player's stats suggest intensity tier: {result.get('intensityTier', 'unknown')}.
+                Provide a short brand-new humiliating scenario for effect: '{effect_str}'.
+                """
+                try:
+                    # Acquire the client from your chatgpt_integration module
+                    client = get_openai_client()
+            
+                    # Now call the ChatCompletion endpoint via client.chat.completions.create
+                    gpt_resp = await client.chat.completions.create(
+                        model="gpt-4o",  # or whichever model you're using
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": "Generate a unique punishment scenario."}
+                        ],
+                        max_tokens=200,
+                        temperature=1.0
+                    )
+                    scenario = gpt_resp.choices[0].message.content.strip()
+                    result["punishmentScenario"] = scenario
+            
+                except Exception as e:
+                    result["punishmentScenario"] = f"(GPT error: {e})"
 
-        # 6) If we found an intensity tier example but didn't do GPT scenario, use it
-        if chosen_intensity_tier and not result["punishmentScenario"]:
-            result["punishmentScenario"] = f"(From IntensityTier) {chosen_intensity_tier}"
+            # 6) If we found an intensity tier example but didn't do GPT scenario, use it
+            if chosen_intensity_tier and "punishmentScenario" not in result:
+                result["punishmentScenario"] = f"(From IntensityTier) {chosen_intensity_tier}"
 
-        # 7) Memory log
-        mem_text = f"Effect triggered: {effect_str}. (Intensity: {result['intensityTier']})"
-        store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
-        result["memoryLog"] = mem_text
+            # 7) Memory log
+            mem_text = f"Effect triggered: {effect_str}. (Intensity: {result.get('intensityTier', 'unknown')})"
+            # Replace with async version:
+            # await store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
+            result["memoryLog"] = mem_text
 
-        conn.commit()
-
-    conn.close()
-    return result
+        return result
+    except Exception as e:
+        logger.error(f"Error applying effect: {e}", exc_info=True)
+        return result
 
 
 ############################
 # 4. Putting It All Together
 ############################
 
-def enforce_all_rules_on_player(player_name="Chase"):
+async def enforce_all_rules_on_player(player_name="Chase"):
     """
     1. Get the player's stats
     2. Retrieve all rules from GameRules
@@ -388,30 +396,32 @@ def enforce_all_rules_on_player(player_name="Chase"):
     4. If true => apply the effect
     5. Return a summary of what got triggered
     """
-    # Load player stats for condition checks
-    player_stats = get_player_stats(player_name)
+    try:
+        # Load player stats for condition checks
+        player_stats = await get_player_stats(player_name)
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT condition, effect FROM GameRules")
-    rules = cursor.fetchall()
-    conn.close()
+        async with get_db_connection_context() as conn:
+            rules = await conn.fetch("SELECT condition, effect FROM GameRules")
 
-    triggered_effects = []
-    for (condition_str, effect_str) in rules:
-        logic_op, parsed_conditions = parse_condition(condition_str)
-        result_bool = evaluate_condition(logic_op, parsed_conditions, player_stats)
-        if result_bool:
-            # It's True => apply
-            # Note: if you need an NPC ID for certain effects, pass it here
-            outcome = apply_effect(effect_str, player_name)
-            triggered_effects.append({
-                "condition": condition_str,
-                "effect": effect_str,
-                "outcome": outcome
-            })
+        triggered_effects = []
+        for row in rules:
+            condition_str, effect_str = row["condition"], row["effect"]
+            logic_op, parsed_conditions = parse_condition(condition_str)
+            result_bool = evaluate_condition(logic_op, parsed_conditions, player_stats)
+            if result_bool:
+                # It's True => apply
+                # Note: if you need an NPC ID for certain effects, pass it here
+                outcome = await apply_effect(effect_str, player_name)
+                triggered_effects.append({
+                    "condition": condition_str,
+                    "effect": effect_str,
+                    "outcome": outcome
+                })
 
-    return triggered_effects
+        return triggered_effects
+    except Exception as e:
+        logger.error(f"Error enforcing rules: {e}", exc_info=True)
+        return []
 
 
 ############################
@@ -419,7 +429,7 @@ def enforce_all_rules_on_player(player_name="Chase"):
 ############################
 
 @rule_enforcement_bp.route("/enforce_rules", methods=["POST"])
-def enforce_rules_route():
+async def enforce_rules_route():
     """
     Example route to manually trigger rules enforcement.
     JSON param: {"player_name": "..."} optional
@@ -427,7 +437,7 @@ def enforce_rules_route():
     data = request.get_json() or {}
     player_name = data.get("player_name", "Chase")
 
-    triggered = enforce_all_rules_on_player(player_name)
+    triggered = await enforce_all_rules_on_player(player_name)
     if not triggered:
         return jsonify({"message": "No rules triggered."}), 200
 
