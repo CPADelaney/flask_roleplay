@@ -1,9 +1,11 @@
 # logic/seed_interactions.py
 import json
 import logging
-from db.connection import get_db_connection
+import asyncio
+import asyncpg
+from db.connection import get_db_connection_context
 
-def create_and_seed_interactions():
+async def create_and_seed_interactions():
     """
     Creates the 'Interactions' table rows based on Document 15.
     If you want them in multiple rows, each with:
@@ -12,9 +14,6 @@ def create_and_seed_interactions():
       - task_examples (for the examples from the doc)
       - agency_overrides (for the stat thresholds)
     """
-    conn = get_db_connection()
-    cur = conn.cursor()
-
     logging.info("Inserting or updating 'Interactions' rows...")
 
     # You can define a list of sections, each becoming a row in Interactions
@@ -128,7 +127,7 @@ def create_and_seed_interactions():
                 },
                 "stages": [
                     "Stage 1: humiliating apology (Willpower/Shame)",
-                    "Stage 2: Clean Boss’s shoes (MentalResilience vs. taunts)",
+                    "Stage 2: Clean Boss's shoes (MentalResilience vs. taunts)",
                     "Stage 3: Accept public punishment (Corruption & PhysicalEndurance)"
                 ],
                 "outcomes": {
@@ -141,28 +140,28 @@ def create_and_seed_interactions():
         }
     ]
 
-    # Insert or update logic
-    insert_sql = """
-    INSERT INTO Interactions (interaction_name, detailed_rules, task_examples, agency_overrides)
-    VALUES (%s, %s, %s, %s)
-    ON CONFLICT (interaction_name)
-    DO UPDATE
-    SET
-        detailed_rules=EXCLUDED.detailed_rules,
-        task_examples=EXCLUDED.task_examples,
-        agency_overrides=EXCLUDED.agency_overrides
-    """
-
-    for row_data in interactions_data:
-        cur.execute(insert_sql, (
-            row_data["interaction_name"],
-            json.dumps(row_data["detailed_rules"]),
-            json.dumps(row_data["task_examples"]),
-            json.dumps(row_data["agency_overrides"])
-        ))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    logging.info("Seeded 'Interactions' data successfully.")
+    try:
+        async with get_db_connection_context() as conn:
+            # Insert or update logic
+            for row_data in interactions_data:
+                await conn.execute("""
+                INSERT INTO Interactions (interaction_name, detailed_rules, task_examples, agency_overrides)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (interaction_name)
+                DO UPDATE
+                SET
+                    detailed_rules=EXCLUDED.detailed_rules,
+                    task_examples=EXCLUDED.task_examples,
+                    agency_overrides=EXCLUDED.agency_overrides
+                """, 
+                row_data["interaction_name"],
+                json.dumps(row_data["detailed_rules"]),
+                json.dumps(row_data["task_examples"]),
+                json.dumps(row_data["agency_overrides"])
+                )
+            
+            logging.info("Seeded 'Interactions' data successfully.")
+    except asyncpg.PostgresError as e:
+        logging.error(f"Database error in create_and_seed_interactions: {e}", exc_info=True)
+    except Exception as e:
+        logging.error(f"Unexpected error in create_and_seed_interactions: {e}", exc_info=True)
