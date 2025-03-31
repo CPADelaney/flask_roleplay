@@ -2,8 +2,9 @@
 
 import time
 import json
+import logging
 from flask import session
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 class ImageGenerationDecider:
     """
@@ -14,19 +15,17 @@ class ImageGenerationDecider:
     def __init__(self, user_id, conversation_id):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.user_preferences = self._load_user_preferences()
-        self.recent_generations = self._get_recent_generations()
+        self.user_preferences = None
+        self.recent_generations = None
     
-    def _load_user_preferences(self):
+    async def initialize(self):
+        """Initialize the decider by loading preferences and recent generations."""
+        self.user_preferences = await self._load_user_preferences()
+        self.recent_generations = self._get_recent_generations()
+        return self
+    
+    async def _load_user_preferences(self):
         """Load user preferences for image generation."""
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT key, value FROM CurrentRoleplay
-            WHERE user_id = %s AND conversation_id = %s AND key LIKE 'image_pref%%'
-        """, (self.user_id, self.conversation_id))
-        
         preferences = {
             'frequency': 'medium',  # low, medium, high
             'nsfw_level': 'moderate',  # none, mild, moderate, explicit
@@ -35,26 +34,33 @@ class ImageGenerationDecider:
             'image_budget': 50  # Number of images per day/session
         }
         
-        # Override defaults with user preferences from DB
-        for row in cursor.fetchall():
-            key = row[0].replace('image_pref_', '')
-            value = row[1]
-            # Convert string "true"/"false" to boolean if needed
-            if value.lower() == 'true':
-                value = True
-            elif value.lower() == 'false':
-                value = False
-            # Convert numeric strings to integers if needed
-            try:
-                if value.isdigit():
-                    value = int(value)
-            except AttributeError:
-                pass
+        try:
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT key, value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key LIKE 'image_pref%'
+                """, self.user_id, self.conversation_id)
                 
-            preferences[key] = value
-        
-        cursor.close()
-        conn.close()
+                # Override defaults with user preferences from DB
+                for row in rows:
+                    key = row['key'].replace('image_pref_', '')
+                    value = row['value']
+                    # Convert string "true"/"false" to boolean if needed
+                    if value.lower() == 'true':
+                        value = True
+                    elif value.lower() == 'false':
+                        value = False
+                    # Convert numeric strings to integers if needed
+                    try:
+                        if value.isdigit():
+                            value = int(value)
+                    except AttributeError:
+                        pass
+                        
+                    preferences[key] = value
+        except Exception as e:
+            logging.error(f"Error loading user preferences: {e}")
+            
         return preferences
     
     def _get_recent_generations(self):
@@ -113,7 +119,7 @@ class ImageGenerationDecider:
         
         return True, None
     
-    def should_generate_image(self, gpt_response):
+    async def should_generate_image(self, gpt_response):
         """
         Determine if an image should be generated for this response.
         
@@ -123,6 +129,9 @@ class ImageGenerationDecider:
         Returns:
             tuple: (should_generate, reason)
         """
+        if not self.user_preferences:
+            await self.initialize()
+            
         # Check if images are disabled entirely
         if self.user_preferences['disable_images']:
             return False, "Images disabled by user preference"
@@ -199,7 +208,8 @@ class ImageGenerationDecider:
         # Default fallback
         return False, "Scene didn't meet visualization threshold"
 
-def should_generate_image_for_response(user_id, conversation_id, gpt_response):
+async def should_generate_image_for_response(user_id, conversation_id, gpt_response):
     """Convenience function to check if an image should be generated."""
     decider = ImageGenerationDecider(user_id, conversation_id)
-    return decider.should_generate_image(gpt_response)
+    await decider.initialize()
+    return await decider.should_generate_image(gpt_response)
