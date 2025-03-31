@@ -12,6 +12,7 @@ from data.npc_dal import NPCDataAccess
 from lore.lore_manager import LoreManager
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from db.connection import get_db_connection_context
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -699,4 +700,4 @@ class NPCBeliefFormation:
                     return True
         
         # If no direct contradiction, assume it supports the belief
-        return False 
+        return False
