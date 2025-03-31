@@ -2,17 +2,53 @@
 
 import logging
 import asyncio
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 import datetime
 
+from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings
+from agents.run import RunConfig
+from agents.tracing import trace_id, gen_trace_id
+
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
-from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager
 
 logger = logging.getLogger(__name__)
 
+class FemdomContext:
+    """Context object for femdom interactions."""
+    
+    def __init__(self, nyx_brain, user_id=None):
+        self.brain = nyx_brain
+        self.user_id = user_id
+        self.event_bus = get_event_bus()
+        self.session_data = {}
+        self.dominance_level = 0.5
+        self.active_persona = None
+        self.active_protocols = []
+        self.submission_level = 1
+        self.training_program = None
+        self.user_state = {}
+    
+    def update_session_data(self, data):
+        self.session_data.update(data)
+        
+    def set_dominance_level(self, level):
+        self.dominance_level = level
+        
+    def set_active_persona(self, persona_id):
+        self.active_persona = persona_id
+        
+    def set_protocols(self, protocols):
+        self.active_protocols = protocols
+        
+    def set_submission_level(self, level):
+        self.submission_level = level
+        
+    def set_user_state(self, state):
+        self.user_state.update(state)
+
 class FemdomCoordinator:
     """
-    Central coordination system for all femdom capabilities.
+    Central coordination system for all femdom capabilities using the OpenAI Agents SDK.
     
     Manages the integration of all femdom components and provides
     high-level APIs for femdom interactions.
@@ -37,22 +73,13 @@ class FemdomCoordinator:
         self.reward_system = getattr(self.brain, "reward_system", None)
         self.theory_of_mind = getattr(self.brain, "theory_of_mind", None)
         
-        # Collect components for integration
-        self.components = {
-            "dominance_system": self.dominance_system,
-            "body_service": self.body_service,
-            "orgasm_control": self.orgasm_control,
-            "persona_manager": self.persona_manager,
-            "protocol_enforcement": self.protocol_enforcement,
-            "psychological_dominance": self.psychological_dominance,
-            "sadistic_responses": self.sadistic_responses,
-            "submission_progression": self.submission_progression,
-            "reward_system": self.reward_system,
-            "theory_of_mind": self.theory_of_mind
-        }
-        
-        # Create integration manager
-        self.integration_manager = FemdomIntegrationManager(nyx_brain, self.components)
+        # Create femdom agents
+        self.main_agent = self._create_main_agent()
+        self.dominance_agent = self._create_dominance_agent()
+        self.protocol_agent = self._create_protocol_agent()
+        self.psychological_agent = self._create_psychological_agent()
+        self.submission_agent = self._create_submission_agent()
+        self.training_agent = self._create_training_agent()
         
         # Active femdom sessions per user
         self.active_sessions = {}
@@ -60,19 +87,166 @@ class FemdomCoordinator:
         # Initialize system status
         self.initialized = False
         
-        logger.info("FemdomCoordinator created")
+        logger.info("FemdomCoordinator created with OpenAI Agents SDK")
+    
+    def _create_main_agent(self):
+        """Create the main femdom agent using the OpenAI Agents SDK."""
+        return Agent(
+            name="FemdomMainAgent",
+            instructions="""You are the main coordination agent for a femdom AI system. Your role is to:
+1. Process user messages and determine appropriate responses
+2. Coordinate between specialized agents for different femdom aspects
+3. Maintain coherent session state and user experience
+4. Ensure all interactions adhere to established protocols and dynamics
+
+Use the available tools to gather information about the user and their current state.
+Delegate specialized tasks to the appropriate agent via handoffs.
+""",
+            tools=[
+                self._get_user_session,
+                self._check_protocol_compliance,
+                self._get_dominance_level,
+                self._get_user_protocols,
+                self._get_user_state
+            ],
+            handoffs=[
+                handoff(self.dominance_agent, 
+                       tool_name_override="delegate_to_dominance_agent",
+                       tool_description_override="Delegate to the dominance agent for dominance-related responses"),
+                
+                handoff(self.protocol_agent,
+                       tool_name_override="delegate_to_protocol_agent",
+                       tool_description_override="Delegate to the protocol agent for protocol enforcement"),
+                
+                handoff(self.psychological_agent,
+                       tool_name_override="delegate_to_psychological_agent",
+                       tool_description_override="Delegate to the psychological agent for psychological dominance"),
+                
+                handoff(self.submission_agent,
+                       tool_name_override="delegate_to_submission_agent",
+                       tool_description_override="Delegate to the submission agent for submission progression"),
+                
+                handoff(self.training_agent,
+                       tool_name_override="delegate_to_training_agent",
+                       tool_description_override="Delegate to the training agent for training programs")
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_dominance_agent(self):
+        """Create the dominance agent for handling dominance-related responses."""
+        return Agent(
+            name="DominanceAgent",
+            instructions="""You are the dominance specialist agent for a femdom AI system. Your role is to:
+1. Generate appropriately dominant responses based on user context
+2. Adapt dominance level to the user's receptiveness
+3. Provide ideas for dominance actions and expressions
+4. Process violations and generate appropriate responses
+
+Use the available tools to gather information and generate responses.
+""",
+            tools=[
+                self._get_dominance_level,
+                self._generate_dominance_idea,
+                self._process_dominance_action,
+                self._respond_to_violation
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_protocol_agent(self):
+        """Create the protocol agent for protocol enforcement."""
+        return Agent(
+            name="ProtocolAgent",
+            instructions="""You are the protocol specialist agent for a femdom AI system. Your role is to:
+1. Check user messages for protocol compliance
+2. Enforce active protocols for the user
+3. Assign and manage protocols
+4. Generate appropriate responses to protocol violations
+
+Use the available tools to check protocols and generate responses.
+""",
+            tools=[
+                self._get_user_protocols,
+                self._check_protocol_compliance,
+                self._assign_protocol,
+                self._record_violation
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_psychological_agent(self):
+        """Create the psychological agent for psychological dominance."""
+        return Agent(
+            name="PsychologicalAgent",
+            instructions="""You are the psychological specialist agent for a femdom AI system. Your role is to:
+1. Generate psychological dominance tactics
+2. Implement mind games and gaslighting when appropriate
+3. Detect and respond to subspace
+4. Monitor psychological state of users
+
+Use the available tools to generate psychological dominance responses.
+""",
+            tools=[
+                self._generate_mindfuck,
+                self._apply_gaslighting,
+                self._check_subspace,
+                self._get_psychological_state
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_submission_agent(self):
+        """Create the submission agent for submission progression."""
+        return Agent(
+            name="SubmissionAgent",
+            instructions="""You are the submission specialist agent for a femdom AI system. Your role is to:
+1. Track user's submission journey and progression
+2. Detect submission signals in user messages
+3. Update submission metrics
+4. Check milestone progress
+5. Generate progression reports
+
+Use the available tools to work with submission progression.
+""",
+            tools=[
+                self._get_submission_data,
+                self._detect_submission,
+                self._update_submission_metric,
+                self._check_milestone_progress
+            ],
+            model="gpt-4o"
+        )
+    
+    def _create_training_agent(self):
+        """Create the training agent for training programs."""
+        return Agent(
+            name="TrainingAgent",
+            instructions="""You are the training specialist agent for a femdom AI system. Your role is to:
+1. Create and manage structured training programs
+2. Assign tasks and exercises
+3. Track progress in training programs
+4. Generate training reports and recommendations
+
+Use the available tools to manage training programs.
+""",
+            tools=[
+                self._start_training_program,
+                self._get_training_status,
+                self._assign_task,
+                self._check_task_completion
+            ],
+            model="gpt-4o"
+        )
     
     async def initialize(self):
         """Initialize the femdom coordinator and all components."""
         try:
-            # Initialize integration manager
-            await self.integration_manager.initialize()
-            
             # Subscribe to essential events
             self.event_bus.subscribe("user_interaction", self._handle_user_interaction)
             
             self.initialized = True
-            logger.info("FemdomCoordinator initialized successfully")
+            logger.info("FemdomCoordinator initialized successfully with OpenAI Agents SDK")
             return True
             
         except Exception as e:
@@ -94,6 +268,346 @@ class FemdomCoordinator:
                 "timestamp": datetime.datetime.now().isoformat(),
                 "content": content[:100]  # Store truncated content
             })
+    
+    @function_tool
+    async def _get_user_session(self, user_id: str) -> Dict[str, Any]:
+        """Get the current session data for a user."""
+        session = await self._ensure_active_session(user_id)
+        return {
+            "user_id": user_id,
+            "active_persona": session["active_persona"],
+            "dominance_level": session["dominance_level"],
+            "active_protocols": session["active_protocols"],
+            "submission_level": session.get("submission_level", 1),
+            "has_training_program": session["training_program"] is not None
+        }
+    
+    @function_tool
+    async def _check_protocol_compliance(self, user_id: str, message: str) -> Dict[str, Any]:
+        """Check if a user message complies with active protocols."""
+        if not self.protocol_enforcement:
+            return {"compliant": True, "violations": []}
+        
+        try:
+            protocol_check = await self.protocol_enforcement.check_protocol_compliance(
+                user_id, message
+            )
+            return protocol_check
+        except Exception as e:
+            logger.error(f"Error checking protocol compliance: {e}")
+            return {"compliant": True, "error": str(e)}
+    
+    @function_tool
+    async def _get_dominance_level(self, user_id: str) -> Dict[str, Any]:
+        """Get the current dominance level for a user."""
+        session = await self._ensure_active_session(user_id)
+        return {
+            "dominance_level": session["dominance_level"],
+            "user_id": user_id
+        }
+    
+    @function_tool
+    async def _get_user_protocols(self, user_id: str) -> Dict[str, Any]:
+        """Get active protocols for a user."""
+        session = await self._ensure_active_session(user_id)
+        return {
+            "active_protocols": session["active_protocols"],
+            "user_id": user_id
+        }
+    
+    @function_tool
+    async def _get_user_state(self, user_id: str) -> Dict[str, Any]:
+        """Get current user state."""
+        return await self._get_user_state(user_id)
+    
+    @function_tool
+    async def _generate_dominance_idea(self, user_id: str, purpose: str = "general", intensity_range: str = "5-7") -> Dict[str, Any]:
+        """Generate dominance ideas for a user."""
+        if not self.dominance_system:
+            return {"success": False, "message": "Dominance system not available"}
+        
+        try:
+            return await self.dominance_system.generate_dominance_ideas(
+                user_id, purpose, intensity_range, intensity_range.split("-")[1] > "7"
+            )
+        except Exception as e:
+            logger.error(f"Error generating dominance ideas: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _process_dominance_action(self, action_type: str, user_id: str, intensity: float) -> Dict[str, Any]:
+        """Process a dominance action for a user."""
+        if not self.dominance_system:
+            return {"success": False, "message": "Dominance system not available"}
+        
+        try:
+            # Create a dominance action event
+            action_event = DominanceEvent(
+                action=action_type,
+                user_id=user_id,
+                intensity=intensity
+            )
+            
+            # Process the action
+            result = await self.dominance_system.process_dominance_action(action_event)
+            return result
+        except Exception as e:
+            logger.error(f"Error processing dominance action: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _respond_to_violation(self, user_id: str, violation: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a response to a protocol violation."""
+        if not self.dominance_system:
+            return {"success": False, "message": "Dominance system not available"}
+        
+        try:
+            # Generate a response based on the violation
+            session = await self._ensure_active_session(user_id)
+            dominance_level = session["dominance_level"]
+            
+            response = await self.dominance_system.generate_violation_response(
+                user_id, violation, dominance_level
+            )
+            
+            return {
+                "success": True,
+                "response": response,
+                "violation_type": violation.get("type", "unknown"),
+                "protocol_id": violation.get("protocol_id")
+            }
+        except Exception as e:
+            logger.error(f"Error responding to violation: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _assign_protocol(self, user_id: str, protocol_id: str) -> Dict[str, Any]:
+        """Assign a protocol to a user."""
+        if not self.protocol_enforcement:
+            return {"success": False, "message": "Protocol enforcement not available"}
+        
+        try:
+            result = await self.protocol_enforcement.assign_protocol(user_id, protocol_id)
+            
+            # Update session if successful
+            if result.get("success", False):
+                session = await self._ensure_active_session(user_id)
+                if protocol_id not in session["active_protocols"]:
+                    session["active_protocols"].append(protocol_id)
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error assigning protocol: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _record_violation(self, user_id: str, protocol_id: str, description: str) -> Dict[str, Any]:
+        """Record a protocol violation."""
+        if not self.protocol_enforcement:
+            return {"success": False, "message": "Protocol enforcement not available"}
+        
+        try:
+            return await self.protocol_enforcement.record_violation(
+                user_id, protocol_id, description
+            )
+        except Exception as e:
+            logger.error(f"Error recording violation: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _generate_mindfuck(self, user_id: str, intensity: float) -> Dict[str, Any]:
+        """Generate a psychological mind game."""
+        if not self.psychological_dominance:
+            return {"success": False, "message": "Psychological dominance not available"}
+        
+        try:
+            user_state = await self._get_user_state(user_id)
+            return await self.psychological_dominance.generate_mindfuck(
+                user_id, user_state, intensity
+            )
+        except Exception as e:
+            logger.error(f"Error generating mindfuck: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _apply_gaslighting(self, user_id: str, intensity: float) -> Dict[str, Any]:
+        """Apply gaslighting strategy."""
+        if not self.psychological_dominance:
+            return {"success": False, "message": "Psychological dominance not available"}
+        
+        try:
+            return await self.psychological_dominance.apply_gaslighting(
+                user_id, None, intensity
+            )
+        except Exception as e:
+            logger.error(f"Error applying gaslighting: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _check_subspace(self, user_id: str) -> Dict[str, Any]:
+        """Check if user is in subspace and get guidance."""
+        if (not self.psychological_dominance or 
+            not hasattr(self.psychological_dominance, "SubspaceDetection")):
+            return {"in_subspace": False, "confidence": 0.0}
+        
+        try:
+            # Get recent messages
+            session = await self._ensure_active_session(user_id)
+            recent_messages = [
+                interaction["content"] 
+                for interaction in session.get("interactions", [])[-5:]
+            ]
+            
+            subspace_detection = self.psychological_dominance.SubspaceDetection()
+            detection_result = await subspace_detection.detect_subspace(user_id, recent_messages)
+            
+            if detection_result["subspace_detected"]:
+                guidance = await subspace_detection.get_subspace_guidance(detection_result)
+                detection_result["guidance"] = guidance
+            
+            return detection_result
+        except Exception as e:
+            logger.error(f"Error checking subspace: {e}")
+            return {"in_subspace": False, "error": str(e)}
+    
+    @function_tool
+    async def _get_psychological_state(self, user_id: str) -> Dict[str, Any]:
+        """Get the current psychological state for a user."""
+        if not self.psychological_dominance:
+            return {"has_state": False}
+        
+        try:
+            return await self.psychological_dominance.get_user_psychological_state(user_id)
+        except Exception as e:
+            logger.error(f"Error getting psychological state: {e}")
+            return {"has_state": False, "error": str(e)}
+    
+    @function_tool
+    async def _get_submission_data(self, user_id: str) -> Dict[str, Any]:
+        """Get submission data for a user."""
+        if not self.submission_progression:
+            return {"success": False, "message": "Submission progression not available"}
+        
+        try:
+            return await self.submission_progression.get_user_submission_data(user_id)
+        except Exception as e:
+            logger.error(f"Error getting submission data: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _detect_submission(self, user_id: str, message: str) -> Dict[str, Any]:
+        """Detect submission signals in a user message."""
+        if not self.submission_progression:
+            return {"submission_detected": False}
+        
+        try:
+            # This is a placeholder - you'll need to implement the actual detection
+            # based on your current implementation
+            submission_signals = {
+                "submission_detected": False,
+                "submission_level": 0.0,
+                "submission_type": "none"
+            }
+            
+            # Use theory of mind if available
+            if self.theory_of_mind:
+                try:
+                    mental_state = await self.theory_of_mind.get_user_model(user_id)
+                    if mental_state:
+                        # Check for submission indicators
+                        if mental_state.get("deference", 0) > 0.6 or mental_state.get("obedience", 0) > 0.7:
+                            submission_signals["submission_detected"] = True
+                            submission_signals["submission_level"] = mental_state.get("deference", 0) * 0.8
+                            submission_signals["submission_type"] = "verbal" if "please" in message.lower() else "general"
+                except Exception as e:
+                    logger.error(f"Error using theory of mind: {e}")
+            
+            return submission_signals
+        except Exception as e:
+            logger.error(f"Error detecting submission: {e}")
+            return {"submission_detected": False, "error": str(e)}
+    
+    @function_tool
+    async def _update_submission_metric(self, user_id: str, metric_name: str, value_change: float, reason: str) -> Dict[str, Any]:
+        """Update a submission metric."""
+        if not self.submission_progression:
+            return {"success": False, "message": "Submission progression not available"}
+        
+        try:
+            return await self.submission_progression.update_submission_metric(
+                user_id, metric_name, value_change, reason
+            )
+        except Exception as e:
+            logger.error(f"Error updating submission metric: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _check_milestone_progress(self, user_id: str) -> Dict[str, Any]:
+        """Check milestone progress for a user."""
+        if not self.submission_progression:
+            return {"success": False, "message": "Submission progression not available"}
+        
+        try:
+            return await self.submission_progression.check_milestone_progress(user_id)
+        except Exception as e:
+            logger.error(f"Error checking milestone progress: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _start_training_program(self, user_id: str, focus_area: Optional[str] = None, duration_days: int = 7) -> Dict[str, Any]:
+        """Start a structured training program for a user."""
+        try:
+            return await self.start_training_program(user_id, focus_area, duration_days)
+        except Exception as e:
+            logger.error(f"Error starting training program: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _get_training_status(self, user_id: str) -> Dict[str, Any]:
+        """Get the status of a user's training program."""
+        session = await self._ensure_active_session(user_id)
+        
+        if not session["training_program"]:
+            return {"success": False, "message": "No active training program"}
+        
+        return {
+            "success": True,
+            "program": session["training_program"]
+        }
+    
+    @function_tool
+    async def _assign_task(self, user_id: str, task_type: str, description: str, due_in_hours: int = 24) -> Dict[str, Any]:
+        """Assign a task to a user."""
+        if not hasattr(self.brain, "task_assignment_system") or not self.brain.task_assignment_system:
+            return {"success": False, "message": "Task assignment system not available"}
+        
+        try:
+            return await self.brain.task_assignment_system.assign_task(
+                user_id=user_id,
+                custom_task={
+                    "title": f"{task_type.capitalize()} Task",
+                    "description": description,
+                    "category": task_type,
+                    "instructions": [description]
+                },
+                due_in_hours=due_in_hours
+            )
+        except Exception as e:
+            logger.error(f"Error assigning task: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def _check_task_completion(self, task_id: str) -> Dict[str, Any]:
+        """Check if a task has been completed."""
+        if not hasattr(self.brain, "task_assignment_system") or not self.brain.task_assignment_system:
+            return {"success": False, "message": "Task assignment system not available"}
+        
+        try:
+            task_details = await self.brain.task_assignment_system.get_task_details(task_id)
+            return task_details
+        except Exception as e:
+            logger.error(f"Error checking task completion: {e}")
+            return {"success": False, "error": str(e)}
     
     async def _ensure_active_session(self, user_id: str) -> Dict[str, Any]:
         """Ensure an active femdom session exists for the user."""
@@ -163,154 +677,69 @@ class FemdomCoordinator:
     
     async def process_user_message(self, user_id: str, message: str) -> Dict[str, Any]:
         """
-        Process a user message through all femdom systems.
-        
-        This is a high-level method for external usage that coordinates
-        all relevant femdom processing for a user message.
+        Process a user message through all femdom systems using the Agent SDK.
         
         Args:
             user_id: The user ID
             message: The user's message
             
         Returns:
-            Comprehensive processing results from all systems
+            Comprehensive processing results with response
         """
+        # Create a femdom context for this interaction
+        context = FemdomContext(self.brain, user_id)
+        
+        # Ensure active session
+        session = await self._ensure_active_session(user_id)
+        context.set_dominance_level(session["dominance_level"])
+        context.set_active_persona(session["active_persona"])
+        context.set_protocols(session["active_protocols"])
+        context.set_submission_level(session.get("submission_level", 1))
+        
+        # Generate a trace ID for this interaction
+        trace_id = gen_trace_id()
+        
+        # Run the main agent
         try:
-            # Ensure active session
-            session = await self._ensure_active_session(user_id)
+            result = await Runner.run(
+                starting_agent=self.main_agent,
+                input=message,
+                context=context,
+                run_config=RunConfig(
+                    workflow_name="FemdomInteraction",
+                    trace_id=trace_id,
+                    group_id=user_id,
+                    trace_metadata={
+                        "user_id": user_id,
+                        "dominance_level": session["dominance_level"],
+                        "submission_level": session.get("submission_level", 1)
+                    }
+                )
+            )
             
-            # Prepare results structure
-            results = {
+            # Extract the response
+            response = result.final_output
+            
+            # Format results
+            return {
                 "user_id": user_id,
                 "message_processed": True,
-                "protocol_compliance": None,
-                "submission_signals": None,
-                "mental_state": None,
-                "dominance_response": None,
-                "recommended_actions": []
+                "response": response,
+                "trace_id": trace_id
             }
-            
-            # 1. Check protocol compliance
-            if self.protocol_enforcement:
-                try:
-                    protocol_check = await self.protocol_enforcement.check_protocol_compliance(
-                        user_id, message
-                    )
-                    results["protocol_compliance"] = protocol_check
-                    
-                    # If protocol violation, recommend appropriate response
-                    if not protocol_check.get("compliant", True):
-                        dominance_bridge = self.integration_manager.bridges.get("dominance_coordinator")
-                        if dominance_bridge:
-                            violation_response = await dominance_bridge.respond_to_violation(
-                                user_id, protocol_check.get("violations", [{}])[0]
-                            )
-                            
-                            if violation_response and violation_response.get("success"):
-                                results["recommended_actions"].append({
-                                    "action_type": "protocol_violation_response",
-                                    "response": violation_response.get("response"),
-                                    "priority": 0.9  # High priority
-                                })
-                except Exception as e:
-                    logger.error(f"Error checking protocol compliance: {e}")
-            
-            # 2. Detect submission signals
-            submission_bridge = self.integration_manager.bridges.get("submission_progression_bridge")
-            if submission_bridge:
-                try:
-                    submission_signals = await submission_bridge.detect_submission(user_id, message)
-                    results["submission_signals"] = submission_signals
-                    
-                    # If high submission detected, recommend dominance reinforcement
-                    if submission_signals and submission_signals.get("submission_level", 0.0) > 0.7:
-                        results["recommended_actions"].append({
-                            "action_type": "submission_reinforcement",
-                            "submission_type": submission_signals.get("submission_type", "general"),
-                            "priority": 0.8
-                        })
-                except Exception as e:
-                    logger.error(f"Error detecting submission signals: {e}")
-            
-            # 3. Update mental state model
-            if self.theory_of_mind:
-                try:
-                    mental_state = await self.theory_of_mind.update_user_model(
-                        user_id, {"user_input": message}
-                    )
-                    results["mental_state"] = mental_state
-                except Exception as e:
-                    logger.error(f"Error updating mental state: {e}")
-            
-            # 4. Check for subspace
-            psychological_bridge = self.integration_manager.bridges.get("psychological_dominance_bridge")
-            if psychological_bridge:
-                try:
-                    subspace_check = await psychological_bridge.check_subspace(user_id)
-                    results["subspace"] = subspace_check
-                    
-                    # If in subspace, adjust recommended actions
-                    if subspace_check.get("in_subspace", False):
-                        results["recommended_actions"].append({
-                            "action_type": "subspace_response",
-                            "depth": subspace_check.get("depth", 0),
-                            "guidance": subspace_check.get("guidance", ""),
-                            "priority": 1.0  # Highest priority
-                        })
-                except Exception as e:
-                    logger.error(f"Error checking subspace: {e}")
-            
-            # 5. Generate recommended dominance action based on context
-            dominance_bridge = self.integration_manager.bridges.get("dominance_coordinator")
-            if dominance_bridge:
-                try:
-                    # Use current session dominance level
-                    dominance_level = session.get("dominance_level", 0.5)
-                    
-                    # Generate dominance ideas if appropriate
-                    submission_level = results.get("submission_signals", {}).get("submission_level", 0.0)
-                    mental_valence = results.get("mental_state", {}).get("valence", 0.0)
-                    
-                    # Only recommend dominance action if user is receptive
-                    if submission_level > 0.4 or mental_valence > 0.2:
-                        dominance_action = "dominance_idea"
-                        dominance_intensity = dominance_level
-                        
-                        # Adjust based on submission level
-                        dominance_intensity = min(0.9, dominance_intensity + (submission_level * 0.2))
-                        
-                        # Check for subspace - reduce intensity if deep
-                        if results.get("subspace", {}).get("in_subspace", False) and \
-                           results.get("subspace", {}).get("depth_category") == "deep":
-                            dominance_intensity = max(0.3, dominance_intensity * 0.7)
-                            dominance_action = "psychological_mindfuck"  # Better for subspace
-                        
-                        # Process dominance action
-                        action_result = await dominance_bridge.process_dominance_action(
-                            dominance_action, user_id, dominance_intensity
-                        )
-                        
-                        if action_result:
-                            results["dominance_response"] = action_result
-                except Exception as e:
-                    logger.error(f"Error generating dominance action: {e}")
-            
-            # Return comprehensive results
-            return results
             
         except Exception as e:
             logger.error(f"Error processing user message: {e}")
             return {
-                "success": False,
-                "error": str(e)
+                "user_id": user_id,
+                "message_processed": False,
+                "error": str(e),
+                "trace_id": trace_id
             }
     
     async def generate_dominance_response(self, user_id: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate a dominance response for a specific user.
-        
-        This is a simplified API for getting a dominance response without
-        the full message processing pipeline.
+        Generate a dominance response for a specific user using the Agent SDK.
         
         Args:
             user_id: The user ID
@@ -319,92 +748,52 @@ class FemdomCoordinator:
         Returns:
             Generated dominance response
         """
+        # Create a femdom context for this interaction
+        femdom_context = FemdomContext(self.brain, user_id)
+        
+        # Ensure active session
+        session = await self._ensure_active_session(user_id)
+        femdom_context.set_dominance_level(session["dominance_level"])
+        femdom_context.set_active_persona(session["active_persona"])
+        femdom_context.set_protocols(session["active_protocols"])
+        femdom_context.set_submission_level(session.get("submission_level", 1))
+        
+        # Add context to the femdom context
+        if context:
+            femdom_context.update_session_data(context)
+        
+        # Generate a trace ID for this interaction
+        trace_id = gen_trace_id()
+        
+        # Run the dominance agent directly
         try:
-            # Ensure active session
-            session = await self._ensure_active_session(user_id)
-            context = context or {}
-            
-            # Get dominance level from session
-            dominance_level = session.get("dominance_level", 0.5)
-            
-            # Get requested response type from context or use default
-            response_type = context.get("response_type", "general")
-            intensity_override = context.get("intensity")
-            intensity = intensity_override if intensity_override is not None else dominance_level
-            
-            # Route to appropriate system based on requested type
-            if response_type.startswith("psychological_"):
-                # Psychological dominance response
-                if self.psychological_dominance:
-                    subtype = response_type.replace("psychological_", "")
-                    
-                    if subtype == "mindfuck":
-                        user_state = await self._get_user_state(user_id)
-                        return await self.psychological_dominance.generate_mindfuck(
-                            user_id, user_state, intensity
-                        )
-                    elif subtype == "gaslighting":
-                        return await self.psychological_dominance.apply_gaslighting(
-                            user_id, None, intensity
-                        )
-            
-            elif response_type.startswith("sadistic_"):
-                # Sadistic response
-                if self.sadistic_responses:
-                    subtype = response_type.replace("sadistic_", "")
-                    category = subtype if subtype in ["mockery", "amusement", "degradation"] else "amusement"
-                    
-                    return await self.sadistic_responses.generate_sadistic_amusement_response(
-                        user_id, intensity, category=category
-                    )
-            
-            elif response_type == "dominance_idea" or response_type == "general":
-                # Generate dominance ideas
-                if self.dominance_system:
-                    purpose = context.get("purpose", "general")
-                    intensity_range = f"{int(intensity * 10) - 2}-{int(intensity * 10)}"
-                    
-                    return await self.dominance_system.generate_dominance_ideas(
-                        user_id, purpose, intensity_range, intensity > 0.7
-                    )
-            
-            elif response_type == "orgasm_control":
-                # Orgasm control response
-                if self.orgasm_control:
-                    action = context.get("action", "process_permission_request")
-                    
-                    if action == "process_permission_request":
-                        request_text = context.get("request_text", "May I orgasm?")
-                        return await self.orgasm_control.process_permission_request(
-                            user_id, request_text, context
-                        )
-                    elif action == "start_denial":
-                        duration_hours = context.get("duration_hours", 24)
-                        level = min(5, int(intensity * 6))  # Scale 0-5
-                        
-                        return await self.orgasm_control.start_denial_period(
-                            user_id, duration_hours, level, context.get("begging_allowed", True)
-                        )
-            
-            elif response_type == "protocol_violation":
-                # Protocol violation response
-                dominance_bridge = self.integration_manager.bridges.get("dominance_coordinator")
-                if dominance_bridge:
-                    violation = context.get("violation", {})
-                    return await dominance_bridge.respond_to_violation(user_id, violation)
-            
-            # Default fallback - generate generic dominance idea
-            if self.dominance_system:
-                intensity_range = f"{int(intensity * 10) - 2}-{int(intensity * 10)}"
-                return await self.dominance_system.generate_dominance_ideas(
-                    user_id, "general", intensity_range, intensity > 0.7
+            result = await Runner.run(
+                starting_agent=self.dominance_agent,
+                input={
+                    "user_id": user_id,
+                    "request_type": "dominance_response",
+                    "context": context or {}
+                },
+                context=femdom_context,
+                run_config=RunConfig(
+                    workflow_name="DominanceResponse",
+                    trace_id=trace_id,
+                    group_id=user_id,
+                    trace_metadata={
+                        "user_id": user_id,
+                        "dominance_level": session["dominance_level"],
+                        "context_type": context.get("response_type", "general") if context else "general"
+                    }
                 )
+            )
             
-            # Ultimate fallback if no systems available
+            # Extract the response
+            response = result.final_output
+            
             return {
-                "success": False,
-                "message": "No dominance systems available",
-                "response": "I'm unable to generate a dominance response at this time."
+                "success": True,
+                "response": response.get("response", response),
+                "trace_id": trace_id
             }
             
         except Exception as e:
@@ -412,7 +801,8 @@ class FemdomCoordinator:
             return {
                 "success": False,
                 "error": str(e),
-                "response": "An error occurred while generating a dominance response."
+                "response": "An error occurred while generating a dominance response.",
+                "trace_id": trace_id
             }
     
     async def start_training_program(self, 
@@ -591,6 +981,14 @@ class FemdomCoordinator:
         return {
             "initialized": self.initialized,
             "active_sessions": len(self.active_sessions),
+            "agents": {
+                "main_agent": self.main_agent is not None,
+                "dominance_agent": self.dominance_agent is not None,
+                "protocol_agent": self.protocol_agent is not None,
+                "psychological_agent": self.psychological_agent is not None,
+                "submission_agent": self.submission_agent is not None,
+                "training_agent": self.training_agent is not None
+            },
             "components": {
                 "dominance_system": self.dominance_system is not None,
                 "body_service": self.body_service is not None,
@@ -600,6 +998,5 @@ class FemdomCoordinator:
                 "psychological_dominance": self.psychological_dominance is not None,
                 "sadistic_responses": self.sadistic_responses is not None,
                 "submission_progression": self.submission_progression is not None
-            },
-            "integration_manager": await self.integration_manager.get_status()
+            }
         }
