@@ -1320,106 +1320,59 @@ class MemoryManager:
             logger.error(f"Error during memory maintenance: {e}", exc_info=True)
             return {"consolidated": False, "error": str(e)}
 
-    async def _store_consolidated_memories(self, consolidated: Dict[str, Any]) -> None:
-        """Store consolidated memories in the database."""
-        try:
-            from db.connection import get_db_connection
-            import asyncpg
-            
-            conn = await asyncpg.connect(dsn=get_db_connection())
-            try:
-                for mem_type, summary in consolidated.items():
-                    await conn.execute("""
-                        INSERT INTO ConsolidatedMemories 
-                        (user_id, conversation_id, memory_type, summary, created_at)
-                        VALUES ($1, $2, $3, $4, NOW())
-                    """, self.user_id, self.conversation_id, mem_type, json.dumps(summary))
-            finally:
-                await conn.close()
-        except Exception as e:
-            logger.error(f"Error storing consolidated memories: {e}")
+    # Added close method stub (as mentioned in thoughts)
+    async def close(self):
+         """Perform cleanup if necessary."""
+         logger.info(f"Closing MemoryManager for {self.user_id}:{self.conversation_id}. (No specific actions implemented)")
+         # If there were specific resources to release per-manager instance, do it here.
+         pass
 
-    async def _generate_group_summary(self, memories: List[Memory]) -> Dict[str, Any]:
-        """Generate a summary for a group of memories."""
-        try:
-            # Sort by importance and recency
-            sorted_memories = sorted(
-                memories,
-                key=lambda x: (x.importance, x.last_accessed),
-                reverse=True
-            )
-            
-            # Get top memories
-            top_memories = sorted_memories[:5]
-            
-            # Generate summary
-            summary = {
-                "type": memories[0].memory_type,
-                "count": len(memories),
-                "time_span": {
-                    "start": min(m.created_at for m in memories),
-                    "end": max(m.created_at for m in memories)
-                },
-                "key_memories": [m.to_dict() for m in top_memories],
-                "importance_score": sum(m.importance for m in memories) / len(memories),
-                "tags": list(set(tag for m in memories for tag in m.tags))
-            }
-            
-            return summary
-        except Exception as e:
-            logger.error(f"Error generating group summary: {e}")
-            return {}
-
-    async def consolidate_memories(self, time_window: int = 7) -> None:
-        """Consolidate and summarize memories within a time window."""
-        try:
-            # Get memories in time window
-            memories = await self.get_recent_memories(days=time_window)
-            
-            # Group by type and importance
-            grouped_memories = defaultdict(list)
-            for memory in memories:
-                grouped_memories[memory.memory_type].append(memory)
-                
-            # Generate summaries for each group
-            consolidated = {}
-            for mem_type, mems in grouped_memories.items():
-                if len(mems) > 5:  # Only consolidate if enough memories
-                    summary = await self._generate_group_summary(mems)
-                    consolidated[mem_type] = summary
-                    
-            # Store consolidated memories
-            await self._store_consolidated_memories(consolidated)
-            
-            # Update local cache
-            self.memories.update(consolidated)
-            self._build_memory_indices()
-            
-        except Exception as e:
-            logger.error(f"Error consolidating memories: {e}")
-
-
-# Global manager registry
-_memory_managers = {}
+# --- Global Manager Registry and Factory ---
+_memory_managers: Dict[str, MemoryManager] = {}
+_manager_lock = asyncio.Lock() # Lock for managing the registry creation
 
 async def get_memory_manager(user_id: int, conversation_id: int) -> MemoryManager:
-    """Get or create a memory manager instance"""
+    """Get or create a memory manager instance asynchronously."""
     key = f"{user_id}:{conversation_id}"
-    
-    if key not in _memory_managers:
+
+    # Check if exists first without lock for performance
+    manager = _memory_managers.get(key)
+    if manager and manager.is_initialized:
+        return manager
+
+    # If not found or not initialized, acquire lock to create/initialize
+    async with _manager_lock:
+        # Double-check if it was created while waiting for the lock
+        manager = _memory_managers.get(key)
+        if manager and manager.is_initialized:
+            return manager
+
+        # Create and initialize the manager
+        logger.info(f"Creating new MemoryManager instance for {key}")
         manager = MemoryManager(user_id, conversation_id)
-        await manager.initialize()
-        _memory_managers[key] = manager
-    
-    return _memory_managers[key]
+        try:
+            await manager.initialize()
+            _memory_managers[key] = manager
+            return manager
+        except Exception as e:
+            # Initialization failed, don't store the broken manager
+            logger.critical(f"Failed to initialize MemoryManager for {key}: {e}", exc_info=True)
+            # Depending on requirements, maybe return a dummy/fallback manager or raise
+            raise RuntimeError(f"Failed to initialize MemoryManager for {key}") from e
+
 
 async def cleanup_memory_managers():
-    """Close all memory managers"""
+    """Close all registered memory managers."""
     global _memory_managers
-    
-    # Close each manager
-    for manager in _memory_managers.values():
-        await manager.close()
-    
-    # Clear registry
-    _memory_managers.clear()
+    logger.info(f"Cleaning up {len(_memory_managers)} memory managers...")
+    async with _manager_lock: # Ensure no creation happens during cleanup
+        managers_to_close = list(_memory_managers.values())
+        _memory_managers.clear() # Clear registry immediately
+
+    # Close managers outside the lock
+    for manager in managers_to_close:
+        try:
+            await manager.close()
+        except Exception as e:
+            logger.error(f"Error closing manager for {manager.user_id}:{manager.conversation_id}: {e}", exc_info=True)
+    logger.info("Memory managers cleanup complete.")
