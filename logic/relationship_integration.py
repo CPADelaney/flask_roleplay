@@ -11,7 +11,7 @@ import random
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 
 class RelationshipIntegration:
@@ -230,247 +230,258 @@ class RelationshipIntegration:
     
     async def add_npc_to_group(self, group_id: int, npc_id: int, role: str = "member") -> bool:
         """
-        Add an NPC to a group.
-        
+        Asynchronously add an NPC to a group.
+
         Args:
             group_id: ID of the group
             npc_id: ID of the NPC
             role: Role of the NPC in the group
-            
+
         Returns:
-            True if successful
+            True if successful, False otherwise.
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get group data
-            cursor.execute("""
-                SELECT group_data
-                FROM NPCGroups
-                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
-            """, (group_id, self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
-            if not row:
-                return False
-                
-            group_data = row[0]
-            if isinstance(group_data, str):
-                try:
-                    group_data = json.loads(group_data)
-                except json.JSONDecodeError:
+            async with get_db_connection_context() as conn:
+                # Use fetchrow which returns a Record or None
+                group_row = await conn.fetchrow("""
+                    SELECT group_data
+                    FROM NPCGroups
+                    WHERE group_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, group_id, self.user_id, self.conversation_id)
+
+                if not group_row:
+                    logger.warning(f"Group {group_id} not found for user {self.user_id}, convo {self.conversation_id}.")
                     return False
-            
-            # Get NPC data
-            cursor.execute("""
-                SELECT npc_name, dominance
-                FROM NPCStats
-                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            """, (npc_id, self.user_id, self.conversation_id))
-            
-            npc_row = cursor.fetchone()
-            if not npc_row:
-                return False
-                
-            npc_name, dominance = npc_row
-            
-            # Add NPC to group
-            members = group_data.get("members", [])
-            
-            # Check if NPC is already in group
-            for member in members:
-                if member.get("npc_id") == npc_id:
-                    return True
-            
-            # Add NPC to group
-            members.append({
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "dominance": dominance,
-                "joined_date": datetime.now().isoformat(),
-                "status": "active",
-                "role": role
-            })
-            
-            group_data["members"] = members
-            
-            # Update group data
-            cursor.execute("""
-                UPDATE NPCGroups
-                SET group_data=%s
-                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
-            """, (json.dumps(group_data), group_id, self.user_id, self.conversation_id))
-            
-            conn.commit()
-            return True
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error adding NPC to group: {e}")
+
+                # Assuming group_data might be stored as JSON text or JSONB
+                group_data = group_row['group_data'] # Access by column name
+                # asyncpg might return dict directly for JSONB, check if load needed
+                if isinstance(group_data, str):
+                    try:
+                        group_data = json.loads(group_data)
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON in group_data for group {group_id}.", exc_info=True)
+                        return False
+                elif group_data is None: # Handle case where data is NULL
+                    group_data = {}
+
+                # Get NPC data
+                npc_row = await conn.fetchrow("""
+                    SELECT npc_name, dominance
+                    FROM NPCStats
+                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, npc_id, self.user_id, self.conversation_id)
+
+                if not npc_row:
+                    logger.warning(f"NPC {npc_id} not found for user {self.user_id}, convo {self.conversation_id}.")
+                    return False
+
+                npc_name, dominance = npc_row['npc_name'], npc_row['dominance']
+
+                # Add NPC to group data structure
+                members = group_data.setdefault("members", []) # Use setdefault for safety
+
+                # Check if NPC is already in group
+                if any(member.get("npc_id") == npc_id for member in members):
+                     logger.info(f"NPC {npc_id} already in group {group_id}. Skipping add.")
+                     return True # Considered successful if already present
+
+                # Add new member
+                members.append({
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "dominance": dominance,
+                    "joined_date": datetime.now().isoformat(),
+                    "status": "active",
+                    "role": role
+                })
+
+                # Update group data in DB - Use json.dumps if column is TEXT/VARCHAR
+                # If column is JSON/JSONB, asyncpg might handle the dict directly
+                await conn.execute("""
+                    UPDATE NPCGroups
+                    SET group_data=$1
+                    WHERE group_id=$2 AND user_id=$3 AND conversation_id=$4
+                """, json.dumps(group_data), group_id, self.user_id, self.conversation_id)
+                # Alternative if column is JSON/JSONB:
+                # await conn.execute(..., group_data, group_id, ...)
+
+                logger.info(f"Successfully added NPC {npc_id} to group {group_id}.")
+                return True
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error adding NPC {npc_id} to group {group_id}: {db_err}", exc_info=True)
             return False
-        finally:
-            cursor.close()
-            conn.close()
+        except Exception as e:
+            logger.exception(f"Unexpected error adding NPC {npc_id} to group {group_id}: {e}")
+            return False
+        # No finally block needed for connection closing
     
     async def generate_group_dynamics(self, group_id: int) -> Dict[str, Any]:
         """
-        Generate group dynamics for a group of NPCs.
-        
+        Asynchronously generate group dynamics for a group of NPCs.
+
         Args:
             group_id: ID of the group
-            
+
         Returns:
-            Dictionary with group dynamics
+            Dictionary with group dynamics or error info.
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get group data
-            cursor.execute("""
-                SELECT group_data, group_name
-                FROM NPCGroups
-                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
-            """, (group_id, self.user_id, self.conversation_id))
+            async with get_db_connection_context() as conn:
+                # Get group data
+                group_row = await conn.fetchrow("""
+                    SELECT group_data, group_name
+                    FROM NPCGroups
+                    WHERE group_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, group_id, self.user_id, self.conversation_id)
+
+                if not group_row:
+                    logger.warning(f"Group {group_id} not found during dynamics generation.")
+                    return {"error": "Group not found"}
+
+                group_data = group_row['group_data']
+                group_name = group_row['group_name']
+
+                # Handle JSON loading
+                if isinstance(group_data, str):
+                    try:
+                        group_data = json.loads(group_data)
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON in group_data for group {group_id} during dynamics.", exc_info=True)
+                        return {"error": "Invalid group data"}
+                elif group_data is None:
+                    group_data = {}
+
+                # Generate dynamic relationships between members
+                members = group_data.setdefault("members", [])
+                member_ids = [m.get("npc_id") for m in members if m.get("npc_id") is not None]
             
-            row = cursor.fetchone()
-            if not row:
-                return {"error": "Group not found"}
+                relationships = []
+                # Use internal methods which already handle async DB access
+                for i in range(len(member_ids)):
+                    for j in range(i+1, len(member_ids)):
+                        npc1_id = member_ids[i]
+                        npc2_id = member_ids[j]
+
+                        # Check existing relationship (using updated internal method)
+                        rel = await self.get_relationship("npc", npc1_id, "npc", npc2_id)
+                        if not rel:
+                            # Create relationship (using updated internal method)
+                            rel_type = random.choice(["neutral", "alliance", "rivalry", "dominant", "submission"])
+                            rel = await self.create_relationship("npc", npc1_id, "npc", npc2_id, rel_type)
+
+                        relationships.append(rel)
+
+                # Generate random group events
+                events = []
+                if members: # Avoid sampling from empty list
+                    for _ in range(3):
+                        event_type = random.choice(["meeting", "conflict", "collaboration", "celebration", "crisis"])
+                                
+                    if event_type == "meeting":
+                        events.append(f"The group held a meeting to discuss their goals and plans.")
+                    elif event_type == "conflict":
+                        conflict_members = random.sample(members, min(2, len(members)))
+                        events.append(f"{conflict_members[0].get('npc_name')} and {conflict_members[1].get('npc_name')} had a disagreement about the group's direction.")
+                    elif event_type == "collaboration":
+                        events.append(f"The group worked together on a project, strengthening their bonds.")
+                    elif event_type == "celebration":
+                        events.append(f"The group celebrated a significant achievement together.")
+                    elif event_type == "crisis":
+                        events.append(f"The group faced a crisis that tested their unity and resolve.")
                 
-            group_data, group_name = row
-            if isinstance(group_data, str):
-                try:
-                    group_data = json.loads(group_data)
-                except json.JSONDecodeError:
-                    return {"error": "Invalid group data"}
-            
-            # Generate dynamic relationships between members
-            members = group_data.get("members", [])
-            member_ids = [m.get("npc_id") for m in members]
-            
-            relationships = []
-            for i in range(len(member_ids)):
-                for j in range(i+1, len(member_ids)):
-                    npc1_id = member_ids[i]
-                    npc2_id = member_ids[j]
-                    
-                    # Check existing relationship
-                    rel = await self.get_relationship("npc", npc1_id, "npc", npc2_id)
-                    if not rel:
-                        # Create relationship
-                        rel_type = random.choice(["neutral", "alliance", "rivalry", "dominant", "submission"])
-                        rel = await self.create_relationship("npc", npc1_id, "npc", npc2_id, rel_type)
-                    
-                    relationships.append(rel)
-            
-            # Generate random group events
-            events = []
-            for _ in range(3):
-                event_type = random.choice(["meeting", "conflict", "collaboration", "celebration", "crisis"])
+                # Update group dynamics
+                dynamics = group_data.get("dynamics", {})
+                if not dynamics:
+                    dynamics = {
+                        "hierarchy": random.randint(30, 70),
+                        "cohesion": random.randint(30, 70),
+                        "secrecy": random.randint(30, 70),
+                        "territoriality": random.randint(30, 70),
+                        "exclusivity": random.randint(30, 70)
+                    }
                 
-                if event_type == "meeting":
-                    events.append(f"The group held a meeting to discuss their goals and plans.")
-                elif event_type == "conflict":
-                    conflict_members = random.sample(members, min(2, len(members)))
-                    events.append(f"{conflict_members[0].get('npc_name')} and {conflict_members[1].get('npc_name')} had a disagreement about the group's direction.")
-                elif event_type == "collaboration":
-                    events.append(f"The group worked together on a project, strengthening their bonds.")
-                elif event_type == "celebration":
-                    events.append(f"The group celebrated a significant achievement together.")
-                elif event_type == "crisis":
-                    events.append(f"The group faced a crisis that tested their unity and resolve.")
-            
-            # Update group dynamics
-            dynamics = group_data.get("dynamics", {})
-            if not dynamics:
-                dynamics = {
-                    "hierarchy": random.randint(30, 70),
-                    "cohesion": random.randint(30, 70),
-                    "secrecy": random.randint(30, 70),
-                    "territoriality": random.randint(30, 70),
-                    "exclusivity": random.randint(30, 70)
+                # Update group data
+                group_data["dynamics"] = dynamics
+                group_data["shared_history"] = group_data.get("shared_history", []) + events
+                
+                # Update group data in DB
+                await conn.execute("""
+                    UPDATE NPCGroups
+                    SET group_data=$1
+                    WHERE group_id=$2 AND user_id=$3 AND conversation_id=$4
+                """, json.dumps(group_data), group_id, self.user_id, self.conversation_id)
+                
+                logger.info(f"Generated dynamics for group {group_id} ('{group_name}').")
+                return {
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "dynamics": dynamics,
+                    "events": events,
+                    "relationships": relationships
                 }
-            
-            # Update group data
-            group_data["dynamics"] = dynamics
-            group_data["shared_history"] = group_data.get("shared_history", []) + events
-            
-            cursor.execute("""
-                UPDATE NPCGroups
-                SET group_data=%s
-                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
-            """, (json.dumps(group_data), group_id, self.user_id, self.conversation_id))
-            
-            conn.commit()
-            
-            return {
-                "group_id": group_id,
-                "group_name": group_name,
-                "dynamics": dynamics,
-                "events": events,
-                "relationships": relationships
-            }
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error generating dynamics for group {group_id}: {db_err}", exc_info=True)
+            return {"error": f"Database error: {db_err}"}
         except Exception as e:
-            conn.rollback()
-            logging.error(f"Error generating group dynamics: {e}")
-            return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
-    
+            logger.exception(f"Unexpected error generating dynamics for group {group_id}: {e}")
+            return {"error": f"Unexpected error: {e}"}
+
+        
     async def generate_relationship_evolution(self, link_id: int) -> Dict[str, Any]:
         """
-        Generate relationship evolution information.
-        
+        Asynchronously generate relationship evolution information.
+
         Args:
             link_id: ID of the relationship link
-            
+
         Returns:
-            Dictionary with evolution information
+            Dictionary with evolution information or error info.
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         try:
-            # Get relationship data
-            cursor.execute("""
-                SELECT entity1_type, entity1_id, entity2_type, entity2_id,
-                       link_type, link_level, link_history, dynamics
-                FROM SocialLinks
-                WHERE link_id=%s AND user_id=%s AND conversation_id=%s
-            """, (link_id, self.user_id, self.conversation_id))
+            async with get_db_connection_context() as conn:
+                # Get relationship data
+                row = await conn.fetchrow("""
+                    SELECT entity1_type, entity1_id, entity2_type, entity2_id,
+                           link_type, link_level, link_history, dynamics
+                    FROM SocialLinks
+                    WHERE link_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, link_id, self.user_id, self.conversation_id)
+
+                if not row:
+                    logger.warning(f"Relationship link {link_id} not found for evolution.")
+                    return {"error": "Relationship not found"}
+
+                e1_type, e1_id, e2_type, e2_id = row['entity1_type'], row['entity1_id'], row['entity2_type'], row['entity2_id']
+                link_type, link_level = row['link_type'], row['link_level']
+                history_json, dynamics_json = row['link_history'], row['dynamics']
             
-            row = cursor.fetchone()
-            if not row:
-                return {"error": "Relationship not found"}
-                
-            e1_type, e1_id, e2_type, e2_id, link_type, link_level, history, dynamics_json = row
-            
-            # Get entity names
-            e1_name = await self.get_entity_name(e1_type, e1_id)
-            e2_name = await self.get_entity_name(e2_type, e2_id)
-            
-            # Parse dynamics
-            dynamics = {}
-            if dynamics_json:
-                if isinstance(dynamics_json, str):
-                    try:
-                        dynamics = json.loads(dynamics_json)
-                    except json.JSONDecodeError:
-                        dynamics = {}
-                else:
-                    dynamics = dynamics_json
-            
-            # Parse history
-            history_events = []
-            if history:
-                if isinstance(history, str):
-                    try:
-                        history_events = json.loads(history)
-                    except json.JSONDecodeError:
-                        history_events = []
-                else:
-                    history_events = history
+                # Get entity names (using updated internal method)
+                # Run concurrently for potential speedup
+                e1_name_task = asyncio.create_task(self.get_entity_name(e1_type, e1_id))
+                e2_name_task = asyncio.create_task(self.get_entity_name(e2_type, e2_id))
+                e1_name, e2_name = await e1_name_task, await e2_name_task
+
+                # Parse dynamics
+                dynamics = {}
+                if dynamics_json: # Check if not None first
+                    if isinstance(dynamics_json, str):
+                         try: dynamics = json.loads(dynamics_json)
+                         except json.JSONDecodeError: pass # Keep dynamics empty on error
+                    else: # Assume it's already a dict (e.g., from JSONB)
+                         dynamics = dynamics_json
+
+                # Parse history
+                history_events = []
+                if history_json: # Check if not None first
+                    if isinstance(history_json, str):
+                         try: history_events = json.loads(history_json)
+                         except json.JSONDecodeError: pass # Keep history empty on error
+                    else: # Assume it's already a list
+                         history_events = history_json
+
             
             # Generate potential future trajectories
             trajectories = []
@@ -562,82 +573,97 @@ class RelationshipIntegration:
     
     async def get_entity_name(self, entity_type: str, entity_id: int) -> str:
         """
-        Get the name of an entity.
-        
+        Asynchronously get the name of an entity.
+
         Args:
             entity_type: Type of entity
             entity_id: ID of entity
-            
+
         Returns:
-            Name of the entity
+            Name of the entity or a default string.
         """
+        # Handle player name directly
         if entity_type == "player":
-            return "Chase"
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+            # Consider making player name configurable if needed
+            return "Player" # Assuming "Chase" was player-specific, use generic "Player"
+
+        # Fetch NPC name from DB
         try:
-            cursor.execute("""
-                SELECT npc_name
-                FROM NPCStats
-                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            """, (entity_id, self.user_id, self.conversation_id))
-            
-            row = cursor.fetchone()
-            if row:
-                return row[0]
-            
-            return "Unknown NPC"
-        finally:
-            cursor.close()
-            conn.close()
-    
+            async with get_db_connection_context() as conn:
+                # Use fetchval to get a single value directly (npc_name or None)
+                npc_name = await conn.fetchval("""
+                    SELECT npc_name
+                    FROM NPCStats
+                    WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
+                """, entity_id, self.user_id, self.conversation_id)
+
+                return npc_name if npc_name else f"Unknown NPC ({entity_id})"
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error fetching name for {entity_type} {entity_id}: {db_err}", exc_info=True)
+            return f"DB Error ({entity_type} {entity_id})" # Return specific error string
+        except Exception as e:
+            logger.exception(f"Unexpected error fetching name for {entity_type} {entity_id}: {e}")
+            return f"Error ({entity_type} {entity_id})"
+
+
     async def get_player_relationships(self) -> List[Dict[str, Any]]:
         """
-        Get all relationships involving the player.
-        
+        Asynchronously get all relationships involving the player.
+
         Returns:
-            List of relationship data
+            List of relationship data. Returns empty list on error.
         """
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        relationships = []
         try:
-            # Get all relationships involving the player
-            cursor.execute("""
-                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
-                       link_type, link_level
-                FROM SocialLinks
-                WHERE user_id=%s AND conversation_id=%s
-                AND ((entity1_type='player' AND entity1_id=%s) OR 
-                     (entity2_type='player' AND entity2_id=%s))
-            """, (self.user_id, self.conversation_id, self.user_id, self.user_id))
-            
-            relationships = []
-            for row in cursor.fetchall():
-                link_id, e1_type, e1_id, e2_type, e2_id, link_type, link_level = row
-                
-                # Determine the NPC
-                if e1_type == "player":
-                    npc_type = e2_type
-                    npc_id = e2_id
-                else:
-                    npc_type = e1_type
-                    npc_id = e1_id
-                
-                # Get NPC name
-                npc_name = await self.get_entity_name(npc_type, npc_id)
-                
-                relationships.append({
-                    "link_id": link_id,
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "relationship_type": link_type,
-                    "relationship_level": link_level
-                })
-            
+            # Assuming player ID is the same as user ID for simplicity here
+            player_id = self.user_id
+
+            async with get_db_connection_context() as conn:
+                # Use fetch to get multiple rows
+                rows = await conn.fetch("""
+                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
+                           link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id=$1 AND conversation_id=$2
+                    AND ((entity1_type='player' AND entity1_id=$3) OR
+                         (entity2_type='player' AND entity2_id=$3))
+                """, self.user_id, self.conversation_id, player_id)
+
+                # Process rows concurrently if getting names is slow
+                tasks = []
+                for row in rows:
+                    link_id = row['link_id']
+                    link_type = row['link_type']
+                    link_level = row['link_level']
+
+                    # Determine the NPC involved
+                    if row['entity1_type'] == "player":
+                        npc_type, npc_id = row['entity2_type'], row['entity2_id']
+                    else:
+                        npc_type, npc_id = row['entity1_type'], row['entity1_id']
+
+                    # Create a task to get NPC name and append data
+                    async def fetch_and_format(lt, ll, nt, ni, lid):
+                         npc_name = await self.get_entity_name(nt, ni)
+                         return {
+                             "link_id": lid,
+                             "npc_id": ni,
+                             "npc_name": npc_name,
+                             "relationship_type": lt,
+                             "relationship_level": ll
+                         }
+                    tasks.append(fetch_and_format(link_type, link_level, npc_type, npc_id, link_id))
+
+                # Gather results from all tasks
+                if tasks:
+                    relationships = await asyncio.gather(*tasks)
+
             return relationships
-        finally:
-            cursor.close()
-            conn.close()
+
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Database error fetching player relationships for user {self.user_id}: {db_err}", exc_info=True)
+            return [] # Return empty list on error
+        except Exception as e:
+            logger.exception(f"Unexpected error fetching player relationships for user {self.user_id}: {e}")
+            return [] # Return empty list on error
