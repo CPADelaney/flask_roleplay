@@ -807,7 +807,9 @@ class EmotionalMemoryManager:
 # Create the necessary tables if they don't exist
 async def create_emotional_tables():
     """Create the necessary tables for the emotional memory system if they don't exist."""
-    async with TransactionContext() as conn:
+    from db.connection import get_db_connection_context
+    
+    async with get_db_connection_context() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS EntityEmotionalState (
                 user_id INTEGER NOT NULL,
