@@ -2101,215 +2101,228 @@ decision_engine_agent = Agent(
 class NPCDecisionEngine:
     """
     Decision-making engine for NPCs with integrated behavior evolution.
-    Combines original DecisionEngineSDK and BehaviorEvolution classes.
     """
-    
+
     @classmethod
     async def create(cls, npc_id: int, user_id: int, conversation_id: int) -> "NPCDecisionEngine":
-        """
-        Factory method to create an NPCDecisionEngine instance.
-        
-        Args:
-            npc_id: ID of the NPC
-            user_id: User ID
-            conversation_id: Conversation ID
-            
-        Returns:
-            An initialized NPCDecisionEngine instance
-        """
+        """Async factory method to create an NPCDecisionEngine instance."""
         self = cls(npc_id, user_id, conversation_id)
-        await self.initialize()
+        await self.initialize() # Call the async initializer
         return self
-    
+
     def __init__(self, npc_id: int, user_id: int, conversation_id: int):
-        """
-        Initialize a DecisionEngine instance.
-        
-        Args:
-            npc_id: ID of the NPC
-            user_id: User ID
-            conversation_id: Conversation ID
-        """
         self.npc_id = npc_id
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
-        # Create context
         self.context = DecisionContext(npc_id, user_id, conversation_id)
-        
-        # Create behavior evolution
+        # BehaviorEvolution instance is created, but DB calls happen in its methods
         self.behavior_evolution = BehaviorEvolution(user_id, conversation_id)
-    
+
+    # --- Updated to be async ---
     async def initialize(self) -> None:
-        """Initialize goals after getting NPC data."""
+        """Async initialization: Fetches initial NPC data and evolution factors."""
+        logger.info(f"Initializing NPCDecisionEngine for NPC {self.npc_id}")
         try:
+            # Use a wrapper for the context needed by the tool
             ctx_wrapper = RunContextWrapper(self.context)
-            npc_data = await get_npc_data(ctx_wrapper)
-            
-            if npc_data:
-                await self.initialize_long_term_goals(npc_data.model_dump())
-                
-            # Initialize behavior evolution factors
-            await self.update_behavior_evolution()
+            npc_data_model = await get_npc_data(ctx_wrapper) # Fetch initial data (hits DB)
+
+            # Initialize long-term goals based on fetched data
+            # Ensure npc_data_model is converted to dict if needed by initialize_long_term_goals
+            await self.initialize_long_term_goals(npc_data_model.model_dump())
+
+            # Initialize behavior evolution factors (hits DB)
+            await self.update_behavior_evolution_context() # Renamed method for clarity
+
+            logger.info(f"NPCDecisionEngine initialized successfully for NPC {self.npc_id}")
+
         except Exception as e:
-            logger.error(f"Error initializing NPCDecisionEngine: {e}")
-    
+            logger.critical(f"FATAL: Error initializing NPCDecisionEngine for NPC {self.npc_id}: {e}", exc_info=True)
+            # Depending on requirements, maybe raise this error or handle gracefully
+            # For now, logging critical and continuing might leave engine in bad state.
+
+    # --- Updated to be async ---
     async def decide(
-        self, 
-        perception: Dict[str, Any], 
-        available_actions: Optional[List[dict]] = None
+        self,
+        perception: Dict[str, Any], # Expects a dict, ideally matching NPCPerception schema
+        available_actions: Optional[List[dict]] = None # Optional input
     ) -> Dict[str, Any]:
         """
-        Evaluate the NPC's current state, context, personality, memories, and emotional state
-        to pick an action.
-        
-        Args:
-            perception: NPC's perception of the environment
-            available_actions: Optional list of action dicts the NPC could take
+        Asynchronously decide the NPC's next action.
+        """
+        with custom_span("NPCDecisionEngine.decide", attributes={"npc_id": self.npc_id}):
+            logger.debug(f"Starting decision cycle for NPC {self.npc_id}")
+            # Store perception in context (ensure it's a dict)
+            try:
+                # Validate perception if possible, or just store
+                 self.context.perception = NPCPerception(**perception).model_dump() # Validate & store dict
+            except Exception as p_err:
+                 logger.error(f"Invalid perception data for NPC {self.npc_id}: {p_err}. Using raw dict.", exc_info=True)
+                 self.context.perception = perception # Store raw dict if validation fails
+
+            # Optional: Update behavior factors every decision cycle? Or less frequently?
+            # If less frequently, move this call elsewhere (e.g., periodic background task)
+            # await self.update_behavior_evolution_context()
+
+            # --- Agent Runner Call ---
+            # The agent runner executes the tools (get_npc_data, score_actions etc.) which handle DB access
+            try:
+                 result = await Runner.run(
+                     decision_engine_agent,
+                     f"Make a decision for NPC {self.npc_id} based on perception and context.",
+                     context=self.context # Pass the DecisionContext object
+                 )
+
+                 chosen_action = result.final_output
+
+                 # Convert back to dict for external usage
+                 if isinstance(chosen_action, NPCAction):
+                     logger.info(f"NPC {self.npc_id} chose action: {chosen_action.type}")
+                     return chosen_action.model_dump()
+                 elif isinstance(chosen_action, dict):
+                      logger.info(f"NPC {self.npc_id} chose action (dict): {chosen_action.get('type', 'Unknown')}")
+                      return chosen_action # Assume it's already a dict
+                 else:
+                      logger.error(f"Decision engine for NPC {self.npc_id} returned unexpected type: {type(chosen_action)}. Returning default idle action.")
+                      # Fallback action
+                      return NPCAction(type="idle", description="Engine error resulted in idle", target="self").model_dump()
+
+            except Exception as agent_err:
+                logger.error(f"Error running decision engine agent for NPC {self.npc_id}: {agent_err}", exc_info=True)
+                # Fallback action on agent error
+                return NPCAction(type="idle", description="Agent execution error", target="self").model_dump()
+
+
+    # --- Updated to be async, takes dict ---
+    async def initialize_long_term_goals(self, npc_data_dict: Dict[str, Any]) -> None:
+        """
+        Initialize NPC's long-term goals based on personality dict. (No DB calls here)
+        """
+        with function_span("initialize_long_term_goals", attributes={"npc_id": self.npc_id}):
+            self.context.long_term_goals = [] # Reset goals
+
+            # Use .get() for safe access
+            dominance = npc_data_dict.get("dominance", 50.0)
+            cruelty = npc_data_dict.get("cruelty", 50.0)
+            traits = npc_data_dict.get("personality_traits", [])
+            # Assuming archetypes might be added later or come from elsewhere
+            archetypes = npc_data_dict.get("archetypes", [])
+
+            # --- Goal definition logic (remains the same) ---
+            if dominance > 75:
+                self.context.long_term_goals.append({
+                    "type": "dominance",
+                    "description": "Assert complete control over submissives",
+                    "importance": 0.9,
+                    "progress": 0,
+                    "target_entity": "player"
+                })
+            elif dominance > 60:
+                self.context.long_term_goals.append({
+                    "type": "dominance",
+                    "description": "Establish authority in social hierarchy",
+                    "importance": 0.8,
+                    "progress": 0,
+                    "target_entity": None
+                })
+            elif dominance < 30:
+                self.context.long_term_goals.append({
+                    "type": "submission",
+                    "description": "Find strong dominant to serve",
+                    "importance": 0.8,
+                    "progress": 0,
+                    "target_entity": None
+                })
             
-        Returns:
-            The chosen action (dict format)
+            # Create goals based on cruelty
+            if cruelty > 70:
+                self.context.long_term_goals.append({
+                    "type": "sadism",
+                    "description": "Break down resistances through humiliation",
+                    "importance": 0.85,
+                    "progress": 0,
+                    "target_entity": "player"
+                })
+            elif cruelty < 30 and dominance > 60:
+                self.context.long_term_goals.append({
+                    "type": "guidance",
+                    "description": "Guide submissives to growth through guidance",
+                    "importance": 0.75,
+                    "progress": 0,
+                    "target_entity": "player"
+                })
+            
+            # Personality traits
+            if "ambitious" in traits:
+                self.context.long_term_goals.append({
+                    "type": "power",
+                    "description": "Increase social influence and control",
+                    "importance": 0.85,
+                    "progress": 0,
+                    "target_entity": None
+                })
+            if "protective" in traits:
+                self.context.long_term_goals.append({
+                    "type": "protection",
+                    "description": "Ensure the safety and well-being of those in care",
+                    "importance": 0.8,
+                    "progress": 0,
+                    "target_entity": "player" if dominance > 50 else None
+                })
+            
+            # Archetypes
+            if isinstance(archetypes, list):
+                for arch in archetypes:
+                    arch_name = arch if isinstance(arch, str) else arch.get("name", "") if isinstance(arch, dict) else ""
+                    
+                    if "mentor" in arch_name.lower():
+                        self.context.long_term_goals.append({
+                            "type": "development",
+                            "description": "Guide the development of the player",
+                            "importance": 0.9,
+                            "progress": 0,
+                            "target_entity": "player"
+                        })
+                    elif "seductress" in arch_name.lower():
+                        self.context.long_term_goals.append({
+                            "type": "seduction",
+                            "description": "Gradually increase player's dependency and devotion",
+                            "importance": 0.9,
+                            "progress": 0,
+                            "target_entity": "player"
+                        })
+
+            logger.debug(f"Initialized {len(self.context.long_term_goals)} long-term goals for NPC {self.npc_id}")
+
+
+    # --- Renamed and uses BehaviorEvolution methods ---
+    async def update_behavior_evolution_context(self) -> None:
         """
-        # Store perception
-        self.context.perception = perception
-        
-        # Convert available_actions to NPCAction objects if provided
-        if available_actions:
-            action_options = [NPCAction(**act) for act in available_actions]
-        else:
-            action_options = None
-        
-        # Run the decision agent
-        result = await Runner.run(
-            decision_engine_agent,
-            f"Make a decision for NPC {self.npc_id}",
-            context=self.context
-        )
-        
-        # Grab the final action
-        chosen_action = result.final_output
-        
-        # Convert back to dict for external usage
-        if isinstance(chosen_action, NPCAction):
-            return chosen_action.model_dump()
-        else:
-            return chosen_action
-    
-    async def initialize_long_term_goals(self, npc_data: Dict[str, Any]) -> None:
+        Update the NPC's behavior evolution factors in the context by calling BehaviorEvolution.
+        This method handles the DB interactions via the BehaviorEvolution class.
         """
-        Initialize NPC's long-term goals based on personality and archetype.
-        """
-        self.context.long_term_goals = []
-        
-        dominance = npc_data.get("dominance", 50)
-        cruelty = npc_data.get("cruelty", 50)
-        traits = npc_data.get("personality_traits", [])
-        archetypes = npc_data.get("archetypes", [])
-        
-        # Create goals based on dominance
-        if dominance > 75:
-            self.context.long_term_goals.append({
-                "type": "dominance",
-                "description": "Assert complete control over submissives",
-                "importance": 0.9,
-                "progress": 0,
-                "target_entity": "player"
-            })
-        elif dominance > 60:
-            self.context.long_term_goals.append({
-                "type": "dominance",
-                "description": "Establish authority in social hierarchy",
-                "importance": 0.8,
-                "progress": 0,
-                "target_entity": None
-            })
-        elif dominance < 30:
-            self.context.long_term_goals.append({
-                "type": "submission",
-                "description": "Find strong dominant to serve",
-                "importance": 0.8,
-                "progress": 0,
-                "target_entity": None
-            })
-        
-        # Create goals based on cruelty
-        if cruelty > 70:
-            self.context.long_term_goals.append({
-                "type": "sadism",
-                "description": "Break down resistances through humiliation",
-                "importance": 0.85,
-                "progress": 0,
-                "target_entity": "player"
-            })
-        elif cruelty < 30 and dominance > 60:
-            self.context.long_term_goals.append({
-                "type": "guidance",
-                "description": "Guide submissives to growth through guidance",
-                "importance": 0.75,
-                "progress": 0,
-                "target_entity": "player"
-            })
-        
-        # Personality traits
-        if "ambitious" in traits:
-            self.context.long_term_goals.append({
-                "type": "power",
-                "description": "Increase social influence and control",
-                "importance": 0.85,
-                "progress": 0,
-                "target_entity": None
-            })
-        if "protective" in traits:
-            self.context.long_term_goals.append({
-                "type": "protection",
-                "description": "Ensure the safety and well-being of those in care",
-                "importance": 0.8,
-                "progress": 0,
-                "target_entity": "player" if dominance > 50 else None
-            })
-        
-        # Archetypes
-        if isinstance(archetypes, list):
-            for arch in archetypes:
-                arch_name = arch if isinstance(arch, str) else arch.get("name", "") if isinstance(arch, dict) else ""
-                
-                if "mentor" in arch_name.lower():
-                    self.context.long_term_goals.append({
-                        "type": "development",
-                        "description": "Guide the development of the player",
-                        "importance": 0.9,
-                        "progress": 0,
-                        "target_entity": "player"
-                    })
-                elif "seductress" in arch_name.lower():
-                    self.context.long_term_goals.append({
-                        "type": "seduction",
-                        "description": "Gradually increase player's dependency and devotion",
-                        "importance": 0.9,
-                        "progress": 0,
-                        "target_entity": "player"
-                    })
-    
-    async def update_behavior_evolution(self) -> Dict[str, Any]:
-        """
-        Update the NPC's behavior evolution factors.
-        
-        Returns:
-            Updated behavior evolution factors
-        """
-        with function_span("update_behavior_evolution"):
+        with function_span("update_behavior_evolution_context", attributes={"npc_id": self.npc_id}):
+            logger.debug(f"Updating behavior evolution factors for NPC {self.npc_id}")
+            # evaluate_npc_scheming fetches data and calculates adjustments
             adjustments = await self.behavior_evolution.evaluate_npc_scheming(self.npc_id)
-            await self.behavior_evolution.apply_scheming_adjustments(self.npc_id, adjustments)
-            
-            # Update context
-            self.context.behavior_evolution_factors = BehaviorEvolFactors(
-                scheme_level=adjustments.get("scheme_level", 0),
-                trust_modifiers=adjustments.get("trust_modifiers", {}),
-                loyalty_tests=adjustments.get("loyalty_tests", 0),
-                betrayal_planning=adjustments.get("betrayal_planning", False),
-                targeting_player=adjustments.get("targeting_player", False),
-                npc_recruits=adjustments.get("npc_recruits", []),
-                paranoia_level=adjustments.get("paranoia_level", 0)
-            )
-            
-            return adjustments
+
+            if "error" not in adjustments:
+                # apply_scheming_adjustments updates the database
+                await self.behavior_evolution.apply_scheming_adjustments(self.npc_id, adjustments)
+
+                # Update the context object with the results
+                self.context.behavior_evolution_factors = BehaviorEvolFactors(
+                    scheme_level=adjustments.get("scheme_level", 0),
+                    trust_modifiers=adjustments.get("trust_modifiers", {}),
+                    loyalty_tests=adjustments.get("loyalty_tests", 0),
+                    betrayal_planning=adjustments.get("betrayal_planning", False),
+                    targeting_player=adjustments.get("targeting_player", False),
+                    npc_recruits=adjustments.get("npc_recruits", []),
+                    paranoia_level=adjustments.get("paranoia_level", 0),
+                    adaptation_score=adjustments.get("adaptation_score", 0.0)
+                )
+                logger.debug(f"Behavior evolution context updated for NPC {self.npc_id}")
+            else:
+                logger.error(f"Failed to update behavior evolution context for NPC {self.npc_id} due to evaluation error: {adjustments['error']}")
+                # Optionally clear or set default factors in context on error?
+                # self.context.behavior_evolution_factors = BehaviorEvolFactors() # Reset on error?
