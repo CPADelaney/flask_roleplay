@@ -13,6 +13,9 @@ except ImportError:
     ASYNCPG_AVAILABLE = False
     logging.warning("asyncpg not available, falling back to synchronous connections")
 
+# Import database connections
+from db.connection import get_db_connection_context
+
 # Import config values from environment
 from os import environ
 
@@ -25,123 +28,28 @@ DB_STATEMENT_TIMEOUT = int(environ.get("DB_STATEMENT_TIMEOUT", "60"))
 DB_STATEMENT_LIFETIME = int(environ.get("DB_STATEMENT_LIFETIME", "300"))
 DB_INACTIVE_CONN_LIFETIME = int(environ.get("DB_INACTIVE_CONN_LIFETIME", "300"))
 
-# Global connection pool
-DB_POOL = None
-
-async def initialize_db_pool():
-    """Initialize the database connection pool once at application startup."""
-    global DB_POOL
-    try:
-        if not ASYNCPG_AVAILABLE:
-            logging.warning("Cannot initialize pool: asyncpg not available")
-            return None
-            
-        if DB_POOL is None:
-            DB_POOL = await asyncpg.create_pool(
-                dsn=DB_DSN,
-                min_size=DB_MIN_CONN,
-                max_size=DB_MAX_CONN,
-                command_timeout=DB_COMMAND_TIMEOUT,
-                statement_timeout=DB_STATEMENT_TIMEOUT,
-                max_cached_statement_lifetime=DB_STATEMENT_LIFETIME,
-                max_inactive_connection_lifetime=DB_INACTIVE_CONN_LIFETIME
-            )
-            logging.info("Database connection pool initialized")
-            return DB_POOL
-    except Exception as e:
-        logging.error(f"Error initializing DB pool: {e}")
-        return None
-
-async def get_db_connection_async():
-    """Get an async database connection from the pool."""
-    global DB_POOL
-    
-    if not ASYNCPG_AVAILABLE:
-        raise ImportError("asyncpg not available")
-        
-    if DB_POOL is not None:
-        return await DB_POOL.acquire()
-    else:
-        # Try to initialize pool
-        await initialize_db_pool()
-        if DB_POOL is not None:
-            return await DB_POOL.acquire()
-        else:
-            # Fallback to creating individual connections
-            return await asyncpg.connect(dsn=DB_DSN)
-
 @contextlib.asynccontextmanager
 async def db_transaction():
     """Context manager for database transactions."""
-    conn = None
-    try:
-        conn = await get_db_connection_async()
+    async with get_db_connection_context() as conn:
         async with conn.transaction():
             yield conn
-    finally:
-        if conn:
-            if DB_POOL is not None:
-                await DB_POOL.release(conn)
-            else:
-                await conn.close()
 
 @contextlib.asynccontextmanager
 async def db_transaction_with_timeout(timeout_seconds=10):
     """Context manager for database transactions with explicit timeout."""
-    conn = None
     timeout_task = None
-    operation_task = None
     
     try:
         # Start timeout
-        loop = asyncio.get_event_loop()
-        conn_future = loop.create_future()
-        
-        # Create a task for getting connection
-        async def get_conn():
-            try:
-                connection = await get_db_connection_async()
-                if not conn_future.done():
-                    conn_future.set_result(connection)
-            except Exception as e:
-                if not conn_future.done():
-                    conn_future.set_exception(e)
-        
-        # Create tasks for timeout and connection
         timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
-        operation_task = asyncio.create_task(get_conn())
         
-        # Wait for either connection or timeout
-        done, pending = await asyncio.wait(
-            [timeout_task, conn_future],
-            return_when=asyncio.FIRST_COMPLETED
-        )
-        
-        # Cancel pending tasks
-        for task in pending:
-            task.cancel()
-            
-        # Check if we timed out
-        if timeout_task in done:
-            raise asyncio.TimeoutError(f"Database connection timed out after {timeout_seconds} seconds")
-            
-        # Get connection
-        conn = conn_future.result()
-        
-        # Enter transaction with timeout
-        tr = conn.transaction()
-        await tr.start()
-        
-        try:
-            yield conn
-            await tr.commit()
-        except Exception:
-            try:
-                await tr.rollback()
-            except Exception as e:
-                logging.error(f"Error rolling back transaction: {e}")
-            raise
-            
+        # Start both tasks
+        async with asyncio.timeout(timeout_seconds):
+            async with get_db_connection_context() as conn:
+                async with conn.transaction():
+                    yield conn
+                    
     except asyncio.TimeoutError:
         logging.error(f"Database operation timed out after {timeout_seconds} seconds")
         raise
@@ -152,18 +60,6 @@ async def db_transaction_with_timeout(timeout_seconds=10):
         # Clean up tasks
         if timeout_task and not timeout_task.done():
             timeout_task.cancel()
-        if operation_task and not operation_task.done():
-            operation_task.cancel()
-            
-        # Clean up connection
-        if conn:
-            try:
-                if DB_POOL is not None:
-                    await DB_POOL.release(conn)
-                else:
-                    await conn.close()
-            except Exception as e:
-                logging.error(f"Error releasing connection: {e}")
 
 async def with_transaction(callback, *args, **kwargs):
     """
