@@ -9,6 +9,7 @@ from npcs.npc_agent import NPCAgent
 from npcs.npc_agent_system import NPCAgentSystem
 from nyx.nyx_governance import NyxGovernor, DirectiveType, DirectivePriority
 from memory.memory_nyx_integration import get_memory_nyx_bridge
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,8 @@ class NyxNPCBridge:
     async def get_npc_system(self) -> NPCAgentSystem:
         """Lazy-load the NPC system."""
         if self.npc_system is None:
-            # You'll need to properly initialize this with your connection pool
-            from db.connection import get_db_connection
-            import asyncpg
-            
-            pool = await asyncpg.create_pool(dsn=get_db_connection())
-            self.npc_system = NPCAgentSystem(self.user_id, self.conversation_id, pool)
+            # Updated to use async connection pool
+            self.npc_system = NPCAgentSystem(self.user_id, self.conversation_id, None)
             await self.npc_system.initialize_agents()
         return self.npc_system
     
