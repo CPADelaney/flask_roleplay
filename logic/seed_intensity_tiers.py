@@ -1,17 +1,16 @@
 # logic/seed_intensity_tiers.py
 import json
 import logging
-from db.connection import get_db_connection
+import asyncio
+import asyncpg
+from db.connection import get_db_connection_context
 
-def create_and_seed_intensity_tiers():
+async def create_and_seed_intensity_tiers():
     """
     Creates the IntensityTiers table if it doesn't exist, then inserts the rows
     matching the content from your design doc. 
     If rows already exist, you can decide whether to skip, update, or override.
     """
-    conn = get_db_connection()
-    cur = conn.cursor()
-
     logging.info("Creating IntensityTiers table if not exists...")
 
     # 1) Create table if needed
@@ -27,16 +26,8 @@ def create_and_seed_intensity_tiers():
       permanent_effects JSONB
     );
     """
-    cur.execute(create_table_sql)
-
-    # 2) Optionally clear existing rows or check if they're present
-    # cur.execute("DELETE FROM IntensityTiers;")
-
-    logging.info("Inserting or updating IntensityTiers rows...")
-
-    # We'll define some data structures in Python, then insert them
-    # You can combine or reorganize the data as you prefer.
-
+    
+    # 2) Define the tiers data
     tiers_data = [
         {
             "tier_name": "Low Intensity (0–30)",
@@ -175,26 +166,37 @@ def create_and_seed_intensity_tiers():
         }
     ]
 
-    insert_sql = """
-    INSERT INTO IntensityTiers (
-      tier_name, range_min, range_max, description, key_features, activity_examples, permanent_effects
-    )
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """
-
-    for tier in tiers_data:
-        cur.execute(insert_sql, (
-            tier["tier_name"],
-            tier["range_min"],
-            tier["range_max"],
-            tier["description"],
-            json.dumps(tier["key_features"]),   # key_features => JSON
-            json.dumps(tier["activity_examples"]),
-            json.dumps(tier["permanent_effects"])
-        ))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    logging.info("Successfully inserted IntensityTiers data.")
+    try:
+        async with get_db_connection_context() as conn:
+            # Create table
+            await conn.execute(create_table_sql)
+            
+            # Insert tiers data
+            for tier in tiers_data:
+                await conn.execute("""
+                INSERT INTO IntensityTiers (
+                  tier_name, range_min, range_max, description, key_features, activity_examples, permanent_effects
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (tier_name) DO UPDATE SET
+                  range_min = EXCLUDED.range_min,
+                  range_max = EXCLUDED.range_max,
+                  description = EXCLUDED.description,
+                  key_features = EXCLUDED.key_features,
+                  activity_examples = EXCLUDED.activity_examples,
+                  permanent_effects = EXCLUDED.permanent_effects
+                """, 
+                tier["tier_name"],
+                tier["range_min"],
+                tier["range_max"],
+                tier["description"],
+                json.dumps(tier["key_features"]),
+                json.dumps(tier["activity_examples"]),
+                json.dumps(tier["permanent_effects"])
+                )
+            
+            logging.info("Successfully inserted IntensityTiers data.")
+    except asyncpg.PostgresError as e:
+        logging.error(f"Database error in create_and_seed_intensity_tiers: {e}", exc_info=True)
+    except Exception as e:
+        logging.error(f"Unexpected error in create_and_seed_intensity_tiers: {e}", exc_info=True)
