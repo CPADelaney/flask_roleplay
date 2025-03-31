@@ -5,8 +5,8 @@ import logging
 import functools
 import time 
 import openai
-from typing import Dict, Any
-from db.connection import get_db_connection
+from typing import Dict, List, Any, Optional, Union
+from db.connection import get_db_connection_context  # Updated to context manager
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
@@ -48,15 +48,15 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     }
                 },
                 "additionalProperties": False,
-                "description": "Chase’s detailed weekly schedule."
+                "description": "Chase's detailed weekly schedule."
             },
             "MainQuest": {
                 "type": "string",
-                "description": "Summary of Chase’s main quest."
+                "description": "Summary of Chase's main quest."
             },
             "PlayerRole": {
                 "type": "string",
-                "description": "Chase’s typical day/role in this environment."
+                "description": "Chase's typical day/role in this environment."
             },
             "npc_creations": {
                 "type": "array",
@@ -403,10 +403,6 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     }
 }
 
-
-
-
-
 def get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -414,31 +410,43 @@ def get_openai_client():
     openai.api_key = api_key
     return openai
 
-def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT sender, content
-        FROM messages
-        WHERE conversation_id=%s
-        ORDER BY id DESC
-        LIMIT %s
-    """, (conversation_id, limit))
-    rows = cur.fetchall()
-    conn.close()
+async def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
+    """
+    Build message history using async DB connection
+    """
+    try:
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch("""
+                SELECT sender, content
+                FROM messages
+                WHERE conversation_id=$1
+                ORDER BY id DESC
+                LIMIT $2
+            """, conversation_id, limit)
+            
+        # Convert to list and reverse for oldest first
+        messages_data = [(row['sender'], row['content']) for row in rows]
+        messages_data.reverse()  # Oldest first
+        
+        chat_history = []
+        for sender, content in messages_data:
+            role = "user" if sender.lower() == "user" else "assistant"
+            chat_history.append({"role": role, "content": content})
 
-    rows.reverse()  # Oldest first
-    chat_history = []
-    for sender, content in rows:
-        role = "user" if sender.lower() == "user" else "assistant"
-        chat_history.append({"role": role, "content": content})
-
-    messages = []
-    messages.append({"role": "system", "content": SYSTEM_PROMPT})
-    messages.append({"role": "system", "content": aggregator_text})
-    messages.extend(chat_history)
-    messages.append({"role": "user", "content": user_input})
-    return messages
+        messages = []
+        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        messages.append({"role": "system", "content": aggregator_text})
+        messages.extend(chat_history)
+        messages.append({"role": "user", "content": user_input})
+        return messages
+    except Exception as e:
+        logging.error(f"Error building message history: {e}")
+        # Return a minimal set of messages in case of error
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": aggregator_text},
+            {"role": "user", "content": user_input}
+        ]
 
 def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
     def decorator_retry(func):
@@ -458,24 +466,25 @@ def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, excepti
 
 
 @retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
-def get_chatgpt_response(
+async def get_chatgpt_response(
     conversation_id: int, 
     aggregator_text: str, 
     user_input: str,
     reflection_enabled: bool = False
 ) -> dict[str, Any]:
     """
-    Get a response from OpenAI with an optional hidden reflection step. 
+    Get a response from OpenAI with an optional hidden reflection step.
     When reflection_enabled=True, it first requests an internal reflection in JSON, 
     then uses that hidden reflection to generate the final user-facing text.
     """
 
     # 1) Identify the user_id for this conversation
-    conn = get_db_connection()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
-            row = cur.fetchone()
+    try:
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                "SELECT user_id FROM conversations WHERE id = $1", 
+                conversation_id
+            )
             if not row:
                 logging.error(f"Conversation {conversation_id} not found")
                 return {
@@ -483,12 +492,19 @@ def get_chatgpt_response(
                     "response": "Error: Conversation not found",
                     "tokens_used": 0
                 }
-            user_id = row[0]
+            user_id = row['user_id']
+    except Exception as e:
+        logging.error(f"Error getting user_id for conversation {conversation_id}: {e}")
+        return {
+            "type": "text",
+            "response": "Error: Database error",
+            "tokens_used": 0
+        }
 
     # 2) Possibly retrieve or build a system prompt that includes image guidance
     #    (If your code merges that with PUBLIC_SYSTEM_PROMPT, do so accordingly.)
     image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
-    # For demonstration, we’ll just store it or ignore it. 
+    # For demonstration, we'll just store it or ignore it. 
     # You might want to merge it with your normal PUBLIC_SYSTEM_PROMPT text.
 
     # 3) Create the OpenAI client
@@ -497,7 +513,7 @@ def get_chatgpt_response(
     # 4) If reflection is OFF, do the single-step call as before
     if not reflection_enabled:
         # Build message history (past user & assistant messages), up to 15
-        raw_history = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+        raw_history = await build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
         # Create the final messages array
         # You have two system prompts + the user message + the chat history
@@ -554,7 +570,6 @@ def get_chatgpt_response(
             }
 
     # 5) If reflection is ON, do a two-step approach
-
     else:
         ### STEP A: Reflection Request ###
         # We ask the model for a short JSON reflection (chain-of-thought) about the user input
@@ -630,7 +645,7 @@ DO NOT produce user-facing text here; only the JSON.
             {"role": "user", "content": user_input}
         ]
         # If you want to include the prior chat history:
-        # final_messages.extend(build_message_history(conversation_id, aggregator_text, user_input, limit=15))
+        # final_messages.extend(await build_message_history(conversation_id, aggregator_text, user_input, limit=15))
 
         final_response = openai_client.chat.completions.create(
             model="gpt-4o",
