@@ -1,3 +1,5 @@
+# lore/unified_manager.py
+
 """
 Unified Manager with Resource Management
 
