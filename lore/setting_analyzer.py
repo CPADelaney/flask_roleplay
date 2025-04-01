@@ -1,4 +1,4 @@
-# setting_analyzer.py
+# lore/setting_analyzer.py
 
 import logging
 import json
