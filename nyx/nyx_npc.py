@@ -1,3 +1,5 @@
+# nyx/nyx_npc.py
+
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 import random
