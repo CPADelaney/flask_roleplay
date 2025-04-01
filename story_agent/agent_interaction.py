@@ -43,6 +43,9 @@ from story_agent.progressive_summarization import (
     SummaryLevel
 )
 
+# Database connection
+from db.connection import get_db_connection_context
+
 logger = logging.getLogger(__name__)
 
 # ----- Orchestration Functions -----
@@ -173,15 +176,14 @@ async def orchestrate_conflict_analysis_and_narrative(
             elif "metadata" in result and "entity_id" in result["metadata"]:
                 # Try to get NPC name from database
                 try:
-                    import asyncpg
-                    conn = await asyncpg.connect(dsn=None)  # Connection string will be retrieved from config
-                    row = await conn.fetchrow(
-                        "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
-                        int(result["metadata"]["entity_id"])
-                    )
-                    if row:
-                        npc_names.append(row["npc_name"])
-                    await conn.close()
+                    # Using the new async context manager for database connection
+                    async with get_db_connection_context() as conn:
+                        row = await conn.fetchrow(
+                            "SELECT npc_name FROM NPCStats WHERE npc_id = $1",
+                            int(result["metadata"]["entity_id"])
+                        )
+                        if row:
+                            npc_names.append(row["npc_name"])
                 except Exception as db_error:
                     logger.warning(f"Error retrieving NPC name: {db_error}")
         
