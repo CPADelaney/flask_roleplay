@@ -1,3 +1,5 @@
+# lore/config.py
+
 """
 Unified Configuration System
 
