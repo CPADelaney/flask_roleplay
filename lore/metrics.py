@@ -1,3 +1,5 @@
+# lore/metrics.py
+
 """
 Unified Metrics System
 
