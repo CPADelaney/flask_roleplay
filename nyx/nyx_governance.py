@@ -36,7 +36,7 @@ from db.connection import get_db_connection_context
 
 # Memory system references
 from memory.wrapper import MemorySystem
-from nyx.nyx_memory_system import NyxMemorySystem
+from memory.memory_nyx_integration.py import MemoryNyxBridge
 
 # Integration with LLM services for reasoning
 from nyx.llm_integration import generate_text_completion, generate_reflection
