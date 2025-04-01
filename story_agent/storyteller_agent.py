@@ -19,13 +19,15 @@ import json
 import asyncio
 import time
 import os
-import asyncpg
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
 from math import floor
 
 from agents import Agent, Runner, function_tool, handoff
 from pydantic import BaseModel, Field
+
+# Database connection
+from db.connection import get_db_connection_context
 
 # Comprehensive Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -1130,9 +1132,8 @@ class StorytellerAgent:
         except Exception as e:
             logger.warning(f"Error getting NPCs from context system: {e}, falling back to database")
         
-        # Fallback to direct database query
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        # Fallback to direct database query using the new async context manager
+        async with get_db_connection_context() as conn:
             if location:
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, current_location, dominance, cruelty, 
@@ -1176,8 +1177,6 @@ class StorytellerAgent:
                 })
             
             return nearby_npcs
-        finally:
-            await conn.close()
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "get_current_game_time")
     async def get_current_game_time(self, ctx):
@@ -1209,9 +1208,8 @@ class StorytellerAgent:
         except Exception as e:
             logger.warning(f"Error getting time from context system: {e}, falling back to database")
         
-        # Fallback to direct database query
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        # Fallback to direct database query using the new async context manager
+        async with get_db_connection_context() as conn:
             year, month, day, time_of_day = 1, 1, 1, "Morning"
             
             for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
@@ -1232,8 +1230,6 @@ class StorytellerAgent:
                         time_of_day = row["value"]
             
             return year, month, day, time_of_day
-        finally:
-            await conn.close()
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
@@ -1412,8 +1408,8 @@ class StorytellerAgent:
             
             # If time advanced and confirmed, update the database
             if time_result.time_advanced and confirm_advance:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-                try:
+                # Use the new async context manager for the database connection
+                async with get_db_connection_context() as conn:
                     new_time = time_result.new_time
                     new_year = new_time.get("year", year)
                     new_month = new_time.get("month", month)
@@ -1459,8 +1455,6 @@ class StorytellerAgent:
                             "observation",
                             6
                         )
-                finally:
-                    await conn.close()
             
             return time_result
         finally:
@@ -1510,9 +1504,8 @@ class StorytellerAgent:
         except Exception as e:
             logger.warning(f"Error getting crossroads from context: {e}")
         
-        # Fallback to direct database query
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        # Fallback to direct database query using the new async context manager
+        async with get_db_connection_context() as conn:
             rows = await conn.fetch("""
                 SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
                        dynamics
@@ -1540,11 +1533,6 @@ class StorytellerAgent:
                         pass
             
             return crossroads
-        except Exception as e:
-            logging.error(f"Error checking relationship crossroads: {e}")
-            return []
-        finally:
-            await conn.close()
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
@@ -1805,9 +1793,8 @@ class StorytellerAgent:
             
             update_data = result.final_output
             
-            # Apply the updates
-            conn = await asyncpg.connect(dsn=DB_DSN)
-            try:
+            # Apply the updates using the new async context manager
+            async with get_db_connection_context() as conn:
                 # Add required fields to update_data
                 update_data.user_id = user_id
                 update_data.conversation_id = conversation_id
@@ -1848,8 +1835,6 @@ class StorytellerAgent:
                 self.last_context_version = None
                 
                 return update_result
-            finally:
-                await conn.close()
         finally:
             # Stop timer
             if timer_id and self.performance_monitor:
@@ -1949,19 +1934,14 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
+        # Use the new async context manager for database connection
+        async with get_db_connection_context() as conn:
             await conn.execute("""
                 INSERT INTO messages (conversation_id, sender, content)
                 VALUES($1, $2, $3)
             """, conversation_id, sender, content)
             
             return {"status": "stored"}
-        except Exception as e:
-            logging.error(f"Error storing message: {e}")
-            return {"status": "error", "error": str(e)}
-        finally:
-            await conn.close()
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
