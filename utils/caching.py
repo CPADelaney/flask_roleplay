@@ -887,6 +887,18 @@ except Exception as e:
      logger.exception(f"CRITICAL ERROR initializing COMPUTATION_CACHE: {e}")
      raise
 
+
+async def get(key: str):
+    # For example, delegate to the EnhancedCache:
+    return await enhanced_main_cache.get(key)
+
+async def set(key: str, value: Any, ttl: int = 300):
+    return await enhanced_main_cache.set(key, value, ttl)
+
+async def delete(key: str):
+    return await enhanced_main_cache.invalidate(key)
+
+
 # --- Remove redundant/example code ---
 # Remove the second EnhancedCache initialization and usage examples (lines ~633-672 in original)
 # Remove the simple Cache class and its instance/wrapper functions (lines ~676-725 in original)
