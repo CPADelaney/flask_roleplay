@@ -1,3 +1,5 @@
+# lore/monitoring.py
+
 """System monitoring and metrics collection for the lore system."""
 
 import logging
