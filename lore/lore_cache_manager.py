@@ -1,3 +1,5 @@
+# lore/lore_cache_manager.py
+
 """
 Lore Cache Management System
 
