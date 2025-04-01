@@ -32,7 +32,7 @@ import asyncpg
 from agents import trace
 
 # Database connection helper
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 # Memory system references
 from memory.wrapper import MemorySystem
