@@ -1,3 +1,5 @@
+# lore/unified_routes.py
+
 """
 Unified Routes for Lore System
 
