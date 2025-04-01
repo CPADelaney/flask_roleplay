@@ -6,7 +6,9 @@ import json
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union, Tuple, Set
-import asyncpg
+
+# Database connection
+from db.connection import get_db_connection_context, initialize_connection_pool, close_connection_pool
 
 # Try to import OpenAI for summarization
 try:
@@ -397,10 +399,11 @@ class ProgressiveNarrativeSummarizer:
     async def initialize(self) -> None:
         """Initialize database connection if using PostgreSQL"""
         if self.db_connection_string:
-            self.pool = await asyncpg.create_pool(self.db_connection_string)
+            # Initialize the global connection pool rather than creating our own
+            await initialize_connection_pool()
             
             # Create tables if they don't exist
-            async with self.pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute('''
                 CREATE TABLE IF NOT EXISTS narrative_events (
                     event_id TEXT PRIMARY KEY,
@@ -448,7 +451,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _load_data_from_db(self) -> None:
         """Load data from database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             # Load events
             event_rows = await conn.fetch("SELECT * FROM narrative_events")
             for row in event_rows:
@@ -505,8 +508,9 @@ class ProgressiveNarrativeSummarizer:
                 pass
             self.summary_task = None
             
-        if hasattr(self, 'pool'):
-            await self.pool.close()
+        # Use the global connection pool closer instead of our own
+        if self.db_connection_string:
+            await close_connection_pool()
     
     async def start_summary_processor(self, interval: int = 3600) -> None:
         """
@@ -649,7 +653,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _save_event_to_db(self, event: EventInfo) -> None:
         """Save event to database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             await conn.execute('''
             INSERT INTO narrative_events (
                 event_id, event_type, content, timestamp, importance,
@@ -741,7 +745,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _save_arc_to_db(self, arc: StoryArc) -> None:
         """Save arc to database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             await conn.execute('''
             INSERT INTO story_arcs (
                 arc_id, title, description, start_date, end_date, status,
@@ -776,7 +780,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _save_event_arc_relationships(self, arc: StoryArc) -> None:
         """Save event-arc relationships to database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             # Delete existing relationships for this arc
             await conn.execute("DELETE FROM event_arc_relationships WHERE arc_id = $1", arc.arc_id)
             
@@ -819,7 +823,7 @@ class ProgressiveNarrativeSummarizer:
             await self._save_arc_to_db(arc)
             
             # Save relationship
-            async with self.pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute('''
                 INSERT INTO event_arc_relationships (event_id, arc_id)
                 VALUES ($1, $2)
@@ -859,7 +863,7 @@ class ProgressiveNarrativeSummarizer:
             await self._save_arc_to_db(arc)
             
             # Remove relationship
-            async with self.pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute('''
                 DELETE FROM event_arc_relationships
                 WHERE event_id = $1 AND arc_id = $2
@@ -938,7 +942,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _update_event_access_stats(self, event: EventInfo) -> None:
         """Update event access statistics in database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             await conn.execute('''
             UPDATE narrative_events
             SET last_accessed = $1, access_count = $2
@@ -1028,7 +1032,7 @@ class ProgressiveNarrativeSummarizer:
     
     async def _update_arc_access_stats(self, arc: StoryArc) -> None:
         """Update arc access statistics in database"""
-        async with self.pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             await conn.execute('''
             UPDATE story_arcs
             SET last_accessed = $1, access_count = $2
@@ -1126,7 +1130,7 @@ class ProgressiveNarrativeSummarizer:
             params.append(limit)
             
             # Execute query
-            async with self.pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(query, *params)
                 
                 events = []
@@ -1243,7 +1247,7 @@ class ProgressiveNarrativeSummarizer:
             params.append(limit)
             
             # Execute query
-            async with self.pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch(query, *params)
                 
                 arcs = []
@@ -2045,7 +2049,7 @@ class RPGNarrativeManager:
         if not arcs:
             # Try to find any completed arcs with this tag
             if self.narrative.db_connection_string:
-                async with self.narrative.pool.acquire() as conn:
+                async with get_db_connection_context() as conn:
                     rows = await conn.fetch('''
                     SELECT arc_id, title, description, status
                     FROM story_arcs
