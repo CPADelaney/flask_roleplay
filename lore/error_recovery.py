@@ -1,3 +1,5 @@
+# lore/error_recovery.py
+
 """Error recovery and monitoring system for the lore system."""
 
 import logging
