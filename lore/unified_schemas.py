@@ -1,3 +1,5 @@
+# lore/unified_schemas.py
+
 """
 Unified Schemas for Lore System
 
