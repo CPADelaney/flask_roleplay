@@ -1,3 +1,5 @@
+# story_agent/creative_task_agent.py
+
 """
 Creative Task Agent - Generates contextually appropriate and creative tasks/challenges 
 based on the current NPCs, scenario, and player context.
@@ -10,6 +12,7 @@ from dataclasses import dataclass
 from utils.npc_utils import get_npc_personality_traits
 from utils.story_context import get_current_scenario_context
 from utils.memory_utils import get_relevant_memories
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
@@ -114,11 +117,11 @@ class CreativeTaskGenerator:
             ]
         }
 
-    def _get_task_context(self, npc_id: str, scenario_id: str) -> TaskContext:
+    async def _get_task_context(self, npc_id: str, scenario_id: str) -> TaskContext:
         """Gather context for task generation"""
-        npc_data = get_npc_personality_traits(npc_id)
-        scenario = get_current_scenario_context(scenario_id)
-        memories = get_relevant_memories(npc_id, limit=5)
+        npc_data = await get_npc_personality_traits(npc_id)
+        scenario = await get_current_scenario_context(scenario_id)
+        memories = await get_relevant_memories(npc_id, limit=5)
         
         return TaskContext(
             npc_id=npc_id,
@@ -238,10 +241,10 @@ class CreativeTaskGenerator:
         
         return reward_types[task_type]
 
-    def generate_task(self, npc_id: str, scenario_id: str) -> CreativeTask:
+    async def generate_task(self, npc_id: str, scenario_id: str) -> CreativeTask:
         """Generate a complete creative task"""
         # Get context
-        context = self._get_task_context(npc_id, scenario_id)
+        context = await self._get_task_context(npc_id, scenario_id)
         
         # Select task type
         task_type = self._select_task_type(context)
@@ -275,4 +278,4 @@ print(f"Task: {task.title}")
 print(f"Description: {task.description}")
 print(f"Success Criteria: {task.success_criteria}")
 print(f"Reward Type: {task.reward_type}")
-""" 
+"""
