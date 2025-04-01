@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from agents import function_tool, RunContextWrapper
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from logic.narrative_progression import (
     get_current_narrative_stage, 
     check_for_personal_revelations,
@@ -284,10 +284,14 @@ async def get_summarized_narrative_context(
             try:
                 from story_agent.progressive_summarization import RPGNarrativeManager
                 
+                # UPDATED: Get DB connection string
+                async with get_db_connection_context() as conn:
+                    dsn = conn.dsn
+                
                 narrative_manager = RPGNarrativeManager(
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    db_connection_string=get_db_connection()
+                    db_connection_string=dsn
                 )
                 await narrative_manager.initialize()
                 
@@ -533,51 +537,49 @@ async def get_key_npcs(ctx, limit: int = 5) -> List[Dict[str, Any]]:
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Get NPCs ordered by dominance (a proxy for importance)
-        cursor.execute("""
-            SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-            ORDER BY dominance DESC
-            LIMIT %s
-        """, (user_id, conversation_id, limit))
-        
-        npcs = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, dominance, cruelty, closeness, trust, respect = row
+    # UPDATED: Use async connection
+    async with get_db_connection_context() as conn:
+        try:
+            # Get NPCs ordered by dominance (a proxy for importance)
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                ORDER BY dominance DESC
+                LIMIT $3
+            """, user_id, conversation_id, limit)
             
-            # Get relationship with player
-            relationship = await get_relationship_summary(
-                user_id, conversation_id, 
-                "player", user_id, "npc", npc_id
-            )
+            npcs = []
+            for row in rows:
+                npc_id, npc_name = row['npc_id'], row['npc_name']
+                dominance, cruelty = row['dominance'], row['cruelty']
+                closeness, trust, respect = row['closeness'], row['trust'], row['respect']
+                
+                # Get relationship with player
+                relationship = await get_relationship_summary(
+                    user_id, conversation_id, 
+                    "player", user_id, "npc", npc_id
+                )
+                
+                dynamics = {}
+                if relationship and 'dynamics' in relationship:
+                    dynamics = relationship['dynamics']
+                
+                npcs.append({
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "dominance": dominance,
+                    "cruelty": cruelty,
+                    "closeness": closeness,
+                    "trust": trust,
+                    "respect": respect,
+                    "relationship_dynamics": dynamics
+                })
             
-            dynamics = {}
-            if relationship and 'dynamics' in relationship:
-                dynamics = relationship['dynamics']
-            
-            npcs.append({
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "dominance": dominance,
-                "cruelty": cruelty,
-                "closeness": closeness,
-                "trust": trust,
-                "respect": respect,
-                "relationship_dynamics": dynamics
-            })
-        
-        return npcs
-    except Exception as e:
-        logger.error(f"Error fetching key NPCs: {str(e)}", exc_info=True)
-        return []
-    finally:
-        cursor.close()
-        conn.close()
+            return npcs
+        except Exception as e:
+            logger.error(f"Error fetching key NPCs: {str(e)}", exc_info=True)
+            return []
 
 @function_tool
 @track_performance("get_narrative_stages")
@@ -1343,64 +1345,66 @@ async def get_resource_history(ctx, resource_type: Optional[str] = None, limit: 
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        if resource_type:
-            cursor.execute("""
-                SELECT resource_type, old_value, new_value, amount_changed, 
-                       source, description, timestamp
-                FROM ResourceHistoryLog
-                WHERE user_id=%s AND conversation_id=%s AND resource_type=%s
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (user_id, conversation_id, resource_type, limit))
-        else:
-            cursor.execute("""
-                SELECT resource_type, old_value, new_value, amount_changed, 
-                       source, description, timestamp
-                FROM ResourceHistoryLog
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (user_id, conversation_id, limit))
-        
-        history = []
-        for row in cursor.fetchall():
-            resource_type, old_value, new_value, amount_changed, source, description, timestamp = row
+    # UPDATED: Use async connection
+    async with get_db_connection_context() as conn:
+        try:
+            if resource_type:
+                rows = await conn.fetch("""
+                    SELECT resource_type, old_value, new_value, amount_changed, 
+                           source, description, timestamp
+                    FROM ResourceHistoryLog
+                    WHERE user_id=$1 AND conversation_id=$2 AND resource_type=$3
+                    ORDER BY timestamp DESC
+                    LIMIT $4
+                """, user_id, conversation_id, resource_type, limit)
+            else:
+                rows = await conn.fetch("""
+                    SELECT resource_type, old_value, new_value, amount_changed, 
+                           source, description, timestamp
+                    FROM ResourceHistoryLog
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY timestamp DESC
+                    LIMIT $3
+                """, user_id, conversation_id, limit)
             
-            # Format money values if resource_type is money
-            formatted_old = None
-            formatted_new = None
-            formatted_change = None
+            history = []
+            for row in rows:
+                resource_type = row['resource_type']
+                old_value = row['old_value']
+                new_value = row['new_value']
+                amount_changed = row['amount_changed']
+                source = row['source']
+                description = row['description']
+                timestamp = row['timestamp']
+                
+                # Format money values if resource_type is money
+                formatted_old = None
+                formatted_new = None
+                formatted_change = None
+                
+                if resource_type == "money":
+                    resource_manager = context.resource_manager
+                    formatted_old = await resource_manager.get_formatted_money(old_value)
+                    formatted_new = await resource_manager.get_formatted_money(new_value)
+                    formatted_change = await resource_manager.get_formatted_money(amount_changed)
+                
+                history.append({
+                    "resource_type": resource_type,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "amount_changed": amount_changed,
+                    "formatted_old_value": formatted_old,
+                    "formatted_new_value": formatted_new,
+                    "formatted_change": formatted_change,
+                    "source": source,
+                    "description": description,
+                    "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+                })
             
-            if resource_type == "money":
-                resource_manager = context.resource_manager
-                formatted_old = await resource_manager.get_formatted_money(old_value)
-                formatted_new = await resource_manager.get_formatted_money(new_value)
-                formatted_change = await resource_manager.get_formatted_money(amount_changed)
-            
-            history.append({
-                "resource_type": resource_type,
-                "old_value": old_value,
-                "new_value": new_value,
-                "amount_changed": amount_changed,
-                "formatted_old_value": formatted_old,
-                "formatted_new_value": formatted_new,
-                "formatted_change": formatted_change,
-                "source": source,
-                "description": description,
-                "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
-            })
-        
-        return history
-    except Exception as e:
-        logger.error(f"Error getting resource history: {str(e)}", exc_info=True)
-        return []
-    finally:
-        cursor.close()
-        conn.close()
+            return history
+        except Exception as e:
+            logger.error(f"Error getting resource history: {str(e)}", exc_info=True)
+            return []
 
 # ----- Narrative Tools -----
 
@@ -1458,51 +1462,45 @@ async def generate_personal_revelation(ctx, npc_name: str, revelation_type: str)
         inner_monologue = random.choice(revelation_templates).format(npc_name=npc_name)
         
         # Add to PlayerJournal
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("""
-                INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, revelation_types, timestamp)
-                VALUES (%s, %s, 'personal_revelation', %s, %s, CURRENT_TIMESTAMP)
-                RETURNING id
-            """, (user_id, conversation_id, inner_monologue, revelation_type))
-            
-            journal_id = cursor.fetchone()[0]
-            conn.commit()
-            
-            # NEW: Store this as a memory if possible
-            if hasattr(context, 'add_narrative_memory'):
-                await context.add_narrative_memory(
-                    f"Personal revelation about {npc_name}: {inner_monologue}",
-                    "personal_revelation",
-                    0.8,  # High importance for revelations
-                    tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
-                )
-            
-            # NEW: Check for narrative manager
-            if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                # Add to narrative manager
-                await context.narrative_manager.add_revelation(
-                    content=inner_monologue,
-                    revelation_type=revelation_type,
-                    importance=0.8,
-                    tags=[revelation_type, "revelation"]
-                )
-            
-            return {
-                "type": "personal_revelation",
-                "name": f"{revelation_type.capitalize()} Awareness",
-                "inner_monologue": inner_monologue,
-                "journal_id": journal_id,
-                "success": True
-            }
-        except Exception as db_error:
-            conn.rollback()
-            logger.error(f"Database error recording personal revelation: {db_error}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+        # UPDATED: Use async connection
+        async with get_db_connection_context() as conn:
+            try:
+                # Use asyncpg's execute() and fetchrow() methods
+                journal_id = await conn.fetchval("""
+                    INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, revelation_types, timestamp)
+                    VALUES ($1, $2, 'personal_revelation', $3, $4, CURRENT_TIMESTAMP)
+                    RETURNING id
+                """, user_id, conversation_id, inner_monologue, revelation_type)
+                
+                # NEW: Store this as a memory if possible
+                if hasattr(context, 'add_narrative_memory'):
+                    await context.add_narrative_memory(
+                        f"Personal revelation about {npc_name}: {inner_monologue}",
+                        "personal_revelation",
+                        0.8,  # High importance for revelations
+                        tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
+                    )
+                
+                # NEW: Check for narrative manager
+                if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                    # Add to narrative manager
+                    await context.narrative_manager.add_revelation(
+                        content=inner_monologue,
+                        revelation_type=revelation_type,
+                        importance=0.8,
+                        tags=[revelation_type, "revelation"]
+                    )
+                
+                return {
+                    "type": "personal_revelation",
+                    "name": f"{revelation_type.capitalize()} Awareness",
+                    "inner_monologue": inner_monologue,
+                    "journal_id": journal_id,
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording personal revelation: {db_error}")
+                raise
     except Exception as e:
         logger.error(f"Error generating personal revelation: {str(e)}", exc_info=True)
         return {
@@ -1569,50 +1567,44 @@ async def generate_dream_sequence(ctx, npc_names: List[str]) -> Dict[str, Any]:
         user_id = context.user_id
         conversation_id = context.conversation_id
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("""
-                INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
-                VALUES (%s, %s, 'dream_sequence', %s, CURRENT_TIMESTAMP)
-                RETURNING id
-            """, (user_id, conversation_id, dream_text))
-            
-            journal_id = cursor.fetchone()[0]
-            conn.commit()
-            
-            # NEW: Store this as a memory if possible
-            if hasattr(context, 'add_narrative_memory'):
-                await context.add_narrative_memory(
-                    f"Dream sequence: {dream_text}",
-                    "dream_sequence",
-                    0.7,  # High importance for dreams
-                    tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
-                )
-            
-            # NEW: Check for narrative manager
-            if hasattr(context, 'narrative_manager') and context.narrative_manager:
-                # Add to narrative manager
-                await context.narrative_manager.add_dream_sequence(
-                    content=dream_text,
-                    symbols=[npc1, npc2, npc3, "control", "manipulation"],
-                    importance=0.7,
-                    tags=["dream", "symbolic"]
-                )
-            
-            return {
-                "type": "dream_sequence",
-                "text": dream_text,
-                "journal_id": journal_id,
-                "success": True
-            }
-        except Exception as db_error:
-            conn.rollback()
-            logger.error(f"Database error recording dream sequence: {db_error}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+        # UPDATED: Use async connection
+        async with get_db_connection_context() as conn:
+            try:
+                # Use asyncpg's fetchval method
+                journal_id = await conn.fetchval("""
+                    INSERT INTO PlayerJournal (user_id, conversation_id, entry_type, entry_text, timestamp)
+                    VALUES ($1, $2, 'dream_sequence', $3, CURRENT_TIMESTAMP)
+                    RETURNING id
+                """, user_id, conversation_id, dream_text)
+                
+                # NEW: Store this as a memory if possible
+                if hasattr(context, 'add_narrative_memory'):
+                    await context.add_narrative_memory(
+                        f"Dream sequence: {dream_text}",
+                        "dream_sequence",
+                        0.7,  # High importance for dreams
+                        tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
+                    )
+                
+                # NEW: Check for narrative manager
+                if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                    # Add to narrative manager
+                    await context.narrative_manager.add_dream_sequence(
+                        content=dream_text,
+                        symbols=[npc1, npc2, npc3, "control", "manipulation"],
+                        importance=0.7,
+                        tags=["dream", "symbolic"]
+                    )
+                
+                return {
+                    "type": "dream_sequence",
+                    "text": dream_text,
+                    "journal_id": journal_id,
+                    "success": True
+                }
+            except Exception as db_error:
+                logger.error(f"Database error recording dream sequence: {db_error}")
+                raise
     except Exception as e:
         logger.error(f"Error generating dream sequence: {str(e)}", exc_info=True)
         return {
@@ -1707,31 +1699,27 @@ async def apply_crossroads_choice(
             # Get NPC from link ID if possible
             npc_name = "Unknown"
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    SELECT entity2_id
-                    FROM SocialLinks
-                    WHERE link_id = %s AND entity2_type = 'npc'
-                """, (link_id,))
-                
-                row = cursor.fetchone()
-                if row:
-                    npc_id = row[0]
+                # UPDATED: Use async connection
+                async with get_db_connection_context() as conn:
+                    # Use asyncpg's fetchrow method
+                    row = await conn.fetchrow("""
+                        SELECT entity2_id
+                        FROM SocialLinks
+                        WHERE link_id = $1 AND entity2_type = 'npc'
+                    """, link_id)
                     
-                    cursor.execute("""
-                        SELECT npc_name
-                        FROM NPCStats
-                        WHERE npc_id = %s
-                    """, (npc_id,))
-                    
-                    npc_row = cursor.fetchone()
-                    if npc_row:
-                        npc_name = npc_row[0]
+                    if row:
+                        npc_id = row['entity2_id']
                         
-                cursor.close()
-                conn.close()
+                        # Fetch the NPC name
+                        npc_row = await conn.fetchrow("""
+                            SELECT npc_name
+                            FROM NPCStats
+                            WHERE npc_id = $1
+                        """, npc_id)
+                        
+                        if npc_row:
+                            npc_name = npc_row['npc_name']
             except Exception as db_error:
                 logger.warning(f"Could not get NPC name for memory: {db_error}")
             
@@ -1897,51 +1885,54 @@ async def get_player_journal_entries(ctx, entry_type: Optional[str] = None, limi
     user_id = context.user_id
     conversation_id = context.conversation_id
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        if entry_type:
-            cursor.execute("""
-                SELECT id, entry_type, entry_text, revelation_types, 
-                       narrative_moment, fantasy_flag, intensity_level, timestamp
-                FROM PlayerJournal
-                WHERE user_id=%s AND conversation_id=%s AND entry_type=%s
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (user_id, conversation_id, entry_type, limit))
-        else:
-            cursor.execute("""
-                SELECT id, entry_type, entry_text, revelation_types, 
-                       narrative_moment, fantasy_flag, intensity_level, timestamp
-                FROM PlayerJournal
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (user_id, conversation_id, limit))
-        
-        entries = []
-        for row in cursor.fetchall():
-            id, entry_type, entry_text, revelation_types, narrative_moment, fantasy_flag, intensity_level, timestamp = row
+    # UPDATED: Use async connection
+    async with get_db_connection_context() as conn:
+        try:
+            if entry_type:
+                rows = await conn.fetch("""
+                    SELECT id, entry_type, entry_text, revelation_types, 
+                           narrative_moment, fantasy_flag, intensity_level, timestamp
+                    FROM PlayerJournal
+                    WHERE user_id=$1 AND conversation_id=$2 AND entry_type=$3
+                    ORDER BY timestamp DESC
+                    LIMIT $4
+                """, user_id, conversation_id, entry_type, limit)
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, entry_type, entry_text, revelation_types, 
+                           narrative_moment, fantasy_flag, intensity_level, timestamp
+                    FROM PlayerJournal
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY timestamp DESC
+                    LIMIT $3
+                """, user_id, conversation_id, limit)
             
-            entries.append({
-                "id": id,
-                "entry_type": entry_type,
-                "entry_text": entry_text,
-                "revelation_types": revelation_types,
-                "narrative_moment": narrative_moment,
-                "fantasy_flag": fantasy_flag,
-                "intensity_level": intensity_level,
-                "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
-            })
-        
-        return entries
-    except Exception as e:
-        logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
-        return []
-    finally:
-        cursor.close()
-        conn.close()
+            entries = []
+            for row in rows:
+                id = row['id']
+                entry_type = row['entry_type']
+                entry_text = row['entry_text']
+                revelation_types = row['revelation_types']
+                narrative_moment = row['narrative_moment']
+                fantasy_flag = row['fantasy_flag']
+                intensity_level = row['intensity_level']
+                timestamp = row['timestamp']
+                
+                entries.append({
+                    "id": id,
+                    "entry_type": entry_type,
+                    "entry_text": entry_text,
+                    "revelation_types": revelation_types,
+                    "narrative_moment": narrative_moment,
+                    "fantasy_flag": fantasy_flag,
+                    "intensity_level": intensity_level,
+                    "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
+                })
+            
+            return entries
+        except Exception as e:
+            logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
+            return []
 
 @function_tool
 async def analyze_conflict_potential(ctx, narrative_text: str) -> Dict[str, Any]:
