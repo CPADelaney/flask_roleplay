@@ -1,3 +1,5 @@
+# lore/error_handler.py
+
 """
 Unified Error Handling System
 
