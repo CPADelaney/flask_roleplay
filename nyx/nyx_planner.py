@@ -6,7 +6,7 @@ import random
 import re
 from collections import defaultdict
 from nyx.nyx_memory_system import NyxMemorySystem
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 import json
 
 logger = logging.getLogger("nyx_planner")
@@ -125,7 +125,7 @@ class NyxPlanner:
             )
             
             # Initialize graph structure if not exists
-            async with await get_db_connection() as conn:
+            async with await get_db_connection_context() as conn:
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS memory_graph (
                         id SERIAL PRIMARY KEY,
@@ -149,7 +149,7 @@ class NyxPlanner:
     async def _load_plans(self):
         """Load existing plans from storage"""
         try:
-            async with await get_db_connection() as conn:
+            async with await get_db_connection_context() as conn:
                 # Create plans table if not exists
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS nyx_plans (
@@ -210,7 +210,7 @@ class NyxPlanner:
     async def save_plan(self, plan: Plan):
         """Save plan to persistent storage"""
         try:
-            async with await get_db_connection() as conn:
+            async with await get_db_connection_context() as conn:
                 await conn.execute("""
                     INSERT INTO nyx_plans (
                         id, user_id, conversation_id, name, description, 
@@ -251,7 +251,7 @@ class NyxPlanner:
     async def _load_player_profile(self):
         """Load existing player profile from storage"""
         try:
-            async with await get_db_connection() as conn:
+            async with await get_db_connection_context() as conn:
                 # Create player profile table if not exists
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS player_profiles (
@@ -303,7 +303,7 @@ class NyxPlanner:
     async def save_player_profile(self):
         """Save player profile to persistent storage"""
         try:
-            async with await get_db_connection() as conn:
+            async with await get_db_connection_context() as conn:
                 await conn.execute("""
                     UPDATE player_profiles SET
                         kink_preferences = $3,
@@ -1048,10 +1048,10 @@ class NyxPlanner:
                 
         # Analyze emotional triggers
         emotional_patterns = {
-            "arousal": ["aroused", "excited", "turned on", "horny"],
-            "fear": ["scared", "afraid", "terrified", "fear"],
-            "desire": ["want", "desire", "crave", "need"],
-            "submission": ["submit", "yield", "surrender", "obey"]
+            "arousal": ["aroused", "excited", "turned on", "horny", "hot"],
+            "fear": ["scared", "afraid", "terrified", "fear", "anxious"],
+            "desire": ["want", "desire", "crave", "need", "long"],
+            "submission": ["submit", "yield", "surrender", "obey", "please"]
         }
         
         for emotion, patterns in emotional_patterns.items():
@@ -1259,3 +1259,105 @@ class NyxPlanner:
             "submission": ["submit", "yield", "surrender", "obey"]
         }
         return patterns.get(trigger, [])
+
+    async def _generate_plan_steps(self, plan_type: str, context: Dict[str, Any] = None) -> List[PlanStep]:
+        """Generate plan steps based on plan type and context"""
+        steps = []
+        
+        if plan_type == "emotional_manipulation":
+            steps = [
+                PlanStep(
+                    id="emotional_hook",
+                    type="emotional",
+                    description="Create emotional connection",
+                    success_criteria=["emotional response", "connection"],
+                    failure_criteria=["resistance", "rejection"],
+                    risk_level=0.3
+                ),
+                PlanStep(
+                    id="emotional_control",
+                    type="emotional",
+                    description="Establish emotional control",
+                    success_criteria=["submission", "dependency"],
+                    failure_criteria=["independence", "defiance"],
+                    risk_level=0.5
+                ),
+                PlanStep(
+                    id="emotional_dependency",
+                    type="emotional",
+                    description="Create emotional dependency",
+                    success_criteria=["need", "craving", "obsession"],
+                    failure_criteria=["detachment", "distance"],
+                    risk_level=0.7
+                )
+            ]
+        elif plan_type == "psychological_control":
+            steps = [
+                PlanStep(
+                    id="cognitive_restructuring",
+                    type="psychological",
+                    description="Alter cognitive patterns",
+                    success_criteria=["confusion", "doubt", "uncertainty"],
+                    failure_criteria=["clarity", "certainty", "confidence"],
+                    risk_level=0.4
+                ),
+                PlanStep(
+                    id="reality_distortion",
+                    type="psychological",
+                    description="Distort perception of reality",
+                    success_criteria=["questioning", "doubt", "trust"],
+                    failure_criteria=["skepticism", "resistance", "independence"],
+                    risk_level=0.6
+                ),
+                PlanStep(
+                    id="self_concept_erosion",
+                    type="psychological",
+                    description="Erode sense of self",
+                    success_criteria=["identity crisis", "self-doubt", "dependency"],
+                    failure_criteria=["self-confidence", "identity", "certainty"],
+                    risk_level=0.8
+                )
+            ]
+        elif plan_type == "addiction_manipulation":
+            steps = [
+                PlanStep(
+                    id="pleasure_association",
+                    type="behavioral",
+                    description="Create pleasure association",
+                    success_criteria=["arousal", "enjoyment", "pleasure"],
+                    failure_criteria=["disinterest", "boredom", "apathy"],
+                    risk_level=0.3
+                ),
+                PlanStep(
+                    id="intermittent_reinforcement",
+                    type="behavioral",
+                    description="Establish intermittent reinforcement",
+                    success_criteria=["anticipation", "craving", "seeking"],
+                    failure_criteria=["disinterest", "avoidance", "detachment"],
+                    risk_level=0.5
+                ),
+                PlanStep(
+                    id="withdrawal_induction",
+                    type="behavioral",
+                    description="Induce withdrawal symptoms",
+                    success_criteria=["desperation", "need", "obsession"],
+                    failure_criteria=["independence", "disinterest", "detachment"],
+                    risk_level=0.7
+                ),
+                PlanStep(
+                    id="complete_dependency",
+                    type="behavioral",
+                    description="Establish complete dependency",
+                    success_criteria=["addiction", "obsession", "desperation"],
+                    failure_criteria=["independence", "control", "balance"],
+                    risk_level=0.9
+                )
+            ]
+            
+        # Adjust steps based on context if provided
+        if context:
+            intensity = context.get("intensity", 0.5)
+            for step in steps:
+                step.risk_level *= intensity
+                
+        return steps
