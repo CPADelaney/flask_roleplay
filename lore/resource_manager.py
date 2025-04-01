@@ -1,3 +1,5 @@
+# lore/resource_manager.py
+
 """
 Resource Management System
 
