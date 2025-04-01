@@ -13,7 +13,6 @@ This module:
 import logging
 import json
 import re
-import asyncpg
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime, timedelta
@@ -21,7 +20,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Database connection helper
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 # Vector embedding utility
 from utils.embedding_service import get_embedding
@@ -107,84 +106,83 @@ class NyxSchemaManager:
     async def _load_schema_information(self) -> None:
         """Load table and column information from the database."""
         try:
-            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-                async with pool.acquire() as conn:
-                    # Get all tables and their comments
-                    tables = await conn.fetch("""
+            async with get_db_connection_context() as conn:
+                # Get all tables and their comments
+                tables = await conn.fetch("""
+                    SELECT 
+                        t.table_name,
+                        pg_catalog.obj_description(
+                            pg_catalog.pg_class.oid, 'pg_class'
+                        ) as description,
+                        tc.table_type,
+                        to_char(tc.creation_time, 'YYYY-MM-DD HH24:MI:SS') as created,
+                        tc.is_dynamic
+                    FROM information_schema.tables t
+                    JOIN (
+                        SELECT c.relname as table_name, 
+                               c.relkind as table_type,
+                               c.relcreated as creation_time,
+                               CASE 
+                                 WHEN c.relname LIKE 'dynamic\\_%' THEN TRUE 
+                                 ELSE FALSE 
+                               END as is_dynamic
+                        FROM pg_catalog.pg_class c
+                        WHERE c.relkind = 'r'
+                          AND c.relnamespace = (
+                              SELECT oid FROM pg_catalog.pg_namespace 
+                              WHERE nspname = 'public'
+                          )
+                    ) tc ON t.table_name = tc.table_name
+                    WHERE t.table_schema = 'public'
+                """)
+                
+                # Process table information
+                self.table_cache = {}
+                for table in tables:
+                    table_name = table['table_name']
+                    self.table_cache[table_name] = {
+                        'description': table['description'] or '',
+                        'is_dynamic': table['is_dynamic'],
+                        'created': table['created'],
+                        'columns': {}
+                    }
+                
+                # Get column information for all tables
+                for table_name in self.table_cache:
+                    columns = await conn.fetch("""
                         SELECT 
-                            t.table_name,
-                            pg_catalog.obj_description(
-                                pg_catalog.pg_class.oid, 'pg_class'
-                            ) as description,
-                            tc.table_type,
-                            to_char(tc.creation_time, 'YYYY-MM-DD HH24:MI:SS') as created,
-                            tc.is_dynamic
-                        FROM information_schema.tables t
-                        JOIN (
-                            SELECT c.relname as table_name, 
-                                   c.relkind as table_type,
-                                   c.relcreated as creation_time,
-                                   CASE 
-                                     WHEN c.relname LIKE 'dynamic\\_%' THEN TRUE 
-                                     ELSE FALSE 
-                                   END as is_dynamic
-                            FROM pg_catalog.pg_class c
-                            WHERE c.relkind = 'r'
-                              AND c.relnamespace = (
-                                  SELECT oid FROM pg_catalog.pg_namespace 
-                                  WHERE nspname = 'public'
-                              )
-                        ) tc ON t.table_name = tc.table_name
-                        WHERE t.table_schema = 'public'
-                    """)
+                            column_name,
+                            data_type,
+                            is_nullable,
+                            column_default,
+                            pg_catalog.col_description(
+                                (table_schema || '.' || table_name)::regclass::oid,
+                                ordinal_position
+                            ) as description
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = $1
+                        ORDER BY ordinal_position
+                    """, table_name)
                     
-                    # Process table information
-                    self.table_cache = {}
-                    for table in tables:
-                        table_name = table['table_name']
-                        self.table_cache[table_name] = {
-                            'description': table['description'] or '',
-                            'is_dynamic': table['is_dynamic'],
-                            'created': table['created'],
-                            'columns': {}
+                    for column in columns:
+                        col_name = column['column_name']
+                        self.table_cache[table_name]['columns'][col_name] = {
+                            'data_type': column['data_type'],
+                            'nullable': column['is_nullable'] == 'YES',
+                            'default': column['column_default'],
+                            'description': column['description'] or ''
                         }
-                    
-                    # Get column information for all tables
-                    for table_name in self.table_cache:
-                        columns = await conn.fetch("""
-                            SELECT 
-                                column_name,
-                                data_type,
-                                is_nullable,
-                                column_default,
-                                pg_catalog.col_description(
-                                    (table_schema || '.' || table_name)::regclass::oid,
-                                    ordinal_position
-                                ) as description
-                            FROM information_schema.columns
-                            WHERE table_schema = 'public'
-                              AND table_name = $1
-                            ORDER BY ordinal_position
-                        """, table_name)
-                        
-                        for column in columns:
-                            col_name = column['column_name']
-                            self.table_cache[table_name]['columns'][col_name] = {
-                                'data_type': column['data_type'],
-                                'nullable': column['is_nullable'] == 'YES',
-                                'default': column['column_default'],
-                                'description': column['description'] or ''
-                            }
-                    
-                    # Build flat column cache for similarity comparisons
-                    self.column_cache = {}
-                    for table_name, table_info in self.table_cache.items():
-                        for col_name, col_info in table_info['columns'].items():
-                            key = f"{table_name}.{col_name}"
-                            self.column_cache[key] = {
-                                **col_info,
-                                'table': table_name
-                            }
+                
+                # Build flat column cache for similarity comparisons
+                self.column_cache = {}
+                for table_name, table_info in self.table_cache.items():
+                    for col_name, col_info in table_info['columns'].items():
+                        key = f"{table_name}.{col_name}"
+                        self.column_cache[key] = {
+                            **col_info,
+                            'table': table_name
+                        }
         
         except Exception as e:
             logger.error(f"Error loading schema information: {e}")
@@ -312,44 +310,43 @@ class NyxSchemaManager:
         }
         
         try:
-            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-                async with pool.acquire() as conn:
-                    # Start a transaction
-                    async with conn.transaction():
-                        # 1. Create new tables
-                        for table_name, columns in optimized_schema.items():
-                            result = await self._create_table(conn, table_name, columns)
-                            if "error" in result:
-                                changes_made["errors"].append(result["error"])
-                            else:
-                                changes_made["tables_created"].append(result)
-                        
-                        # 2. Extend existing tables
-                        for table_name, columns in tables_to_extend.items():
-                            result = await self._extend_table(conn, table_name, columns)
-                            if "error" in result:
-                                changes_made["errors"].append(result["error"])
-                            else:
-                                changes_made["tables_extended"].append(result)
-                                changes_made["columns_added"].extend(
-                                    [f"{table_name}.{col}" for col in result["columns_added"]]
-                                )
-                        
-                        # 3. Update the schema cache
-                        await self._load_schema_information()
-                        
-                        # 4. Register schema changes for migrations
-                        await register_schema_change({
-                            "user_id": self.user_id,
-                            "conversation_id": self.conversation_id,
-                            "changes": changes_made,
-                            "original_proposal": schema_proposal["original_proposed_schema"],
-                            "optimized_proposal": optimized_schema,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        
-                        # 5. Increment the change counter for rate limiting
-                        self._increment_change_counter()
+            async with get_db_connection_context() as conn:
+                # Start a transaction
+                async with conn.transaction():
+                    # 1. Create new tables
+                    for table_name, columns in optimized_schema.items():
+                        result = await self._create_table(conn, table_name, columns)
+                        if "error" in result:
+                            changes_made["errors"].append(result["error"])
+                        else:
+                            changes_made["tables_created"].append(result)
+                    
+                    # 2. Extend existing tables
+                    for table_name, columns in tables_to_extend.items():
+                        result = await self._extend_table(conn, table_name, columns)
+                        if "error" in result:
+                            changes_made["errors"].append(result["error"])
+                        else:
+                            changes_made["tables_extended"].append(result)
+                            changes_made["columns_added"].extend(
+                                [f"{table_name}.{col}" for col in result["columns_added"]]
+                            )
+                    
+                    # 3. Update the schema cache
+                    await self._load_schema_information()
+                    
+                    # 4. Register schema changes for migrations
+                    await register_schema_change({
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id,
+                        "changes": changes_made,
+                        "original_proposal": schema_proposal["original_proposed_schema"],
+                        "optimized_proposal": optimized_schema,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    # 5. Increment the change counter for rate limiting
+                    self._increment_change_counter()
             
             if not changes_made["errors"]:
                 changes_made["status"] = "success"
