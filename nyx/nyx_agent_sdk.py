@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 import asyncpg
 import time
 import psutil
@@ -14,7 +14,7 @@ from agents import Agent, handoff, function_tool, Runner, trace
 from agents import ModelSettings, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, RunConfig
 from pydantic import BaseModel, Field
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from nyx.nyx_memory_system import NyxMemorySystem
 from nyx.nyx_model_manager import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
@@ -2526,15 +2526,14 @@ async def get_emotional_state(ctx) -> str:
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     
-    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT emotional_state FROM NyxAgentState
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
-            
-            if row and row["emotional_state"]:
-                return row["emotional_state"]
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow("""
+            SELECT emotional_state FROM NyxAgentState
+            WHERE user_id = $1 AND conversation_id = $2
+        """, user_id, conversation_id)
+        
+        if row and row["emotional_state"]:
+            return row["emotional_state"]
     
     # Default emotional state
     default_state = {
@@ -2557,19 +2556,19 @@ async def update_emotional_state(ctx, emotional_state: Dict[str, Any]) -> str:
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     
-    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id, conversation_id) 
-                DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
-            """, user_id, conversation_id, json.dumps(emotional_state))
+    async with get_db_connection_context() as conn:
+        await conn.execute("""
+            INSERT INTO NyxAgentState (user_id, conversation_id, emotional_state, updated_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, conversation_id) 
+            DO UPDATE SET emotional_state = $3, updated_at = CURRENT_TIMESTAMP
+        """, user_id, conversation_id, json.dumps(emotional_state))
     
     return json.dumps({
         "updated": True,
         "emotional_state": emotional_state
     })
+
 
 # ===== Main Functions =====
 
@@ -2768,19 +2767,19 @@ async def generate_reflection(
 
 async def store_messages(user_id: int, conversation_id: int, user_input: str, nyx_response: str):
     """Store user and Nyx messages in database"""
-    async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-        async with pool.acquire() as conn:
-            # Store user message
-            await conn.execute(
-                "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
-                conversation_id, "user", user_input
-            )
-            
-            # Store Nyx message
-            await conn.execute(
-                "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
-                conversation_id, "Nyx", nyx_response
-            )
+    async with get_db_connection_context() as conn:
+        # Store user message
+        await conn.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
+            conversation_id, "user", user_input
+        )
+        
+        # Store Nyx message
+        await conn.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
+            conversation_id, "Nyx", nyx_response
+        )
+
 # Add to the end of nyx_agent_sdk.py
 
 async def process_user_input_with_openai(
