@@ -1,3 +1,5 @@
+# lore/lore_system.py
+
 """
 Lore System - Main Entry Point
 
