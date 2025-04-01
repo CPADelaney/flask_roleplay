@@ -2289,24 +2289,23 @@ class AgentContext:
     async def _store_interaction_history(self, relationship_updates: Dict[str, Any]):
         """Store interaction history in the database."""
         try:
-            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute("""
-                        INSERT INTO interaction_history (
-                            entity1_id, entity2_id, interaction_type,
-                            outcome, emotional_impact, duration,
-                            intensity, relationship_changes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    """,
-                    relationship_updates["participants"][0]["id"],
-                    relationship_updates["participants"][1]["id"],
-                    relationship_updates["interaction_type"],
-                    relationship_updates.get("outcome", "unknown"),
-                    json.dumps(relationship_updates.get("emotional_impacts", {})),
-                    relationship_updates.get("duration", 0),
-                    relationship_updates.get("intensity", 0.5),
-                    json.dumps(relationship_updates["relationship_changes"])
-                    )
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO interaction_history (
+                        entity1_id, entity2_id, interaction_type,
+                        outcome, emotional_impact, duration,
+                        intensity, relationship_changes
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                relationship_updates["participants"][0]["id"],
+                relationship_updates["participants"][1]["id"],
+                relationship_updates["interaction_type"],
+                relationship_updates.get("outcome", "unknown"),
+                json.dumps(relationship_updates.get("emotional_impacts", {})),
+                relationship_updates.get("duration", 0),
+                relationship_updates.get("intensity", 0.5),
+                json.dumps(relationship_updates["relationship_changes"])
+                )
         except Exception as e:
             logger.error(f"Error storing interaction history: {e}")
     
