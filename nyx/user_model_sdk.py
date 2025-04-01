@@ -5,13 +5,12 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
-import asyncpg
 
 from agents import Agent, function_tool, Runner, trace
 from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from nyx.nyx_model_manager import UserModelManager
 from utils.caching import USER_MODEL_CACHE
 
