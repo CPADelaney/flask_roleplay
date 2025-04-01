@@ -1,3 +1,5 @@
+# lore/lore_generation.py
+
 """
 Lore Generation System
 
