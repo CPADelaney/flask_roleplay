@@ -36,7 +36,7 @@ from db.connection import get_db_connection_context
 
 # Memory system references
 from memory.wrapper import MemorySystem
-from memory.memory_nyx_integration.py import MemoryNyxBridge
+from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
 
 # Integration with LLM services for reasoning
 from nyx.llm_integration import generate_text_completion, generate_reflection
@@ -134,8 +134,8 @@ class NyxUnifiedGovernor:
     
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
-        # Initialize memory system
-        self.memory_system = await MemoryNyxBridge.get_instance(
+        # Initialize memory system using the correct function
+        self.memory_system = await get_memory_nyx_bridge(
             self.user_id,
             self.conversation_id
         )
@@ -151,12 +151,24 @@ class NyxUnifiedGovernor:
     
     async def _load_initial_state(self):
         """Load initial state and goals."""
-        # Load active goals
-        self.active_goals = await self.memory_system.get_active_goals()
+        # Use recall to get goal-related memories instead of a non-existent get_active_goals method
+        goal_memories = await self.memory_system.recall(
+            entity_type="nyx",
+            entity_id=self.conversation_id,
+            query="active goals",
+            context="system goals",
+            limit=10
+        )
+        
+        # Extract goals from memories
+        self.active_goals = self._extract_goals_from_memories(goal_memories.get("memories", []))
         
         # Load agent-specific goals
         for agent_type, agent in self.registered_agents.items():
-            self.agent_goals[agent_type] = await agent.get_active_goals()
+            if hasattr(agent, "get_active_goals"):
+                self.agent_goals[agent_type] = await agent.get_active_goals()
+            else:
+                self.agent_goals[agent_type] = []
         
         # Load performance metrics
         await self._update_performance_metrics()
@@ -982,6 +994,32 @@ class NyxUnifiedGovernor:
         }
         
         return amount * multipliers[unit]
+
+
+    def _extract_goals_from_memories(self, memories):
+        """Extract goals from memory objects"""
+        goals = []
+        for memory in memories:
+            # Look for goal info in memory text or metadata
+            if "goal" in memory.get("text", "").lower():
+                # Parse goal information from memory
+                # This is a simple implementation - enhance based on your memory format
+                goals.append({
+                    "id": memory.get("id"),
+                    "description": memory.get("text"),
+                    "status": "active"
+                })
+            
+            # Check metadata for goal information
+            metadata = memory.get("metadata", {})
+            if metadata.get("type") == "goal":
+                goals.append({
+                    "id": memory.get("id"),
+                    "description": memory.get("text"),
+                    "status": metadata.get("status", "active")
+                })
+                
+        return goals
     
     async def _record_coordination(
         self,
@@ -1011,8 +1049,24 @@ class NyxUnifiedGovernor:
             if result["success"]:
                 self.collaboration_success[agent_type]["success"] += 1
         
-        # Store in memory system
-        await self.memory_system.add_coordination_record(coordination_record)
+        # Store in memory system using remember method instead of add_coordination_record
+        memory_text = f"Coordination for goal '{goal.get('description', 'Unknown')}' - " \
+                     f"Result: {'Success' if result['success'] else 'Failure'}"
+        
+        tags = ["coordination", "system", goal.get("type", "general")]
+        if result["success"]:
+            tags.append("success")
+        else:
+            tags.append("failure")
+            
+        await self.memory_system.remember(
+            entity_type="nyx",
+            entity_id=self.conversation_id,
+            memory_text=memory_text,
+            importance="high",  # Coordination records are important
+            emotional=False,    # System records don't need emotional analysis
+            tags=tags
+        )
     
     async def _extract_plan_learnings(
         self,
