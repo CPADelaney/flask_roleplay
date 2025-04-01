@@ -1,3 +1,5 @@
+# lore/lore_validation.py
+
 """
 Lore Validation Module
 
