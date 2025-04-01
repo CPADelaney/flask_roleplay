@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from utils.npc_utils import get_npc_personality_traits
 from utils.story_context import get_current_scenario_context
 from utils.memory_utils import get_relevant_memories
+from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +70,10 @@ class ActivityRecommender:
             }
         }
     
-    def _get_activity_context(self, scenario_id: str, npc_ids: List[str]) -> ActivityContext:
+    async def _get_activity_context(self, scenario_id: str, npc_ids: List[str]) -> ActivityContext:
         """Gather context for activity recommendation"""
-        scenario = get_current_scenario_context(scenario_id)
-        npcs = [get_npc_personality_traits(npc_id) for npc_id in npc_ids]
+        scenario = await get_current_scenario_context(scenario_id)
+        npcs = [await get_npc_personality_traits(npc_id) for npc_id in npc_ids]
         
         # This would be more detailed in actual implementation
         return ActivityContext(
@@ -217,7 +218,7 @@ class ActivityRecommender:
         
         return " | ".join(reasons)
     
-    def recommend_activities(
+    async def recommend_activities(
         self,
         scenario_id: str,
         npc_ids: List[str],
@@ -226,7 +227,7 @@ class ActivityRecommender:
     ) -> List[ActivityRecommendation]:
         """Generate activity recommendations"""
         # Get context
-        context = self._get_activity_context(scenario_id, npc_ids)
+        context = await self._get_activity_context(scenario_id, npc_ids)
         
         # Calculate category weights
         category_weights = self._calculate_activity_weights(context)
