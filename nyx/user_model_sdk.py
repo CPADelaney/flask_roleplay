@@ -260,7 +260,7 @@ boundaries, and interaction patterns.""",
     tools=[
         get_user_model,
         track_kink_preference,
-        track_behavior_pattern,
+track_behavior_pattern,
         update_personality_assessment
     ],
     output_type=UserModelAnalysis
@@ -440,8 +440,6 @@ async def format_behavior_patterns(ctx, behavior_patterns: Dict[str, Any]) -> st
     
     return json.dumps(result)
 
-# Add to user_model_sdk.py
-
 @function_tool
 async def track_conversation_response(
     ctx,
@@ -574,47 +572,12 @@ async def analyze_user_revelations(
         
     # If no revelations found through simple means, use more sophisticated analysis
     if not revelations and len(user_message.split()) > 5:
-        # Create a prompt for detecting implicit preferences
-        prompt = f"""
-        Analyze this user message for potential preferences or behavior patterns in a femdom roleplay context:
+        user_model_manager = ctx.context.user_model_manager
         
-        User: "{user_message}"
-        
-        Identify:
-        1. Any explicit or implicit kink preferences
-        2. Behavioral tendencies (submission, resistance, etc.)
-        3. Communication style preferences
-        4. Response to dominant themes
-        
-        Format your response as JSON with 'revelations' as a list of objects, each containing:
-        - type: "kink_preference" or "behavior_pattern"
-        - name/pattern: The specific preference or pattern
-        - intensity: A value from 0 to 1 indicating strength
-        - source: How this was detected
-        - confidence: How confident you are in this detection (0-1)
-        """
-        
-        try:
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You analyze user messages to detect preferences and patterns."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=300
-            )
-            
-            # Try to parse JSON response
-            try:
-                analysis = json.loads(response.choices[0].message.content)
-                if "revelations" in analysis:
-                    revelations.extend(analysis["revelations"])
-            except:
-                # If JSON parsing fails, extract what we can
-                pass
-        except Exception as e:
-            pass
+        # Use the LLM for more sophisticated analysis through UserModelManager
+        sophisticated_analysis = await user_model_manager.analyze_text_for_preferences(user_message)
+        if sophisticated_analysis and sophisticated_analysis.get("revelations"):
+            revelations.extend(sophisticated_analysis["revelations"])
     
     # Track any detected revelations
     if revelations:
@@ -653,44 +616,3 @@ async def initialize_user_model(user_id: int) -> Dict[str, Any]:
     user_model = await user_model_context.user_model_manager.get_user_model()
     
     return user_model
-
-def _process_user_interaction(self, interaction: Dict[str, Any]):
-    """Process a user interaction for model updates"""
-    try:
-        # Extract features
-        features = self._extract_interaction_features(interaction)
-        
-        # Update behavioral model
-        self._update_behavioral_model(features)
-        
-        # Update preference model
-        self._update_preference_model(features)
-        
-        # Update emotional model
-        self._update_emotional_model(features)
-        
-        # Save updates
-        self._save_model_updates()
-        
-    except Exception as e:
-        logger.error(f"Failed to process user interaction: {e}")
-        raise
-
-def _process_model_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a query against the user model"""
-    try:
-        # Parse query
-        query_type = query.get("type", "general")
-        query_params = query.get("params", {})
-        
-        # Get relevant model components
-        components = self._get_relevant_components(query_type)
-        
-        # Generate response
-        response = self._generate_model_response(components, query_params)
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Failed to process model query: {e}")
-        raise
