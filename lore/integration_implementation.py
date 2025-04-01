@@ -1,3 +1,5 @@
+# lore/integration_implementation.py
+
 """Implementation of integration layer methods for the lore system."""
 
 import logging
