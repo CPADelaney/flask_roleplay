@@ -1,3 +1,5 @@
+# lore/__init__.py
+
 """
 Lore Module
 
@@ -15,8 +17,8 @@ from .lore_system import LoreSystem
 from .lore_routes import register_lore_routes
 
 # Core components
-from .lore_generators import DynamicLoreGenerator, WorldBuilder, FactionGenerator, LoreEvolution
-from .lore_integration import NPCLoreIntegration, ConflictIntegration, ContextEnhancer
+from .lore_generator import DynamicLoreGenerator
+from .integration import NPCLoreIntegration, ConflictIntegration, ContextEnhancer
 from .governance_registration import register_all_lore_modules_with_governance
 
 # Error handling
@@ -24,7 +26,7 @@ from .error_manager import ErrorHandler, LoreError, handle_errors
 
 # Utility components
 from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
-from .lore_validation import ValidationManager, ValidationResult
+from .validation import ValidationManager, ValidationResult
 from .lore_directive_handler import LoreDirectiveHandler
 from .lore_tools import (
     generate_foundation_lore,
@@ -57,9 +59,6 @@ __all__ = [
     'register_lore_routes',
     'register_all_lore_modules_with_governance',
     'DynamicLoreGenerator',
-    'WorldBuilder',
-    'FactionGenerator',
-    'LoreEvolution',
     'NPCLoreIntegration',
     'ConflictIntegration',
     'ContextEnhancer',
