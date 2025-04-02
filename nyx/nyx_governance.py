@@ -34,9 +34,11 @@ from agents import trace
 # Database connection helper
 from db.connection import get_db_connection_context
 
+from nyx.constants import DirectiveType, DirectivePriority, AgentType
+
 # Memory system references
 from memory.wrapper import MemorySystem
-from memory.memory_nyx_integration import MemoryNyxBridge, get_memory_nyx_bridge
+from memory.memory_nyx_integration import get_memory_nyx_bridge
 
 # Integration with LLM services for reasoning
 from nyx.llm_integration import generate_text_completion, generate_reflection
