@@ -776,15 +776,15 @@ COMPUTATION_CACHE_TTL = int(environ.get("COMPUTATION_CACHE_TTL", "600")) # Incre
 # Make sure REDIS_URL env var is set if you want Redis support
 redis_url_env = environ.get("REDIS_URL")
 # Note: EnhancedCache is async, ensure it's started/stopped within an async context
-# logger.info("Attempting to initialize EnhancedCache 'enhanced_main_cache'...")
-# try:
-#    # Example initialization, adjust params as needed
-#    enhanced_main_cache = EnhancedCache(max_size_mb=100, redis_url=redis_url_env)
-#    logger.info("Successfully initialized EnhancedCache 'enhanced_main_cache'.")
-# except Exception as e:
-#    logger.exception(f"CRITICAL ERROR initializing EnhancedCache 'enhanced_main_cache': {e}")
+logger.info("Attempting to initialize EnhancedCache 'enhanced_main_cache'...")
+try:
+   # Example initialization, adjust params as needed
+   enhanced_main_cache = EnhancedCache(max_size_mb=100, redis_url=redis_url_env)
+   logger.info("Successfully initialized EnhancedCache 'enhanced_main_cache'.")
+except Exception as e:
+   logger.exception(f"CRITICAL ERROR initializing EnhancedCache 'enhanced_main_cache': {e}")
     # Decide if this should be fatal (raise) or just logged
-    # raise # Re-raise to make it fatal
+    raise # Re-raise to make it fatal
 
 # --- Initialize MemoryCache Instances ---
 logger.info("Initializing MemoryCache instances...")
