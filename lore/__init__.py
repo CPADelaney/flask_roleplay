@@ -12,17 +12,28 @@ import functools
 from .lore_system import LoreSystem
 
 # API routes
-from lore.lore_api_routes import register_lore_api_routes
+from .lore_routes import register_lore_routes
 
 # Core components
-from .lore_manager import LoreManager
-from .npc_lore_integration import NPCLoreIntegration
-from .dynamic_lore_generator import DynamicLoreGenerator
+from .lore_generators import DynamicLoreGenerator, WorldBuilder, FactionGenerator, LoreEvolution
+from .lore_integration import NPCLoreIntegration, ConflictIntegration, ContextEnhancer
 from .governance_registration import register_all_lore_modules_with_governance
 
-from .generators import ComponentGeneratorFactory, ComponentConfig
-from .resource_manager import ResourceManager, ResourceConfig
-from .error_handler import ErrorHandler
+# Error handling
+from .error_manager import ErrorHandler, LoreError, handle_errors
+
+# Utility components
+from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
+from .lore_validation import ValidationManager, ValidationResult
+from .lore_directive_handler import LoreDirectiveHandler
+from .lore_tools import (
+    generate_foundation_lore,
+    generate_factions,
+    generate_cultural_elements,
+    generate_historical_events,
+    generate_locations,
+    generate_quest_hooks
+)
 
 def _deprecated(func_or_class):
     """Mark a function or class as deprecated with a warning."""
@@ -43,14 +54,29 @@ def _deprecated(func_or_class):
 # Export the main interface
 __all__ = [
     'LoreSystem',
-    'register_lore_api_routes',
+    'register_lore_routes',
     'register_all_lore_modules_with_governance',
-    'LoreManager',
-    'NPCLoreIntegration',
     'DynamicLoreGenerator',
-    'ComponentGeneratorFactory',
-    'ComponentConfig',
-    'ResourceManager',
-    'ResourceConfig',
-    'ErrorHandler'
-] 
+    'WorldBuilder',
+    'FactionGenerator',
+    'LoreEvolution',
+    'NPCLoreIntegration',
+    'ConflictIntegration',
+    'ContextEnhancer',
+    'ErrorHandler',
+    'LoreError',
+    'handle_errors',
+    'NPCDataAccess',
+    'LocationDataAccess',
+    'FactionDataAccess',
+    'LoreKnowledgeAccess',
+    'ValidationManager',
+    'ValidationResult',
+    'LoreDirectiveHandler',
+    'generate_foundation_lore',
+    'generate_factions',
+    'generate_cultural_elements',
+    'generate_historical_events',
+    'generate_locations',
+    'generate_quest_hooks'
+]
