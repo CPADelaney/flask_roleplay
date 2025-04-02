@@ -23,9 +23,11 @@ from memory.memory_agent_sdk import (
     MaintenanceInput,
     AnalysisInput
 )
-from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
+
 from memory.wrapper import MemorySystem
 from utils.caching import get_cache, set_cache, delete_cache
+
+from nyx.constants import AgentType, DirectiveType, DirectivePriority
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ class MemoryNyxBridge:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
+        from nyx.nyx_governance import NyxUnifiedGovernor
         self.governor = NyxUnifiedGovernor(user_id, conversation_id)
         self.memory_context = MemorySystemContext(user_id, conversation_id)
         self.memory_agent = None
