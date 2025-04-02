@@ -1,17 +1,19 @@
-# lore/generator.py
+# lore/lore_generator.py
 
 """
-Lore Generator Components
+Lore Generator Components - Consolidated
 
-This module provides components for generating and evolving lore content.
+This module provides components for generating and evolving lore content,
+including dynamic generation, evolution, and component generation.
 """
 
 import logging
 import json
 import asyncio
-from typing import Dict, List, Any, Optional, Set, Union
-from datetime import datetime
 import random
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from datetime import datetime
+from dataclasses import dataclass
 
 # Nyx governance integration
 from nyx.integrate import get_central_governance
@@ -28,7 +30,7 @@ from .data_access import (
 
 # Generation tools
 from agents.run_context import RunContextWrapper
-from lore.lore_tools import (
+from .lore_tools import (
     generate_foundation_lore,
     generate_factions,
     generate_cultural_elements,
@@ -37,7 +39,23 @@ from lore.lore_tools import (
     generate_quest_hooks
 )
 
+# Import error handling
+from .error_manager import LoreError, ErrorHandler, handle_errors
+
 logger = logging.getLogger(__name__)
+
+#---------------------------
+# Component Generator Base Classes
+#---------------------------
+
+@dataclass
+class ComponentConfig:
+    """Configuration for component generation"""
+    min_length: int = 100
+    max_length: int = 500
+    style: str = "descriptive"
+    tone: str = "neutral"
+    include_metadata: bool = True
 
 class BaseGenerator:
     """Base class for all generator components."""
@@ -54,6 +72,7 @@ class BaseGenerator:
         self.conversation_id = conversation_id
         self.governor = None
         self.initialized = False
+        self._cache = {}
         
         # Initialize data access components
         self.npc_data = NPCDataAccess(user_id, conversation_id)
@@ -87,6 +106,15 @@ class BaseGenerator:
             logger.error(f"Error initializing {self.__class__.__name__}: {e}")
             return False
     
+    async def initialize_governance(self) -> bool:
+        """Initialize governance connection."""
+        try:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing governance for {self.__class__.__name__}: {e}")
+            return False
+    
     async def cleanup(self):
         """Clean up resources."""
         try:
@@ -97,7 +125,265 @@ class BaseGenerator:
             await self.lore_knowledge.cleanup()
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
+    
+    def _get_cached(self, key: str) -> Optional[Dict[str, Any]]:
+        """Get a cached component if available"""
+        return self._cache.get(key)
+    
+    def _cache_component(self, key: str, component: Dict[str, Any]):
+        """Cache a generated component"""
+        self._cache[key] = component
 
+class ComponentGenerator(BaseGenerator):
+    """Base class for all component generators"""
+    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None, 
+                 config: Optional[ComponentConfig] = None):
+        super().__init__(user_id, conversation_id)
+        self.config = config or ComponentConfig()
+    
+    async def generate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a component with the given context"""
+        raise NotImplementedError
+
+class CharacterGenerator(ComponentGenerator):
+    """Generator for character components"""
+    async def generate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        cache_key = f"character_{context.get('name', '')}"
+        if cached := self._get_cached(cache_key):
+            return cached
+            
+        component = {
+            "type": "character",
+            "name": context.get("name", "Unknown Character"),
+            "description": await self._generate_description(context),
+            "traits": await self._generate_traits(context),
+            "background": await self._generate_background(context),
+            "relationships": await self._generate_relationships(context),
+            "metadata": {
+                "created_at": datetime.utcnow().isoformat(),
+                "version": "1.0"
+            } if self.config.include_metadata else {}
+        }
+        
+        self._cache_component(cache_key, component)
+        return component
+    
+    async def _generate_description(self, context: Dict[str, Any]) -> str:
+        """Generate a detailed description for a character."""
+        try:
+            # Extract relevant context
+            name = context.get("name", "Unknown Character")
+            role = context.get("role", "Unknown Role")
+            background = context.get("background", {})
+            
+            # Build description components
+            run_ctx = RunContextWrapper(context={"user_id": self.user_id, "conversation_id": self.conversation_id})
+            
+            # Sample implementation - would use more sophisticated generation in practice
+            description = f"{name} is a {role}. "
+            if "origin" in background:
+                description += f"They come from {background['origin']}. "
+            if "appearance" in context:
+                description += context["appearance"]
+            
+            return description
+        except Exception as e:
+            logger.error(f"Error generating character description: {str(e)}")
+            return f"Description for {context.get('name', 'Unknown Character')}"
+    
+    async def _generate_traits(self, context: Dict[str, Any]) -> List[str]:
+        """Generate character traits."""
+        # Sample implementation - would use more sophisticated generation in practice
+        try:
+            return context.get("predefined_traits", ["Intelligent", "Resourceful", "Cautious"])
+        except Exception as e:
+            logger.error(f"Error generating character traits: {str(e)}")
+            return ["Resourceful", "Adaptable"]
+    
+    async def _generate_background(self, context: Dict[str, Any]) -> str:
+        """Generate character background."""
+        # Sample implementation - would use more sophisticated generation in practice
+        try:
+            return context.get("predefined_background", "A mysterious past shrouded in secrecy.")
+        except Exception as e:
+            logger.error(f"Error generating character background: {str(e)}")
+            return "Background unknown."
+    
+    async def _generate_relationships(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate character relationships."""
+        # Sample implementation - would use more sophisticated generation in practice
+        try:
+            return context.get("predefined_relationships", [])
+        except Exception as e:
+            logger.error(f"Error generating character relationships: {str(e)}")
+            return []
+
+class LocationGenerator(ComponentGenerator):
+    """Generator for location components"""
+    async def generate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        cache_key = f"location_{context.get('name', '')}"
+        if cached := self._get_cached(cache_key):
+            return cached
+            
+        component = {
+            "type": "location",
+            "name": context.get("name", "Unknown Location"),
+            "description": await self._generate_description(context),
+            "climate": await self._generate_climate(context),
+            "geography": await self._generate_geography(context),
+            "culture": await self._generate_culture(context),
+            "metadata": {
+                "created_at": datetime.utcnow().isoformat(),
+                "version": "1.0"
+            } if self.config.include_metadata else {}
+        }
+        
+        self._cache_component(cache_key, component)
+        return component
+    
+    async def _generate_description(self, context: Dict[str, Any]) -> str:
+        """Generate a detailed description for a location."""
+        # Sample implementation
+        try:
+            name = context.get("name", "Unknown Location")
+            location_type = context.get("type", "area")
+            
+            description = f"{name} is a {location_type}. "
+            if "features" in context:
+                description += f"It features {', '.join(context['features'])}. "
+            if "atmosphere" in context:
+                description += context["atmosphere"]
+                
+            return description
+        except Exception as e:
+            logger.error(f"Error generating location description: {str(e)}")
+            return f"Description of {context.get('name', 'Unknown Location')}"
+    
+    async def _generate_climate(self, context: Dict[str, Any]) -> str:
+        """Generate climate information."""
+        # Sample implementation
+        try:
+            return context.get("climate", "Temperate")
+        except Exception as e:
+            logger.error(f"Error generating climate: {str(e)}")
+            return "Temperate"
+    
+    async def _generate_geography(self, context: Dict[str, Any]) -> str:
+        """Generate geographical information."""
+        # Sample implementation
+        try:
+            return context.get("geography", "Varied terrain")
+        except Exception as e:
+            logger.error(f"Error generating geography: {str(e)}")
+            return "Varied terrain"
+    
+    async def _generate_culture(self, context: Dict[str, Any]) -> str:
+        """Generate cultural information."""
+        # Sample implementation
+        try:
+            return context.get("culture", "Diverse")
+        except Exception as e:
+            logger.error(f"Error generating culture: {str(e)}")
+            return "Diverse"
+
+class EventGenerator(ComponentGenerator):
+    """Generator for event components"""
+    async def generate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        cache_key = f"event_{context.get('name', '')}"
+        if cached := self._get_cached(cache_key):
+            return cached
+            
+        component = {
+            "type": "event",
+            "name": context.get("name", "Unknown Event"),
+            "description": await self._generate_description(context),
+            "date": await self._generate_date(context),
+            "participants": await self._generate_participants(context),
+            "consequences": await self._generate_consequences(context),
+            "metadata": {
+                "created_at": datetime.utcnow().isoformat(),
+                "version": "1.0"
+            } if self.config.include_metadata else {}
+        }
+        
+        self._cache_component(cache_key, component)
+        return component
+    
+    async def _generate_description(self, context: Dict[str, Any]) -> str:
+        """Generate a detailed description for an event."""
+        # Sample implementation
+        try:
+            name = context.get("name", "Unknown Event")
+            event_type = context.get("type", "occurrence")
+            
+            description = f"{name} was a significant {event_type}. "
+            if "details" in context:
+                if "summary" in context["details"]:
+                    description += context["details"]["summary"]
+                
+            return description
+        except Exception as e:
+            logger.error(f"Error generating event description: {str(e)}")
+            return f"Description of {context.get('name', 'Unknown Event')}"
+    
+    async def _generate_date(self, context: Dict[str, Any]) -> str:
+        """Generate date information."""
+        # Sample implementation
+        try:
+            year = context.get("year")
+            month = context.get("month")
+            day = context.get("day")
+            
+            if all([year, month, day]):
+                return f"{year}-{month:02d}-{day:02d}"
+            elif year:
+                return f"Year {year}"
+            else:
+                return "Unknown date"
+        except Exception as e:
+            logger.error(f"Error generating event date: {str(e)}")
+            return "Unknown date"
+    
+    async def _generate_participants(self, context: Dict[str, Any]) -> List[str]:
+        """Generate participant information."""
+        # Sample implementation
+        try:
+            return context.get("participants", [])
+        except Exception as e:
+            logger.error(f"Error generating event participants: {str(e)}")
+            return []
+    
+    async def _generate_consequences(self, context: Dict[str, Any]) -> List[str]:
+        """Generate consequence information."""
+        # Sample implementation
+        try:
+            return context.get("consequences", [])
+        except Exception as e:
+            logger.error(f"Error generating event consequences: {str(e)}")
+            return []
+
+class ComponentGeneratorFactory:
+    """Factory for creating component generators"""
+    @staticmethod
+    def create_generator(component_type: str, user_id: Optional[int] = None, 
+                         conversation_id: Optional[int] = None,
+                         config: Optional[ComponentConfig] = None) -> ComponentGenerator:
+        """Create a component generator of the specified type."""
+        generators = {
+            "character": CharacterGenerator,
+            "location": LocationGenerator,
+            "event": EventGenerator
+        }
+        
+        generator_class = generators.get(component_type.lower())
+        if not generator_class:
+            raise ValueError(f"Unknown component type: {component_type}")
+            
+        return generator_class(user_id, conversation_id, config)
+
+#---------------------------
+# World and Setting Generators
+#---------------------------
 
 class WorldBuilder(BaseGenerator):
     """Generates foundation world lore."""
@@ -245,6 +531,11 @@ class WorldBuilder(BaseGenerator):
             logger.error(f"Error getting setting name: {e}")
             return "The Setting"
 
+    async def get_connection_pool(self):
+        """Get database connection pool."""
+        # This would need to be implemented based on your database connection implementation
+        from db.connection import get_connection_pool
+        return await get_connection_pool()
 
 class FactionGenerator(BaseGenerator):
     """Generates faction and related lore content."""
@@ -290,17 +581,7 @@ class FactionGenerator(BaseGenerator):
         # Store each in the DB
         for faction in factions_data:
             try:
-                await self._store_faction(
-                    name=faction["name"],
-                    faction_type=faction["type"],
-                    description=faction["description"],
-                    values=faction["values"],
-                    goals=faction["goals"],
-                    headquarters=faction.get("headquarters"),
-                    rivals=faction.get("rivals", []),
-                    allies=faction.get("allies", []),
-                    hierarchy_type=faction.get("hierarchy_type")
-                )
+                await self._store_faction(faction)
             except Exception as e:
                 logging.error(f"Error storing faction '{faction['name']}': {e}")
 
@@ -359,14 +640,7 @@ class FactionGenerator(BaseGenerator):
         # Store them
         for element in cultural_data:
             try:
-                await self._store_cultural_element(
-                    name=element["name"],
-                    element_type=element["type"],
-                    description=element["description"],
-                    practiced_by=element["practiced_by"],
-                    significance=element["significance"],
-                    historical_origin=element.get("historical_origin", "")
-                )
+                await self._store_cultural_element(element)
             except Exception as e:
                 logging.error(f"Error storing cultural element '{element.get('name','unknown')}': {e}")
 
@@ -429,14 +703,7 @@ class FactionGenerator(BaseGenerator):
         # Then store them
         for event in events_data:
             try:
-                await self._store_historical_event(
-                    name=event["name"],
-                    description=event["description"],
-                    date_description=event["date_description"],
-                    significance=event["significance"],
-                    participating_factions=event["participating_factions"],
-                    consequences=event["consequences"]
-                )
+                await self._store_historical_event(event)
             except Exception as e:
                 logging.error(f"Error storing historical event '{event.get('name','Unknown')}': {e}")
 
@@ -496,11 +763,7 @@ class FactionGenerator(BaseGenerator):
         for loc in locations_data:
             try:
                 # Create the location record
-                location_id = await self._store_location(
-                    name=loc["name"],
-                    description=loc["description"],
-                    location_type=loc["type"]
-                )
+                location_id = await self._store_location(loc)
 
                 # Add location lore
                 controlling_faction = loc.get("controlling_faction")
@@ -577,16 +840,7 @@ class FactionGenerator(BaseGenerator):
         # Store them
         for quest in quests_data:
             try:
-                await self._store_quest(
-                    quest_name=quest["quest_name"],
-                    quest_giver=quest["quest_giver"],
-                    location=quest["location"],
-                    description=quest["description"],
-                    difficulty=quest["difficulty"],
-                    objectives=quest["objectives"],
-                    rewards=quest["rewards"],
-                    lore_significance=quest["lore_significance"]
-                )
+                await self._store_quest(quest)
             except Exception as e:
                 logging.error(f"Error storing quest hook '{quest.get('quest_name','Unknown')}': {e}")
 
@@ -606,27 +860,8 @@ class FactionGenerator(BaseGenerator):
 
         return quests_data
     
-    async def _store_faction(self, name: str, faction_type: str, description: str,
-                           values: List[str], goals: List[str], headquarters: Optional[str] = None,
-                           rivals: Optional[List[str]] = None, allies: Optional[List[str]] = None,
-                           hierarchy_type: Optional[str] = None) -> int:
-        """
-        Store a faction in the database.
-        
-        Args:
-            name: Faction name
-            faction_type: Type of faction
-            description: Faction description
-            values: List of faction values
-            goals: List of faction goals
-            headquarters: Optional headquarters location
-            rivals: Optional list of rival factions
-            allies: Optional list of allied factions
-            hierarchy_type: Optional hierarchy type
-            
-        Returns:
-            ID of the created faction
-        """
+    async def _store_faction(self, faction_data: Dict[str, Any]) -> int:
+        """Store a faction in the database."""
         try:
             query = """
                 INSERT INTO Factions (
@@ -637,26 +872,22 @@ class FactionGenerator(BaseGenerator):
                 RETURNING id
             """
             
-            # Convert arrays to JSON strings if necessary
-            if not isinstance(values, str):
-                values_json = json.dumps(values)
-            else:
-                values_json = values
-                
-            if not isinstance(goals, str):
-                goals_json = json.dumps(goals)
-            else:
-                goals_json = goals
-                
-            if not isinstance(rivals, str) and rivals is not None:
-                rivals_json = json.dumps(rivals)
-            else:
-                rivals_json = rivals
-                
-            if not isinstance(allies, str) and allies is not None:
-                allies_json = json.dumps(allies)
-            else:
-                allies_json = allies
+            # Extract values from faction data
+            name = faction_data.get("name", "Unknown Faction")
+            faction_type = faction_data.get("type", "organization")
+            description = faction_data.get("description", "")
+            values = faction_data.get("values", [])
+            goals = faction_data.get("goals", [])
+            headquarters = faction_data.get("headquarters")
+            rivals = faction_data.get("rivals", [])
+            allies = faction_data.get("allies", [])
+            hierarchy_type = faction_data.get("hierarchy_type")
+            
+            # Convert lists to JSON if needed
+            values_json = json.dumps(values) if not isinstance(values, str) else values
+            goals_json = json.dumps(goals) if not isinstance(goals, str) else goals
+            rivals_json = json.dumps(rivals) if not isinstance(rivals, str) and rivals is not None else rivals
+            allies_json = json.dumps(allies) if not isinstance(allies, str) and allies is not None else allies
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -682,24 +913,8 @@ class FactionGenerator(BaseGenerator):
             logger.error(f"Error storing faction: {e}")
             return 0
     
-    async def _store_cultural_element(self, name: str, element_type: str, 
-                                    description: str, practiced_by: List[str],
-                                    significance: int,
-                                    historical_origin: Optional[str] = None) -> int:
-        """
-        Store a cultural element in the database.
-        
-        Args:
-            name: Element name
-            element_type: Type of cultural element
-            description: Element description
-            practiced_by: List of practitioners
-            significance: Element significance (1-10)
-            historical_origin: Optional historical origin
-            
-        Returns:
-            ID of the created cultural element
-        """
+    async def _store_cultural_element(self, element_data: Dict[str, Any]) -> int:
+        """Store a cultural element in the database."""
         try:
             query = """
                 INSERT INTO CulturalElements (
@@ -710,11 +925,16 @@ class FactionGenerator(BaseGenerator):
                 RETURNING id
             """
             
-            # Convert arrays to JSON strings if necessary
-            if not isinstance(practiced_by, str):
-                practiced_by_json = json.dumps(practiced_by)
-            else:
-                practiced_by_json = practiced_by
+            # Extract values from element data
+            name = element_data.get("name", "Unknown Element")
+            element_type = element_data.get("type", "tradition")
+            description = element_data.get("description", "")
+            practiced_by = element_data.get("practiced_by", [])
+            significance = element_data.get("significance", 5)
+            historical_origin = element_data.get("historical_origin")
+            
+            # Convert lists to JSON if needed
+            practiced_by_json = json.dumps(practiced_by) if not isinstance(practiced_by, str) else practiced_by
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -737,24 +957,8 @@ class FactionGenerator(BaseGenerator):
             logger.error(f"Error storing cultural element: {e}")
             return 0
     
-    async def _store_historical_event(self, name: str, description: str,
-                                    date_description: str, significance: int,
-                                    participating_factions: List[str],
-                                    consequences: List[str]) -> int:
-        """
-        Store a historical event in the database.
-        
-        Args:
-            name: Event name
-            description: Event description
-            date_description: Description of when it occurred
-            significance: Event significance (1-10)
-            participating_factions: List of participating factions
-            consequences: List of consequences
-            
-        Returns:
-            ID of the created historical event
-        """
+    async def _store_historical_event(self, event_data: Dict[str, Any]) -> int:
+        """Store a historical event in the database."""
         try:
             query = """
                 INSERT INTO HistoricalEvents (
@@ -765,16 +969,17 @@ class FactionGenerator(BaseGenerator):
                 RETURNING id
             """
             
-            # Convert arrays to JSON strings if necessary
-            if not isinstance(participating_factions, str):
-                factions_json = json.dumps(participating_factions)
-            else:
-                factions_json = participating_factions
-                
-            if not isinstance(consequences, str):
-                consequences_json = json.dumps(consequences)
-            else:
-                consequences_json = consequences
+            # Extract values from event data
+            name = event_data.get("name", "Unknown Event")
+            description = event_data.get("description", "")
+            date_description = event_data.get("date_description", "Unknown date")
+            significance = event_data.get("significance", 5)
+            participating_factions = event_data.get("participating_factions", [])
+            consequences = event_data.get("consequences", [])
+            
+            # Convert lists to JSON if needed
+            factions_json = json.dumps(participating_factions) if not isinstance(participating_factions, str) else participating_factions
+            consequences_json = json.dumps(consequences) if not isinstance(consequences, str) else consequences
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -797,19 +1002,8 @@ class FactionGenerator(BaseGenerator):
             logger.error(f"Error storing historical event: {e}")
             return 0
     
-    async def _store_location(self, name: str, description: str,
-                            location_type: str) -> int:
-        """
-        Store a location in the database.
-        
-        Args:
-            name: Location name
-            description: Location description
-            location_type: Type of location
-            
-        Returns:
-            ID of the created location
-        """
+    async def _store_location(self, location_data: Dict[str, Any]) -> int:
+        """Store a location in the database."""
         try:
             query = """
                 INSERT INTO Locations (
@@ -818,6 +1012,11 @@ class FactionGenerator(BaseGenerator):
                 ) VALUES ($1, $2, $3, $4, $5, NOW())
                 RETURNING id
             """
+            
+            # Extract values from location data
+            name = location_data.get("name", "Unknown Location")
+            description = location_data.get("description", "")
+            location_type = location_data.get("type", "area")
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -840,19 +1039,7 @@ class FactionGenerator(BaseGenerator):
     async def _store_location_lore(self, location_id: int, founding_story: str,
                                 hidden_secrets: List[str], local_legends: List[str],
                                 historical_significance: str) -> int:
-        """
-        Store location lore in the database.
-        
-        Args:
-            location_id: ID of the location
-            founding_story: Story of the location's founding
-            hidden_secrets: List of hidden secrets
-            local_legends: List of local legends
-            historical_significance: Historical significance
-            
-        Returns:
-            ID of the created location lore
-        """
+        """Store location lore in the database."""
         try:
             query = """
                 INSERT INTO LocationLore (
@@ -863,16 +1050,9 @@ class FactionGenerator(BaseGenerator):
                 RETURNING id
             """
             
-            # Convert arrays to JSON strings if necessary
-            if not isinstance(hidden_secrets, str):
-                secrets_json = json.dumps(hidden_secrets)
-            else:
-                secrets_json = hidden_secrets
-                
-            if not isinstance(local_legends, str):
-                legends_json = json.dumps(local_legends)
-            else:
-                legends_json = local_legends
+            # Convert lists to JSON if needed
+            secrets_json = json.dumps(hidden_secrets) if not isinstance(hidden_secrets, str) else hidden_secrets
+            legends_json = json.dumps(local_legends) if not isinstance(local_legends, str) else local_legends
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -895,16 +1075,7 @@ class FactionGenerator(BaseGenerator):
             return 0
     
     async def _connect_faction_to_location(self, location_id: int, faction_name: str) -> bool:
-        """
-        Connect a faction to a location.
-        
-        Args:
-            location_id: ID of the location
-            faction_name: Name of the faction
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Connect a faction to a location in the database."""
         try:
             # First, get the faction ID
             faction_query = """
@@ -953,25 +1124,8 @@ class FactionGenerator(BaseGenerator):
             logger.error(f"Error connecting faction to location: {e}")
             return False
     
-    async def _store_quest(self, quest_name: str, quest_giver: str, location: str,
-                         description: str, difficulty: int, objectives: List[str],
-                         rewards: List[str], lore_significance: int) -> int:
-        """
-        Store a quest in the database.
-        
-        Args:
-            quest_name: Name of the quest
-            quest_giver: Name of the quest giver
-            location: Location of the quest
-            description: Quest description
-            difficulty: Quest difficulty (1-10)
-            objectives: List of objectives
-            rewards: List of rewards
-            lore_significance: Significance to lore (1-10)
-            
-        Returns:
-            ID of the created quest
-        """
+    async def _store_quest(self, quest_data: Dict[str, Any]) -> int:
+        """Store a quest in the database."""
         try:
             query = """
                 INSERT INTO Quests (
@@ -983,16 +1137,19 @@ class FactionGenerator(BaseGenerator):
                 RETURNING id
             """
             
-            # Convert arrays to JSON strings if necessary
-            if not isinstance(objectives, str):
-                objectives_json = json.dumps(objectives)
-            else:
-                objectives_json = objectives
-                
-            if not isinstance(rewards, str):
-                rewards_json = json.dumps(rewards)
-            else:
-                rewards_json = rewards
+            # Extract values from quest data
+            quest_name = quest_data.get("quest_name", "Unknown Quest")
+            quest_giver = quest_data.get("quest_giver", "")
+            location = quest_data.get("location", "")
+            description = quest_data.get("description", "")
+            difficulty = quest_data.get("difficulty", 5)
+            objectives = quest_data.get("objectives", [])
+            rewards = quest_data.get("rewards", [])
+            lore_significance = quest_data.get("lore_significance", 5)
+            
+            # Convert lists to JSON if needed
+            objectives_json = json.dumps(objectives) if not isinstance(objectives, str) else objectives
+            rewards_json = json.dumps(rewards) if not isinstance(rewards, str) else rewards
             
             # Execute query
             async with self.get_connection_pool() as pool:
@@ -1017,7 +1174,12 @@ class FactionGenerator(BaseGenerator):
         except Exception as e:
             logger.error(f"Error storing quest: {e}")
             return 0
-
+    
+    async def get_connection_pool(self):
+        """Get database connection pool."""
+        # This would need to be implemented based on your database connection implementation
+        from db.connection import get_connection_pool
+        return await get_connection_pool()
 
 class LoreEvolution(BaseGenerator):
     """Handles lore evolution over time."""
@@ -1200,48 +1362,15 @@ class LoreEvolution(BaseGenerator):
         try:
             triggers = []
             
-            # Check time-based triggers
-            time_triggers = await self._check_time_triggers(lore, context)
-            triggers.extend(time_triggers)
-            
             # Check event-based triggers
             event_triggers = await self._check_event_triggers(lore, context)
             triggers.extend(event_triggers)
-            
-            # Check state-based triggers
-            state_triggers = await self._check_state_triggers(lore, context)
-            triggers.extend(state_triggers)
-            
-            # Check relationship-based triggers
-            relationship_triggers = await self._check_relationship_triggers(
-                lore,
-                context
-            )
-            triggers.extend(relationship_triggers)
             
             return triggers
             
         except Exception as e:
             logger.error(f"Failed to analyze evolution triggers: {str(e)}")
             raise
-    
-    async def _check_time_triggers(
-        self,
-        lore: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Check for time-based evolution triggers.
-        
-        Args:
-            lore: Current lore state
-            context: Evolution context
-            
-        Returns:
-            List of time-based triggers
-        """
-        # Mock implementation - would be replaced with actual logic
-        return []
     
     async def _check_event_triggers(
         self,
@@ -1271,42 +1400,6 @@ class LoreEvolution(BaseGenerator):
             })
         
         return triggers
-    
-    async def _check_state_triggers(
-        self,
-        lore: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Check for state-based evolution triggers.
-        
-        Args:
-            lore: Current lore state
-            context: Evolution context
-            
-        Returns:
-            List of state-based triggers
-        """
-        # Mock implementation - would be replaced with actual logic
-        return []
-    
-    async def _check_relationship_triggers(
-        self,
-        lore: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Check for relationship-based evolution triggers.
-        
-        Args:
-            lore: Current lore state
-            context: Evolution context
-            
-        Returns:
-            List of relationship-based triggers
-        """
-        # Mock implementation - would be replaced with actual logic
-        return []
     
     async def _generate_evolution_plan(
         self,
@@ -1422,7 +1515,6 @@ class LoreEvolution(BaseGenerator):
         # Mock implementation - would be replaced with actual logic
         return evolved_lore
 
-
 class DynamicLoreGenerator(BaseGenerator):
     """
     Main lore generation coordinator.
@@ -1437,6 +1529,7 @@ class DynamicLoreGenerator(BaseGenerator):
         self.world_builder = None
         self.faction_generator = None
         self.lore_evolution = None
+        self.error_handler = None
     
     async def initialize(self) -> bool:
         """Initialize the dynamic lore generator."""
@@ -1453,6 +1546,9 @@ class DynamicLoreGenerator(BaseGenerator):
             
             self.lore_evolution = LoreEvolution(self.user_id, self.conversation_id)
             await self.lore_evolution.initialize()
+            
+            # Initialize error handler
+            self.error_handler = ErrorHandler(self.user_id, self.conversation_id)
             
             return True
         except Exception as e:
@@ -1496,53 +1592,65 @@ class DynamicLoreGenerator(BaseGenerator):
             logging.warning(f"Complete lore generation not approved: {permission.get('reasoning')}")
             return {"error": permission.get("reasoning"), "approved": False}
         
-        # 1) Foundation lore
-        foundation_data = await self.world_builder.initialize_world_lore(environment_desc)
-        if isinstance(foundation_data, dict) and "error" in foundation_data:
-            return foundation_data
-
-        # 2) Factions referencing 'social_structure' from foundation_data
-        factions_data = await self.faction_generator.generate_factions(environment_desc, foundation_data)
-
-        # 3) Cultural elements referencing environment + factions
-        cultural_data = await self.faction_generator.generate_cultural_elements(environment_desc, factions_data)
-
-        # 4) Historical events referencing environment + foundation_data + factions
-        historical_data = await self.faction_generator.generate_historical_events(environment_desc, foundation_data, factions_data)
-
-        # 5) Locations referencing environment + factions
-        locations_data = await self.faction_generator.generate_locations(environment_desc, factions_data)
-
-        # 6) Quest hooks referencing factions + locations
-        quests_data = await self.faction_generator.generate_quest_hooks(factions_data, locations_data)
-
-        # Report complete action to governance
-        await self.governor.process_agent_action_report(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_generator",
-            action={
-                "type": "generate_complete_lore",
-                "description": f"Generated complete lore for environment: {environment_desc[:50]}"
-            },
-            result={
-                "world_lore_count": len(foundation_data) if isinstance(foundation_data, dict) else 0,
-                "factions_count": len(factions_data),
-                "cultural_elements_count": len(cultural_data),
-                "historical_events_count": len(historical_data),
-                "locations_count": len(locations_data),
-                "quests_count": len(quests_data),
-                "setting_name": await self.world_builder.get_setting_name()
+        try:
+            # 1) Foundation lore
+            foundation_data = await self.world_builder.initialize_world_lore(environment_desc)
+            if isinstance(foundation_data, dict) and "error" in foundation_data:
+                return foundation_data
+    
+            # 2) Factions referencing 'social_structure' from foundation_data
+            factions_data = await self.faction_generator.generate_factions(environment_desc, foundation_data)
+    
+            # 3) Cultural elements referencing environment + factions
+            cultural_data = await self.faction_generator.generate_cultural_elements(environment_desc, factions_data)
+    
+            # 4) Historical events referencing environment + foundation_data + factions
+            historical_data = await self.faction_generator.generate_historical_events(environment_desc, foundation_data, factions_data)
+    
+            # 5) Locations referencing environment + factions
+            locations_data = await self.faction_generator.generate_locations(environment_desc, factions_data)
+    
+            # 6) Quest hooks referencing factions + locations
+            quests_data = await self.faction_generator.generate_quest_hooks(factions_data, locations_data)
+    
+            # Report complete action to governance
+            await self.governor.process_agent_action_report(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="lore_generator",
+                action={
+                    "type": "generate_complete_lore",
+                    "description": f"Generated complete lore for environment: {environment_desc[:50]}"
+                },
+                result={
+                    "world_lore_count": len(foundation_data) if isinstance(foundation_data, dict) else 0,
+                    "factions_count": len(factions_data),
+                    "cultural_elements_count": len(cultural_data),
+                    "historical_events_count": len(historical_data),
+                    "locations_count": len(locations_data),
+                    "quests_count": len(quests_data),
+                    "setting_name": await self.world_builder.get_setting_name()
+                }
+            )
+    
+            return {
+                "world_lore": foundation_data,
+                "factions": factions_data,
+                "cultural_elements": cultural_data,
+                "historical_events": historical_data,
+                "locations": locations_data,
+                "quests": quests_data
             }
-        )
-
-        return {
-            "world_lore": foundation_data,
-            "factions": factions_data,
-            "cultural_elements": cultural_data,
-            "historical_events": historical_data,
-            "locations": locations_data,
-            "quests": quests_data
-        }
+        except Exception as e:
+            error_msg = f"Error generating complete lore: {str(e)}"
+            logger.error(error_msg)
+            
+            # Use error handler if available
+            if self.error_handler:
+                from .error_manager import LoreError, ErrorType
+                error = LoreError(error_msg, ErrorType.UNKNOWN)
+                await self.error_handler.handle_error(error)
+            
+            return {"error": error_msg}
     
     async def evolve_lore_with_event(self, event_description: str) -> Dict[str, Any]:
         """
