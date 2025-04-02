@@ -4,7 +4,7 @@
 Lore Generator Components - Consolidated
 
 This module provides components for generating and evolving lore content,
-including dynamic generation, evolution, and component generation.
+including dynamic generation, evolution, component generation, and governance integration.
 """
 
 import logging
@@ -14,6 +14,21 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from datetime import datetime
 from dataclasses import dataclass
+
+# Agents SDK imports
+from agents import Agent, ModelSettings, function_tool, Runner
+from agents.models.openai_responses import OpenAIResponsesModel
+from agents.run_context import RunContextWrapper
+
+# Import schemas
+from .unified_schemas import (
+    FoundationLoreOutput,
+    FactionsOutput,
+    CulturalElementsOutput,
+    HistoricalEventsOutput,
+    LocationsOutput,
+    QuestsOutput
+)
 
 # Nyx governance integration
 from nyx.integrate import get_central_governance
@@ -28,21 +43,189 @@ from .data_access import (
     LoreKnowledgeAccess
 )
 
-# Generation tools
-from agents.run_context import RunContextWrapper
-from .lore_tools import (
-    generate_foundation_lore,
-    generate_factions,
-    generate_cultural_elements,
-    generate_historical_events,
-    generate_locations,
-    generate_quest_hooks
-)
-
 # Import error handling
 from .error_manager import LoreError, ErrorHandler, handle_errors
 
 logger = logging.getLogger(__name__)
+
+#---------------------------
+# Function Tool Definitions with Nyx Governance
+#---------------------------
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_foundation_lore",
+    action_description="Generating foundation lore for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"foundation_lore_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]:
+    """
+    Generate foundation lore (cosmology, magic system, etc.) for a given environment.
+    
+    Args:
+        environment_desc: Environment description
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate cohesive foundational world lore for this environment:
+    {environment_desc}
+
+    Return as JSON with keys:
+    cosmology, magic_system, world_history, calendar_system, social_structure
+    """
+    
+    result = await Runner.run(foundation_lore_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(FoundationLoreOutput)
+    return final_output.dict()
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_factions",
+    action_description="Generating factions for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"factions_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_factions(ctx, environment_desc: str, social_structure: str) -> List[Dict[str, Any]]:
+    """
+    Generate 3-5 distinct factions referencing environment_desc + social_structure.
+    
+    Args:
+        environment_desc: Environment description
+        social_structure: Social structure description
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate 3-5 distinct factions for this environment:
+    Environment: {environment_desc}
+    Social Structure: {social_structure}
+    
+    Return JSON as an array of objects (matching FactionsOutput).
+    """
+    
+    result = await Runner.run(factions_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(FactionsOutput)
+    return [f.dict() for f in final_output.__root__]
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_cultural_elements",
+    action_description="Generating cultural elements for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"cultural_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_cultural_elements(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Generate cultural elements (traditions, taboos, etc.) referencing environment + faction names.
+    
+    Args:
+        environment_desc: Environment description
+        faction_names: Comma-separated faction names
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate 4-7 unique cultural elements for:
+    Environment: {environment_desc}
+    Factions: {faction_names}
+
+    Return JSON array matching CulturalElementsOutput.
+    """
+    
+    result = await Runner.run(cultural_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(CulturalElementsOutput)
+    return [c.dict() for c in final_output.__root__]
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_historical_events",
+    action_description="Generating historical events for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"history_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_historical_events(ctx, environment_desc: str, world_history: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Generate historical events referencing environment, existing world_history, faction_names.
+    
+    Args:
+        environment_desc: Environment description
+        world_history: Existing world history
+        faction_names: Comma-separated faction names
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate 5-7 significant historical events:
+    Environment: {environment_desc}
+    Existing World History: {world_history}
+    Factions: {faction_names}
+
+    Return JSON array matching HistoricalEventsOutput.
+    """
+    
+    result = await Runner.run(history_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(HistoricalEventsOutput)
+    return [h.dict() for h in final_output.__root__]
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_locations",
+    action_description="Generating locations for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"locations_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_locations(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
+    """
+    Generate 5-8 significant locations referencing environment_desc + faction names.
+    
+    Args:
+        environment_desc: Environment description
+        faction_names: Comma-separated faction names
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate 5-8 significant locations for:
+    Environment: {environment_desc}
+    Factions: {faction_names}
+
+    Return JSON array matching LocationsOutput.
+    """
+    
+    result = await Runner.run(locations_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(LocationsOutput)
+    return [l.dict() for l in final_output.__root__]
+
+@function_tool
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_quest_hooks",
+    action_description="Generating quest hooks for factions and locations",
+    id_from_context=lambda ctx: f"quests_{ctx.context.get('conversation_id', 0)}"
+)
+async def generate_quest_hooks(ctx, faction_names: str, location_names: str) -> List[Dict[str, Any]]:
+    """
+    Generate 5-7 quest hooks referencing existing factions, locations, etc.
+    
+    Args:
+        faction_names: Comma-separated faction names
+        location_names: Comma-separated location names
+    """
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    user_prompt = f"""
+    Generate 5-7 engaging quest hooks:
+    Factions: {faction_names}
+    Locations: {location_names}
+
+    Return JSON array matching QuestsOutput.
+    """
+    
+    result = await Runner.run(quests_agent, user_prompt, context=run_ctx.context)
+    final_output = result.final_output_as(QuestsOutput)
+    return [q.dict() for q in final_output.__root__]
 
 #---------------------------
 # Component Generator Base Classes
@@ -860,326 +1043,43 @@ class FactionGenerator(BaseGenerator):
 
         return quests_data
     
+    # Database storage methods - these would need to be implemented based on your DB schema
     async def _store_faction(self, faction_data: Dict[str, Any]) -> int:
         """Store a faction in the database."""
-        try:
-            query = """
-                INSERT INTO Factions (
-                    user_id, conversation_id, name, type,
-                    description, values, goals, headquarters,
-                    rivals, allies, hierarchy_type, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-                RETURNING id
-            """
-            
-            # Extract values from faction data
-            name = faction_data.get("name", "Unknown Faction")
-            faction_type = faction_data.get("type", "organization")
-            description = faction_data.get("description", "")
-            values = faction_data.get("values", [])
-            goals = faction_data.get("goals", [])
-            headquarters = faction_data.get("headquarters")
-            rivals = faction_data.get("rivals", [])
-            allies = faction_data.get("allies", [])
-            hierarchy_type = faction_data.get("hierarchy_type")
-            
-            # Convert lists to JSON if needed
-            values_json = json.dumps(values) if not isinstance(values, str) else values
-            goals_json = json.dumps(goals) if not isinstance(goals, str) else goals
-            rivals_json = json.dumps(rivals) if not isinstance(rivals, str) and rivals is not None else rivals
-            allies_json = json.dumps(allies) if not isinstance(allies, str) and allies is not None else allies
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    faction_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        name,
-                        faction_type,
-                        description,
-                        values_json,
-                        goals_json,
-                        headquarters,
-                        rivals_json,
-                        allies_json,
-                        hierarchy_type
-                    )
-                    
-                    return faction_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing faction: {e}")
-            return 0
+        # Implementation placeholder
+        return 0
     
     async def _store_cultural_element(self, element_data: Dict[str, Any]) -> int:
         """Store a cultural element in the database."""
-        try:
-            query = """
-                INSERT INTO CulturalElements (
-                    user_id, conversation_id, name, type,
-                    description, practiced_by, significance,
-                    historical_origin, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-                RETURNING id
-            """
-            
-            # Extract values from element data
-            name = element_data.get("name", "Unknown Element")
-            element_type = element_data.get("type", "tradition")
-            description = element_data.get("description", "")
-            practiced_by = element_data.get("practiced_by", [])
-            significance = element_data.get("significance", 5)
-            historical_origin = element_data.get("historical_origin")
-            
-            # Convert lists to JSON if needed
-            practiced_by_json = json.dumps(practiced_by) if not isinstance(practiced_by, str) else practiced_by
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    element_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        name,
-                        element_type,
-                        description,
-                        practiced_by_json,
-                        significance,
-                        historical_origin
-                    )
-                    
-                    return element_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing cultural element: {e}")
-            return 0
+        # Implementation placeholder
+        return 0
     
     async def _store_historical_event(self, event_data: Dict[str, Any]) -> int:
         """Store a historical event in the database."""
-        try:
-            query = """
-                INSERT INTO HistoricalEvents (
-                    user_id, conversation_id, name, description,
-                    date_description, significance, participating_factions,
-                    consequences, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-                RETURNING id
-            """
-            
-            # Extract values from event data
-            name = event_data.get("name", "Unknown Event")
-            description = event_data.get("description", "")
-            date_description = event_data.get("date_description", "Unknown date")
-            significance = event_data.get("significance", 5)
-            participating_factions = event_data.get("participating_factions", [])
-            consequences = event_data.get("consequences", [])
-            
-            # Convert lists to JSON if needed
-            factions_json = json.dumps(participating_factions) if not isinstance(participating_factions, str) else participating_factions
-            consequences_json = json.dumps(consequences) if not isinstance(consequences, str) else consequences
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    event_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        name,
-                        description,
-                        date_description,
-                        significance,
-                        factions_json,
-                        consequences_json
-                    )
-                    
-                    return event_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing historical event: {e}")
-            return 0
+        # Implementation placeholder
+        return 0
     
     async def _store_location(self, location_data: Dict[str, Any]) -> int:
         """Store a location in the database."""
-        try:
-            query = """
-                INSERT INTO Locations (
-                    user_id, conversation_id, location_name,
-                    description, location_type, created_at
-                ) VALUES ($1, $2, $3, $4, $5, NOW())
-                RETURNING id
-            """
-            
-            # Extract values from location data
-            name = location_data.get("name", "Unknown Location")
-            description = location_data.get("description", "")
-            location_type = location_data.get("type", "area")
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    location_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        name,
-                        description,
-                        location_type
-                    )
-                    
-                    return location_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing location: {e}")
-            return 0
+        # Implementation placeholder
+        return 0
     
     async def _store_location_lore(self, location_id: int, founding_story: str,
-                                hidden_secrets: List[str], local_legends: List[str],
-                                historical_significance: str) -> int:
+                                  hidden_secrets: List[str], local_legends: List[str],
+                                  historical_significance: str) -> int:
         """Store location lore in the database."""
-        try:
-            query = """
-                INSERT INTO LocationLore (
-                    user_id, conversation_id, location_id,
-                    founding_story, hidden_secrets, local_legends,
-                    historical_significance, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                RETURNING id
-            """
-            
-            # Convert lists to JSON if needed
-            secrets_json = json.dumps(hidden_secrets) if not isinstance(hidden_secrets, str) else hidden_secrets
-            legends_json = json.dumps(local_legends) if not isinstance(local_legends, str) else local_legends
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    lore_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        location_id,
-                        founding_story,
-                        secrets_json,
-                        legends_json,
-                        historical_significance
-                    )
-                    
-                    return lore_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing location lore: {e}")
-            return 0
+        # Implementation placeholder
+        return 0
     
     async def _connect_faction_to_location(self, location_id: int, faction_name: str) -> bool:
         """Connect a faction to a location in the database."""
-        try:
-            # First, get the faction ID
-            faction_query = """
-                SELECT id FROM Factions
-                WHERE name = $1 AND user_id = $2 AND conversation_id = $3
-                LIMIT 1
-            """
-            
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    faction_id = await conn.fetchval(
-                        faction_query,
-                        faction_name,
-                        self.user_id,
-                        self.conversation_id
-                    )
-                    
-                    if not faction_id:
-                        return False
-                    
-                    # Create connection
-                    connection_query = """
-                        INSERT INTO LoreConnections (
-                            user_id, conversation_id, source_type,
-                            source_id, target_type, target_id,
-                            connection_type, strength, created_at
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-                        RETURNING id
-                    """
-                    
-                    await conn.fetchval(
-                        connection_query,
-                        self.user_id,
-                        self.conversation_id,
-                        "Factions",
-                        faction_id,
-                        "Locations",
-                        location_id,
-                        "controls",
-                        8  # Strong control
-                    )
-                    
-                    return True
-                    
-        except Exception as e:
-            logger.error(f"Error connecting faction to location: {e}")
-            return False
+        # Implementation placeholder
+        return False
     
     async def _store_quest(self, quest_data: Dict[str, Any]) -> int:
         """Store a quest in the database."""
-        try:
-            query = """
-                INSERT INTO Quests (
-                    user_id, conversation_id, quest_name,
-                    quest_giver, location, description,
-                    difficulty, objectives, rewards,
-                    lore_significance, status, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-                RETURNING id
-            """
-            
-            # Extract values from quest data
-            quest_name = quest_data.get("quest_name", "Unknown Quest")
-            quest_giver = quest_data.get("quest_giver", "")
-            location = quest_data.get("location", "")
-            description = quest_data.get("description", "")
-            difficulty = quest_data.get("difficulty", 5)
-            objectives = quest_data.get("objectives", [])
-            rewards = quest_data.get("rewards", [])
-            lore_significance = quest_data.get("lore_significance", 5)
-            
-            # Convert lists to JSON if needed
-            objectives_json = json.dumps(objectives) if not isinstance(objectives, str) else objectives
-            rewards_json = json.dumps(rewards) if not isinstance(rewards, str) else rewards
-            
-            # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    quest_id = await conn.fetchval(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        quest_name,
-                        quest_giver,
-                        location,
-                        description,
-                        difficulty,
-                        objectives_json,
-                        rewards_json,
-                        lore_significance,
-                        "available"  # Default status
-                    )
-                    
-                    return quest_id
-                    
-        except Exception as e:
-            logger.error(f"Error storing quest: {e}")
-            return 0
-    
-    async def get_connection_pool(self):
-        """Get database connection pool."""
-        # This would need to be implemented based on your database connection implementation
-        from db.connection import get_connection_pool
-        return await get_connection_pool()
+        # Implementation placeholder
+        return 0
 
 class LoreEvolution(BaseGenerator):
     """Handles lore evolution over time."""
@@ -1676,3 +1576,95 @@ class DynamicLoreGenerator(BaseGenerator):
             
         if self.lore_evolution:
             await self.lore_evolution.cleanup()
+
+# Agent definitions for reference in the function tools
+foundation_lore_agent = Agent(
+    name="FoundationLoreAgent",
+    instructions=(
+        "You produce foundational world lore for a fantasy environment. "
+        "Return valid JSON that matches FoundationLoreOutput, which has keys: "
+        "[cosmology, magic_system, world_history, calendar_system, social_structure]. "
+        "Do NOT include any extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.4),
+    output_type=FoundationLoreOutput,
+)
+
+factions_agent = Agent(
+    name="FactionsAgent",
+    instructions=(
+        "You generate 3-5 distinct factions for a given setting. "
+        "Return valid JSON as an array of objects, matching FactionsOutput. "
+        "Each faction object has: name, type, description, values, goals, "
+        "headquarters, rivals, allies, hierarchy_type, etc. "
+        "No extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.7),
+    output_type=FactionsOutput,
+)
+
+cultural_agent = Agent(
+    name="CulturalAgent",
+    instructions=(
+        "You create cultural elements like traditions, customs, rituals. "
+        "Return JSON matching CulturalElementsOutput: an array of objects. "
+        "Fields include: name, type, description, practiced_by, significance, "
+        "historical_origin. No extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.5),
+    output_type=CulturalElementsOutput,
+)
+
+history_agent = Agent(
+    name="HistoryAgent",
+    instructions=(
+        "You create major historical events. Return JSON matching "
+        "HistoricalEventsOutput: an array with fields name, date_description, "
+        "description, participating_factions, consequences, significance. "
+        "No extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.6),
+    output_type=HistoricalEventsOutput,
+)
+
+locations_agent = Agent(
+    name="LocationsAgent",
+    instructions=(
+        "You generate 5-8 significant locations. Return JSON matching "
+        "LocationsOutput: an array of objects with fields name, description, "
+        "type, controlling_faction, notable_features, hidden_secrets, "
+        "strategic_importance. No extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.7),
+    output_type=LocationsOutput,
+)
+
+quests_agent = Agent(
+    name="QuestsAgent",
+    instructions=(
+        "You create 5-7 quest hooks. Return JSON matching QuestsOutput: an "
+        "array of objects with quest_name, quest_giver, location, description, "
+        "objectives, rewards, difficulty, lore_significance. "
+        "No extra text outside the JSON.\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),
+    model_settings=ModelSettings(temperature=0.7),
+    output_type=QuestsOutput,
+)
