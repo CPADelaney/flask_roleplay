@@ -6,8 +6,8 @@ Unified Configuration System
 Manages all configuration settings for the lore system.
 """
 
-from typing import Dict, Any, Optional, List, Union
-from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List, Union, Type
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import yaml
 import json
@@ -72,11 +72,11 @@ class ErrorHandlerConfig:
 @dataclass
 class DatabaseConfig:
     """Database configuration"""
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+    host: str = "localhost"
+    port: int = 5432
+    user: str = "postgres"
+    password: str = ""
+    database: str = "lore_db"
     pool_size: int = 10
     max_overflow: int = 20
     pool_timeout: int = 30
@@ -95,7 +95,7 @@ class MonitoringConfig:
 @dataclass
 class SecurityConfig:
     """Security configuration"""
-    secret_key: str
+    secret_key: str = ""
     token_expiry: int = 3600
     rate_limit_enabled: bool = True
     cors_enabled: bool = True
@@ -105,9 +105,24 @@ class SecurityConfig:
     ssl_key_path: Optional[str] = None
 
 @dataclass
+class SystemConfig:
+    """System configuration"""
+    environment: str = "development"
+    debug: bool = False
+    testing: bool = False
+    max_workers: int = 4
+    request_timeout: int = 30
+    max_request_size: int = 10485760  # 10MB
+    temp_dir: str = "/tmp/lore"
+    file_upload_dir: str = "uploads"
+    allowed_extensions: List[str] = field(default_factory=lambda: [
+        ".txt", ".json", ".yaml", ".md"
+    ])
+
+@dataclass
 class LoreConfig:
     """Main configuration class"""
-    environment: Environment
+    environment: Environment = Environment.DEVELOPMENT
     debug: bool = False
     log_level: str = "INFO"
     log_format: str = "json"
@@ -118,6 +133,7 @@ class LoreConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
     custom_settings: Dict[str, Any] = field(default_factory=dict)
 
 class ConfigManager:
@@ -169,7 +185,7 @@ class ConfigManager:
                 config_key = key[5:].lower().replace('_', '.')
                 self._set_nested_value(self.config, config_key, value)
                 
-    def _set_nested_value(self, d: Dict[str, Any], key: str, value: Any):
+    def _set_nested_value(self, d: dict, key: str, value: Any):
         """Set a nested dictionary value using dot notation."""
         keys = key.split('.')
         current = d
@@ -237,38 +253,6 @@ class ConfigManager:
             'path': self.get('metrics.path', '/metrics')
         }
         
-    def get_security_config(self) -> Dict[str, Any]:
-        """Get security configuration."""
-        return {
-            'secret_key': self.get('security.secret_key', ''),
-            'token_expiry': int(self.get('security.token_expiry', 3600)),
-            'allowed_origins': self.get('security.allowed_origins', ['*'])
-        }
-        
-    def get_integration_config(self) -> Dict[str, Any]:
-        """Get integration configuration."""
-        return {
-            'enabled': self.get('integration.enabled', True),
-            'timeout': int(self.get('integration.timeout', 30)),
-            'retry_count': int(self.get('integration.retry_count', 3))
-        }
-        
-    def get_validation_config(self) -> Dict[str, Any]:
-        """Get validation configuration."""
-        return {
-            'strict_mode': self.get('validation.strict_mode', False),
-            'max_depth': int(self.get('validation.max_depth', 10)),
-            'max_length': int(self.get('validation.max_length', 1000))
-        }
-        
-    def get_performance_config(self) -> Dict[str, Any]:
-        """Get performance configuration."""
-        return {
-            'cache_ttl': int(self.get('performance.cache_ttl', 3600)),
-            'batch_size': int(self.get('performance.batch_size', 100)),
-            'max_connections': int(self.get('performance.max_connections', 100))
-        }
-        
     def get_all_config(self) -> Dict[str, Any]:
         """Get all configuration values."""
         return self.config.copy()
@@ -286,11 +270,43 @@ class ConfigManager:
                 json.dump(self.config, f, indent=4)
         except Exception as e:
             logger.error(f"Error saving config: {str(e)}")
+    
+    def get_lore_config(self) -> LoreConfig:
+        """Get a structured LoreConfig object"""
+        # Map the raw config dictionary to a LoreConfig instance
+        try:
+            env = self.config.get('environment', 'development')
+            environment = Environment(env) if isinstance(env, str) else env
+            
+            return LoreConfig(
+                environment=environment,
+                debug=self.config.get('debug', False),
+                log_level=self.config.get('log_level', 'INFO'),
+                log_format=self.config.get('log_format', 'json'),
+                log_file=self.config.get('log_file'),
+                database=DatabaseConfig(**self.config.get('database', {})),
+                cache=ResourceConfig(**self.config.get('cache', {})),
+                validation=ValidationConfig(**self.config.get('validation', {})),
+                error_handler=ErrorHandlerConfig(**self.config.get('error_handler', {})),
+                monitoring=MonitoringConfig(**self.config.get('monitoring', {})),
+                security=SecurityConfig(**self.config.get('security', {})),
+                system=SystemConfig(**self.config.get('system', {})),
+                custom_settings=self.config.get('custom_settings', {})
+            )
+        except Exception as e:
+            logger.error(f"Error creating LoreConfig: {str(e)}")
+            # Return default config
+            return LoreConfig()
 
 # Create global config instance
 config = ConfigManager()
 
 @lru_cache()
-def get_config() -> LoreConfig:
-    """Get the global configuration instance"""
-    return config.config 
+def get_config() -> Dict[str, Any]:
+    """Get the global configuration dictionary"""
+    return config.config
+
+@lru_cache()
+def get_lore_config() -> LoreConfig:
+    """Get the global LoreConfig instance"""
+    return config.get_lore_config()
