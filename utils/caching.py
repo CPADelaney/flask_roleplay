@@ -898,6 +898,20 @@ async def set(key: str, value: Any, ttl: int = 300):
 async def delete(key: str):
     return await enhanced_main_cache.invalidate(key)
 
+async def get_cache(key: str):
+    """Wrapper for get function with the expected name."""
+    return await get(key)
+
+async def set_cache(key: str, value: Any, ttl: int = 300):
+    """Wrapper for set function with the expected name."""
+    return await set(key, value, ttl)
+
+async def delete_cache(key: str):
+    """Wrapper for delete function with the expected name."""
+    return await delete(key)
+
+logger.info("Added wrapper functions: get_cache, set_cache, delete_cache")
+
 
 # --- Remove redundant/example code ---
 # Remove the second EnhancedCache initialization and usage examples (lines ~633-672 in original)
