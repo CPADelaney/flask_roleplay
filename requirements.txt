@@ -16,6 +16,7 @@ celery
 gunicorn
 eventlet>=0.24.1
 asgiref
+quart
 
 # Web framework
 flask==3.0.0
