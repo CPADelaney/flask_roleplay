@@ -7,13 +7,13 @@ This module provides API routes for the lore system.
 """
 
 import logging
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from typing import Dict, Any
 
 # Import core lore system
 from .lore_system import LoreSystem
 
-# Import route utilities
+# Import route utilities - these would need to be updated for Quart
 from routes.auth import require_login
 
 # Import monitoring
@@ -43,7 +43,7 @@ async def _get_lore_system(user_id, conversation_id):
 @track_request("lore_generate", "POST")
 async def generate_world_lore(user_id):
     """Generate complete lore for a world/environment."""
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     conversation_id = data.get("conversation_id")
     environment_desc = data.get("environment_desc")
     
@@ -77,8 +77,9 @@ async def generate_world_lore(user_id):
 @track_request("lore_location", "GET")
 async def get_location_lore(user_id):
     """Get lore for a specific location."""
-    conversation_id = request.args.get("conversation_id")
-    location_name = request.args.get("location_name")
+    args = request.args
+    conversation_id = args.get("conversation_id")
+    location_name = args.get("location_name")
     
     if not conversation_id:
         return jsonify({"error": "Missing conversation_id parameter"}), 400
@@ -107,8 +108,9 @@ async def get_location_lore(user_id):
 @track_request("lore_scene", "GET")
 async def get_scene_with_lore(user_id):
     """Get a scene description with integrated lore for a location."""
-    conversation_id = request.args.get("conversation_id")
-    location_name = request.args.get("location_name")
+    args = request.args
+    conversation_id = args.get("conversation_id")
+    location_name = args.get("location_name")
     
     if not conversation_id:
         return jsonify({"error": "Missing conversation_id parameter"}), 400
@@ -137,8 +139,9 @@ async def get_scene_with_lore(user_id):
 @track_request("lore_npc_knowledge", "GET")
 async def get_npc_lore_knowledge(user_id):
     """Get an NPC's knowledge of lore."""
-    conversation_id = request.args.get("conversation_id")
-    npc_id = request.args.get("npc_id")
+    args = request.args
+    conversation_id = args.get("conversation_id")
+    npc_id = args.get("npc_id")
     
     if not conversation_id:
         return jsonify({"error": "Missing conversation_id parameter"}), 400
@@ -167,7 +170,7 @@ async def get_npc_lore_knowledge(user_id):
 @track_request("lore_npcs_integrate", "POST")
 async def integrate_lore_with_npcs_route(user_id):
     """Integrate lore with NPCs."""
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     conversation_id = data.get("conversation_id")
     npc_ids = data.get("npc_ids", [])
     
@@ -216,7 +219,7 @@ async def integrate_lore_with_npcs_route(user_id):
 @track_request("lore_update", "POST")
 async def update_lore_after_event(user_id):
     """Update lore based on a narrative event."""
-    data = request.get_json() or {}
+    data = await request.get_json() or {}
     conversation_id = data.get("conversation_id")
     event_description = data.get("event_description")
     
@@ -247,6 +250,6 @@ async def update_lore_after_event(user_id):
 #---------------------------
 
 def register_lore_routes(app):
-    """Register lore routes with the Flask app."""
+    """Register lore routes with the Quart app."""
     app.register_blueprint(lore_bp)
     logger.info("Lore API routes registered")
