@@ -20,6 +20,13 @@ try:
 except ImportError:
     redis = None # Handle cases where redis might not be installed
 
+from os import environ
+
+# --- Define General Cache Constants --- <<< ADD THESE LINES >>>
+CACHE_TTL: int = 3600  # Example: Default TTL of 1 hour (in seconds)
+NPC_DIRECTIVE_CACHE: str = "npc_directive:{npc_id}" # Example cache key template for NPC directives
+AGENT_DIRECTIVE_CACHE: str = "agent_directive:{agent_id}" # Example cache key template for agent directives
+
 # Configure logging
 name = __name__  # Define name for logger
 logger = logging.getLogger(name)
