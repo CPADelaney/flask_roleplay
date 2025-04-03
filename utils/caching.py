@@ -782,7 +782,8 @@ try:
    enhanced_main_cache = EnhancedCache(max_size_mb=100, redis_url=redis_url_env)
    logger.info("Successfully initialized EnhancedCache 'enhanced_main_cache'.")
 except Exception as e:
-   logger.exception(f"CRITICAL ERROR initializing EnhancedCache 'enhanced_main_cache': {e}")
+    # Assuming 4 spaces for indentation, adjust if you use tabs or a different number
+    logger.exception(f"CRITICAL ERROR initializing EnhancedCache 'enhanced_main_cache': {e}")
     # Decide if this should be fatal (raise) or just logged
     raise # Re-raise to make it fatal
 
