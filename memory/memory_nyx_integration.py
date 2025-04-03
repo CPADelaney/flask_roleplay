@@ -11,6 +11,8 @@ import asyncio
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 
+from memory.core import Memory
+
 from agents import trace, Runner
 
 from memory.memory_agent_sdk import (
