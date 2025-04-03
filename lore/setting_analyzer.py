@@ -3,7 +3,7 @@
 import logging
 import json
 from typing import Dict, Any, List
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 
 # Import Nyx governance
 from nyx.integrate import get_central_governance
@@ -41,68 +41,69 @@ class SettingAnalyzer:
         Returns:
             Dictionary with aggregated NPC data
         """
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT npc_id, npc_name, archetypes, likes, dislikes, 
-                       hobbies, affiliations, personality_traits, 
-                       current_location, archetype_summary
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-            """, (self.user_id, self.conversation_id))
-            
-            rows = cursor.fetchall()
-        finally:
-            cursor.close()
-            conn.close()
-        
-        # Process rows into a structured dict
+        # Initialize empty collections
         all_npcs = []
         all_archetypes, all_likes, all_hobbies, all_affiliations, all_locations = (
             set(), set(), set(), set(), set()
         )
-
-        for row in rows:
-            npc_id, npc_name, archetypes_json, likes_json, dislikes_json, \
-            hobbies_json, affiliations_json, personality_json, \
-            current_location, archetype_summary = row
-
-            # Safely load JSON fields
-            def safe_load(s):
-                try:
-                    return json.loads(s) if s else []
-                except:
-                    return []
-
-            archetypes = safe_load(archetypes_json)
-            likes = safe_load(likes_json)
-            dislikes = safe_load(dislikes_json)
-            hobbies = safe_load(hobbies_json)
-            affiliations = safe_load(affiliations_json)
-            personality_traits = safe_load(personality_json)
-
-            # Update sets
-            all_archetypes.update(archetypes)
-            all_likes.update(likes)
-            all_hobbies.update(hobbies)
-            all_affiliations.update(affiliations)
-            if current_location:
-                all_locations.add(current_location)
+        
+        async with await get_db_connection_context() as conn:
+            # Fetch NPC data using async query
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, archetypes, likes, dislikes, 
+                       hobbies, affiliations, personality_traits, 
+                       current_location, archetype_summary
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, self.user_id, self.conversation_id)
             
-            all_npcs.append({
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "archetypes": archetypes,
-                "likes": likes,
-                "dislikes": dislikes,
-                "hobbies": hobbies,
-                "affiliations": affiliations,
-                "personality_traits": personality_traits,
-                "current_location": current_location,
-                "archetype_summary": archetype_summary
-            })
+            # Process rows into a structured dict
+            for row in rows:
+                npc_id = row['npc_id']
+                npc_name = row['npc_name']
+                archetypes_json = row['archetypes']
+                likes_json = row['likes']
+                dislikes_json = row['dislikes']
+                hobbies_json = row['hobbies']
+                affiliations_json = row['affiliations']
+                personality_json = row['personality_traits']
+                current_location = row['current_location']
+                archetype_summary = row['archetype_summary']
+
+                # Safely load JSON fields
+                def safe_load(s):
+                    try:
+                        return json.loads(s) if s else []
+                    except:
+                        return []
+
+                archetypes = safe_load(archetypes_json)
+                likes = safe_load(likes_json)
+                dislikes = safe_load(dislikes_json)
+                hobbies = safe_load(hobbies_json)
+                affiliations = safe_load(affiliations_json)
+                personality_traits = safe_load(personality_json)
+
+                # Update sets
+                all_archetypes.update(archetypes)
+                all_likes.update(likes)
+                all_hobbies.update(hobbies)
+                all_affiliations.update(affiliations)
+                if current_location:
+                    all_locations.add(current_location)
+                
+                all_npcs.append({
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "archetypes": archetypes,
+                    "likes": likes,
+                    "dislikes": dislikes,
+                    "hobbies": hobbies,
+                    "affiliations": affiliations,
+                    "personality_traits": personality_traits,
+                    "current_location": current_location,
+                    "archetype_summary": archetype_summary
+                })
 
         # Get the environment desc and setting name from DB
         setting_desc, setting_name = await self._get_current_setting_info()
@@ -215,28 +216,23 @@ class SettingAnalyzer:
         """
         setting_desc = "A setting with no description."
         setting_name = "The Setting"
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            cursor.execute("""
+        
+        async with await get_db_connection_context() as conn:
+            # Get environment description
+            row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='EnvironmentDesc'
-            """, (self.user_id, self.conversation_id))
-            row = cursor.fetchone()
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
+            """, self.user_id, self.conversation_id)
             if row:
-                setting_desc = row[0] or setting_desc
+                setting_desc = row['value'] or setting_desc
 
-            cursor.execute("""
+            # Get setting name
+            row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='CurrentSetting'
-            """, (self.user_id, self.conversation_id))
-            row = cursor.fetchone()
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentSetting'
+            """, self.user_id, self.conversation_id)
             if row:
-                setting_name = row[0] or setting_name
-        finally:
-            cursor.close()
-            conn.close()
+                setting_name = row['value'] or setting_name
 
         return setting_desc, setting_name
         
