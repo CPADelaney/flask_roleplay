@@ -10,7 +10,14 @@ Features:
 5) Registration with proper agent types and constants
 """
 
-from typing import Any, Dict, List, Optional, Union, Tuple, Set
+from typing import Any, Dict, List, Optional, Union, Tuple, Set, Type, Callable, TypeVar
+import logging
+import json
+import asyncio
+from datetime import datetime
+import psutil
+import time
+import functools
 
 # Agents SDK imports
 from agents import Agent, ModelSettings, function_tool, Runner, trace
@@ -30,7 +37,7 @@ from nyx.governance_helpers import (
 )
 from nyx.directive_handler import DirectiveHandler
 
-# Pydantic schemas for your outputs
+# Pydantic schemas for outputs
 from lore.unified_schemas import (
     FoundationLoreOutput,
     FactionsOutput,
@@ -43,13 +50,6 @@ from lore.unified_schemas import (
     ValidationOutput,
     FixOutput
 )
-
-import logging
-import json
-import asyncio
-from datetime import datetime
-import psutil
-import time
 
 from .lore_system import LoreSystem
 from .lore_validation import LoreValidator
@@ -67,6 +67,10 @@ logger = logging.getLogger(__name__)
 lore_system = DynamicLoreGenerator()
 lore_validator = ValidationManager()
 error_handler = ErrorHandler()
+
+# Type variables for generic functions
+T = TypeVar('T')
+R = TypeVar('R')
 
 # -------------------------------------------------------------------------------
 # Lore Agent Context and Directive Handler
@@ -97,409 +101,173 @@ class LoreAgentContext(BaseManager):
         await super().stop()
         await self.resource_manager.stop()
     
+    async def _get_cached_data_with_resource_check(
+        self,
+        data_type: str,
+        data_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Generic method to get data from cache with resource availability check."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data(data_type, data_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting {data_type} data: {e}")
+            return None
+    
+    async def _set_cached_data_with_resource_check(
+        self,
+        data_type: str,
+        data_id: str,
+        data: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Generic method to set data in cache with resource availability check."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data(data_type, data_id, data, tags)
+        except Exception as e:
+            logger.error(f"Error setting {data_type} data: {e}")
+            return False
+    
+    async def _invalidate_cached_data_generic(
+        self,
+        data_type: str,
+        data_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Generic method to invalidate cached data."""
+        try:
+            await self.invalidate_cached_data(data_type, data_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating {data_type} data: {e}")
+    
+    # Generic data access methods that use the above helper methods
+    
+    async def get_data(
+        self,
+        data_type: str,
+        data_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get generic data from cache or fetch if not available."""
+        return await self._get_cached_data_with_resource_check(data_type, data_id, fetch_func)
+    
+    async def set_data(
+        self,
+        data_type: str,
+        data_id: str,
+        data: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set generic data in cache."""
+        return await self._set_cached_data_with_resource_check(data_type, data_id, data, tags)
+    
+    async def invalidate_data(
+        self,
+        data_type: str,
+        data_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate generic data cache."""
+        await self._invalidate_cached_data_generic(data_type, data_id, recursive)
+    
+    # Specific data access methods using the generic ones
+    
     # Agent data methods
+    async def get_agent_data(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('agent', agent_id, fetch_func)
     
-    async def get_agent_data(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get agent data from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('agent', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting agent data: {e}")
-            return None
+    async def set_agent_data(self, agent_id: str, data: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('agent', agent_id, data, tags)
     
-    async def set_agent_data(
-        self,
-        agent_id: str,
-        data: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set agent data in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('agent', agent_id, data, tags)
-        except Exception as e:
-            logger.error(f"Error setting agent data: {e}")
-            return False
+    async def invalidate_agent_data(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('agent', agent_id, recursive)
     
-    async def invalidate_agent_data(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate agent data cache."""
-        try:
-            await self.invalidate_cached_data('agent', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating agent data: {e}")
+    # Registration data methods
+    async def get_registration_data(self, registration_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('registration', registration_id, fetch_func)
     
-    # Registration data methods (from governance_registration.py)
+    async def set_registration_data(self, registration_id: str, data: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('registration', registration_id, data, tags)
     
-    async def get_registration_data(
-        self,
-        registration_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get registration data from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('registration', registration_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting registration data: {e}")
-            return None
+    async def invalidate_registration_data(self, registration_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('registration', registration_id, recursive)
     
-    async def set_registration_data(
-        self,
-        registration_id: str,
-        data: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set registration data in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('registration', registration_id, data, tags)
-        except Exception as e:
-            logger.error(f"Error setting registration data: {e}")
-            return False
+    async def get_registration_history(self, registration_id: str, fetch_func: Optional[callable] = None) -> Optional[List[Dict[str, Any]]]:
+        return await self.get_data('registration_history', registration_id, fetch_func)
     
-    async def invalidate_registration_data(
-        self,
-        registration_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate registration data cache."""
-        try:
-            await self.invalidate_cached_data('registration', registration_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating registration data: {e}")
+    async def set_registration_history(self, registration_id: str, history: List[Dict[str, Any]], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('registration_history', registration_id, history, tags)
     
-    async def get_registration_history(
-        self,
-        registration_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Get registration history from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('registration_history', registration_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting registration history: {e}")
-            return None
+    async def invalidate_registration_history(self, registration_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('registration_history', registration_id, recursive)
     
-    async def set_registration_history(
-        self,
-        registration_id: str,
-        history: List[Dict[str, Any]],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set registration history in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('registration_history', registration_id, history, tags)
-        except Exception as e:
-            logger.error(f"Error setting registration history: {e}")
-            return False
+    async def get_registration_metadata(self, registration_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('registration_metadata', registration_id, fetch_func)
     
-    async def invalidate_registration_history(
-        self,
-        registration_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate registration history cache."""
-        try:
-            await self.invalidate_cached_data('registration_history', registration_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating registration history: {e}")
+    async def set_registration_metadata(self, registration_id: str, metadata: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('registration_metadata', registration_id, metadata, tags)
     
-    async def get_registration_metadata(
-        self,
-        registration_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get registration metadata from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('registration_metadata', registration_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting registration metadata: {e}")
-            return None
-    
-    async def set_registration_metadata(
-        self,
-        registration_id: str,
-        metadata: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set registration metadata in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('registration_metadata', registration_id, metadata, tags)
-        except Exception as e:
-            logger.error(f"Error setting registration metadata: {e}")
-            return False
-    
-    async def invalidate_registration_metadata(
-        self,
-        registration_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate registration metadata cache."""
-        try:
-            await self.invalidate_cached_data('registration_metadata', registration_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating registration metadata: {e}")
+    async def invalidate_registration_metadata(self, registration_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('registration_metadata', registration_id, recursive)
     
     # Agent permissions methods
+    async def get_agent_permissions(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('agent_permissions', agent_id, fetch_func)
     
-    async def get_agent_permissions(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get agent permissions from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('agent_permissions', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting agent permissions: {e}")
-            return None
+    async def set_agent_permissions(self, agent_id: str, permissions: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('agent_permissions', agent_id, permissions, tags)
     
-    async def set_agent_permissions(
-        self,
-        agent_id: str,
-        permissions: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set agent permissions in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('agent_permissions', agent_id, permissions, tags)
-        except Exception as e:
-            logger.error(f"Error setting agent permissions: {e}")
-            return False
-    
-    async def invalidate_agent_permissions(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate agent permissions cache."""
-        try:
-            await self.invalidate_cached_data('agent_permissions', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating agent permissions: {e}")
+    async def invalidate_agent_permissions(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('agent_permissions', agent_id, recursive)
     
     # Action history methods
+    async def get_action_history(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[List[Dict[str, Any]]]:
+        return await self.get_data('action_history', agent_id, fetch_func)
     
-    async def get_action_history(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Get action history from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('action_history', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting action history: {e}")
-            return None
+    async def set_action_history(self, agent_id: str, history: List[Dict[str, Any]], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('action_history', agent_id, history, tags)
     
-    async def set_action_history(
-        self,
-        agent_id: str,
-        history: List[Dict[str, Any]],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set action history in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('action_history', agent_id, history, tags)
-        except Exception as e:
-            logger.error(f"Error setting action history: {e}")
-            return False
-    
-    async def invalidate_action_history(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate action history cache."""
-        try:
-            await self.invalidate_cached_data('action_history', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating action history: {e}")
+    async def invalidate_action_history(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('action_history', agent_id, recursive)
     
     # Agent state methods
+    async def get_agent_state(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('agent_state', agent_id, fetch_func)
     
-    async def get_agent_state(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get agent state from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('agent_state', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting agent state: {e}")
-            return None
+    async def set_agent_state(self, agent_id: str, state: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('agent_state', agent_id, state, tags)
     
-    async def set_agent_state(
-        self,
-        agent_id: str,
-        state: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set agent state in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('agent_state', agent_id, state, tags)
-        except Exception as e:
-            logger.error(f"Error setting agent state: {e}")
-            return False
-    
-    async def invalidate_agent_state(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate agent state cache."""
-        try:
-            await self.invalidate_cached_data('agent_state', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating agent state: {e}")
+    async def invalidate_agent_state(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('agent_state', agent_id, recursive)
     
     # Agent relationships methods
+    async def get_agent_relationships(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('agent_relationships', agent_id, fetch_func)
     
-    async def get_agent_relationships(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get agent relationships from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('agent_relationships', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting agent relationships: {e}")
-            return None
+    async def set_agent_relationships(self, agent_id: str, relationships: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('agent_relationships', agent_id, relationships, tags)
     
-    async def set_agent_relationships(
-        self,
-        agent_id: str,
-        relationships: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set agent relationships in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('agent_relationships', agent_id, relationships, tags)
-        except Exception as e:
-            logger.error(f"Error setting agent relationships: {e}")
-            return False
-    
-    async def invalidate_agent_relationships(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate agent relationships cache."""
-        try:
-            await self.invalidate_cached_data('agent_relationships', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating agent relationships: {e}")
+    async def invalidate_agent_relationships(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('agent_relationships', agent_id, recursive)
     
     # Agent metadata methods
+    async def get_agent_metadata(self, agent_id: str, fetch_func: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        return await self.get_data('agent_metadata', agent_id, fetch_func)
     
-    async def get_agent_metadata(
-        self,
-        agent_id: str,
-        fetch_func: Optional[callable] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get agent metadata from cache or fetch if not available."""
-        try:
-            # Check resource availability before fetching
-            if fetch_func:
-                await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.get_cached_data('agent_metadata', agent_id, fetch_func)
-        except Exception as e:
-            logger.error(f"Error getting agent metadata: {e}")
-            return None
+    async def set_agent_metadata(self, agent_id: str, metadata: Dict[str, Any], tags: Optional[Set[str]] = None) -> bool:
+        return await self.set_data('agent_metadata', agent_id, metadata, tags)
     
-    async def set_agent_metadata(
-        self,
-        agent_id: str,
-        metadata: Dict[str, Any],
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """Set agent metadata in cache."""
-        try:
-            # Check resource availability before setting
-            await self.resource_manager._check_resource_availability('memory')
-            
-            return await self.set_cached_data('agent_metadata', agent_id, metadata, tags)
-        except Exception as e:
-            logger.error(f"Error setting agent metadata: {e}")
-            return False
-    
-    async def invalidate_agent_metadata(
-        self,
-        agent_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """Invalidate agent metadata cache."""
-        try:
-            await self.invalidate_cached_data('agent_metadata', agent_id, recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating agent metadata: {e}")
+    async def invalidate_agent_metadata(self, agent_id: Optional[str] = None, recursive: bool = True) -> None:
+        await self.invalidate_data('agent_metadata', agent_id, recursive)
     
     # Resource management methods
-    
     async def get_resource_stats(self) -> Dict[str, Any]:
         """Get resource usage statistics."""
         try:
@@ -529,12 +297,38 @@ agent_context = LoreAgentContext(0, 0)  # Will be properly initialized later
 # Function Tools with Governance Integration
 # -------------------------------------------------------------------------------
 
-@function_tool
-@with_governance(
+def create_governed_function_tool(
+    agent_type: str,
+    action_type: str,
+    action_description_template: str,
+    id_extractor: Callable = lambda ctx: action_type
+):
+    """Factory for creating governed function tools with consistent patterns."""
+    def decorator(func):
+        @function_tool
+        @with_governance(
+            agent_type=agent_type,
+            action_type=action_type,
+            action_description=action_description_template,
+            id_from_context=id_extractor
+        )
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Define common governance parameters for lore functions
+LORE_GOVERNANCE_PARAMS = {
+    'agent_type': AgentType.NARRATIVE_CRAFTER,
+}
+
+# Create governed function tools using the factory
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_foundation_lore",
-    action_description="Generating foundation lore for environment: {environment_desc}",
-    id_from_context=lambda ctx: "foundation_lore"
+    action_description_template="Generating foundation lore for environment: {environment_desc}",
+    id_extractor=lambda ctx: "foundation_lore"
 )
 async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]:
     """
@@ -555,12 +349,11 @@ async def generate_foundation_lore(ctx, environment_desc: str) -> Dict[str, Any]
     final_output = result.final_output_as(FoundationLoreOutput)
     return final_output.dict()
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_factions",
-    action_description="Generating factions for environment: {environment_desc}",
-    id_from_context=lambda ctx: "factions"
+    action_description_template="Generating factions for environment: {environment_desc}",
+    id_extractor=lambda ctx: "factions"
 )
 async def generate_factions(ctx, environment_desc: str, social_structure: str) -> List[Dict[str, Any]]:
     """
@@ -583,12 +376,11 @@ async def generate_factions(ctx, environment_desc: str, social_structure: str) -
     # __root__ is a list of FactionSchema objects
     return [f.dict() for f in final_output.__root__]
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_cultural_elements",
-    action_description="Generating cultural elements for environment: {environment_desc}",
-    id_from_context=lambda ctx: "cultural"
+    action_description_template="Generating cultural elements for environment: {environment_desc}",
+    id_extractor=lambda ctx: "cultural"
 )
 async def generate_cultural_elements(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
     """
@@ -610,12 +402,11 @@ async def generate_cultural_elements(ctx, environment_desc: str, faction_names: 
     final_output = result.final_output_as(CulturalElementsOutput)
     return [c.dict() for c in final_output.__root__]
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_historical_events",
-    action_description="Generating historical events for environment: {environment_desc}",
-    id_from_context=lambda ctx: "history"
+    action_description_template="Generating historical events for environment: {environment_desc}",
+    id_extractor=lambda ctx: "history"
 )
 async def generate_historical_events(ctx, environment_desc: str, world_history: str, faction_names: str) -> List[Dict[str, Any]]:
     """
@@ -639,12 +430,11 @@ async def generate_historical_events(ctx, environment_desc: str, world_history: 
     final_output = result.final_output_as(HistoricalEventsOutput)
     return [h.dict() for h in final_output.__root__]
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_locations",
-    action_description="Generating locations for environment: {environment_desc}",
-    id_from_context=lambda ctx: "locations"
+    action_description_template="Generating locations for environment: {environment_desc}",
+    id_extractor=lambda ctx: "locations"
 )
 async def generate_locations(ctx, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
     """
@@ -666,12 +456,11 @@ async def generate_locations(ctx, environment_desc: str, faction_names: str) -> 
     final_output = result.final_output_as(LocationsOutput)
     return [l.dict() for l in final_output.__root__]
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_quest_hooks",
-    action_description="Generating quest hooks for environment: {environment_desc}",
-    id_from_context=lambda ctx: "quests"
+    action_description_template="Generating quest hooks for environment: {environment_desc}",
+    id_extractor=lambda ctx: "quests"
 )
 async def generate_quest_hooks(ctx, environment_desc: str, faction_names: str, locations: str) -> List[Dict[str, Any]]:
     """
@@ -695,12 +484,11 @@ async def generate_quest_hooks(ctx, environment_desc: str, faction_names: str, l
     final_output = result.final_output_as(QuestsOutput)
     return [q.dict() for q in final_output.__root__]
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="analyze_setting",
-    action_description="Analyzing setting data for environment: {environment_desc}",
-    id_from_context=lambda ctx: "setting"
+    action_description_template="Analyzing setting data for environment: {environment_desc}",
+    id_extractor=lambda ctx: "setting"
 )
 async def analyze_setting(ctx, environment_desc: str) -> Dict[str, Any]:
     """
@@ -725,108 +513,116 @@ async def analyze_setting(ctx, environment_desc: str) -> Dict[str, Any]:
     return result.final_output
 
 # -------------------------------------------------------------------------------
-# Agent Definitions
+# Agent Definitions Factory
 # -------------------------------------------------------------------------------
 
-# Foundation lore agent
-foundation_lore_agent = Agent(
+def create_lore_agent(
+    name: str,
+    instructions: str,
+    output_type: Optional[Type] = None,
+    temperature: float = 0.5
+) -> Agent:
+    """
+    Factory function to create lore agents with consistent settings.
+    
+    Args:
+        name: Agent name
+        instructions: Agent instructions
+        output_type: Expected output type
+        temperature: Model temperature
+        
+    Returns:
+        Configured Agent instance
+    """
+    base_instructions = (
+        f"{instructions}\n\n"
+        "Always respect directives from the Nyx governance system and check permissions "
+        "before performing any actions."
+    )
+    
+    return Agent(
+        name=name,
+        instructions=base_instructions,
+        model=OpenAIResponsesModel(model="o3-mini"),
+        model_settings=ModelSettings(temperature=temperature),
+        output_type=output_type,
+    )
+
+# Create agents using the factory
+foundation_lore_agent = create_lore_agent(
     name="FoundationLoreAgent",
     instructions=(
         "You produce foundational world lore for a fantasy environment. "
         "Return valid JSON that matches FoundationLoreOutput, which has keys: "
         "[cosmology, magic_system, world_history, calendar_system, social_structure]. "
-        "Do NOT include any extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "Do NOT include any extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.4),
     output_type=FoundationLoreOutput,
+    temperature=0.4
 )
 
-# Factions agent
-factions_agent = Agent(
+factions_agent = create_lore_agent(
     name="FactionsAgent",
     instructions=(
         "You generate 3-5 distinct factions for a given setting. "
         "Return valid JSON as an array of objects, matching FactionsOutput. "
         "Each faction object has: name, type, description, values, goals, "
         "headquarters, rivals, allies, hierarchy_type, etc. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.7),
     output_type=FactionsOutput,
+    temperature=0.7
 )
 
-# Cultural elements agent
-cultural_agent = Agent(
+cultural_agent = create_lore_agent(
     name="CulturalAgent",
     instructions=(
         "You create cultural elements like traditions, customs, rituals. "
         "Return JSON matching CulturalElementsOutput: an array of objects. "
         "Fields include: name, type, description, practiced_by, significance, "
-        "historical_origin. No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "historical_origin. No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.5),
     output_type=CulturalElementsOutput,
+    temperature=0.5
 )
 
-# Historical events agent
-history_agent = Agent(
+history_agent = create_lore_agent(
     name="HistoryAgent",
     instructions=(
         "You create major historical events. Return JSON matching "
         "HistoricalEventsOutput: an array with fields name, date_description, "
         "description, participating_factions, consequences, significance. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.6),
     output_type=HistoricalEventsOutput,
+    temperature=0.6
 )
 
-# Locations agent
-locations_agent = Agent(
+locations_agent = create_lore_agent(
     name="LocationsAgent",
     instructions=(
         "You generate 5-8 significant locations. Return JSON matching "
         "LocationsOutput: an array of objects with fields name, description, "
         "type, controlling_faction, notable_features, hidden_secrets, "
-        "strategic_importance. No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "strategic_importance. No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.7),
     output_type=LocationsOutput,
+    temperature=0.7
 )
 
-# Quests agent
-quests_agent = Agent(
+quests_agent = create_lore_agent(
     name="QuestsAgent",
     instructions=(
         "You create 5-7 quest hooks. Return JSON matching QuestsOutput: an "
         "array of objects with quest_name, quest_giver, location, description, "
         "objectives, rewards, difficulty, lore_significance. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.7),
     output_type=QuestsOutput,
+    temperature=0.7
 )
 
-# Setting Analysis Agent
-setting_analysis_agent = Agent(
+setting_analysis_agent = create_lore_agent(
     name="SettingAnalysisAgent",
     instructions=(
         "You analyze the game setting and NPC data to propose relevant "
@@ -834,24 +630,81 @@ setting_analysis_agent = Agent(
         "academic, athletic, social, professional, cultural, political, other. "
         "Each category is an array of objects with fields like name, type, "
         "description, membership_basis, hierarchy, gathering_location, etc. "
-        "No extra text outside the JSON.\n\n"
-        "Always respect directives from the Nyx governance system and check permissions "
-        "before performing any actions."
+        "No extra text outside the JSON."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),
-    model_settings=ModelSettings(temperature=0.7),
+    temperature=0.7
+)
+
+integration_agent = create_lore_agent(
+    name="IntegrationAgent",
+    instructions=(
+        "You integrate different parts of lore to ensure consistency. "
+        "Return JSON matching IntegrationOutput with fields for any "
+        "inconsistencies, resolutions, and integrated data. "
+        "No extra text outside the JSON."
+    ),
+    output_type=IntegrationOutput,
+    temperature=0.5
+)
+
+conflict_resolution_agent = create_lore_agent(
+    name="ConflictResolutionAgent",
+    instructions=(
+        "You resolve conflicts between different parts of lore. "
+        "Return JSON matching ConflictResolutionOutput with fields for "
+        "conflict description, resolution approach, and updated data. "
+        "No extra text outside the JSON."
+    ),
+    output_type=ConflictResolutionOutput,
+    temperature=0.6
+)
+
+validation_agent = create_lore_agent(
+    name="ValidationAgent",
+    instructions=(
+        "You validate lore for consistency and quality. "
+        "Return JSON matching ValidationOutput with fields for "
+        "is_valid (boolean), issues (array), and suggestions (array). "
+        "No extra text outside the JSON."
+    ),
+    output_type=ValidationOutput,
+    temperature=0.4
+)
+
+fix_agent = create_lore_agent(
+    name="FixAgent",
+    instructions=(
+        "You fix inconsistencies in lore. "
+        "Return JSON matching FixOutput with fields for issue_id, "
+        "fix_description, updated_data, and affected_components. "
+        "No extra text outside the JSON."
+    ),
+    output_type=FixOutput,
+    temperature=0.5
+)
+
+relationship_validation_agent = create_lore_agent(
+    name="RelationshipValidationAgent",
+    instructions=(
+        "You validate relationships between different parts of lore. "
+        "Return JSON matching ValidationOutput with fields for "
+        "is_valid (boolean), relationship_issues (array), and "
+        "relationship_suggestions (array). "
+        "No extra text outside the JSON."
+    ),
+    output_type=ValidationOutput, 
+    temperature=0.4
 )
 
 # -------------------------------------------------------------------------------
 # Main Functions for Lore Creation with Governance
 # -------------------------------------------------------------------------------
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="create_complete_lore",
-    action_description="Creating complete lore for environment: {environment_desc}",
-    id_from_context=lambda ctx: "complete_lore"
+    action_description_template="Creating complete lore for environment: {environment_desc}",
+    id_extractor=lambda ctx: "complete_lore"
 )
 async def create_complete_lore_with_governance(ctx, environment_desc: str) -> Dict[str, Any]:
     """
@@ -907,12 +760,11 @@ async def create_complete_lore_with_governance(ctx, environment_desc: str) -> Di
         logger.error(f"Error creating complete lore: {e}")
         return None
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="integrate_npc_lore",
-    action_description="Integrating lore with NPCs: {npc_ids}",
-    id_from_context=lambda ctx: "npc_lore"
+    action_description_template="Integrating lore with NPCs: {npc_ids}",
+    id_extractor=lambda ctx: "npc_lore"
 )
 async def integrate_lore_with_npcs_with_governance(ctx, npc_ids: List[int], lore_context: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -950,12 +802,11 @@ async def integrate_lore_with_npcs_with_governance(ctx, npc_ids: List[int], lore
             "error": str(e)
         }
 
-@function_tool
-@with_governance(
+@create_governed_function_tool(
     agent_type=AgentType.NARRATIVE_CRAFTER,
     action_type="generate_scene_description",
-    action_description="Generating scene description for location: {location_name}",
-    id_from_context=lambda ctx: "scene"
+    action_description_template="Generating scene description for location: {location_name}",
+    id_extractor=lambda ctx: "scene"
 )
 async def generate_scene_description_with_lore_and_governance(
     ctx,
@@ -1001,86 +852,9 @@ async def generate_scene_description_with_lore_and_governance(
             "error": str(e)
         }
 
-async def process_lore_directive(ctx, directive: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Process a lore-related directive with Nyx governance oversight.
-    
-    Args:
-        ctx: Context object
-        directive: Directive to process
-    """
-    try:
-        directive_type = directive.get("type")
-        directive_id = directive.get("id")
-        
-        # Process based on directive type
-        if directive_type == DirectiveType.ACTION:
-            if "generate_lore" in directive.get("instruction", "").lower():
-                return await create_complete_lore_with_governance(ctx, directive.get("environment_desc", ""))
-            elif "integrate_npc" in directive.get("instruction", "").lower():
-                return await integrate_lore_with_npcs_with_governance(
-                    ctx,
-                    directive.get("npc_ids", []),
-                    directive.get("lore_context", {})
-                )
-            elif "generate_scene" in directive.get("instruction", "").lower():
-                return await generate_scene_description_with_lore_and_governance(
-                    ctx,
-                    directive.get("location_name", ""),
-                    directive.get("lore_context", {}),
-                    directive.get("npc_ids", [])
-                )
-        
-        return {
-            "status": "unknown_directive",
-            "directive_id": directive_id,
-            "type": directive_type
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing lore directive: {e}")
-        return {
-            "status": "error",
-            "directive_id": directive_id,
-            "error": str(e)
-        }
-
-async def register_with_governance(user_id: int, conversation_id: int) -> bool:
-    """
-    Register lore agents with Nyx governance.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-    """
-    try:
-        # Get governance system
-        governance = await get_central_governance(user_id, conversation_id)
-        
-        # Register each agent type
-        agent_types = [
-            (AgentType.NARRATIVE_CRAFTER, "lore_generator"),
-            (AgentType.NARRATIVE_CRAFTER, "lore_integrator"),
-            (AgentType.NARRATIVE_CRAFTER, "setting_analyzer")
-        ]
-        
-        for agent_type, agent_id in agent_types:
-            await governance.register_agent(
-                agent_type=agent_type,
-                agent_id=agent_id,
-                capabilities={
-                    "lore_generation": True,
-                    "lore_integration": True,
-                    "setting_analysis": True,
-                    "npc_interaction": True
-                }
-            )
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error registering with governance: {e}")
-        return False
+# -------------------------------------------------------------------------------
+# Database and NPC Utility Functions
+# -------------------------------------------------------------------------------
 
 async def get_npc_data(npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
     """
@@ -1142,11 +916,7 @@ async def get_npc_data(npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         logger.error(f"Error getting NPC data: {e}")
         return {}
 
-async def determine_relevant_lore(
-    self,
-    npc_id: int,
-    context: Dict[str, Any] = None
-) -> Dict[str, Any]:
+async def determine_relevant_lore(npc_id: int, context: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Determine which lore elements are relevant to a specific NPC based on their stats,
     relationships, and current context.
@@ -1160,17 +930,17 @@ async def determine_relevant_lore(
     """
     try:
         # Get NPC stats and current state
-        npc_stats = await get_npc_stats(self.ctx)
-        current_location = await self._get_current_location()
+        npc_stats = await get_npc_stats()
+        current_location = await get_current_location()
         
         # Get NPC's relationships and beliefs
-        relationships = await self.lore_system.get_npc_relationships(npc_id)
-        beliefs = await self.lore_system.get_npc_beliefs(npc_id)
+        relationships = await lore_system.get_npc_relationships(npc_id)
+        beliefs = await lore_system.get_npc_beliefs(npc_id)
         
         # Get all available lore elements
-        world_lore = await self.lore_system.get_world_lore()
-        location_lore = await self.lore_system.get_location_lore(current_location)
-        faction_lore = await self.lore_system.get_faction_lore()
+        world_lore = await lore_system.get_world_lore()
+        location_lore = await lore_system.get_location_lore(current_location)
+        faction_lore = await lore_system.get_faction_lore()
         
         # Initialize relevance scores
         relevant_lore = {
@@ -1220,7 +990,7 @@ async def determine_relevant_lore(
                 relevance_score += 0.4
             
             # Check if lore relates to NPC's schedule
-            current_time = await self._get_current_time()
+            current_time = await get_current_time()
             if lore.get('time_period') in current_time.get('periods', []):
                 relevance_score += 0.3
             
@@ -1269,12 +1039,7 @@ async def determine_relevant_lore(
         logger.error(f"Error determining relevant lore for NPC {npc_id}: {e}")
         return {}
 
-async def integrate_npc_lore(
-    self,
-    npc_id: int,
-    relevant_lore: Dict[str, Any],
-    context: Dict[str, Any] = None
-) -> Dict[str, Any]:
+async def integrate_npc_lore(npc_id: int, relevant_lore: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Integrate relevant lore with an NPC, updating their knowledge, beliefs, and relationships.
     
@@ -1288,8 +1053,8 @@ async def integrate_npc_lore(
     """
     try:
         # Get current NPC state
-        npc_stats = await get_npc_stats(self.ctx)
-        current_location = await self._get_current_location()
+        npc_stats = await get_npc_stats()
+        current_location = await get_current_location()
         
         # Initialize integration results
         integration_results = {
@@ -1321,7 +1086,7 @@ async def integrate_npc_lore(
                     memory = {
                         'type': 'lore_memory',
                         'content': lore.get('content'),
-                        'emotional_impact': self._calculate_emotional_impact(lore, npc_stats),
+                        'emotional_impact': calculate_emotional_impact(lore, npc_stats),
                         'timestamp': datetime.now().isoformat()
                     }
                     integration_results['new_memories'].append(memory)
@@ -1395,16 +1160,16 @@ async def integrate_npc_lore(
         
         # Apply updates to NPC
         if integration_results['updated_knowledge']:
-            await self.lore_system.update_npc_knowledge(npc_id, integration_results['updated_knowledge'])
+            await lore_system.update_npc_knowledge(npc_id, integration_results['updated_knowledge'])
         
         if integration_results['updated_beliefs']:
-            await self.lore_system.update_npc_beliefs(npc_id, integration_results['updated_beliefs'])
+            await lore_system.update_npc_beliefs(npc_id, integration_results['updated_beliefs'])
         
         if integration_results['updated_relationships']:
-            await self.lore_system.update_npc_relationships(npc_id, integration_results['updated_relationships'])
+            await lore_system.update_npc_relationships(npc_id, integration_results['updated_relationships'])
         
         if integration_results['new_memories']:
-            await self.lore_system.add_npc_memories(npc_id, integration_results['new_memories'])
+            await lore_system.add_npc_memories(npc_id, integration_results['new_memories'])
         
         return integration_results
         
@@ -1412,7 +1177,7 @@ async def integrate_npc_lore(
         logger.error(f"Error integrating lore for NPC {npc_id}: {e}")
         return {}
 
-def _calculate_emotional_impact(self, lore: Dict[str, Any], npc_stats: NPCStats) -> int:
+def calculate_emotional_impact(lore: Dict[str, Any], npc_stats) -> int:
     """Calculate the emotional impact of lore on an NPC based on their personality."""
     impact = 0
     
@@ -1433,11 +1198,7 @@ def _calculate_emotional_impact(self, lore: Dict[str, Any], npc_stats: NPCStats)
     
     return max(min(impact, 5), -5)  # Clamp between -5 and 5
 
-async def get_location_data(
-    self,
-    location_name: str,
-    context: Dict[str, Any] = None
-) -> Dict[str, Any]:
+async def get_location_data(location_name: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Retrieve location-specific data including environment, NPCs, and lore.
     
@@ -1450,29 +1211,29 @@ async def get_location_data(
     """
     try:
         # Get basic location data
-        location_data = await self.lore_system.get_location(location_name)
+        location_data = await lore_system.get_location(location_name)
         if not location_data:
             logger.warning(f"Location {location_name} not found")
             return {}
         
         # Get current time and environment state
-        current_time = await self._get_current_time()
-        environment_state = await self.lore_system.get_environment_state(location_name)
+        current_time = await get_current_time()
+        environment_state = await lore_system.get_environment_state(location_name)
         
         # Get NPCs in the location
-        npcs_in_location = await self._get_nearby_npcs(location_name)
+        npcs_in_location = await get_nearby_npcs(location_name)
         
         # Get location-specific lore
-        location_lore = await self.lore_system.get_location_lore(location_name)
+        location_lore = await lore_system.get_location_lore(location_name)
         
         # Get faction presence in location
-        faction_presence = await self.lore_system.get_location_factions(location_name)
+        faction_presence = await lore_system.get_location_factions(location_name)
         
         # Get active events or quests in location
-        active_events = await self.lore_system.get_location_events(location_name)
+        active_events = await lore_system.get_location_events(location_name)
         
         # Get environmental conditions
-        environmental_conditions = await self.lore_system.get_environmental_conditions(location_name)
+        environmental_conditions = await lore_system.get_environmental_conditions(location_name)
         
         # Compile location data
         location_info = {
@@ -1493,7 +1254,7 @@ async def get_location_data(
             'npcs': {
                 'total': len(npcs_in_location),
                 'list': npcs_in_location,
-                'faction_representation': self._calculate_faction_representation(npcs_in_location)
+                'faction_representation': calculate_faction_representation(npcs_in_location)
             },
             'lore': {
                 'historical': [l for l in location_lore if l.get('type') == 'historical'],
@@ -1502,31 +1263,31 @@ async def get_location_data(
             },
             'factions': {
                 'present': faction_presence,
-                'influence': self._calculate_faction_influence(faction_presence)
+                'influence': calculate_faction_influence(faction_presence)
             },
             'events': {
                 'active': active_events,
-                'upcoming': await self.lore_system.get_upcoming_events(location_name)
+                'upcoming': await lore_system.get_upcoming_events(location_name)
             },
             'resources': {
-                'available': await self.lore_system.get_location_resources(location_name),
-                'scarcity': await self.lore_system.get_resource_scarcity(location_name)
+                'available': await lore_system.get_location_resources(location_name),
+                'scarcity': await lore_system.get_resource_scarcity(location_name)
             },
             'connections': {
-                'adjacent_locations': await self.lore_system.get_adjacent_locations(location_name),
-                'travel_routes': await self.lore_system.get_travel_routes(location_name)
+                'adjacent_locations': await lore_system.get_adjacent_locations(location_name),
+                'travel_routes': await lore_system.get_travel_routes(location_name)
             }
         }
         
         # Add dynamic elements based on time and conditions
-        location_info['dynamic_elements'] = await self._get_dynamic_elements(
+        location_info['dynamic_elements'] = await get_dynamic_elements(
             location_info,
             current_time,
             environmental_conditions
         )
         
         # Add interaction possibilities
-        location_info['interaction_possibilities'] = await self._get_interaction_possibilities(
+        location_info['interaction_possibilities'] = await get_interaction_possibilities(
             location_info,
             npcs_in_location,
             active_events
@@ -1538,10 +1299,13 @@ async def get_location_data(
         logger.error(f"Error getting location data for {location_name}: {e}")
         return {}
 
-def _calculate_faction_representation(self, npcs: List[Dict[str, Any]]) -> Dict[str, float]:
+def calculate_faction_representation(npcs: List[Dict[str, Any]]) -> Dict[str, float]:
     """Calculate faction representation among NPCs in a location."""
     faction_counts = {}
     total_npcs = len(npcs)
+    
+    if total_npcs == 0:
+        return {}
     
     for npc in npcs:
         faction_id = npc.get('faction_id')
@@ -1553,7 +1317,7 @@ def _calculate_faction_representation(self, npcs: List[Dict[str, Any]]) -> Dict[
         for faction_id, count in faction_counts.items()
     }
 
-def _calculate_faction_influence(self, faction_presence: List[Dict[str, Any]]) -> Dict[str, float]:
+def calculate_faction_influence(faction_presence: List[Dict[str, Any]]) -> Dict[str, float]:
     """Calculate faction influence in a location based on presence and resources."""
     influence = {}
     
@@ -1576,8 +1340,7 @@ def _calculate_faction_influence(self, faction_presence: List[Dict[str, Any]]) -
     
     return influence
 
-async def _get_dynamic_elements(
-    self,
+async def get_dynamic_elements(
     location_info: Dict[str, Any],
     current_time: Dict[str, Any],
     environmental_conditions: Dict[str, Any]
@@ -1626,8 +1389,7 @@ async def _get_dynamic_elements(
     
     return dynamic_elements
 
-async def _get_interaction_possibilities(
-    self,
+async def get_interaction_possibilities(
     location_info: Dict[str, Any],
     npcs: List[Dict[str, Any]],
     active_events: List[Dict[str, Any]]
@@ -1670,280 +1432,9 @@ async def _get_interaction_possibilities(
     
     return interactions
 
-class LoreDirectiveHandler:
-    """
-    Standardized handler for processing lore-related directives from Nyx governance.
-    
-    This class provides a unified way for all lore agents to handle directives
-    from the central Nyx governance system.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int, agent_type: str = AgentType.NARRATIVE_CRAFTER, agent_id: str = "lore_generator"):
-        """
-        Initialize the lore directive handler.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            agent_type: Agent type (default: NARRATIVE_CRAFTER)
-            agent_id: Agent ID (default: lore_generator)
-        """
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.agent_type = agent_type
-        self.agent_id = agent_id
-        self.governor = None
-        self.directive_handler = None
-        
-        # Store prohibited actions from directives
-        self.prohibited_actions = []
-        
-        # Store action modifications from directives
-        self.action_modifications = {}
-    
-    async def initialize(self):
-        """Initialize the handler with Nyx governance."""
-        # Get governance system
-        self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        
-        # Initialize directive handler
-        self.directive_handler = DirectiveHandler(
-            self.user_id, 
-            self.conversation_id, 
-            self.agent_type,
-            self.agent_id
-        )
-        
-        # Register handlers for different directive types
-        self.directive_handler.register_handler(DirectiveType.ACTION, self._handle_action_directive)
-        self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
-        
-        # Start background processing of directives
-        self.directive_task = await self.directive_handler.start_background_processing(interval=60.0)
-    
-    async def _handle_action_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle action directives.
-        
-        Args:
-            directive: The directive data
-            
-        Returns:
-            Result of processing
-        """
-        directive_id = directive.get("id")
-        instruction = directive.get("instruction", "")
-        
-        logger.info(f"Processing action directive {directive_id}: {instruction}")
-        
-        if "generate_lore" in instruction.lower():
-            # Handle lore generation directive
-            environment_desc = directive.get("environment_desc", "")
-            if environment_desc:
-                # Import here to avoid circular imports
-                lore_generator = DynamicLoreGenerator(self.user_id, self.conversation_id)
-                result = await lore_generator.generate_complete_lore(environment_desc)
-                return {
-                    "status": "completed",
-                    "directive_id": directive_id,
-                    "lore_generated": True,
-                    "environment": environment_desc
-                }
-        
-        elif "integrate_lore" in instruction.lower():
-            # Handle lore integration directive
-            npc_ids = directive.get("npc_ids", [])
-            if npc_ids:
-                # Import here to avoid circular imports
-                from lore.lore_integration import LoreIntegrationSystem
-                integration_system = LoreIntegrationSystem(self.user_id, self.conversation_id)
-                result = await integration_system.integrate_lore_with_npcs(npc_ids)
-                return {
-                    "status": "completed",
-                    "directive_id": directive_id,
-                    "npcs_integrated": len(npc_ids)
-                }
-        
-        elif "update_lore" in instruction.lower():
-            # Handle lore update directive
-            event_description = directive.get("event_description", "")
-            if event_description:
-                # Import here to avoid circular imports
-                from lore.lore_integration import LoreIntegrationSystem
-                integration_system = LoreIntegrationSystem(self.user_id, self.conversation_id)
-                result = await integration_system.update_lore_after_narrative_event(event_description)
-                return {
-                    "status": "completed",
-                    "directive_id": directive_id,
-                    "lore_updated": True,
-                    "event_description": event_description
-                }
-        
-        elif "analyze_setting" in instruction.lower():
-            # Handle setting analysis directive
-            # Import here to avoid circular imports
-            from lore.setting_analyzer import SettingAnalyzer
-            analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
-            await analyzer.initialize_governance()
-            result = await analyzer.aggregate_npc_data(None)
-            return {
-                "status": "completed",
-                "directive_id": directive_id,
-                "setting_analyzed": True,
-                "npc_count": len(result.get("npcs", []))
-            }
-        
-        elif "modify_action" in instruction.lower():
-            # Store action modifications for future use
-            action_type = directive.get("action_type")
-            modifications = directive.get("modifications", {})
-            
-            if action_type:
-                self.action_modifications[action_type] = modifications
-                return {
-                    "status": "completed",
-                    "directive_id": directive_id,
-                    "action_type": action_type,
-                    "modifications_stored": True
-                }
-        
-        # Default unknown directive case
-        return {
-            "status": "unknown_directive",
-            "directive_id": directive_id,
-            "instruction": instruction
-        }
-    
-    async def _handle_prohibition_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle prohibition directives.
-        
-        Args:
-            directive: The directive data
-            
-        Returns:
-            Result of processing
-        """
-        directive_id = directive.get("id")
-        prohibited_actions = directive.get("prohibited_actions", [])
-        reason = directive.get("reason", "No reason provided")
-        
-        logger.info(f"Processing prohibition directive {directive_id}: {prohibited_actions}")
-        
-        # Store prohibited actions
-        self.prohibited_actions.extend(prohibited_actions)
-        
-        # Remove duplicates
-        self.prohibited_actions = list(set(self.prohibited_actions))
-        
-        return {
-            "status": "prohibition_registered",
-            "directive_id": directive_id,
-            "prohibited_actions": self.prohibited_actions,
-            "reason": reason
-        }
-    
-    async def check_permission(self, action_type: str, details: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Check if an action is permitted based on directives.
-        
-        Args:
-            action_type: Type of action to check
-            details: Optional action details
-            
-        Returns:
-            Permission status dictionary
-        """
-        # Check if action is prohibited
-        if action_type in self.prohibited_actions or "*" in self.prohibited_actions:
-            return {
-                "approved": False,
-                "reasoning": f"Action {action_type} is prohibited by Nyx directive",
-                "directive_applied": True
-            }
-        
-        # Check if action has modifications
-        if action_type in self.action_modifications:
-            modifications = self.action_modifications[action_type]
-            return {
-                "approved": True,
-                "reasoning": f"Action {action_type} is modified by Nyx directive",
-                "directive_applied": True,
-                "modifications": modifications
-            }
-        
-        # Default approval
-        return {
-            "approved": True,
-            "reasoning": "No directives prohibit this action",
-            "directive_applied": False
-        }
-    
-    async def process_directives(self, force_check: bool = False) -> Dict[str, Any]:
-        """
-        Process all active directives for this lore agent.
-        
-        Args:
-            force_check: Whether to force checking directives
-            
-        Returns:
-            Processing results
-        """
-        return await self.directive_handler.process_directives(force_check)
-    
-    async def get_action_modifications(self, action_type: str) -> Dict[str, Any]:
-        """
-        Get any modifications for a specific action type.
-        
-        Args:
-            action_type: Type of action
-            
-        Returns:
-            Modifications dictionary (empty if none)
-        """
-        return self.action_modifications.get(action_type, {})
-    
-    async def is_action_prohibited(self, action_type: str) -> bool:
-        """
-        Check if an action is prohibited.
-        
-        Args:
-            action_type: Type of action
-            
-        Returns:
-            True if prohibited, False otherwise
-        """
-        return action_type in self.prohibited_actions or "*" in self.prohibited_actions
-    
-    async def apply_directive_to_response(self, response: Any, action_type: str) -> Any:
-        """
-        Apply any directive modifications to a response.
-        
-        Args:
-            response: Original response
-            action_type: Type of action
-            
-        Returns:
-            Modified response if applicable, otherwise original
-        """
-        # If action is prohibited, return error response
-        if await self.is_action_prohibited(action_type):
-            if isinstance(response, dict):
-                return {
-                    "error": f"Action {action_type} is prohibited by Nyx directive",
-                    "approved": False
-                }
-            return response
-        
-        # Apply modifications if any
-        modifications = await self.get_action_modifications(action_type)
-        if modifications and isinstance(response, dict):
-            # Apply each modification
-            for key, value in modifications.items():
-                if key in response:
-                    response[key] = value
-        
-        return response
+# -------------------------------------------------------------------------------
+# Directive Handler
+# -------------------------------------------------------------------------------
 
 class LoreDirectiveHandler:
     """
@@ -2220,12 +1711,89 @@ class LoreDirectiveHandler:
         
         return response
 
+# -------------------------------------------------------------------------------
+# Base Agent Class for Lore Agents
+# -------------------------------------------------------------------------------
 
-class QuestAgent:
+class BaseLoreAgent:
+    """Base class for all lore agent types with common functionality."""
+    
+    def __init__(self, lore_system, agent_type: str = AgentType.NARRATIVE_CRAFTER):
+        self.lore_system = lore_system
+        self.agent_type = agent_type
+        self.initialized = False
+        self.directive_handler = None
+        self._cached_data = {}
+    
+    async def initialize(self):
+        """Initialize the agent with governance and resources."""
+        if not self.initialized:
+            try:
+                # Create directive handler
+                self.directive_handler = LoreDirectiveHandler(
+                    self.lore_system.user_id,
+                    self.lore_system.conversation_id,
+                    self.agent_type,
+                    self.__class__.__name__
+                )
+                await self.directive_handler.initialize()
+                
+                # Additional initialization
+                await self._load_cached_data()
+                
+                self.initialized = True
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing {self.__class__.__name__}: {e}")
+                return False
+        return True
+    
+    async def _load_cached_data(self):
+        """Load cached data for this agent."""
+        try:
+            component_name = self._get_component_name()
+            data = await self.lore_system.get_component(component_name)
+            if data:
+                self._cached_data = data
+        except Exception as e:
+            logger.error(f"Error loading cached data for {self.__class__.__name__}: {e}")
+    
+    async def _save_cached_data(self):
+        """Save cached data for this agent."""
+        try:
+            component_name = self._get_component_name()
+            await self.lore_system.save_component(component_name, self._cached_data)
+        except Exception as e:
+            logger.error(f"Error saving cached data for {self.__class__.__name__}: {e}")
+    
+    def _get_component_name(self):
+        """Get standardized component name for this agent type."""
+        return f"{self.__class__.__name__.lower()}_data"
+    
+    async def check_permission(self, action_type: str, details: Dict[str, Any] = None) -> bool:
+        """Check if an action is permitted by governance."""
+        if not self.initialized:
+            await self.initialize()
+            
+        result = await self.directive_handler.check_permission(action_type, details)
+        return result.get('approved', False)
+    
+    async def process_directives(self):
+        """Process any pending directives for this agent."""
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.directive_handler.process_directives()
+
+# -------------------------------------------------------------------------------
+# Lore Agent Implementations Using the Base Class
+# -------------------------------------------------------------------------------
+
+class QuestAgent(BaseLoreAgent):
     """Agent responsible for managing quest-related lore and progression."""
     
-    def __init__(self, lore_manager: LoreManager):
-        self.lore_manager = lore_manager
+    def __init__(self, lore_system):
+        super().__init__(lore_system, AgentType.NARRATIVE_CRAFTER)
         self.state = {
             'active_quests': {},
             'quest_progress': {},
@@ -2234,35 +1802,41 @@ class QuestAgent:
     
     async def initialize(self):
         """Initialize the quest agent."""
-        try:
-            # Load active quests
-            active_quests = await self.lore_manager.get_all_components('quest')
-            self.state['active_quests'] = {
-                quest['id']: quest for quest in active_quests
-                if quest.get('status') == 'active'
-            }
-            
-            # Load quest progress
-            for quest_id in self.state['active_quests']:
-                progress = await self.lore_manager.get_quest_progression(quest_id)
-                if progress:
-                    self.state['quest_progress'][quest_id] = progress
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing QuestAgent: {e}")
-            return False
+        if await super().initialize():
+            try:
+                # Load active quests
+                active_quests = await self.lore_system.get_all_components('quest')
+                self.state['active_quests'] = {
+                    quest['id']: quest for quest in active_quests
+                    if quest.get('status') == 'active'
+                }
+                
+                # Load quest progress
+                for quest_id in self.state['active_quests']:
+                    progress = await self.lore_system.get_quest_progression(quest_id)
+                    if progress:
+                        self.state['quest_progress'][quest_id] = progress
+                
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing QuestAgent: {e}")
+                return False
+        return False
     
     async def get_quest_context(self, quest_id: int) -> Dict[str, Any]:
         """Get comprehensive quest context including related lore and NPCs."""
         try:
+            # Check permission
+            if not await self.check_permission('get_quest_context'):
+                return {}
+                
             # Get quest data
             quest = self.state['active_quests'].get(quest_id)
             if not quest:
                 return {}
             
             # Get quest lore
-            quest_lore = await self.lore_manager.get_quest_lore(quest_id)
+            quest_lore = await self.lore_system.get_quest_lore(quest_id)
             
             # Get quest progression
             progression = self.state['quest_progress'].get(quest_id, {})
@@ -2272,7 +1846,7 @@ class QuestAgent:
             for lore in quest_lore:
                 if lore.get('metadata', {}).get('npc_id'):
                     npc_id = lore['metadata']['npc_id']
-                    npc_data = await self.lore_manager.get_component(f"npc_{npc_id}")
+                    npc_data = await self.lore_system.get_component(f"npc_{npc_id}")
                     if npc_data:
                         related_npcs.append(npc_data)
             
@@ -2289,8 +1863,12 @@ class QuestAgent:
     async def update_quest_stage(self, quest_id: int, stage: str, data: Dict[str, Any]) -> bool:
         """Update quest stage with new data and handle related updates."""
         try:
+            # Check permission
+            if not await self.check_permission('update_quest_stage'):
+                return False
+                
             # Update quest progression
-            success = await self.lore_manager.update_quest_progression(quest_id, stage, data)
+            success = await self.lore_system.update_quest_progression(quest_id, stage, data)
             if not success:
                 return False
             
@@ -2312,11 +1890,11 @@ class QuestAgent:
             logger.error(f"Error updating quest stage: {e}")
             return False
 
-class NarrativeAgent:
+class NarrativeAgent(BaseLoreAgent):
     """Agent responsible for managing narrative progression and story elements."""
     
-    def __init__(self, lore_manager: LoreManager):
-        self.lore_manager = lore_manager
+    def __init__(self, lore_system):
+        super().__init__(lore_system, AgentType.NARRATIVE_CRAFTER)
         self.state = {
             'active_narratives': {},
             'narrative_stages': {},
@@ -2325,28 +1903,34 @@ class NarrativeAgent:
     
     async def initialize(self):
         """Initialize the narrative agent."""
-        try:
-            # Load active narratives
-            narratives = await self.lore_manager.get_all_components('narrative')
-            self.state['active_narratives'] = {
-                narrative['id']: narrative for narrative in narratives
-                if narrative.get('status') == 'active'
-            }
-            
-            # Load narrative stages
-            for narrative_id in self.state['active_narratives']:
-                data = await self.lore_manager.get_narrative_data(narrative_id)
-                if data:
-                    self.state['narrative_stages'][narrative_id] = data
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing NarrativeAgent: {e}")
-            return False
+        if await super().initialize():
+            try:
+                # Load active narratives
+                narratives = await self.lore_system.get_all_components('narrative')
+                self.state['active_narratives'] = {
+                    narrative['id']: narrative for narrative in narratives
+                    if narrative.get('status') == 'active'
+                }
+                
+                # Load narrative stages
+                for narrative_id in self.state['active_narratives']:
+                    data = await self.lore_system.get_narrative_data(narrative_id)
+                    if data:
+                        self.state['narrative_stages'][narrative_id] = data
+                
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing NarrativeAgent: {e}")
+                return False
+        return False
     
     async def get_narrative_context(self, narrative_id: int) -> Dict[str, Any]:
         """Get comprehensive narrative context including related elements."""
         try:
+            # Check permission
+            if not await self.check_permission('get_narrative_context'):
+                return {}
+                
             # Get narrative data
             narrative = self.state['active_narratives'].get(narrative_id)
             if not narrative:
@@ -2358,7 +1942,7 @@ class NarrativeAgent:
             # Get related story elements
             story_elements = []
             for element_id in narrative.get('related_elements', []):
-                element = await self.lore_manager.get_component(f"story_element_{element_id}")
+                element = await self.lore_system.get_component(f"story_element_{element_id}")
                 if element:
                     story_elements.append(element)
             
@@ -2374,8 +1958,12 @@ class NarrativeAgent:
     async def update_narrative_stage(self, narrative_id: int, stage: str, data: Dict[str, Any]) -> bool:
         """Update narrative stage with new data and handle related updates."""
         try:
+            # Check permission
+            if not await self.check_permission('update_narrative_stage'):
+                return False
+                
             # Update narrative progression
-            success = await self.lore_manager.update_narrative_progression(narrative_id, stage, data)
+            success = await self.lore_system.update_narrative_progression(narrative_id, stage, data)
             if not success:
                 return False
             
@@ -2399,123 +1987,46 @@ class NarrativeAgent:
             logger.error(f"Error updating narrative stage: {e}")
             return False
 
-class SocialAgent:
-    """Agent responsible for managing social relationships and interactions."""
-    
-    def __init__(self, lore_manager: LoreManager):
-        self.lore_manager = lore_manager
-        self.state = {
-            'social_networks': {},
-            'relationship_strengths': {},
-            'interaction_history': {}
-        }
-    
-    async def initialize(self):
-        """Initialize the social agent."""
-        try:
-            # Load social networks
-            networks = await self.lore_manager.get_all_components('social_network')
-            self.state['social_networks'] = {
-                network['id']: network for network in networks
-            }
-            
-            # Load relationship strengths
-            for network_id in self.state['social_networks']:
-                relationships = await self.lore_manager.get_social_links(network_id, 'network')
-                self.state['relationship_strengths'][network_id] = {
-                    rel['metadata']['entity_id']: rel['metadata']['strength']
-                    for rel in relationships
-                }
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing SocialAgent: {e}")
-            return False
-    
-    async def get_social_context(self, entity_id: int, entity_type: str) -> Dict[str, Any]:
-        """Get comprehensive social context including relationships and history."""
-        try:
-            # Get social links
-            links = await self.lore_manager.get_social_links(entity_id, entity_type)
-            
-            # Get relationship strengths
-            strengths = self.state['relationship_strengths'].get(entity_id, {})
-            
-            # Get interaction history
-            history = self.state['interaction_history'].get(entity_id, [])
-            
-            return {
-                'links': links,
-                'strengths': strengths,
-                'history': history
-            }
-        except Exception as e:
-            logger.error(f"Error getting social context: {e}")
-            return {}
-    
-    async def update_relationships(self, entity_id: int, entity_type: str, links: List[Dict[str, Any]]) -> bool:
-        """Update social relationships and handle related updates."""
-        try:
-            # Update social links
-            success = await self.lore_manager.update_social_links(entity_id, entity_type, links)
-            if not success:
-                return False
-            
-            # Update relationship strengths
-            self.state['relationship_strengths'][entity_id] = {
-                link['metadata']['entity_id']: link['metadata']['strength']
-                for link in links
-            }
-            
-            # Update interaction history
-            if entity_id not in self.state['interaction_history']:
-                self.state['interaction_history'][entity_id] = []
-            
-            self.state['interaction_history'][entity_id].append({
-                'timestamp': datetime.now().isoformat(),
-                'type': 'relationship_update',
-                'links': links
-            })
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error updating relationships: {e}")
-            return False
-
-class EnvironmentAgent:
+class EnvironmentAgent(BaseLoreAgent):
     """Agent responsible for managing environmental conditions and state."""
     
     def __init__(self, lore_system):
-        self.lore_system = lore_system
+        super().__init__(lore_system, AgentType.NARRATIVE_CRAFTER)
         self._environmental_states = {}
         self._resource_levels = {}
         self._current_time = None
         
     async def initialize(self):
         """Initialize the environment agent."""
-        try:
-            # Load environmental states
-            locations = await self.lore_system.get_all_components('location')
-            for location in locations:
-                location_id = location['id']
-                state = await self.lore_system.get_environment_state(location_id)
-                conditions = await self.lore_system.get_environmental_conditions(location_id)
-                resources = await self.lore_system.get_location_resources(location_id)
+        if await super().initialize():
+            try:
+                # Load environmental states
+                locations = await self.lore_system.get_all_components('location')
+                for location in locations:
+                    location_id = location['id']
+                    state = await self.lore_system.get_environment_state(location_id)
+                    conditions = await self.lore_system.get_environmental_conditions(location_id)
+                    resources = await self.lore_system.get_location_resources(location_id)
+                    
+                    self._environmental_states[location_id] = {
+                        'state': state,
+                        'conditions': conditions,
+                        'resources': resources
+                    }
                 
-                self._environmental_states[location_id] = {
-                    'state': state,
-                    'conditions': conditions,
-                    'resources': resources
-                }
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing EnvironmentAgent: {e}")
-            return False
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing EnvironmentAgent: {e}")
+                return False
+        return False
     
     async def get_environment_context(self, location_id: int) -> Dict[str, Any]:
         """Get comprehensive environment context including conditions and resources."""
         try:
+            # Check permission
+            if not await self.check_permission('get_environment_context'):
+                return {}
+                
             # Get environmental state
             state = await self.lore_system.get_environment_state(location_id)
             
@@ -2545,6 +2056,10 @@ class EnvironmentAgent:
     async def update_environment_state(self, location_id: int, updates: Dict[str, Any]) -> bool:
         """Update environment state and handle related updates."""
         try:
+            # Check permission
+            if not await self.check_permission('update_environment_state'):
+                return False
+                
             # Update environmental state
             current_state = await self.lore_system.get_environment_state(location_id)
             updated_state = {**current_state, **updates}
@@ -2568,6 +2083,10 @@ class EnvironmentAgent:
     async def update_game_time(self, time_data: Dict[str, Any]) -> bool:
         """Update game time and related events."""
         try:
+            # Check permission
+            if not await self.check_permission('update_game_time'):
+                return False
+                
             query = """
                 INSERT INTO LoreComponents (
                     user_id, conversation_id, component_type,
@@ -2591,124 +2110,20 @@ class EnvironmentAgent:
         except Exception as e:
             logger.error(f"Error updating game time: {e}")
             return False
-            
-    async def update_resource_levels(self, location_id: int, resources: Dict[str, float]) -> bool:
-        """Update resource levels for a location."""
-        try:
-            query = """
-                INSERT INTO LoreComponents (
-                    user_id, conversation_id, component_type,
-                    content, metadata, created_at
-                ) VALUES ($1, $2, 'resource_levels', $3, $4, NOW())
-            """
-            await self.lore_system.db.execute(
-                query,
-                self.lore_system.user_id,
-                self.lore_system.conversation_id,
-                json.dumps(resources),
-                json.dumps({
-                    'location_id': location_id,
-                    'timestamp': datetime.now().isoformat()
-                })
-            )
-            self._resource_levels[location_id] = resources
-            return True
-        except Exception as e:
-            logger.error(f"Error updating resource levels: {e}")
-            return False
 
-# Global agent instances
-quest_agent = None
-narrative_agent = None
-social_agent = None
-environment_agent = None
-conflict_agent = None
-artifact_agent = None
-event_agent = None
-foundation_agent = None
-faction_agent = None
-cultural_agent = None
-historical_agent = None
-location_agent = None
-integration_agent = None
-validation_agent = None
-
-async def get_agents(lore_system):
-    """Get or create global agent instances."""
-    global quest_agent, narrative_agent, social_agent, environment_agent
-    global conflict_agent, artifact_agent, event_agent, foundation_agent
-    global faction_agent, cultural_agent, historical_agent, location_agent
-    global integration_agent, validation_agent
-    
-    if not quest_agent:
-        quest_agent = QuestAgent(lore_system)
-    if not narrative_agent:
-        narrative_agent = NarrativeAgent(lore_system)
-    if not social_agent:
-        social_agent = SocialAgent(lore_system)
-    if not environment_agent:
-        environment_agent = EnvironmentAgent(lore_system)
-    if not conflict_agent:
-        conflict_agent = ConflictAgent(lore_system)
-    if not artifact_agent:
-        artifact_agent = ArtifactAgent(lore_system)
-    if not event_agent:
-        event_agent = EventAgent(lore_system)
-    if not foundation_agent:
-        foundation_agent = FoundationAgent(lore_system)
-    if not faction_agent:
-        faction_agent = FactionAgent(lore_system)
-    if not cultural_agent:
-        cultural_agent = CulturalAgent(lore_system)
-    if not historical_agent:
-        historical_agent = HistoricalAgent(lore_system)
-    if not location_agent:
-        location_agent = LocationAgent(lore_system)
-    if not integration_agent:
-        integration_agent = IntegrationAgent(lore_system)
-    if not validation_agent:
-        validation_agent = ValidationAgent(lore_system)
-        
-    return (
-        quest_agent, narrative_agent, social_agent, environment_agent,
-        conflict_agent, artifact_agent, event_agent, foundation_agent,
-        faction_agent, cultural_agent, historical_agent, location_agent,
-        integration_agent, validation_agent
-    )
-
-# Initialize global agent instances
-quest_agent = None
-narrative_agent = None
-social_agent = None
-environment_agent = None
-conflict_agent = None
-artifact_agent = None
-event_agent = None
-foundation_agent = None
-faction_agent = None
-cultural_agent = None
-historical_agent = None
-location_agent = None
-quest_agent = None
-integration_agent = None
-validation_agent = None
-
-class FoundationAgent:
+class FoundationAgent(BaseLoreAgent):
     """Agent responsible for managing world foundation lore."""
     
     def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self.initialized = False
+        super().__init__(lore_system, AgentType.NARRATIVE_CRAFTER)
         
-    async def initialize(self):
-        """Initialize the foundation agent."""
-        if not self.initialized:
-            self.initialized = True
-            # Initialize any required resources
-            
     async def generate_foundation(self, environment_desc: str) -> Dict[str, Any]:
         """Generate foundation lore for the world."""
         try:
+            # Check permission
+            if not await self.check_permission('generate_foundation'):
+                return {"error": "Operation not permitted by governance"}
+                
             # Get NPC data for better context
             npc_data = await self.aggregate_npc_data()
             
@@ -2718,11 +2133,17 @@ class FoundationAgent:
             # Generate organizations
             organizations = await self.generate_organizations(demographics)
             
-            return {
+            result = {
                 "environment": environment_desc,
                 "demographics": demographics,
                 "organizations": organizations
             }
+            
+            # Store in cached data
+            self._cached_data = result
+            await self._save_cached_data()
+            
+            return result
         except Exception as e:
             logger.error(f"Error generating foundation: {e}")
             return {"error": str(e)}
@@ -2730,7 +2151,14 @@ class FoundationAgent:
     async def update_foundation(self, updates: Dict[str, Any]) -> bool:
         """Update foundation lore with new information."""
         try:
-            # Update foundation data
+            # Check permission
+            if not await self.check_permission('update_foundation'):
+                return False
+                
+            # Update cached data
+            self._cached_data.update(updates)
+            await self._save_cached_data()
+            
             return True
         except Exception as e:
             logger.error(f"Error updating foundation: {e}")
@@ -2739,6 +2167,10 @@ class FoundationAgent:
     async def analyze_setting(self, environment_desc: str) -> Dict[str, Any]:
         """Analyze setting data to generate coherent organizations and relationships."""
         try:
+            # Check permission
+            if not await self.check_permission('analyze_setting'):
+                return {"error": "Operation not permitted by governance"}
+                
             # Get NPC data
             npc_data = await self.aggregate_npc_data()
             
@@ -2936,56 +2368,41 @@ class FoundationAgent:
 
         return setting_desc, setting_name
 
-class FactionAgent:
+class FactionAgent(BaseLoreAgent):
     """Agent responsible for managing factions and their relationships."""
     
     def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._faction_data = {}
-        self._initialized = False
+        super().__init__(lore_system, AgentType.NARRATIVE_CRAFTER)
         
-    async def initialize(self):
-        """Initialize the faction agent."""
-        try:
-            # Load existing faction data
-            faction_data = await self.lore_system.get_component('factions')
-            if faction_data:
-                self._faction_data = faction_data
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing FactionAgent: {e}")
-            return False
-            
     async def generate_factions(self, environment_desc: str, social_structure: str) -> List[Dict[str, Any]]:
         """Generate factions for the world."""
         try:
+            # Check permission
+            if not await self.check_permission('generate_factions'):
+                return []
+                
             # Create run context
             run_ctx = RunContextWrapper(context={})
             
             # Use the generate_factions_agent
             result = await Runner.run(
-                generate_factions_agent,
+                factions_agent,
                 json.dumps({
                     'environment_desc': environment_desc,
                     'social_structure': social_structure,
-                    'existing_factions': self._faction_data
+                    'existing_factions': self._cached_data
                 }),
                 context=run_ctx.context
             )
             
-            factions = result.final_output_as(FactionsOutput).dict()
+            factions = result.final_output_as(FactionsOutput)
+            faction_data = [f.dict() for f in factions.__root__]
             
             # Update internal state
-            self._faction_data = factions
+            self._cached_data = faction_data
+            await self._save_cached_data()
             
-            # Store in database
-            await self.lore_system.save_component(
-                'factions',
-                factions
-            )
-            
-            return factions
+            return faction_data
             
         except Exception as e:
             logger.error(f"Error generating factions: {e}")
@@ -2994,16 +2411,23 @@ class FactionAgent:
     async def update_faction_relationships(self, faction_id: int, relationships: List[Dict[str, Any]]) -> bool:
         """Update relationships between factions."""
         try:
-            if faction_id not in self._faction_data:
+            # Check permission
+            if not await self.check_permission('update_faction_relationships'):
                 return False
                 
-            self._faction_data[faction_id]['relationships'] = relationships
-            
+            # Find faction in cached data
+            faction_found = False
+            for faction in self._cached_data:
+                if faction.get('id') == faction_id:
+                    faction['relationships'] = relationships
+                    faction_found = True
+                    break
+                    
+            if not faction_found:
+                return False
+                
             # Store updated data
-            await self.lore_system.save_component(
-                'factions',
-                self._faction_data
-            )
+            await self._save_cached_data()
             
             return True
             
@@ -3014,10 +2438,16 @@ class FactionAgent:
     async def calculate_faction_influence(self, faction_id: int) -> float:
         """Calculate the influence level of a faction."""
         try:
-            if faction_id not in self._faction_data:
+            # Find faction in cached data
+            faction = None
+            for f in self._cached_data:
+                if f.get('id') == faction_id:
+                    faction = f
+                    break
+                    
+            if not faction:
                 return 0.0
                 
-            faction = self._faction_data[faction_id]
             influence = 0.0
             
             # Calculate based on relationships
@@ -3032,564 +2462,3 @@ class FactionAgent:
         except Exception as e:
             logger.error(f"Error calculating faction influence: {e}")
             return 0.0
-
-class CulturalAgent:
-    """Agent responsible for managing cultural elements and traditions."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._cultural_data = {}
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the cultural agent."""
-        try:
-            # Load existing cultural data
-            cultural_data = await self.lore_system.get_component('cultural_elements')
-            if cultural_data:
-                self._cultural_data = cultural_data
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing CulturalAgent: {e}")
-            return False
-            
-    async def generate_cultural_elements(self, environment_desc: str, faction_names: str) -> List[Dict[str, Any]]:
-        """Generate cultural elements for the world."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the generate_cultural_elements_agent
-            result = await Runner.run(
-                generate_cultural_elements_agent,
-                json.dumps({
-                    'environment_desc': environment_desc,
-                    'faction_names': faction_names,
-                    'existing_culture': self._cultural_data
-                }),
-                context=run_ctx.context
-            )
-            
-            cultural_elements = result.final_output_as(CulturalElementsOutput).dict()
-            
-            # Update internal state
-            self._cultural_data = cultural_elements
-            
-            # Store in database
-            await self.lore_system.save_component(
-                'cultural_elements',
-                cultural_elements
-            )
-            
-            return cultural_elements
-            
-        except Exception as e:
-            logger.error(f"Error generating cultural elements: {e}")
-            return []
-            
-    async def update_cultural_traditions(self, updates: Dict[str, Any]) -> bool:
-        """Update cultural traditions and practices."""
-        try:
-            # Merge updates with existing data
-            self._cultural_data.update(updates)
-            
-            # Store updated data
-            await self.lore_system.save_component(
-                'cultural_elements',
-                self._cultural_data
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating cultural traditions: {e}")
-            return False
-            
-    async def get_cultural_context(self, location_id: int) -> Dict[str, Any]:
-        """Get cultural context for a specific location."""
-        try:
-            location_data = await self.lore_system.get_component(f'location_{location_id}')
-            if not location_data:
-                return {}
-                
-            # Get relevant cultural elements
-            relevant_culture = {
-                k: v for k, v in self._cultural_data.items()
-                if v.get('location_id') == location_id
-            }
-            
-            return {
-                'location': location_data,
-                'cultural_elements': relevant_culture
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting cultural context: {e}")
-            return {}
-
-class HistoricalAgent:
-    """Agent responsible for managing historical events and timelines."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._historical_data = {}
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the historical agent."""
-        try:
-            # Load existing historical data
-            historical_data = await self.lore_system.get_component('historical_events')
-            if historical_data:
-                self._historical_data = historical_data
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing HistoricalAgent: {e}")
-            return False
-            
-    async def generate_historical_events(self, environment_desc: str, world_history: str, faction_names: str) -> List[Dict[str, Any]]:
-        """Generate historical events for the world."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the generate_historical_events_agent
-            result = await Runner.run(
-                generate_historical_events_agent,
-                json.dumps({
-                    'environment_desc': environment_desc,
-                    'world_history': world_history,
-                    'faction_names': faction_names,
-                    'existing_events': self._historical_data
-                }),
-                context=run_ctx.context
-            )
-            
-            historical_events = result.final_output_as(HistoricalEventsOutput).dict()
-            
-            # Update internal state
-            self._historical_data = historical_events
-            
-            # Store in database
-            await self.lore_system.save_component(
-                'historical_events',
-                historical_events
-            )
-            
-            return historical_events
-            
-        except Exception as e:
-            logger.error(f"Error generating historical events: {e}")
-            return []
-            
-    async def update_timeline(self, event_id: int, updates: Dict[str, Any]) -> bool:
-        """Update a historical event in the timeline."""
-        try:
-            if event_id not in self._historical_data:
-                return False
-                
-            self._historical_data[event_id].update(updates)
-            
-            # Store updated data
-            await self.lore_system.save_component(
-                'historical_events',
-                self._historical_data
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating timeline: {e}")
-            return False
-            
-    async def get_historical_context(self, time_period: str) -> Dict[str, Any]:
-        """Get historical context for a specific time period."""
-        try:
-            # Filter events by time period
-            relevant_events = [
-                event for event in self._historical_data.values()
-                if event.get('time_period') == time_period
-            ]
-            
-            return {
-                'time_period': time_period,
-                'events': relevant_events
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting historical context: {e}")
-            return {}
-
-class LocationAgent:
-    """Agent responsible for managing locations and their states."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._location_data = {}
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the location agent."""
-        try:
-            # Load existing location data
-            location_data = await self.lore_system.get_component('locations')
-            if location_data:
-                self._location_data = location_data
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing LocationAgent: {e}")
-            return False
-            
-    async def generate_locations(self, environment_desc: str, factions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Generate locations for the world."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the generate_locations_agent
-            result = await Runner.run(
-                generate_locations_agent,
-                json.dumps({
-                    'environment_desc': environment_desc,
-                    'factions': factions,
-                    'existing_locations': self._location_data
-                }),
-                context=run_ctx.context
-            )
-            
-            locations = result.final_output_as(LocationsOutput).dict()
-            
-            # Update internal state
-            self._location_data = locations
-            
-            # Store in database
-            await self.lore_system.save_component(
-                'locations',
-                locations
-            )
-            
-            return locations
-            
-        except Exception as e:
-            logger.error(f"Error generating locations: {e}")
-            return []
-            
-    async def update_location_state(self, location_id: int, updates: Dict[str, Any]) -> bool:
-        """Update the state of a location."""
-        try:
-            if location_id not in self._location_data:
-                return False
-                
-            self._location_data[location_id].update(updates)
-            
-            # Store updated data
-            await self.lore_system.save_component(
-                'locations',
-                self._location_data
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating location state: {e}")
-            return False
-            
-    async def get_location_context(self, location_id: int) -> Dict[str, Any]:
-        """Get full context for a location."""
-        try:
-            if location_id not in self._location_data:
-                return {}
-                
-            location = self._location_data[location_id]
-            
-            # Get related data
-            cultural_context = await self.lore_system.get_component(f'cultural_{location_id}')
-            historical_context = await self.lore_system.get_component(f'historical_{location_id}')
-            
-            return {
-                'location': location,
-                'cultural_context': cultural_context,
-                'historical_context': historical_context
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting location context: {e}")
-            return {}
-
-class QuestAgent:
-    """Agent responsible for managing quests and their progression."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._quest_data = {}
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the quest agent."""
-        try:
-            # Load existing quest data
-            quest_data = await self.lore_system.get_component('quests')
-            if quest_data:
-                self._quest_data = quest_data
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing QuestAgent: {e}")
-            return False
-            
-    async def generate_quest_hooks(self, factions: List[Dict[str, Any]], locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Generate quest hooks for the world."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the generate_quest_hooks_agent
-            result = await Runner.run(
-                generate_quest_hooks_agent,
-                json.dumps({
-                    'factions': factions,
-                    'locations': locations,
-                    'existing_quests': self._quest_data
-                }),
-                context=run_ctx.context
-            )
-            
-            quest_hooks = result.final_output_as(QuestsOutput).dict()
-            
-            # Update internal state
-            self._quest_data = quest_hooks
-            
-            # Store in database
-            await self.lore_system.save_component(
-                'quests',
-                quest_hooks
-            )
-            
-            return quest_hooks
-            
-        except Exception as e:
-            logger.error(f"Error generating quest hooks: {e}")
-            return []
-            
-    async def update_quest_progression(self, quest_id: int, updates: Dict[str, Any]) -> bool:
-        """Update the progression of a quest."""
-        try:
-            if quest_id not in self._quest_data:
-                return False
-                
-            self._quest_data[quest_id].update(updates)
-            
-            # Store updated data
-            await self.lore_system.save_component(
-                'quests',
-                self._quest_data
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating quest progression: {e}")
-            return False
-            
-    async def get_quest_context(self, quest_id: int) -> Dict[str, Any]:
-        """Get full context for a quest."""
-        try:
-            if quest_id not in self._quest_data:
-                return {}
-                
-            quest = self._quest_data[quest_id]
-            
-            # Get related data
-            faction_data = await self.lore_system.get_component(f'faction_{quest.get("faction_id")}')
-            location_data = await self.lore_system.get_component(f'location_{quest.get("location_id")}')
-            
-            return {
-                'quest': quest,
-                'faction': faction_data,
-                'location': location_data
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting quest context: {e}")
-            return {}
-
-class IntegrationAgent:
-    """Agent responsible for integrating different types of lore."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the integration agent."""
-        try:
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing IntegrationAgent: {e}")
-            return False
-            
-    async def integrate_lore(self, lore_parts: Dict[str, Any]) -> Dict[str, Any]:
-        """Integrate different parts of lore."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the integration_agent
-            result = await Runner.run(
-                integration_agent,
-                json.dumps(lore_parts),
-                context=run_ctx.context
-            )
-            
-            integrated_lore = result.final_output_as(IntegrationOutput).dict()
-            
-            # Store integrated lore
-            await self.lore_system.save_component(
-                'integrated_lore',
-                integrated_lore
-            )
-            
-            return integrated_lore
-            
-        except Exception as e:
-            logger.error(f"Error integrating lore: {e}")
-            return {}
-            
-    async def resolve_conflicts(self, conflicts: List[Dict[str, Any]]) -> bool:
-        """Resolve conflicts between different parts of lore."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the conflict_resolution_agent
-            result = await Runner.run(
-                conflict_resolution_agent,
-                json.dumps(conflicts),
-                context=run_ctx.context
-            )
-            
-            resolutions = result.final_output_as(ConflictResolutionOutput).dict()
-            
-            # Apply resolutions
-            for resolution in resolutions:
-                await self.lore_system.save_component(
-                    f'resolution_{resolution["id"]}',
-                    resolution
-                )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error resolving conflicts: {e}")
-            return False
-            
-    async def validate_integration(self, integrated_lore: Dict[str, Any]) -> bool:
-        """Validate the integrated lore for consistency."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the validation_agent
-            result = await Runner.run(
-                validation_agent,
-                json.dumps(integrated_lore),
-                context=run_ctx.context
-            )
-            
-            validation_result = result.final_output_as(ValidationOutput).dict()
-            
-            return validation_result.get('is_valid', False)
-            
-        except Exception as e:
-            logger.error(f"Error validating integration: {e}")
-            return False
-
-class ValidationAgent:
-    """Agent responsible for validating lore consistency and quality."""
-    
-    def __init__(self, lore_system):
-        self.lore_system = lore_system
-        self._initialized = False
-        
-    async def initialize(self):
-        """Initialize the validation agent."""
-        try:
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"Error initializing ValidationAgent: {e}")
-            return False
-            
-    async def validate_lore(self, lore: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate lore for consistency and quality."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the validation_agent
-            result = await Runner.run(
-                validation_agent,
-                json.dumps(lore),
-                context=run_ctx.context
-            )
-            
-            validation_result = result.final_output_as(ValidationOutput).dict()
-            
-            return validation_result
-            
-        except Exception as e:
-            logger.error(f"Error validating lore: {e}")
-            return {'is_valid': False, 'issues': []}
-            
-    async def fix_inconsistencies(self, issues: List[Dict[str, Any]]) -> bool:
-        """Fix inconsistencies in the lore."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the fix_agent
-            result = await Runner.run(
-                fix_agent,
-                json.dumps(issues),
-                context=run_ctx.context
-            )
-            
-            fixes = result.final_output_as(FixOutput).dict()
-            
-            # Apply fixes
-            for fix in fixes:
-                await self.lore_system.save_component(
-                    f'fix_{fix["id"]}',
-                    fix
-                )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error fixing inconsistencies: {e}")
-            return False
-            
-    async def validate_relationships(self, relationships: List[Dict[str, Any]]) -> bool:
-        """Validate relationships between different parts of lore."""
-        try:
-            # Create run context
-            run_ctx = RunContextWrapper(context={})
-            
-            # Use the relationship_validation_agent
-            result = await Runner.run(
-                relationship_validation_agent,
-                json.dumps(relationships),
-                context=run_ctx.context
-            )
-            
-            validation_result = result.final_output_as(ValidationOutput).dict()
-            
-            return validation_result.get('is_valid', False)
-            
-        except Exception as e:
-            logger.error(f"Error validating relationships: {e}")
-            return False
