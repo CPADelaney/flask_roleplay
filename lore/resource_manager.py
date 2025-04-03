@@ -20,6 +20,7 @@ import json
 import sys
 import gc
 from .base_manager import BaseManager
+import aiofiles
 
 logger = logging.getLogger(__name__)
 
@@ -74,162 +75,172 @@ class MetricsManager:
         }
         self.monitors = {}
         self.interval = 5  # Default collection interval
+        self._lock = asyncio.Lock()  # Thread-safety for async operations
     
-    def record_request(self, method: str, endpoint: str, status: int, duration: float = 0):
+    async def record_request(self, method: str, endpoint: str, status: int, duration: float = 0):
         """Record HTTP request metrics"""
         key = f"{method}:{endpoint}"
         
-        if key not in self.metrics['request_count']:
-            self.metrics['request_count'][key] = 0
-            self.metrics['latency'][key] = []
-        
-        self.metrics['request_count'][key] += 1
-        self.metrics['latency'][key].append(duration)
-        
-        # Track errors
-        if status >= 400:
-            error_type = 'server_error' if status >= 500 else 'client_error'
-            if error_type not in self.metrics['errors']:
-                self.metrics['errors'][error_type] = 0
-            self.metrics['errors'][error_type] += 1
+        async with self._lock:
+            if key not in self.metrics['request_count']:
+                self.metrics['request_count'][key] = 0
+                self.metrics['latency'][key] = []
+            
+            self.metrics['request_count'][key] += 1
+            self.metrics['latency'][key].append(duration)
+            
+            # Track errors
+            if status >= 400:
+                error_type = 'server_error' if status >= 500 else 'client_error'
+                if error_type not in self.metrics['errors']:
+                    self.metrics['errors'][error_type] = 0
+                self.metrics['errors'][error_type] += 1
     
-    def record_cache_operation(self, cache_type: str, hit: bool):
+    async def record_cache_operation(self, cache_type: str, hit: bool):
         """Record cache operation metrics"""
-        if hit:
-            self.metrics['cache']['hits'] += 1
-        else:
-            self.metrics['cache']['misses'] += 1
+        async with self._lock:
+            if hit:
+                self.metrics['cache']['hits'] += 1
+            else:
+                self.metrics['cache']['misses'] += 1
     
-    def record_resource_usage(self, memory: float, cpu: float):
+    async def record_resource_usage(self, memory: float, cpu: float):
         """Record resource usage metrics"""
-        self.metrics['resources']['memory'].append({
-            'timestamp': datetime.utcnow().isoformat(),
-            'value': memory
-        })
-        
-        self.metrics['resources']['cpu'].append({
-            'timestamp': datetime.utcnow().isoformat(),
-            'value': cpu
-        })
-        
-        # Keep only the most recent 100 samples
-        if len(self.metrics['resources']['memory']) > 100:
-            self.metrics['resources']['memory'] = self.metrics['resources']['memory'][-100:]
-        
-        if len(self.metrics['resources']['cpu']) > 100:
-            self.metrics['resources']['cpu'] = self.metrics['resources']['cpu'][-100:]
+        async with self._lock:
+            self.metrics['resources']['memory'].append({
+                'timestamp': datetime.utcnow().isoformat(),
+                'value': memory
+            })
+            
+            self.metrics['resources']['cpu'].append({
+                'timestamp': datetime.utcnow().isoformat(),
+                'value': cpu
+            })
+            
+            # Keep only the most recent 100 samples
+            if len(self.metrics['resources']['memory']) > 100:
+                self.metrics['resources']['memory'] = self.metrics['resources']['memory'][-100:]
+            
+            if len(self.metrics['resources']['cpu']) > 100:
+                self.metrics['resources']['cpu'] = self.metrics['resources']['cpu'][-100:]
     
-    def clear_metrics(self, older_than: Optional[int] = None):
+    async def clear_metrics(self, older_than: Optional[int] = None):
         """Clear metrics older than the specified time in seconds"""
-        if older_than is None:
-            # Clear all metrics
-            self.metrics = {
-                'request_count': {},
-                'latency': {},
-                'errors': {},
-                'cache': {
-                    'hits': 0,
-                    'misses': 0
-                },
-                'resources': {
-                    'memory': [],
-                    'cpu': []
+        async with self._lock:
+            if older_than is None:
+                # Clear all metrics
+                self.metrics = {
+                    'request_count': {},
+                    'latency': {},
+                    'errors': {},
+                    'cache': {
+                        'hits': 0,
+                        'misses': 0
+                    },
+                    'resources': {
+                        'memory': [],
+                        'cpu': []
+                    }
                 }
-            }
-        else:
-            # Clear only old metric data
-            cutoff_time = datetime.utcnow() - timedelta(seconds=older_than)
-            cutoff_timestamp = cutoff_time.timestamp()
-            
-            # Clear resource metrics
-            self.metrics['resources']['memory'] = [
-                m for m in self.metrics['resources']['memory']
-                if datetime.fromisoformat(m['timestamp']) > cutoff_time
-            ]
-            
-            self.metrics['resources']['cpu'] = [
-                m for m in self.metrics['resources']['cpu']
-                if datetime.fromisoformat(m['timestamp']) > cutoff_time
-            ]
-            
-            # Other metrics don't have timestamps, can't filter by age
-    
-    def get_metrics_summary(self) -> Dict[str, Any]:
-        """Get a summary of current metrics"""
-        summary = {
-            'requests': {
-                'total': sum(self.metrics['request_count'].values()),
-                'by_endpoint': self.metrics['request_count'].copy()
-            },
-            'latency': {
-                endpoint: sum(values) / len(values) if values else 0
-                for endpoint, values in self.metrics['latency'].items()
-            },
-            'errors': self.metrics['errors'].copy(),
-            'cache': {
-                'hits': self.metrics['cache']['hits'],
-                'misses': self.metrics['cache']['misses'],
-                'hit_rate': self.metrics['cache']['hits'] / (self.metrics['cache']['hits'] + self.metrics['cache']['misses'])
-                if (self.metrics['cache']['hits'] + self.metrics['cache']['misses']) > 0 else 0
-            }
-        }
-        
-        # Add resource usage
-        if self.metrics['resources']['memory']:
-            summary['resources'] = {
-                'memory': {
-                    'current': self.metrics['resources']['memory'][-1]['value'],
-                    'avg': sum(item['value'] for item in self.metrics['resources']['memory']) / len(self.metrics['resources']['memory'])
-                },
-                'cpu': {
-                    'current': self.metrics['resources']['cpu'][-1]['value'] if self.metrics['resources']['cpu'] else 0,
-                    'avg': sum(item['value'] for item in self.metrics['resources']['cpu']) / len(self.metrics['resources']['cpu'])
-                    if self.metrics['resources']['cpu'] else 0
-                }
-            }
-        
-        return summary
-    
-    def start_monitor(self, name: str, metric_func: Callable, interval: int = 5):
-        """Start a new metric monitor"""
-        if name in self.monitors:
-            return
-        
-        async def monitor_task():
-            while True:
-                try:
-                    value = metric_func()
-                    # Store the metric with timestamp
-                    if name not in self.metrics:
-                        self.metrics[name] = []
-                    
-                    self.metrics[name].append({
-                        'timestamp': datetime.utcnow().isoformat(),
-                        'value': value
-                    })
-                    
-                    # Keep only recent values
-                    if len(self.metrics[name]) > 100:
-                        self.metrics[name] = self.metrics[name][-100:]
-                        
-                except Exception as e:
-                    logger.error(f"Error in metrics monitor {name}: {e}")
+            else:
+                # Clear only old metric data
+                cutoff_time = datetime.utcnow() - timedelta(seconds=older_than)
                 
-                await asyncio.sleep(interval)
-        
-        # Start the monitor task
-        self.monitors[name] = asyncio.create_task(monitor_task())
+                # Clear resource metrics
+                self.metrics['resources']['memory'] = [
+                    m for m in self.metrics['resources']['memory']
+                    if datetime.fromisoformat(m['timestamp']) > cutoff_time
+                ]
+                
+                self.metrics['resources']['cpu'] = [
+                    m for m in self.metrics['resources']['cpu']
+                    if datetime.fromisoformat(m['timestamp']) > cutoff_time
+                ]
     
-    def stop_monitor(self, name: str):
+    async def get_metrics_summary(self) -> Dict[str, Any]:
+        """Get a summary of current metrics"""
+        async with self._lock:
+            summary = {
+                'requests': {
+                    'total': sum(self.metrics['request_count'].values()),
+                    'by_endpoint': self.metrics['request_count'].copy()
+                },
+                'latency': {
+                    endpoint: sum(values) / len(values) if values else 0
+                    for endpoint, values in self.metrics['latency'].items()
+                },
+                'errors': self.metrics['errors'].copy(),
+                'cache': {
+                    'hits': self.metrics['cache']['hits'],
+                    'misses': self.metrics['cache']['misses'],
+                    'hit_rate': self.metrics['cache']['hits'] / (self.metrics['cache']['hits'] + self.metrics['cache']['misses'])
+                    if (self.metrics['cache']['hits'] + self.metrics['cache']['misses']) > 0 else 0
+                }
+            }
+            
+            # Add resource usage
+            if self.metrics['resources']['memory']:
+                summary['resources'] = {
+                    'memory': {
+                        'current': self.metrics['resources']['memory'][-1]['value'],
+                        'avg': sum(item['value'] for item in self.metrics['resources']['memory']) / len(self.metrics['resources']['memory'])
+                    },
+                    'cpu': {
+                        'current': self.metrics['resources']['cpu'][-1]['value'] if self.metrics['resources']['cpu'] else 0,
+                        'avg': sum(item['value'] for item in self.metrics['resources']['cpu']) / len(self.metrics['resources']['cpu'])
+                        if self.metrics['resources']['cpu'] else 0
+                    }
+                }
+            
+            return summary
+    
+    async def start_monitor(self, name: str, metric_func: Callable, interval: int = 5):
+        """Start a new metric monitor"""
+        async with self._lock:
+            if name in self.monitors:
+                return
+            
+            async def monitor_task():
+                while True:
+                    try:
+                        value = await metric_func()
+                        # Store the metric with timestamp
+                        if name not in self.metrics:
+                            self.metrics[name] = []
+                        
+                        self.metrics[name].append({
+                            'timestamp': datetime.utcnow().isoformat(),
+                            'value': value
+                        })
+                        
+                        # Keep only recent values
+                        if len(self.metrics[name]) > 100:
+                            self.metrics[name] = self.metrics[name][-100:]
+                            
+                    except Exception as e:
+                        logger.error(f"Error in metrics monitor {name}: {e}")
+                    
+                    await asyncio.sleep(interval)
+            
+            # Start the monitor task
+            self.monitors[name] = asyncio.create_task(monitor_task())
+    
+    async def stop_monitor(self, name: str):
         """Stop a metric monitor"""
-        if name in self.monitors:
-            self.monitors[name].cancel()
-            del self.monitors[name]
+        async with self._lock:
+            if name in self.monitors:
+                self.monitors[name].cancel()
+                try:
+                    await self.monitors[name]
+                except asyncio.CancelledError:
+                    pass
+                del self.monitors[name]
     
-    def stop_all_monitors(self):
+    async def stop_all_monitors(self):
         """Stop all metric monitors"""
-        for name in list(self.monitors.keys()):
-            self.stop_monitor(name)
+        async with self._lock:
+            for name in list(self.monitors.keys()):
+                await self.stop_monitor(name)
 
 # Create global metrics manager
 metrics_manager = MetricsManager()
@@ -253,7 +264,7 @@ def track_request(endpoint: str, method: str):
                 raise
             finally:
                 duration = time.time() - start_time
-                metrics_manager.record_request(method, endpoint, status, duration)
+                await metrics_manager.record_request(method, endpoint, status, duration)
         return wrapper
     return decorator
 
@@ -268,35 +279,37 @@ def track_operation(operation: str):
                 duration = time.time() - start_time
                 
                 # Record operation timing under custom metrics
-                if 'operations' not in metrics_manager.metrics:
-                    metrics_manager.metrics['operations'] = {}
-                
-                if operation not in metrics_manager.metrics['operations']:
-                    metrics_manager.metrics['operations'][operation] = []
-                
-                metrics_manager.metrics['operations'][operation].append({
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'duration': duration,
-                    'success': True
-                })
+                async with metrics_manager._lock:
+                    if 'operations' not in metrics_manager.metrics:
+                        metrics_manager.metrics['operations'] = {}
+                    
+                    if operation not in metrics_manager.metrics['operations']:
+                        metrics_manager.metrics['operations'][operation] = []
+                    
+                    metrics_manager.metrics['operations'][operation].append({
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'duration': duration,
+                        'success': True
+                    })
                 
                 return result
             except Exception as e:
                 duration = time.time() - start_time
                 
                 # Record failed operation
-                if 'operations' not in metrics_manager.metrics:
-                    metrics_manager.metrics['operations'] = {}
-                
-                if operation not in metrics_manager.metrics['operations']:
-                    metrics_manager.metrics['operations'][operation] = []
-                
-                metrics_manager.metrics['operations'][operation].append({
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'duration': duration,
-                    'success': False,
-                    'error': str(e)
-                })
+                async with metrics_manager._lock:
+                    if 'operations' not in metrics_manager.metrics:
+                        metrics_manager.metrics['operations'] = {}
+                    
+                    if operation not in metrics_manager.metrics['operations']:
+                        metrics_manager.metrics['operations'][operation] = []
+                    
+                    metrics_manager.metrics['operations'][operation].append({
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'duration': duration,
+                        'success': False,
+                        'error': str(e)
+                    })
                 
                 raise
         return wrapper
@@ -346,6 +359,8 @@ class ResourceManager(BaseManager):
         }
         self.cleanup_tasks = []
         self.resource_locks = {}
+        for resource_type in self.resource_metrics.keys():
+            self.resource_locks[resource_type] = asyncio.Lock()
         self.optimization_queue = asyncio.Queue()
         self.cleanup_queue = asyncio.Queue()
         self.metrics_manager = metrics_manager
@@ -354,14 +369,14 @@ class ResourceManager(BaseManager):
     async def start(self):
         """Start the resource manager and monitoring."""
         await super().start()
-        self._start_monitoring()
-        self._start_optimization()
-        self._start_cleanup()
+        await self._start_monitoring()
+        await self._start_optimization()
+        await self._start_cleanup()
         
         # Start standard metrics monitors
-        self.metrics_manager.start_monitor('memory', self._get_memory_usage)
-        self.metrics_manager.start_monitor('cpu', self._get_cpu_usage)
-        self.metrics_manager.start_monitor('disk', self._get_disk_usage)
+        await self.metrics_manager.start_monitor('memory', self._get_memory_usage_async)
+        await self.metrics_manager.start_monitor('cpu', self._get_cpu_usage_async)
+        await self.metrics_manager.start_monitor('disk', self._get_disk_usage_async)
         
         return True
         
@@ -373,7 +388,7 @@ class ResourceManager(BaseManager):
         await self._stop_cleanup()
         
         # Stop metrics monitors
-        self.metrics_manager.stop_all_monitors()
+        await self.metrics_manager.stop_all_monitors()
         
         # Cancel all tasks
         for task in self._tasks:
@@ -386,17 +401,17 @@ class ResourceManager(BaseManager):
         
         return True
         
-    def _start_monitoring(self):
+    async def _start_monitoring(self):
         """Start resource monitoring."""
         self.monitoring_task = asyncio.create_task(self._monitor_resources())
         self._tasks.append(self.monitoring_task)
         
-    def _start_optimization(self):
+    async def _start_optimization(self):
         """Start resource optimization."""
         self.optimization_task = asyncio.create_task(self._process_optimization_queue())
         self._tasks.append(self.optimization_task)
         
-    def _start_cleanup(self):
+    async def _start_cleanup(self):
         """Start resource cleanup."""
         self.cleanup_task = asyncio.create_task(self._process_cleanup_queue())
         self._tasks.append(self.cleanup_task)
@@ -435,12 +450,22 @@ class ResourceManager(BaseManager):
         except:
             return 0.0
     
+    async def _get_memory_usage_async(self) -> float:
+        """Async wrapper for memory usage check."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._get_memory_usage)
+    
     def _get_cpu_usage(self) -> float:
         """Get current CPU usage as percentage."""
         try:
             return psutil.cpu_percent()
         except:
             return 0.0
+            
+    async def _get_cpu_usage_async(self) -> float:
+        """Async wrapper for CPU usage check."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._get_cpu_usage)
     
     def _get_disk_usage(self) -> float:
         """Get current disk usage as percentage."""
@@ -448,23 +473,28 @@ class ResourceManager(BaseManager):
             return psutil.disk_usage('/').percent
         except:
             return 0.0
+            
+    async def _get_disk_usage_async(self) -> float:
+        """Async wrapper for disk usage check."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._get_disk_usage)
                 
     async def _monitor_resources(self):
         """Monitor system resources."""
         while True:
             try:
                 # Get current resource usage
-                memory_usage = self._get_memory_usage()
-                cpu_usage = self._get_cpu_usage()
-                storage_usage = self._get_disk_usage()
+                memory_usage = await self._get_memory_usage_async()
+                cpu_usage = await self._get_cpu_usage_async()
+                storage_usage = await self._get_disk_usage_async()
                 
                 # Update metrics
-                self._update_resource_metrics("memory", memory_usage)
-                self._update_resource_metrics("cpu", cpu_usage)
-                self._update_resource_metrics("storage", storage_usage)
+                await self._update_resource_metrics("memory", memory_usage)
+                await self._update_resource_metrics("cpu", cpu_usage)
+                await self._update_resource_metrics("storage", storage_usage)
                 
                 # Record in metrics manager too
-                self.metrics_manager.record_resource_usage(memory_usage, cpu_usage)
+                await self.metrics_manager.record_resource_usage(memory_usage, cpu_usage)
                 
                 # Check thresholds and trigger optimization if needed
                 await self._check_resource_thresholds()
@@ -476,28 +506,33 @@ class ResourceManager(BaseManager):
                 logger.error(f"Error monitoring resources: {e}")
                 await asyncio.sleep(self.config.monitoring_interval)
                 
-    def _update_resource_metrics(self, resource_type: str, current_value: float):
+    async def _update_resource_metrics(self, resource_type: str, current_value: float):
         """Update resource metrics."""
-        metrics = self.resource_metrics[resource_type]
-        metrics["current"] = current_value
-        metrics["peak"] = max(metrics["peak"], current_value)
-        metrics["history"].append({
-            "timestamp": datetime.utcnow().isoformat(),
-            "value": current_value
-        })
-        
-        # Keep history limited
-        if len(metrics["history"]) > 1000:
-            metrics["history"] = metrics["history"][-1000:]
+        async with self.resource_locks[resource_type]:
+            metrics = self.resource_metrics[resource_type]
+            metrics["current"] = current_value
+            metrics["peak"] = max(metrics["peak"], current_value)
+            metrics["history"].append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "value": current_value
+            })
+            
+            # Keep history limited
+            if len(metrics["history"]) > 1000:
+                metrics["history"] = metrics["history"][-1000:]
             
     async def _check_resource_thresholds(self):
         """Check if any resources exceed their thresholds."""
         for resource_type, metrics in self.resource_metrics.items():
-            if metrics["current"] > metrics["threshold"]:
+            async with self.resource_locks[resource_type]:
+                current_value = metrics["current"]
+                threshold = metrics["threshold"]
+                
+            if current_value > threshold:
                 await self.optimization_queue.put({
                     "type": resource_type,
-                    "current_value": metrics["current"],
-                    "threshold": metrics["threshold"]
+                    "current_value": current_value,
+                    "threshold": threshold
                 })
                 
     async def _process_optimization_queue(self):
@@ -541,14 +576,22 @@ class ResourceManager(BaseManager):
             True if resource is available, False otherwise
         """
         if resource_type == "memory":
-            current_memory = self._get_memory_usage()
-            return current_memory < self.resource_metrics["memory"]["threshold"]
+            current_memory = await self._get_memory_usage_async()
+            async with self.resource_locks["memory"]:
+                threshold = self.resource_metrics["memory"]["threshold"]
+            return current_memory < threshold
+            
         elif resource_type == "cpu":
-            current_cpu = self._get_cpu_usage()
-            return current_cpu < self.resource_metrics["cpu"]["threshold"]
+            current_cpu = await self._get_cpu_usage_async()
+            async with self.resource_locks["cpu"]:
+                threshold = self.resource_metrics["cpu"]["threshold"]
+            return current_cpu < threshold
+            
         elif resource_type == "storage":
-            current_storage = self._get_disk_usage()
-            return current_storage < self.resource_metrics["storage"]["threshold"]
+            current_storage = await self._get_disk_usage_async()
+            async with self.resource_locks["storage"]:
+                threshold = self.resource_metrics["storage"]["threshold"]
+            return current_storage < threshold
         
         return True
                 
@@ -559,15 +602,19 @@ class ResourceManager(BaseManager):
             current_memory = request["current_value"]
             
             # Check if we need to optimize
-            if current_memory > self.resource_metrics["memory"]["threshold"]:
+            async with self.resource_locks["memory"]:
+                threshold = self.resource_metrics["memory"]["threshold"]
+                
+            if current_memory > threshold:
                 # Clear caches
                 await self._clear_memory_caches()
                 
                 # Force garbage collection
-                gc.collect()
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, gc.collect)
                 
                 # Check if we need more aggressive optimization
-                if self._get_memory_usage() > self.resource_metrics["memory"]["threshold"]:
+                if await self._get_memory_usage_async() > threshold:
                     await self._aggressive_memory_optimization()
                     
         except Exception as e:
@@ -580,12 +627,15 @@ class ResourceManager(BaseManager):
             current_cpu = request["current_value"]
             
             # Check if we need to optimize
-            if current_cpu > self.resource_metrics["cpu"]["threshold"]:
+            async with self.resource_locks["cpu"]:
+                threshold = self.resource_metrics["cpu"]["threshold"]
+                
+            if current_cpu > threshold:
                 # Adjust task priorities
                 await self._adjust_task_priorities()
                 
                 # Check if we need more aggressive optimization
-                if self._get_cpu_usage() > self.resource_metrics["cpu"]["threshold"]:
+                if await self._get_cpu_usage_async() > threshold:
                     await self._aggressive_cpu_optimization()
                     
         except Exception as e:
@@ -598,12 +648,15 @@ class ResourceManager(BaseManager):
             current_storage = request["current_value"]
             
             # Check if we need to optimize
-            if current_storage > self.resource_metrics["storage"]["threshold"]:
+            async with self.resource_locks["storage"]:
+                threshold = self.resource_metrics["storage"]["threshold"]
+                
+            if current_storage > threshold:
                 # Clean up temporary files
                 await self._cleanup_temp_files()
                 
                 # Check if we need more aggressive optimization
-                if self._get_disk_usage() > self.resource_metrics["storage"]["threshold"]:
+                if await self._get_disk_usage_async() > threshold:
                     await self._aggressive_storage_optimization()
                     
         except Exception as e:
@@ -617,16 +670,17 @@ class ResourceManager(BaseManager):
                 await self.redis_client.flushdb()
                 
             # Clear in-memory caches
-            self.resource_metrics["memory"]["history"] = []
+            async with self.resource_locks["memory"]:
+                self.resource_metrics["memory"]["history"] = []
             
             # Clear other caches
-            for cache in self._get_active_caches():
+            for cache in await self._get_active_caches():
                 await cache.clear()
                 
         except Exception as e:
             logger.error(f"Error clearing memory caches: {e}")
     
-    def _get_active_caches(self) -> List[Any]:
+    async def _get_active_caches(self) -> List[Any]:
         """Get list of active caches."""
         # This would be implemented based on your cache management
         return []
@@ -638,13 +692,14 @@ class ResourceManager(BaseManager):
             await self._clear_memory_caches()
             
             # Force garbage collection
-            gc.collect()
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, gc.collect)
             
             # Clear unused objects
             await self._clear_unused_objects()
             
             # Check if we need to restart the process
-            if self._get_memory_usage() > 0.95:  # 95% threshold
+            if await self._get_memory_usage_async() > 0.95:  # 95% threshold
                 await self._request_process_restart("High memory usage")
                 
         except Exception as e:
@@ -664,7 +719,8 @@ class ResourceManager(BaseManager):
             # Sort tasks by priority
             tasks.sort(key=lambda t: t.get_name().startswith('high_priority'), reverse=True)
             
-            # Adjust priorities
+            # Adjust priorities - note that in asyncio, task priority is handled differently
+            # This is a placeholder for actual priority adjustment logic
             for task in tasks:
                 if not task.get_name().startswith('high_priority'):
                     task.set_name(f"low_priority_{task.get_name()}")
@@ -682,7 +738,7 @@ class ResourceManager(BaseManager):
             await self._adjust_task_priorities()
             
             # Check if we need to restart the process
-            if self._get_cpu_usage() > 0.95:  # 95% threshold
+            if await self._get_cpu_usage_async() > 0.95:  # 95% threshold
                 await self._request_process_restart("High CPU usage")
                 
         except Exception as e:
@@ -705,7 +761,11 @@ class ResourceManager(BaseManager):
             # Cancel non-essential tasks
             for task in non_essential:
                 task.cancel()
-                
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                    
         except Exception as e:
             logger.error(f"Error cancelling non-essential tasks: {e}")
             
@@ -742,7 +802,7 @@ class ResourceManager(BaseManager):
             await self._cleanup_old_data()
             
             # Check if we need to restart the process
-            if self._get_disk_usage() > 0.95:  # 95% threshold
+            if await self._get_disk_usage_async() > 0.95:  # 95% threshold
                 await self._request_process_restart("High storage usage")
                 
         except Exception as e:
@@ -753,7 +813,8 @@ class ResourceManager(BaseManager):
         try:
             if resource_type == "memory":
                 await self._clear_memory_caches()
-                gc.collect()
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, gc.collect)
             elif resource_type == "storage":
                 await self._cleanup_temp_files()
                 await self._cleanup_old_logs()
@@ -827,16 +888,18 @@ class ResourceManager(BaseManager):
             # Signal the need for restart
             # In a real system, this might write to a status file or send a signal
             restart_file = os.path.join(os.getcwd(), "data", "restart_requested")
-            with open(restart_file, 'w') as f:
-                json.dump({
+            
+            # Use async file operations
+            async with aiofiles.open(restart_file, 'w') as f:
+                await f.write(json.dumps({
                     "timestamp": datetime.utcnow().isoformat(),
                     "reason": reason,
                     "resource_metrics": {
-                        "memory": self._get_memory_usage(),
-                        "cpu": self._get_cpu_usage(),
-                        "storage": self._get_disk_usage()
+                        "memory": await self._get_memory_usage_async(),
+                        "cpu": await self._get_cpu_usage_async(),
+                        "storage": await self._get_disk_usage_async()
                     }
-                }, f)
+                }))
                 
         except Exception as e:
             logger.error(f"Error requesting process restart: {e}")
@@ -846,21 +909,25 @@ class ResourceManager(BaseManager):
         try:
             # Save resource metrics
             metrics_file = os.path.join(os.getcwd(), "data", "resource_metrics.json")
-            with open(metrics_file, 'w') as f:
-                json.dump(self.resource_metrics, f)
+            
+            # Use async file operations
+            async with aiofiles.open(metrics_file, 'w') as f:
+                await f.write(json.dumps(self.resource_metrics))
                 
             # Save other state
             state_file = os.path.join(os.getcwd(), "data", "process_state.json")
-            with open(state_file, 'w') as f:
-                json.dump({
+            
+            # Use async file operations
+            async with aiofiles.open(state_file, 'w') as f:
+                await f.write(json.dumps({
                     "timestamp": datetime.utcnow().isoformat(),
                     "active_tasks": len(asyncio.all_tasks()),
                     "resource_usage": {
-                        "memory": self._get_memory_usage(),
-                        "cpu": self._get_cpu_usage(),
-                        "storage": self._get_disk_usage()
+                        "memory": await self._get_memory_usage_async(),
+                        "cpu": await self._get_cpu_usage_async(),
+                        "storage": await self._get_disk_usage_async()
                     }
-                }, f)
+                }))
                 
         except Exception as e:
             logger.error(f"Error saving state: {e}")
@@ -869,9 +936,9 @@ class ResourceManager(BaseManager):
         """Optimize system resources."""
         try:
             # Get current resource usage
-            memory_usage = self._get_memory_usage()
-            cpu_usage = self._get_cpu_usage()
-            storage_usage = self._get_disk_usage()
+            memory_usage = await self._get_memory_usage_async()
+            cpu_usage = await self._get_cpu_usage_async()
+            storage_usage = await self._get_disk_usage_async()
             
             # Check each resource
             memory_result = await self._optimize_memory({"current_value": memory_usage})
@@ -904,12 +971,13 @@ class ResourceManager(BaseManager):
             await self._cleanup_old_data()
             
             # Force garbage collection
-            gc.collect()
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, gc.collect)
             
             # Get final metrics after cleanup
             current_metrics = {
-                "memory": self._get_memory_usage(),
-                "storage": self._get_disk_usage()
+                "memory": await self._get_memory_usage_async(),
+                "storage": await self._get_disk_usage_async()
             }
             
             return {
@@ -927,11 +995,42 @@ class ResourceManager(BaseManager):
     async def get_resource_stats(self) -> Dict[str, Any]:
         """Get detailed resource statistics."""
         try:
+            # Get process info using executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            process = psutil.Process()
+            
+            memory_info_dict = await loop.run_in_executor(
+                None, 
+                lambda: dict(process.memory_info()._asdict())
+            )
+            
+            cpu_times_dict = await loop.run_in_executor(
+                None, 
+                lambda: dict(process.cpu_times()._asdict())
+            )
+            
+            io_counters_dict = None
+            if hasattr(process, 'io_counters'):
+                io_counters_dict = await loop.run_in_executor(
+                    None, 
+                    lambda: dict(process.io_counters()._asdict())
+                )
+            
+            num_threads = await loop.run_in_executor(None, process.num_threads)
+            nice = await loop.run_in_executor(None, process.nice)
+            
+            # Get system info
+            total_memory = psutil.virtual_memory().total
+            available_memory = psutil.virtual_memory().available
+            memory_percent = psutil.virtual_memory().percent
+            cpu_count = psutil.cpu_count()
+            disk_usage_dict = dict(psutil.disk_usage('/')._asdict())
+            
             return {
                 "current": {
-                    "memory": self._get_memory_usage(),
-                    "cpu": self._get_cpu_usage(),
-                    "storage": self._get_disk_usage()
+                    "memory": await self._get_memory_usage_async(),
+                    "cpu": await self._get_cpu_usage_async(),
+                    "storage": await self._get_disk_usage_async()
                 },
                 "peak": {
                     "memory": self.resource_metrics["memory"]["peak"],
@@ -944,18 +1043,18 @@ class ResourceManager(BaseManager):
                     "storage": self.resource_metrics["storage"]["threshold"]
                 },
                 "process": {
-                    "memory_info": dict(psutil.Process().memory_info()._asdict()),
-                    "cpu_times": dict(psutil.Process().cpu_times()._asdict()),
-                    "io_counters": dict(psutil.Process().io_counters()._asdict()) if hasattr(psutil.Process(), 'io_counters') else None,
-                    "num_threads": psutil.Process().num_threads(),
-                    "nice": psutil.Process().nice()
+                    "memory_info": memory_info_dict,
+                    "cpu_times": cpu_times_dict,
+                    "io_counters": io_counters_dict,
+                    "num_threads": num_threads,
+                    "nice": nice
                 },
                 "system": {
-                    "total_memory": psutil.virtual_memory().total,
-                    "available_memory": psutil.virtual_memory().available,
-                    "memory_percent": psutil.virtual_memory().percent,
-                    "cpu_count": psutil.cpu_count(),
-                    "disk_usage": dict(psutil.disk_usage('/')._asdict())
+                    "total_memory": total_memory,
+                    "available_memory": available_memory,
+                    "memory_percent": memory_percent,
+                    "cpu_count": cpu_count,
+                    "disk_usage": disk_usage_dict
                 },
                 "timestamp": datetime.utcnow().isoformat()
             }
