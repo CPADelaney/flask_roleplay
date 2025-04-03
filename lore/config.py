@@ -147,7 +147,7 @@ class ConfigManager:
         self.config: Dict[str, Any] = {}
         self._load_config()
         
-    def _load_config(self):
+    async def _load_config(self):
         """Load configuration from environment variables and config files."""
         # Load environment variables
         load_dotenv()
@@ -166,7 +166,7 @@ class ConfigManager:
         # Override with environment variables
         self._load_env_vars()
         
-    def _load_json_file(self, filename: str) -> Optional[Dict[str, Any]]:
+    async def _load_json_file(self, filename: str) -> Optional[Dict[str, Any]]:
         """Load configuration from a JSON file."""
         try:
             file_path = Path(self.config_path) / filename
@@ -177,7 +177,7 @@ class ConfigManager:
             logger.error(f"Error loading config file {filename}: {str(e)}")
         return None
         
-    def _load_env_vars(self):
+    async def _load_env_vars(self):
         """Load configuration from environment variables."""
         for key, value in os.environ.items():
             if key.startswith('LORE_'):
@@ -185,7 +185,7 @@ class ConfigManager:
                 config_key = key[5:].lower().replace('_', '.')
                 self._set_nested_value(self.config, config_key, value)
                 
-    def _set_nested_value(self, d: dict, key: str, value: Any):
+    async def _set_nested_value(self, d: dict, key: str, value: Any):
         """Set a nested dictionary value using dot notation."""
         keys = key.split('.')
         current = d
@@ -193,7 +193,7 @@ class ConfigManager:
             current = current.setdefault(k, {})
         current[keys[-1]] = value
         
-    def get(self, key: str, default: Any = None) -> Any:
+    async def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value using dot notation."""
         try:
             value = self.config
@@ -203,7 +203,7 @@ class ConfigManager:
         except (KeyError, TypeError):
             return default
             
-    def get_database_config(self) -> Dict[str, Any]:
+    async def get_database_config(self) -> Dict[str, Any]:
         """Get database configuration."""
         return {
             'host': self.get('database.host', 'localhost'),
@@ -215,7 +215,7 @@ class ConfigManager:
             'max_size': int(self.get('database.pool.max_size', 10))
         }
         
-    def get_cache_config(self) -> Dict[str, Any]:
+    async def get_cache_config(self) -> Dict[str, Any]:
         """Get cache configuration."""
         return {
             'type': self.get('cache.type', 'memory'),
@@ -225,7 +225,7 @@ class ConfigManager:
             'ttl': int(self.get('cache.ttl', 3600))
         }
         
-    def get_logging_config(self) -> Dict[str, Any]:
+    async def get_logging_config(self) -> Dict[str, Any]:
         """Get logging configuration."""
         return {
             'level': self.get('logging.level', 'INFO'),
@@ -235,7 +235,7 @@ class ConfigManager:
             'backup_count': int(self.get('logging.backup_count', 5))
         }
         
-    def get_api_config(self) -> Dict[str, Any]:
+    async def get_api_config(self) -> Dict[str, Any]:
         """Get API configuration."""
         return {
             'host': self.get('api.host', '0.0.0.0'),
@@ -244,7 +244,7 @@ class ConfigManager:
             'rate_limit': int(self.get('api.rate_limit', 100))
         }
         
-    def get_metrics_config(self) -> Dict[str, Any]:
+    async def get_metrics_config(self) -> Dict[str, Any]:
         """Get metrics configuration."""
         return {
             'enabled': self.get('metrics.enabled', True),
@@ -253,16 +253,16 @@ class ConfigManager:
             'path': self.get('metrics.path', '/metrics')
         }
         
-    def get_all_config(self) -> Dict[str, Any]:
+    async def get_all_config(self) -> Dict[str, Any]:
         """Get all configuration values."""
         return self.config.copy()
         
-    def update_config(self, updates: Dict[str, Any]):
+    async def update_config(self, updates: Dict[str, Any]):
         """Update configuration values."""
         for key, value in updates.items():
             self._set_nested_value(self.config, key, value)
             
-    def save_config(self):
+    async def save_config(self):
         """Save current configuration to file."""
         try:
             file_path = Path(self.config_path) / 'config.json'
@@ -271,7 +271,7 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error saving config: {str(e)}")
     
-    def get_lore_config(self) -> LoreConfig:
+    async def get_lore_config(self) -> LoreConfig:
         """Get a structured LoreConfig object"""
         # Map the raw config dictionary to a LoreConfig instance
         try:
@@ -302,11 +302,11 @@ class ConfigManager:
 config = ConfigManager()
 
 @lru_cache()
-def get_config() -> Dict[str, Any]:
+async def get_config() -> Dict[str, Any]:
     """Get the global configuration dictionary"""
     return config.config
 
 @lru_cache()
-def get_lore_config() -> LoreConfig:
+async def get_lore_config() -> LoreConfig:
     """Get the global LoreConfig instance"""
     return config.get_lore_config()
