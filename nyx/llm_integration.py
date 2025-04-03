@@ -4,6 +4,7 @@ import os
 import logging
 import json
 import asyncio
+import numpy as np
 from typing import Dict, List, Any, Optional
 import openai
 
