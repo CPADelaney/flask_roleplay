@@ -6,7 +6,6 @@ import traceback
 from typing import Dict, Any, Optional, Callable, Union, Awaitable
 from functools import wraps
 
-from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType
 
 logger = logging.getLogger(__name__)
@@ -35,6 +34,7 @@ async def check_permission(
     Returns:
         Dictionary with permission check results
     """
+    from nyx.integrate import get_central_governance
     try:
         # Get governance system
         governance = await get_central_governance(user_id, conversation_id)
@@ -167,6 +167,7 @@ async def report_action(
     Returns:
         Dictionary with reporting results
     """
+    from nyx.integrate import get_central_governance
     try:
         # Get governance system
         governance = await get_central_governance(user_id, conversation_id)
