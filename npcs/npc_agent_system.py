@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
-from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, TraceProvider, input_guardrail, GuardrailFunctionOutput
+from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
 
 from .agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
