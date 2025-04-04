@@ -2192,86 +2192,91 @@ class FoundationAgent(BaseLoreAgent):
     async def aggregate_npc_data(self) -> Dict[str, Any]:
         """Collect all NPC data into a unified format."""
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT npc_id, npc_name, archetypes, likes, dislikes, 
-                       hobbies, affiliations, personality_traits, 
-                       current_location, archetype_summary
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-            """, (self.lore_system.user_id, self.lore_system.conversation_id))
-            
-            rows = cursor.fetchall()
-            
-            # Process rows into a structured dict
-            all_npcs = []
-            all_archetypes, all_likes, all_hobbies, all_affiliations, all_locations = (
-                set(), set(), set(), set(), set()
-            )
-
-            for row in rows:
-                npc_id, npc_name, archetypes_json, likes_json, dislikes_json, \
-                hobbies_json, affiliations_json, personality_json, \
-                current_location, archetype_summary = row
-
-                # Safely load JSON fields
-                def safe_load(s):
-                    try:
-                        return json.loads(s) if s else []
-                    except:
-                        return []
-
-                archetypes = safe_load(archetypes_json)
-                likes = safe_load(likes_json)
-                dislikes = safe_load(dislikes_json)
-                hobbies = safe_load(hobbies_json)
-                affiliations = safe_load(affiliations_json)
-                personality_traits = safe_load(personality_json)
-
-                # Update sets
-                all_archetypes.update(archetypes)
-                all_likes.update(likes)
-                all_hobbies.update(hobbies)
-                all_affiliations.update(affiliations)
-                if current_location:
-                    all_locations.add(current_location)
+            # Use async connection context manager
+            async with get_db_connection_context() as conn:
+                # Use async query execution
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, archetypes, likes, dislikes, 
+                           hobbies, affiliations, personality_traits, 
+                           current_location, archetype_summary
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                """, self.lore_system.user_id, self.lore_system.conversation_id)
                 
-                all_npcs.append({
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "archetypes": archetypes,
-                    "likes": likes,
-                    "dislikes": dislikes,
-                    "hobbies": hobbies,
-                    "affiliations": affiliations,
-                    "personality_traits": personality_traits,
-                    "current_location": current_location,
-                    "archetype_summary": archetype_summary
-                })
-
-            # Get the environment desc and setting name from DB
-            setting_desc, setting_name = await self._get_current_setting_info()
-
-            return {
-                "setting_name": setting_name,
-                "setting_description": setting_desc,
-                "npcs": all_npcs,
-                "aggregated": {
-                    "archetypes": list(all_archetypes),
-                    "likes": list(all_likes),
-                    "hobbies": list(all_hobbies),
-                    "affiliations": list(all_affiliations),
-                    "locations": list(all_locations),
+                # Process rows into a structured dict
+                all_npcs = []
+                all_archetypes, all_likes, all_hobbies, all_affiliations, all_locations = (
+                    set(), set(), set(), set(), set()
+                )
+    
+                for row in rows:
+                    # asyncpg returns row as a Record object with named attributes
+                    npc_id = row['npc_id']
+                    npc_name = row['npc_name']
+                    archetypes_json = row['archetypes']
+                    likes_json = row['likes']
+                    dislikes_json = row['dislikes']
+                    hobbies_json = row['hobbies']
+                    affiliations_json = row['affiliations']
+                    personality_json = row['personality_traits']
+                    current_location = row['current_location']
+                    archetype_summary = row['archetype_summary']
+    
+                    # Safely load JSON fields
+                    def safe_load(s):
+                        try:
+                            return json.loads(s) if s else []
+                        except:
+                            return []
+    
+                    archetypes = safe_load(archetypes_json)
+                    likes = safe_load(likes_json)
+                    dislikes = safe_load(dislikes_json)
+                    hobbies = safe_load(hobbies_json)
+                    affiliations = safe_load(affiliations_json)
+                    personality_traits = safe_load(personality_json)
+    
+                    # Update sets
+                    all_archetypes.update(archetypes)
+                    all_likes.update(likes)
+                    all_hobbies.update(hobbies)
+                    all_affiliations.update(affiliations)
+                    if current_location:
+                        all_locations.add(current_location)
+                    
+                    all_npcs.append({
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "archetypes": archetypes,
+                        "likes": likes,
+                        "dislikes": dislikes,
+                        "hobbies": hobbies,
+                        "affiliations": affiliations,
+                        "personality_traits": personality_traits,
+                        "current_location": current_location,
+                        "archetype_summary": archetype_summary
+                    })
+    
+                # Get the environment desc and setting name from DB
+                setting_desc, setting_name = await self._get_current_setting_info()
+    
+                return {
+                    "setting_name": setting_name,
+                    "setting_description": setting_desc,
+                    "npcs": all_npcs,
+                    "aggregated": {
+                        "archetypes": list(all_archetypes),
+                        "likes": list(all_likes),
+                        "hobbies": list(all_hobbies),
+                        "affiliations": list(all_affiliations),
+                        "locations": list(all_locations),
+                    }
                 }
-            }
+            
         except Exception as e:
             logger.error(f"Error aggregating NPC data: {e}")
             return {"error": str(e)}
-        finally:
-            cursor.close()
-            conn.close()
+            # No need for finally block with connection cleanup as the context manager handles it
             
     async def analyze_setting_demographics(self, npc_data: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze the demographics and social structure of the setting."""
@@ -2343,29 +2348,30 @@ class FoundationAgent(BaseLoreAgent):
         """Helper to fetch the current setting name and environment desc from the DB."""
         setting_desc = "A setting with no description."
         setting_name = "The Setting"
+        
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='EnvironmentDesc'
-            """, (self.lore_system.user_id, self.lore_system.conversation_id))
-            row = cursor.fetchone()
-            if row:
-                setting_desc = row[0] or setting_desc
-
-            cursor.execute("""
-                SELECT value FROM CurrentRoleplay
-                WHERE user_id=%s AND conversation_id=%s AND key='CurrentSetting'
-            """, (self.lore_system.user_id, self.lore_system.conversation_id))
-            row = cursor.fetchone()
-            if row:
-                setting_name = row[0] or setting_name
-        finally:
-            cursor.close()
-            conn.close()
-
+            async with get_db_connection_context() as conn:
+                # Get environment description
+                row = await conn.fetchrow("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+                """, self.lore_system.user_id, self.lore_system.conversation_id)
+                
+                if row:
+                    setting_desc = row['value'] or setting_desc
+    
+                # Get setting name
+                row = await conn.fetchrow("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key='CurrentSetting'
+                """, self.lore_system.user_id, self.lore_system.conversation_id)
+                
+                if row:
+                    setting_name = row['value'] or setting_name
+                    
+        except Exception as e:
+            logger.error(f"Error fetching setting info: {e}")
+            
         return setting_desc, setting_name
 
 class FactionAgent(BaseLoreAgent):
