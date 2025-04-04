@@ -53,13 +53,13 @@ class RegionalCultureSystem(BaseLoreManager):
         female_variation: Optional[str] = None
         male_variation: Optional[str] = None
     
-def __init__(self, user_id: int, conversation_id: int):
-        super().__init__(user_id, conversation_id)
-        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-        self.cache_namespace = "regional_culture"
-        
-        # Initialize specialized agents for different cultural tasks
-        self._initialize_agents()
+    def __init__(self, user_id: int, conversation_id: int):
+            super().__init__(user_id, conversation_id)
+            self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+            self.cache_namespace = "regional_culture"
+            
+            # Initialize specialized agents for different cultural tasks
+            self._initialize_agents()
     
     def _initialize_agents(self):
         """Initialize specialized agents for different cultural tasks"""
