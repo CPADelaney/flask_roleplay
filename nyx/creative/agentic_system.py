@@ -38,6 +38,9 @@ class AgenticCreativitySystem:
         
         # Initialize content system
         self.content_system = CreativeContentSystem(base_directory)
+
+        from nyx.creative.logging_utils import NyxLogger
+        self.logger = NyxLogger(self.content_system)
         
         # Initialize code systems
         self.code_analyzer = CodeAnalyzer(self.content_system)
