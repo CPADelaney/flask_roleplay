@@ -33,7 +33,7 @@ class SecurityMiddleware:
             'npc_id': r'^npc_[0-9a-f]{8}$'
         }
     
-    def sanitize_html(self, content: str) -> str:
+    async def sanitize_html(self, content: str) -> str:
         """Sanitize HTML content."""
         return bleach.clean(
             content,
@@ -42,13 +42,13 @@ class SecurityMiddleware:
             strip=True
         )
     
-    def validate_pattern(self, value: str, pattern_name: str) -> bool:
+    async def validate_pattern(self, value: str, pattern_name: str) -> bool:
         """Validate string against predefined pattern."""
         if pattern_name not in self.patterns:
             raise ValueError(f"Unknown pattern: {pattern_name}")
         return bool(re.match(self.patterns[pattern_name], value))
     
-    def validate_json_structure(self, data: Dict[str, Any], schema: Dict[str, Any]) -> bool:
+    async def validate_json_structure(self, data: Dict[str, Any], schema: Dict[str, Any]) -> bool:
         """Validate JSON structure against schema."""
         try:
             from marshmallow import Schema, fields
@@ -63,73 +63,51 @@ def validate_input(schema: Optional[Dict[str, Any]] = None, patterns: Optional[D
     """Decorator for input validation."""
     def decorator(f: Callable):
         @wraps(f)
-        def decorated_function(*args, **kwargs):
+        async def decorated_function(*args, **kwargs):
             security = SecurityMiddleware()
             
             # Validate URL parameters
             for param_name, pattern_name in (patterns or {}).items():
                 if param_name in kwargs:
-                    if not security.validate_pattern(kwargs[param_name], pattern_name):
+                    if not await security.validate_pattern(kwargs[param_name], pattern_name):
                         logger.warning(f"Invalid {param_name} format: {kwargs[param_name]}")
                         abort(400, f"Invalid {param_name} format")
             
             # Validate JSON body
             if schema and request.is_json:
                 data = request.get_json()
-                if not security.validate_json_structure(data, schema):
+                if not await security.validate_json_structure(data, schema):
                     abort(400, "Invalid request body")
             
-            return f(*args, **kwargs)
+            return await f(*args, **kwargs)
         return decorated_function
     return decorator
 
 def sanitize_output(f: Callable):
     """Decorator for output sanitization."""
     @wraps(f)
-    def decorated_function(*args, **kwargs):
+    async def decorated_function(*args, **kwargs):
         security = SecurityMiddleware()
-        response = f(*args, **kwargs)
+        response = await f(*args, **kwargs)
         
         # If response is JSON
         if isinstance(response, dict):
-            def sanitize_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+            async def sanitize_dict(d: Dict[str, Any]) -> Dict[str, Any]:
                 for key, value in d.items():
                     if isinstance(value, str):
-                        d[key] = security.sanitize_html(value)
+                        d[key] = await security.sanitize_html(value)
                     elif isinstance(value, dict):
-                        d[key] = sanitize_dict(value)
+                        d[key] = await sanitize_dict(value)
                     elif isinstance(value, list):
                         d[key] = [
-                            security.sanitize_html(item) if isinstance(item, str)
-                            else sanitize_dict(item) if isinstance(item, dict)
+                            await security.sanitize_html(item) if isinstance(item, str)
+                            else await sanitize_dict(item) if isinstance(item, dict)
                             else item
                             for item in value
                         ]
                 return d
             
-            return sanitize_dict(response)
+            return await sanitize_dict(response)
         
         return response
     return decorated_function
-
-# Example usage:
-"""
-@validate_input(
-    schema={
-        'name': {'type': 'string', 'required': True},
-        'personality_traits': {'type': 'list', 'schema': {'type': 'string'}},
-        'stats': {
-            'type': 'dict',
-            'schema': {
-                'intensity': {'type': 'integer', 'min': 0, 'max': 100},
-                'corruption': {'type': 'integer', 'min': 0, 'max': 100}
-            }
-        }
-    },
-    patterns={'npc_id': 'npc_id'}
-)
-@sanitize_output
-def create_npc():
-    # Your route logic here
-    pass
-""" 
