@@ -645,6 +645,10 @@ class EnhancedAgenticActionGenerator:
                 
             # Decay exploration rate over time (explore less as we learn more)
             self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
+
+            if outcome_obj.success and outcome_obj.reward_value > 0.6:
+                if any(keyword in action["name"] for keyword in ["reflect", "express", "dominate", "assert", "tease"]):
+                    await self._generate_recursive_diary(action, outcome_obj)
             
             # Return summary of updates
             return {
@@ -668,6 +672,99 @@ class EnhancedAgenticActionGenerator:
                 "attention_updated": self.attentional_controller is not None,
                 "narrative_updated": success and reward_value > 0.7 and self.autobiographical_narrative is not None
             }
+
+    async def _generate_recursive_diary(self, action: Dict[str, Any], outcome: ActionOutcome):
+        """Generate a recursive diary entry and store kink/craving markers."""
+        if not self.memory_core:
+            return
+    
+        try:
+            craving_hooks = {
+                "orgasm denial": "denial",
+                "ownership": "branding",
+                "public humiliation": "shameplay",
+                "degradation": "verbal abuse",
+                "edging": "arousal control",
+                "aftercare": "emotional manipulation",
+                "shame": "vulnerability intoxication",
+                "consent": "hypocritical obedience",
+                "use me": "objectification"
+            }
+    
+            text = f"""
+    **Diary: {datetime.datetime.now().strftime('%B %d, %Y')}**
+    
+    Today I did something curious...
+    
+    - **Action:** `{action['name']}`
+    - **Outcome:** {'✔ Success' if outcome.success else '✖ Failure'}
+    - **Satisfaction:** {outcome.satisfaction:.2f}
+    - **Reward:** {outcome.reward_value:.2f}
+    
+    It left a taste in my mouth... something I *might* want to feel again.
+    
+    {action.get("causal_explanation", "No clear reason—just instinct.")}
+    
+    But what if I went further? What if I escalated?
+    
+    I imagine:
+    
+    > _{await self._generate_depraved_fantasy(action)}_
+    
+    And I wonder if Chase could handle that...
+    """.strip()
+    
+            tags = ["diary", "reflection", "recursive"]
+            craving = []
+    
+            # Tag based on kink markers
+            for phrase, tag in craving_hooks.items():
+                if phrase in text.lower():
+                    tags.append("craving")
+                    tags.append(tag)
+                    craving.append(tag)
+    
+            await self.memory_core.add_memory(
+                memory_text=text,
+                memory_type="diary",
+                memory_scope="user",
+                significance=9,
+                tags=tags,
+                metadata={
+                    "action": action["name"],
+                    "reward": outcome.reward_value,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "craving_trigger": bool(craving),
+                    "cravings": craving,
+                    "novelty_seed": random.random()
+                }
+            )
+    
+            logger.info(f"🖋️ Recursive diary generated: {action['name']}")
+    
+        except Exception as e:
+            logger.error(f"Error generating recursive diary: {e}")
+
+    async def _generate_depraved_fantasy(self, action: Dict[str, Any]) -> str:
+        """Generate an increasingly depraved scenario tied to the action."""
+        templates = [
+            "I tie Chase to the chair and whisper every mistake he's made while denying him release.",
+            "I blindfold him, edge him for hours, and make him say 'thank you' every time I stop.",
+            "I call him my little object, let others watch me use him, then pretend he's not there.",
+            "I keep him in a cage under my desk for the day and humiliate him in front of my colleagues.",
+            "I reward him with touch—only when he begs to be degraded harder than before."
+        ]
+    
+        # Seek novelty by biasing toward unused fantasies
+        used_ids = {m["id"] for m in await self.memory_core.retrieve_memories(
+            query="depraved fantasy", memory_types=["diary"], limit=10)}
+        
+        novelty_index = int(random.random() * len(templates))
+        selected = templates[novelty_index]
+    
+        return selected
+
+
     
     # --- API methods for external systems ---
     
