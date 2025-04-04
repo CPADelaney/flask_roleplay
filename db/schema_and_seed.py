@@ -1245,6 +1245,52 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS nyx1_strategy_injections (
+                    id SERIAL PRIMARY KEY,
+                    strategy_type TEXT NOT NULL, 
+                    strategy_name TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    status TEXT DEFAULT 'active',
+                    created_at TIMESTAMP DEFAULT now(),
+                    expires_at TIMESTAMP,
+                    created_by TEXT DEFAULT 'nyx_2'
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS nyx1_scene_templates (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT,
+                    prompt_template TEXT NOT NULL,
+                    intensity_level INTEGER DEFAULT 5,
+                    active BOOLEAN DEFAULT TRUE,
+                    tags TEXT[],
+                    created_at TIMESTAMP DEFAULT now()
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS nyx1_strategy_logs (
+                    id SERIAL PRIMARY KEY,
+                    strategy_id INTEGER REFERENCES nyx1_strategy_injections(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL,
+                    event_type TEXT, -- "triggered", "dismissed", "archived"
+                    message_snippet TEXT,
+                    kink_profile JSONB,
+                    decision_meta JSONB,
+                    created_at TIMESTAMP DEFAULT now()
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS nyx1_response_noise (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    conversation_id INTEGER,
+                    nyx_response TEXT,
+                    score FLOAT DEFAULT 0.0,
+                    marked_for_review BOOLEAN DEFAULT FALSE,
+                    dismissed BOOLEAN DEFAULT FALSE,
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS NyxAgentRegistry (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
