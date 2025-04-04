@@ -203,8 +203,10 @@ class MemoryManager:
                 user_id,
                 conversation_id,
                 AgentType.MEMORY_MANAGER,
-                "memory_manager"
+                "memory_manager",
+                governance=governance  # pass the object here
             )
+        
             
             # Register handlers
             self.directive_handler.register_handler("action", self._handle_action_directive)
