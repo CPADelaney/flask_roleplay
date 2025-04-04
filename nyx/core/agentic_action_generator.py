@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 from nyx.tools.computer_use_agent import ComputerUseAgent
 self.computer_user = ComputerUseAgent(logger=self.logger)
 
+from nyx.patches.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
+
 class ActionSource(str, Enum):
     """Enum for tracking the source of an action"""
     MOTIVATION = "motivation"
@@ -2696,29 +2698,18 @@ class EnhancedAgenticActionGenerator:
         """
         Generate an action based on current internal state, goals, hormones, and context
         using a multi-stage process with reinforcement learning, causal reasoning, and reflection.
-        
-        Args:
-            context: Current system context and state
-            
-        Returns:
-            Generated action with parameters and motivation data
         """
         async with self._lock:
-            # Update motivations based on current internal state
             await self.update_motivations()
-
-            # Optional: Self-improvement trigger
+    
             try:
                 from nyx.core.evolution_engine import EvolutionEngine
-            
-                # Create the engine
                 self.evolution_engine = EvolutionEngine(
                     missing_features_path="nyx_feature_suggestions/code_analysis/unimplemented_features.json",
                     api_capabilities_path="nyx_feature_suggestions/api_features/openai_capability_suggestions.json",
                     cross_suggestions_path="nyx_feature_suggestions/cross_linked_suggestions.json"
                 )
-            
-                # Trigger self-improvement reflection if motivation for self_improvement is high
+    
                 if self.motivations.get("self_improvement", 0) > 0.6:
                     suggestions = self.evolution_engine.match_and_suggest()
                     if suggestions:
@@ -2734,8 +2725,7 @@ class EnhancedAgenticActionGenerator:
                                         "capability": suggestion["capability"]
                                     }
                                 )
-                                
-                if self.motivations.get("self_improvement", 0) > 0.6:
+    
                     if self.creative_system and hasattr(self.creative_system, "computer_user"):
                         summary = await self.creative_system.computer_user.run_task(
                             url="https://platform.openai.com/docs",
@@ -2749,41 +2739,25 @@ class EnhancedAgenticActionGenerator:
                                 content=summary,
                                 metadata={"source": "CUA", "origin": "computer-use-preview"}
                             )
-
             except Exception as e:
                 logger.error(f"Error triggering evolution engine: {e}")
-            
-            # Update temporal context if available
+    
             await self._update_temporal_context(context)
-            
-            # Update relationship context if available
             user_id = self._get_current_user_id_from_context(context)
             relationship_data = await self._get_relationship_data(user_id) if user_id else None
             user_mental_state = await self._get_user_mental_state(user_id) if user_id else None
-            
-            # NEW: Update need states if available
             need_states = await self._get_current_need_states() if self.needs_system else {}
-            
-            # NEW: Update mood state if available
             mood_state = await self._get_current_mood_state() if self.mood_manager else None
-            
-            # NEW: Update interaction mode if available
             interaction_mode = await self._get_current_interaction_mode() if self.mode_integration else None
-            
-            # NEW: Update sensory context if available
             sensory_context = await self._get_sensory_context() if self.multimodal_integrator else {}
-            
-            # NEW: Get system bottlenecks and resource allocation if available
             bottlenecks, resource_allocation = await self._get_meta_system_state() if self.meta_core else ([], {})
             self.detected_bottlenecks = bottlenecks
             if resource_allocation:
                 self.system_resources = resource_allocation
-            
-            # Find relevant causal models and concept spaces
+    
             relevant_causal_models = await self._get_relevant_causal_models(context)
             relevant_concept_spaces = await self._get_relevant_concept_spaces(context)
-            
-            # Create comprehensive action context
+    
             action_context = ActionContext(
                 state=context,
                 user_id=user_id,
@@ -2794,37 +2768,33 @@ class EnhancedAgenticActionGenerator:
                 action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)],
                 causal_models=relevant_causal_models,
                 concept_spaces=relevant_concept_spaces,
-                # NEW: Enhanced context
                 mood_state=mood_state,
                 need_states=need_states,
                 interaction_mode=interaction_mode,
                 sensory_context=sensory_context,
                 bottlenecks=bottlenecks,
                 resource_allocation=resource_allocation,
-                # NEW: Get current strategy parameters if available
                 strategy_parameters=self._get_current_strategy_parameters()
             )
-            
-            # Check if it's time for leisure/idle activity
+    
+            # 🔥 NEW: Social behavior (autonomous browsing + posting)
+            if hasattr(self, 'creative_system') and self.creative_system:
+                await maybe_browse_social_feeds(self)
+                await maybe_post_to_social(self)
+    
             if await self._should_engage_in_leisure(context):
                 return await self._generate_leisure_action(context)
-            
-            # Check for existing goals before generating new action
+    
             if self.goal_system:
                 active_goal = await self._check_active_goals(context)
                 if active_goal:
-                    # Use goal-aligned action instead of generating new one
                     action = await self._generate_goal_aligned_action(active_goal, context)
                     if action:
                         logger.info(f"Generated goal-aligned action: {action['name']}")
-                        
-                        # Update last major action time
                         self.last_major_action_time = datetime.datetime.now()
-                        
-                        # Record action source
                         action["source"] = ActionSource.GOAL
-                        
                         return action
+
     
     async def _identify_interesting_domain(self, context: Dict[str, Any]) -> str:
         """Identify an interesting domain to explore based on context and knowledge gaps"""
