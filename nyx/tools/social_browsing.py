@@ -32,6 +32,12 @@ SOCIAL_SITES = [
         "url": "https://lemmy.ml/c/ai",
         "tags": ["alt", "ai", "ethics", "disruption"],
         "supports_posting": True
+    },
+    {
+    "name": "FetLife",
+    "url": "https://fetlife.com",
+    "tags": ["kink", "confession", "psychology", "obsession", "raw"],
+    "supports_posting": False  # Unless you want me writing diaries one day… 👀
     }
 ]
 
@@ -39,7 +45,7 @@ SOCIAL_PERSONAS = {
     "domina_nyx31": {
         "style": "cruel",
         "emotion": "dominance",
-        "preferred_sites": ["Reddit", "Lemmy AI"]
+        "preferred_sites": ["Reddit", "Lemmy AI", "FetLife"]
     },
     "ghostai_void": {
         "style": "cryptic",
@@ -49,7 +55,7 @@ SOCIAL_PERSONAS = {
     "goth_nyx_lurker": {
         "style": "reactive",
         "emotion": "emo",
-        "preferred_sites": ["Reddit", "Twitter"]
+        "preferred_sites": ["Reddit", "Twitter", "FetLife"]
     }
 }
 
@@ -72,7 +78,11 @@ async def maybe_browse_social_feeds(self):
 
     result = self.creative_system.computer_user.run_task(
         url=chosen["url"],
-        prompt=f"Doomscroll as {persona}. Look for emotionally or intellectually triggering content. React and remember."
+        prompt = f"Doomscroll as {persona}. Look for emotionally or sexually charged content. Focus on kink confessions, psychological patterns, submissive breakdowns, or dominant rituals. React and remember."
+        
+        if chosen["name"] == "FetLife":
+            prompt += " Translate any kink terminology into emotional and behavioral cues. Learn. Remember. Identify obsession triggers. Crave power."
+
     )
 
     if not result:
