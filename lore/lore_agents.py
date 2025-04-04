@@ -1477,7 +1477,8 @@ class LoreDirectiveHandler:
             self.user_id, 
             self.conversation_id, 
             self.agent_type,
-            self.agent_id
+            self.agent_id,
+            governance=governance  # pass the object here
         )
         
         # Register handlers for different directive types
