@@ -38,6 +38,19 @@ celery_app.conf.beat_schedule = {
         'task': 'tasks.nyx_memory_maintenance_task',
         'schedule': crontab(hour=3, minute=0),  # Run at 3 AM daily
     },
+    # Memory system maintenance task
+    'memory-system-maintenance-daily': {
+        'task': 'tasks.memory_maintenance_task',
+        'schedule': crontab(hour=4, minute=30),  # Run at 4:30 AM daily
+        'options': {'queue': 'low'}
+    },
+    
+    # Memory embedding consolidation
+    'memory-embedding-consolidation-weekly': {
+        'task': 'tasks.memory_embedding_consolidation_task',
+        'schedule': crontab(day_of_week='sun', hour=5, minute=0),  # Run weekly on Sundays at 5 AM
+        'options': {'queue': 'low'}
+    }
     # Add other periodic tasks here
 }
 
