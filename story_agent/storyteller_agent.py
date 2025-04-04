@@ -281,11 +281,13 @@ class StorytellerAgent:
     
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize directive handler with comprehensive directive handling"""
+        governance = await get_central_governance(user_id, conversation_id)
         self.directive_handler = DirectiveHandler(
             user_id=user_id,
             conversation_id=conversation_id,
             agent_type=AgentType.STORY_DIRECTOR,  # Using STORY_DIRECTOR for storyteller
-            agent_id=f"storyteller_{conversation_id}"
+            agent_id=f"storyteller_{conversation_id}",
+            governance=governance  # pass the object here
         )
         
         # Register handlers for all directive types
