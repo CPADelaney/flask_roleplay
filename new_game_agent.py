@@ -152,11 +152,13 @@ class NewGameAgent:
     
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize the directive handler for this agent"""
-        self.directive_handler = DirectiveHandler(
+        governance = await get_central_governance(user_id, conversation_id)
+        handler = DirectiveHandler(
             user_id=user_id,
             conversation_id=conversation_id,
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="new_game"
+            agent_type=agent_type,
+            agent_id=agent_id,
+            governance=governance  # pass the object here
         )
         
         # Register handlers for different directive types
