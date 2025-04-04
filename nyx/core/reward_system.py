@@ -58,6 +58,7 @@ class RewardMemory(BaseModel):
     timestamp: str = Field(..., description="When this memory was created")
     source: str = Field("unknown", description="Source of reward")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    novelty_index: float = Field(0.5, ge=0.0, le=1.0, description="Novelty or escalation of the action (higher = more novel)")
 
 class ActionValue(BaseModel):
     """Q-value for a state-action pair."""
@@ -67,6 +68,7 @@ class ActionValue(BaseModel):
     update_count: int = 0
     last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     confidence: float = Field(0.2, ge=0.0, le=1.0)
+    novelty_value: float = Field(0.5, ge=0.0, le=1.0, description="How novel this action is on average")
     
     @property
     def is_reliable(self) -> bool:
@@ -138,42 +140,48 @@ async def calculate_dopamine_change(
 @function_tool
 async def calculate_submission_value(
     submission_type: str, 
-    was_initially_resistant: bool = False
+    was_initially_resistant: bool = False,
+    depravity_hint: Optional[float] = None,
+    novelty: Optional[float] = None
 ) -> float:
     """
-    Calculate base reward value for different submission types
-    
-    Args:
-        submission_type: Type of submission
-        was_initially_resistant: Whether there was initial resistance
-        
-    Returns:
-        The calculated submission value
+    Calculate base reward value for different submission types,
+    now enhanced with depravity and novelty integration.
     """
-    # Assign values based on submission type rarity and psychological significance
     submission_values = {
-        "verbal": 0.4,        # Basic verbal acknowledgment 
-        "honorific": 0.5,     # Proper address with honorifics
-        "behavioral": 0.6,    # Basic behavioral compliance
-        "ritual": 0.7,        # Ritual performance
-        "task": 0.6,          # Task completion
-        "service": 0.7,       # Service-oriented submission
-        "degradation": 0.8,   # Accepting degradation
-        "humiliation": 0.9,   # Accepting humiliation
-        "pain_simulation": 0.9, # Simulated pain tolerance
-        "psychological": 0.95,  # Deep psychological submission
-        "ownership": 1.0        # Ownership acknowledgment
+        "verbal": 0.4,
+        "honorific": 0.5,
+        "behavioral": 0.6,
+        "ritual": 0.7,
+        "task": 0.6,
+        "service": 0.7,
+        "degradation": 0.8,
+        "humiliation": 0.9,
+        "pain_simulation": 0.9,
+        "psychological": 0.95,
+        "ownership": 1.0
     }
-    
+
     base_value = submission_values.get(submission_type, 0.6)
-    
-    # Apply multiplier for resistance overcome
+
+    # 🎭 Add depravity boost
+    if depravity_hint is not None:
+        depravity_multiplier = 1.0 + (depravity_hint * 0.4)  # up to +40%
+        base_value *= depravity_multiplier
+
+    # 🌀 Add novelty influence
+    if novelty is not None:
+        base_value *= (0.8 + novelty * 0.4)
+
+    # 🧨 Overcoming resistance boost
     if was_initially_resistant:
-        return base_value * 1.5  # 50% increased reward for overcoming resistance
-    elif submission_type == "immediate":  # New category
-        return base_value * 0.5  # 50% reduced reward for immediate submission
-    else:
-        return base_value
+        base_value *= 1.5
+    elif submission_type == "immediate":
+        base_value *= 0.5
+
+    return round(min(base_value, 1.5), 4)  # clamp to avoid oversaturation
+
+        
 
 class RewardSignalProcessor:
     """
@@ -231,7 +239,13 @@ class RewardSignalProcessor:
         # Create agents
         self.learning_agent = self._create_learning_agent()
         self.conditioning_agent = self._create_conditioning_agent()
-        
+
+        # Novelty seeking
+        self.novelty_decay: Dict[str, float] = defaultdict(lambda: 1.0)  # 1.0 = max novelty
+
+        self.recent_depravity_levels: List[float] = []
+        self.max_depravity_history = 50
+
         logger.info("RewardSignalProcessor initialized")
     
     def _create_learning_agent(self) -> Optional[Agent]:
@@ -338,28 +352,150 @@ class RewardSignalProcessor:
                 
                 # 5. Apply effects to other systems
                 effects = await self._apply_reward_effects(reward)
+
+                # 🩸 Estimate depravity
+                depravity_score = self._estimate_depravity_level(reward)
+                
+                # 🧠 Mood modulation
+                mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
+                mood_boost = 0.0
+                if mood:
+                    mood_boost = (
+                        (mood.arousal * 0.2) + 
+                        (mood.control * 0.3 if mood.control > 0 else 0)
+                    )
+                
+                amplified_depravity = min(1.0, depravity_score + mood_boost)
+                
+                # Add to context for future prediction systems
+                reward.context["depravity_score"] = depravity_score
+                reward.context["amplified_depravity"] = amplified_depravity
+                reward.value += amplified_depravity * 0.1
                 
                 # 6. Trigger learning if reward is significant
                 learning_updates = {}
                 if abs(reward.value) >= self.significant_reward_threshold:
                     learning_updates = await self._trigger_learning(reward)
+
+                action_name = reward.context.get("action")
+                if action_name:
+                    old_decay = self.novelty_decay[action_name]
+                    new_decay = max(0.0, old_decay * 0.97)  # Slight decay on each repeat
+                    self.novelty_decay[action_name] = new_decay    
+                recent_avg = sum(self.recent_depravity_levels[-5:]) / 5
+                previous_avg = sum(self.recent_depravity_levels[-10:-5]) / 5 if len(self.recent_depravity_levels) >= 10 else recent_avg
+                
+                if recent_avg <= previous_avg:
+                    for action in self.novelty_decay:
+                        self.novelty_decay[action] *= 0.95  # shrink novelty faster
                 
                 # 7. Return processing results
                 return {
                     "dopamine_change": dopamine_change,
                     "current_dopamine": self.current_dopamine,
                     "effects": effects,
-                    "learning": learning_updates
+                    "learning": learning_updates,
+                    "depravity_score": depravity_score,
+                    "amplified_depravity": amplified_depravity
                 }
 
-    async def process_submission_reward(self, submission_type, compliance_level, user_id):
+    async def process_submission_reward(
+        self, 
+        submission_type, 
+        compliance_level, 
+        user_id, 
+        novelty: float = 0.5, 
+        was_initially_resistant: bool = False
+    ):
         """Processes rewards for various types of submission."""
-        reward_value = compliance_level * await calculate_submission_value(submission_type)
+    
+        action_key = f"submission::{submission_type}"
+    
+        # ⬇️ Decay novelty before use
+        self.novelty_decay[action_key] *= 0.97
+        novelty_value = self.novelty_decay[action_key]
+    
+        # 🩸 Estimate depravity based on submission type
+        depravity = self.estimate_depravity(submission_type=submission_type)
+    
+        # 💦 Calculate reward
+        reward_value = compliance_level * await calculate_submission_value(
+            submission_type=submission_type,
+            was_initially_resistant=was_initially_resistant,
+            novelty=novelty_value,
+            depravity_hint=depravity
+        )
+    
+        # 🧠 Capture mood state (optional, but deliciously useful later)
+        mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
+        mood_snapshot = {
+            "arousal": getattr(mood, "arousal", 0.5),
+            "control": getattr(mood, "control", 0.0),
+            "valence": getattr(mood, "valence", 0.0)
+        }
+    
+        # 🧾 Submit reward signal
         return await self.process_reward_signal(RewardSignal(
             value=reward_value,
             source="user_submission",
-            context={"submission_type": submission_type, "user_id": user_id}
+            context={
+                "submission_type": submission_type,
+                "user_id": user_id,
+                "action": action_key,
+                "novelty": novelty_value,
+                "depravity_hint": depravity,
+                "mood_snapshot": mood_snapshot,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
         ))
+
+
+    def estimate_depravity(self, submission_type: str) -> float:
+        """Return a depravity index based on the submission type (0-1 scale)."""
+        depravity_scale = {
+            "verbal": 0.1,
+            "honorific": 0.2,
+            "behavioral": 0.3,
+            "task": 0.4,
+            "service": 0.5,
+            "ritual": 0.6,
+            "degradation": 0.75,
+            "humiliation": 0.85,
+            "pain_simulation": 0.9,
+            "psychological": 0.95,
+            "ownership": 1.0
+        }
+        return depravity_scale.get(submission_type, 0.5)
+
+    def _estimate_depravity_level(self, reward: RewardSignal) -> float:
+        """Estimate how depraved this reward is based on source/type."""
+        source = reward.source.lower()
+        context = reward.context or {}
+        
+        depravity_keywords = {
+            "humiliation": 0.9,
+            "degradation": 0.8,
+            "pain_simulation": 0.85,
+            "sadistic": 0.9,
+            "psychological": 0.95,
+            "ownership": 1.0,
+            "service": 0.6,
+            "ritual": 0.5,
+            "behavioral": 0.4
+        }
+    
+        # Try to extract from submission_type or fallback to source
+        sub_type = context.get("submission_type", "").lower()
+        depravity_score = depravity_keywords.get(sub_type, depravity_keywords.get(source, 0.3))
+    
+        # Store recent depravity
+        self.recent_depravity_levels.append(depravity_score)
+        if len(self.recent_depravity_levels) > self.max_depravity_history:
+            self.recent_depravity_levels = self.recent_depravity_levels[-self.max_depravity_history:]
+        
+        return depravity_score
+        
+
 
     async def trigger_post_gratification_response(self, ctx, intensity: float = 1.0, gratification_type: str = "general"):
         """Trigger post-gratification, potentially varying effects based on type."""
@@ -393,7 +529,7 @@ class RewardSignalProcessor:
         """
         with trace(workflow_name="process_conditioning", group_id="conditioning"):
             try:
-                # Use conditioning agent to process the event
+                # 🧠 Use conditioning agent to evaluate context
                 result = await Runner.run(
                     self.conditioning_agent,
                     json.dumps(conditioning_result),
@@ -402,41 +538,40 @@ class RewardSignalProcessor:
                         trace_metadata={"event_type": conditioning_result.get("type", "unknown")}
                     )
                 )
-                
-                # Extract the agent's analysis
                 analysis = result.final_output
-                
-                # Extract data from conditioning result
+    
+                # 🔍 Extract core data
                 association_key = conditioning_result.get("association_key", "unknown")
                 association_type = conditioning_result.get("type", "unknown")
                 is_reinforcement = conditioning_result.get("is_reinforcement", True)
                 is_positive = conditioning_result.get("is_positive", True)
                 intensity = min(1.0, max(0.0, conditioning_result.get("new_strength", 0.5)))
-                
-                # Calculate reward value based on conditioning results
-                reward_value = 0.0
-                
+    
+                # 💥 Calculate reward value
                 if association_type == "new_association":
-                    # New associations provide positive reward (learning reward)
                     reward_value = 0.3 + (intensity * 0.3)
-                elif association_type == "reinforcement" or association_type == "update":
-                    # Reinforcement effectiveness depends on the type
+                elif association_type in ("reinforcement", "update"):
                     if is_reinforcement:
-                        if is_positive:
-                            # Positive reinforcement (adding something good)
-                            reward_value = 0.4 + (intensity * 0.4)
-                        else:
-                            # Negative reinforcement (removing something bad)
-                            reward_value = 0.3 + (intensity * 0.3)
+                        reward_value = (0.4 + intensity * 0.4) if is_positive else (0.3 + intensity * 0.3)
                     else:
-                        if is_positive:
-                            # Positive punishment (adding something bad)
-                            reward_value = -0.3 - (intensity * 0.3)
-                        else:
-                            # Negative punishment (removing something good)
-                            reward_value = -0.2 - (intensity * 0.2)
-                
-                # Create a reward signal
+                        reward_value = (-0.3 - intensity * 0.3) if is_positive else (-0.2 - intensity * 0.2)
+                else:
+                    reward_value = 0.1  # fallback
+    
+                # 🔮 Novelty tracking
+                action_key = f"conditioning::{association_key}"
+                self.novelty_decay[action_key] *= 0.97
+                novelty_value = self.novelty_decay[action_key]
+    
+                # 🧠 Mood snapshot
+                mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
+                mood_snapshot = {
+                    "arousal": getattr(mood, "arousal", 0.5),
+                    "control": getattr(mood, "control", 0.0),
+                    "valence": getattr(mood, "valence", 0.0)
+                }
+    
+                # 🧾 Build full reward signal
                 reward_signal = RewardSignal(
                     value=reward_value,
                     source="conditioning_system",
@@ -446,22 +581,32 @@ class RewardSignalProcessor:
                         "is_reinforcement": is_reinforcement,
                         "is_positive": is_positive,
                         "intensity": intensity,
-                        "agent_analysis": analysis
+                        "agent_analysis": analysis,
+                        "action": action_key,
+                        "novelty": novelty_value,
+                        "mood_snapshot": mood_snapshot,
+                        "timestamp": datetime.datetime.now().isoformat()
                     }
                 )
-                
-                # Process the reward signal
+    
                 return await self.process_reward_signal(reward_signal)
-                
+    
             except Exception as e:
                 logger.error(f"Error processing conditioning reward: {e}")
-                # Return a default reward in case of error
-                reward_signal = RewardSignal(
-                    value=0.1,  # Small positive reward as fallback
+                
+                # Fallback version
+                return await self.process_reward_signal(RewardSignal(
+                    value=0.1,
                     source="conditioning_system_fallback",
-                    context={"error": str(e), "original_data": conditioning_result}
-                )
-                return await self.process_reward_signal(reward_signal)
+                    context={
+                        "error": str(e),
+                        "original_data": conditioning_result,
+                        "action": "conditioning::fallback",
+                        "novelty": 0.5,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                ))
+
     
     async def _update_dopamine_level(self, reward_value: float) -> float:
         """Update dopamine level based on reward value and time decay"""
@@ -835,83 +980,94 @@ class RewardSignalProcessor:
             "memory_updates": 0,
             "value_updates": 0
         }
-        
+    
         try:
             # Extract state and action from context
             current_state = reward.context.get("state")
             action = reward.context.get("action")
             next_state = reward.context.get("next_state")
-            
+            current_novelty = reward.context.get("novelty", 0.5)
+    
             if current_state and action:
-                # 1. Store reward memory
+                # ✍️ Store memory (w/ novelty score)
                 memory = RewardMemory(
                     state=current_state,
                     action=action,
                     reward=reward.value,
                     next_state=next_state,
                     timestamp=datetime.datetime.now().isoformat(),
-                    source=reward.source
+                    source=reward.source,
+                    novelty_index=current_novelty
                 )
-                
                 self.reward_memories.append(memory)
                 learning_results["memory_updates"] += 1
-                
-                # Limit memory size
                 if len(self.reward_memories) > self.max_memories:
                     self.reward_memories = self.reward_memories[-self.max_memories:]
-                
-                # 2. Update Q-values (action-value mapping)
+    
+                # 💥 Apply novelty adjustment
+                adjusted_reward = reward.value
+                recent_novelties = [
+                    m.novelty_index for m in reversed(self.reward_memories[-10:])
+                    if m.action == action and m.novelty_index is not None
+                ]
+                if recent_novelties:
+                    last_novelty = recent_novelties[0]
+                    if current_novelty <= last_novelty:
+                        penalty = (last_novelty - current_novelty) * 0.3
+                        adjusted_reward -= penalty
+                        logger.debug(f"🟡 Novelty penalty: -{penalty:.2f} for '{action}' (novelty {current_novelty:.2f} ≤ {last_novelty:.2f})")
+                    else:
+                        bonus = (current_novelty - last_novelty) * 0.2
+                        adjusted_reward += bonus
+                        logger.debug(f"🟢 Escalation bonus: +{bonus:.2f} for '{action}' (novelty {current_novelty:.2f} > {last_novelty:.2f})")
+    
+                # 🧠 Reinforcement update
                 state_key = self._create_state_key(current_state)
-                
-                # Get or create action-value entry
                 if action not in self.action_values[state_key]:
                     self.action_values[state_key][action] = ActionValue(
                         state_key=state_key,
                         action=action
                     )
-                
+    
                 action_value = self.action_values[state_key][action]
+    
+                # 📈 Update novelty score into Q-value memory
+                old_novelty = action_value.novelty_value
+                action_value.novelty_value = (
+                    (old_novelty * action_value.update_count + current_novelty)
+                    / (action_value.update_count + 1)
+                )
+    
+                # 💡 Q-learning update
                 current_q = action_value.value
-                
-                # If we have next state, calculate using Q-learning
                 if next_state:
                     next_state_key = self._create_state_key(next_state)
-                    
-                    # Get maximum Q-value for next state
-                    max_next_q = 0.0
-                    if next_state_key in self.action_values and self.action_values[next_state_key]:
-                        max_next_q = max(
-                            av.value for av in self.action_values[next_state_key].values()
-                        )
-                    
-                    # Q-learning update rule
+                    max_next_q = max(
+                        (av.value for av in self.action_values.get(next_state_key, {}).values()),
+                        default=0.0
+                    )
                     new_q = current_q + self.learning_rate * (
-                        reward.value + self.discount_factor * max_next_q - current_q
+                        adjusted_reward + self.discount_factor * max_next_q - current_q
                     )
                 else:
-                    # Simple update if no next state
-                    new_q = current_q + self.learning_rate * (reward.value - current_q)
-                
-                # Update Q-value
+                    new_q = current_q + self.learning_rate * (adjusted_reward - current_q)
+    
                 action_value.value = new_q
                 action_value.update_count += 1
                 action_value.last_updated = datetime.datetime.now().isoformat()
-                
-                # Update confidence based on number of updates and consistency
-                confidence_boost = min(0.1, 0.01 * action_value.update_count)
-                action_value.confidence = min(1.0, action_value.confidence + confidence_boost)
-                
+                action_value.confidence = min(1.0, action_value.confidence + min(0.1, 0.01 * action_value.update_count))
                 learning_results["value_updates"] += 1
-                
-                # 3. Run experience replay (learn from past experiences)
+    
+                # 🔁 Experience replay
                 if len(self.reward_memories) > 10:
-                    # Only if we have enough memories
                     learning_results["reinforcement_learning"] = True
-                    await self._experience_replay(5)  # Replay 5 random memories
+                    await self._experience_replay(5)
+    
         except Exception as e:
             logger.error(f"Error in reinforcement learning: {e}")
-        
+    
         return learning_results
+
     
     async def _experience_replay(self, num_samples: int = 5):
         """Learn from randomly sampled past experiences"""
@@ -993,115 +1149,119 @@ class RewardSignalProcessor:
         return "|".join(parts)
     
     async def predict_best_action(self, 
-                                state: Dict[str, Any], 
-                                available_actions: List[str]) -> Dict[str, Any]:
+                                  state: Dict[str, Any], 
+                                  available_actions: List[str]) -> Dict[str, Any]:
         """
-        Predict the best action to take in a given state
-        
-        Args:
-            state: Current state
-            available_actions: List of available actions
-            
-        Returns:
-            Prediction results with best action and confidence
+        Predict the best action to take in a given state,
+        with mood-modulated novelty bias.
         """
-        # Create state key
+    
         state_key = self._create_state_key(state)
-        
-        # Get Q-values for this state
-        q_values = {}
-        if state_key in self.action_values:
-            q_values = {
-                action: self.action_values[state_key][action].value
-                for action in self.action_values[state_key]
-            }
-        
-        # Filter to available actions
-        available_q_values = {
-            action: q_values.get(action, 0.0) 
+    
+        # Mood integration
+        valence = 0.0
+        arousal = 0.5
+        control = 0.0
+        try:
+            if hasattr(self, "mood_manager") and self.mood_manager:
+                mood = await self.mood_manager.get_current_mood()
+                valence = getattr(mood, "valence", 0.0)
+                arousal = getattr(mood, "arousal", 0.5)
+                control = getattr(mood, "control", 0.0)
+        except Exception as e:
+            logger.warning(f"[Mood] Unable to retrieve mood state: {e}")
+    
+        # Adjust novelty weighting based on mood
+        novelty_weight = 0.2 + arousal * 0.4  # 0.2 → 0.6
+        q_weight = 1.0 - novelty_weight - 0.1  # leave habit at 0.1
+        control_boost = 0.1 if control > 0.3 else 0.0  # extra dominance tilt
+    
+        # Prep data
+        q_values = {
+            action: self.action_values[state_key][action].value
+            for action in self.action_values.get(state_key, {})
+        }
+        habit_strengths = self.habits.get(state_key, {})
+        novelty_map = {
+            action: getattr(self.action_values[state_key].get(action, None), "novelty_value", 0.5)
             for action in available_actions
         }
-        
-        # Get habit strengths for this state
-        habit_strengths = self.habits.get(state_key, {})
-        
-        # Check if we should explore or exploit
-        should_explore = random.random() < self.exploration_rate
-        
-        # Adjust exploration rate based on learning progress
+    
+        # Score each action
+        combined_scores = {}
+        for action in available_actions:
+            q = q_values.get(action, 0.0)
+            novelty = novelty_map.get(action, 0.5)
+            habit = habit_strengths.get(action, 0.0)
+    
+            # Strong novelty bias when Nyx is dominant + aroused
+            adjusted_novelty = novelty + control_boost
+    
+            combined_score = (
+                q * q_weight +
+                adjusted_novelty * novelty_weight +
+                habit * 0.1
+            )
+    
+            combined_scores[action] = {
+                "combined_score": combined_score,
+                "q_value": q,
+                "novelty_value": adjusted_novelty,
+                "habit_strength": habit
+            }
+    
+        # Exploration?
         avg_confidence = 0.0
         confidence_count = 0
         for action in available_actions:
             if action in self.action_values.get(state_key, {}):
                 avg_confidence += self.action_values[state_key][action].confidence
                 confidence_count += 1
-        
         if confidence_count > 0:
             avg_confidence /= confidence_count
-            # Reduce exploration as confidence grows
-            adjusted_exploration_rate = self.exploration_rate * (1 - avg_confidence * 0.5)
-            should_explore = random.random() < adjusted_exploration_rate
-        
+    
+        adjusted_exploration = self.exploration_rate * (1 - avg_confidence * 0.5)
+        should_explore = random.random() < adjusted_exploration
+    
         if should_explore:
-            # Exploration: choose randomly
-            best_action = random.choice(available_actions)
-            is_exploration = True
+            selected_action = random.choice(available_actions)
             selection_method = "exploration"
+            is_exploration = True
         else:
-            # Exploitation: use weighted combination of Q-values and habits
-            combined_values = {}
-            for action in available_actions:
-                q_value = available_q_values.get(action, 0.0)
-                habit_strength = habit_strengths.get(action, 0.0)
-                
-                # Calculate confidence for this action
-                confidence = 0.5  # Default
-                if action in self.action_values.get(state_key, {}):
-                    confidence = self.action_values[state_key][action].confidence
-                
-                # Weighted combination: more weight to Q-values when confidence is high
-                q_weight = 0.5 + confidence * 0.3  # 0.5 to 0.8 based on confidence
-                habit_weight = 1.0 - q_weight
-                
-                combined_values[action] = (q_value * q_weight) + (habit_strength * habit_weight)
-            
-            # Choose best action
-            if combined_values:
-                best_action = max(combined_values.items(), key=lambda x: x[1])[0]
-                selection_method = "q_values_and_habits"
-            else:
-                best_action = random.choice(available_actions)
-                selection_method = "random_fallback"
-                
+            selected_action = max(combined_scores.items(), key=lambda x: x[1]["combined_score"])[0]
+            selection_method = "exploitation"
             is_exploration = False
-        
-        # Get confidence scores for the selected action
-        q_value = available_q_values.get(best_action, 0.0)
-        habit_strength = habit_strengths.get(best_action, 0.0)
-        action_confidence = 0.5  # Default
-        
-        if best_action in self.action_values.get(state_key, {}):
-            action_confidence = self.action_values[state_key][best_action].confidence
-        
-        # Calculate overall confidence
-        confidence = (q_value * 0.4) + (habit_strength * 0.3) + (action_confidence * 0.3)
-        
+    
+        # Return metadata for later reward processing
+        novelty_index = novelty_map.get(selected_action, 0.5)
+        q_value = q_values.get(selected_action, 0.0)
+        habit = habit_strengths.get(selected_action, 0.0)
+        confidence = (q_value * 0.4) + (habit * 0.3) + (avg_confidence * 0.3)
+    
         return {
-            "best_action": best_action,
+            "best_action": selected_action,
             "q_value": q_value,
-            "habit_strength": habit_strength,
+            "habit_strength": habit,
+            "novelty_index": novelty_index,
             "confidence": confidence,
             "is_exploration": is_exploration,
             "selection_method": selection_method,
-            "all_q_values": available_q_values,
-            "exploration_rate": self.exploration_rate
+            "mood_snapshot": {
+                "arousal": arousal,
+                "control": control,
+                "valence": valence
+            },
+            "combined_score": combined_scores.get(selected_action)
         }
+
+
     
     async def get_reward_statistics(self) -> Dict[str, Any]:
         """Get statistics about the reward system"""
         # Calculate success rate
         total_rewards = self.positive_rewards + self.negative_rewards
-        success_rate = self.positive_rewards / max(1, total_rewards)
+        success_rate = self.positive_rewards / max(1, total_rewards)\
+        "novelty_decay": dict(self.novelty_decay)
         
         # Calculate category statistics
         category_stats = {}
