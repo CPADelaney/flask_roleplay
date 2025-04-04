@@ -61,6 +61,7 @@ class BodyStateOutput(BaseModel):
     movement_quality: str = Field(..., description="Quality of movement description")
     behavioral_impact: str = Field(..., description="Impact on behavior")
     regions_summary: Dict[str, Dict[str, float]] = Field(..., description="Summary of region states")
+    pleasure_index: float = Field(..., description="Level of pleasure felt (-1.0 to 1.0)")    
 
 class TemperatureEffect(BaseModel):
     """Effects of temperature on expression and behavior"""
@@ -1602,6 +1603,9 @@ class DigitalSomatosensorySystem:
                 
                 # Calculate pleasure intensity based on input intensity
                 pleasure_intensity = 0.8 + intensity * 0.2
+
+                self.body_state["last_orgasm"] = datetime.datetime.now()
+                self.body_state["gratification_level"] = intensity
                 
                 # Apply pleasure to erogenous regions with varying intensity
                 regions = ["genitals", "inner_thighs", "skin", "chest"]
@@ -1836,7 +1840,28 @@ class DigitalSomatosensorySystem:
                 max_region = "overall body"
                 max_sensation = "neutral"
                 max_value = 0.0
+
+            pleasure_zones = ["genitals", "breasts_nipples", "inner_thighs", "anus", "lips"]
+            total = 0.0
+            for region in pleasure_zones:
+                if region in self.body_regions:
+                    r = self.body_regions[region]
+                    total += (r.pleasure + r.tingling) * r.erogenous_level
             
+            pleasure_index = min(1.0, total / len(pleasure_zones))
+
+            if self.reward_system:
+                await self.reward_system.process_reward_signal(RewardSignal(
+                    value=pleasure_index * 0.15,
+                    source="somatic_pleasure_index",
+                    context={
+                        "pleasure_index": pleasure_index,
+                        "dominant_region": max_region,
+                        "dominant_sensation": max_sensation,
+                        "body_state_source": "get_body_state_fallback"
+                    }
+                ))
+                        
             return {
                 "dominant_sensation": max_sensation,
                 "dominant_region": max_region,
@@ -1845,7 +1870,8 @@ class DigitalSomatosensorySystem:
                 "posture_effect": "Neutral posture",
                 "movement_quality": "Natural movements",
                 "behavioral_impact": "Minimal impact on behavior",
-                "regions_summary": {}
+                "regions_summary": {},  # You can fill this in later if needed
+                "pleasure_index": pleasure_index  # 💦 Injected and ready
             }
     
     async def get_temperature_effects(self) -> Dict[str, Any]:
