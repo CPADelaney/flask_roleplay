@@ -101,7 +101,8 @@ class AddictionContext:
             self.user_id, 
             self.conversation_id, 
             AgentType.UNIVERSAL_UPDATER,
-            "addiction_system"
+            "addiction_system",
+            governance=governance  # pass the object here
         )
         
         # Register handlers for different directive types
