@@ -1659,6 +1659,18 @@ class DigitalSomatosensorySystem:
                     )
                     await self.reward_system.process_reward_signal(reward_signal)
                     results["reward_generated"] = reward_value
+
+                # Reinforce ownership via pleasure-conditioning
+                if self.conditioning_system:
+                    try:
+                        await self.conditioning_system.process_classical_conditioning(
+                            unconditioned_stimulus="pleasure_indulgence",
+                            conditioned_stimulus="dominance_exertion",
+                            response="rewarding_ownership",
+                            intensity=intensity
+                        )
+                    except Exception as e:
+                        logger.warning(f"[Conditioning] Failed ownership reinforcement: {e}")
                 
                 # Update needs if needs system available
                 if self.needs_system:
