@@ -1668,7 +1668,10 @@ class DigitalSomatosensorySystem:
                         self.needs_system.satisfy_need("intimacy", 0.3 * intensity)
                     ]
                     await asyncio.gather(*needs_tasks)
-                    results["needs_satisfied"] = ["physical_closeness", "drive_expression", "intimacy"]
+                    results["needs_satisfied"] = ["physical_closeness", "drive_expression", "intimacy"]\
+
+                if self.needs_system:
+                    await self.needs_system.satisfy_need("pleasure_indulgence", intensity * 0.9)
                 
                 logger.info("Gratification simulation complete")
                 return results
