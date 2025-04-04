@@ -10,6 +10,10 @@ from typing import Dict, List, Any, Optional, Union, Tuple, Set
 import hashlib
 from collections import defaultdict
 
+# Agent SDK imports
+from agents import Agent, function_tool, RunContextWrapper, trace
+from pydantic import BaseModel, Field
+
 from context.unified_cache import context_cache
 from context.context_config import get_config
 from context.vector_service import get_vector_service, VectorService
@@ -110,6 +114,88 @@ class Memory:
         return self.importance
 
 
+# Pydantic models for Agent SDK integration
+class MemoryModel(BaseModel):
+    """Pydantic model for memory data"""
+    memory_id: str
+    content: str
+    memory_type: str = "observation"
+    created_at: str
+    importance: float = 0.5
+    access_count: int = 0
+    last_accessed: str
+    tags: List[str] = []
+    metadata: Dict[str, Any] = {}
+    
+    @classmethod
+    def from_memory(cls, memory: Memory) -> 'MemoryModel':
+        """Convert Memory object to MemoryModel"""
+        return cls(
+            memory_id=memory.memory_id,
+            content=memory.content,
+            memory_type=memory.memory_type,
+            created_at=memory.created_at.isoformat(),
+            importance=memory.importance,
+            access_count=memory.access_count,
+            last_accessed=memory.last_accessed.isoformat(),
+            tags=memory.tags,
+            metadata=memory.metadata
+        )
+
+
+class MemorySearchRequest(BaseModel):
+    """Request model for memory search"""
+    query_text: str
+    memory_types: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    limit: int = 5
+    use_vector: bool = True
+
+
+class MemorySearchResult(BaseModel):
+    """Result model for memory search"""
+    memories: List[MemoryModel] = []
+    query: str
+    total_found: int
+    vector_search_used: bool
+    search_time_ms: float
+
+
+class MemoryAddRequest(BaseModel):
+    """Request model for adding a memory"""
+    content: str
+    memory_type: str = "observation"
+    importance: Optional[float] = None
+    tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    store_vector: bool = True
+
+
+class MemoryAddResult(BaseModel):
+    """Result model for adding a memory"""
+    memory_id: Optional[str] = None
+    success: bool = False
+    error: Optional[str] = None
+
+
+class MemoryConsolidationRules(BaseModel):
+    """Rules for memory consolidation"""
+    time_window_days: int = 7
+    min_importance: float = 0.4
+    group_by: str = "type"
+    max_memories_per_group: int = 5
+    min_memories_to_summarize: int = 3
+
+
+class MemoryConsolidationResult(BaseModel):
+    """Result of memory consolidation"""
+    processed_count: int = 0
+    consolidated_count: int = 0
+    summary_count: int = 0
+    success: bool = False
+    error: Optional[str] = None
+
+
 class MemoryManager:
     """Integrated memory manager for storage, retrieval, and consolidation"""
 
@@ -203,10 +289,8 @@ class MemoryManager:
                 user_id,
                 conversation_id,
                 AgentType.MEMORY_MANAGER,
-                "memory_manager",
-                governance=governance  # pass the object here
+                "memory_manager"
             )
-        
             
             # Register handlers
             self.directive_handler.register_handler("action", self._handle_action_directive)
@@ -217,153 +301,692 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Error initializing Nyx integration: {e}")
 
-    async def _handle_action_directive(self, directive: dict) -> dict:
-        """Handle an action directive from Nyx."""
-        instruction = directive.get("instruction", "")
-        logging.info(f"[MemoryManager] Processing action directive: {instruction}")
+    @function_tool
+    async def search_memories(
+        self, 
+        ctx: RunContextWrapper, 
+        request: MemorySearchRequest
+    ) -> MemorySearchResult:
+        """
+        Search memories by query text with vector search option
         
-        if "consolidate_memories" in instruction.lower():
-            # Apply memory consolidation
-            params = directive.get("parameters", {})
-            consolidation_rules = params.get("consolidation_rules", {})
-            
-            # Consolidate memories
-            await self._consolidate_memories(consolidation_rules)
-            
-            return {"result": "memories_consolidated"}
-            
-        elif "prioritize_memories" in instruction.lower():
-            # Apply memory prioritization
-            params = directive.get("parameters", {})
-            priority_rules = params.get("priority_rules", {})
-            
-            # Update priority rules
-            self._update_priority_rules(priority_rules)
-            
-            # Re-prioritize memories
-            await self._prioritize_memories()
-            
-            return {"result": "memories_prioritized"}
-            
-        elif "filter_memories" in instruction.lower():
-            # Apply memory filtering
-            params = directive.get("parameters", {})
-            filter_rules = params.get("filter_rules", {})
-            
-            # Update filter rules
-            self._update_filter_rules(filter_rules)
-            
-            # Apply filters
-            await self._apply_memory_filters()
-            
-            return {"result": "memories_filtered"}
+        Args:
+            request: Search request with query text, filters and options
         
-        return {"result": "action_not_recognized"}
+        Returns:
+            List of matching memories with metadata
+        """
+        with trace(workflow_name="search_memories"):
+            start_time = time.monotonic()
+            
+            # Ensure initialization
+            if not self.is_initialized:
+                await self.initialize()
+            
+            # Determine if vector search is enabled and available
+            effective_use_vector = (request.use_vector and 
+                                    self.config.is_enabled("use_vector_search") and 
+                                    self.vector_service is not None)
+            
+            # Create a hash for cache key
+            cache_key_params = f"{request.query_text}:{request.memory_types}:{request.tags}:{request.limit}:{effective_use_vector}"
+            cache_key = f"memory_search:{self.user_id}:{self.conversation_id}:{hashlib.md5(cache_key_params.encode()).hexdigest()}"
+            ttl_override = 30  # 30 seconds
 
-    async def _handle_override_directive(self, directive: dict) -> dict:
-        """Handle an override directive from Nyx."""
-        logging.info(f"[MemoryManager] Processing override directive")
-        
-        # Extract override details
-        override_action = directive.get("override_action", {})
-        applies_to = directive.get("applies_to", [])
-        
-        # Store override
-        directive_id = directive.get("id")
-        if directive_id:
-            self.nyx_overrides[directive_id] = {
-                "action": override_action,
-                "applies_to": applies_to
-            }
-        
-        return {"result": "override_stored"}
+            async def perform_search():
+                results_map: Dict[str, Memory] = {}  # Use dict to handle unique IDs easily
 
-    async def _handle_prohibition_directive(self, directive: dict) -> dict:
-        """Handle a prohibition directive from Nyx."""
-        logging.info(f"[MemoryManager] Processing prohibition directive")
-        
-        # Extract prohibition details
-        prohibited_actions = directive.get("prohibited_actions", [])
-        reason = directive.get("reason", "No reason provided")
-        
-        # Store prohibition
-        directive_id = directive.get("id")
-        if directive_id:
-            self.nyx_prohibitions[directive_id] = {
-                "prohibited_actions": prohibited_actions,
-                "reason": reason
-            }
-        
-        return {"result": "prohibition_stored"}
+                # 1. Vector Search (if enabled)
+                if effective_use_vector:
+                    logger.debug(f"Performing vector search for: '{request.query_text}'")
+                    try:
+                        vector_results = await self.vector_service.search_entities(
+                            query_text=request.query_text,
+                            entity_types=["memory"],
+                            top_k=request.limit
+                        )
 
-    def _update_priority_rules(self, rules: Dict[str, Any]) -> None:
-        """Update priority rules based on Nyx directive."""
+                        memory_ids_from_vector = []
+                        for result in vector_results:
+                             metadata = result.get("metadata", {})
+                             if metadata.get("entity_type") == "memory":
+                                 memory_id = metadata.get("memory_id")
+                                 if memory_id:
+                                     memory_ids_from_vector.append(memory_id)
+
+                        # Batch fetch full memories for vector results
+                        for mem_id in memory_ids_from_vector:
+                             memory = await self.get_memory(mem_id)
+                             if memory:
+                                 # Apply post-fetch filtering if vector filters weren't perfect
+                                 if request.memory_types and memory.memory_type not in request.memory_types: 
+                                    continue
+                                 if request.tags and not any(tag in memory.tags for tag in request.tags): 
+                                    continue
+                                 results_map[memory.memory_id] = memory
+
+                    except Exception as vec_err:
+                        logger.error(f"Vector search failed: {vec_err}", exc_info=True)
+                        # Continue to DB search as fallback
+
+                # 2. Database Search (if needed or vector disabled)
+                needed = request.limit - len(results_map)
+                if needed > 0 or not effective_use_vector:
+                    logger.debug(f"Performing DB search for: '{request.query_text}' (needed: {needed})")
+                    try:
+                        db_results = await self._search_memories_in_db(
+                            request.query_text, request.memory_types, request.tags, request.limit
+                        )
+                        # Add unique results from DB up to the overall limit
+                        for memory in db_results:
+                            if memory.memory_id not in results_map and len(results_map) < request.limit:
+                                results_map[memory.memory_id] = memory
+                    except Exception as db_search_err:
+                         logger.error(f"DB search failed: {db_search_err}", exc_info=True)
+
+                # 3. Final sorting and limit
+                final_results = list(results_map.values())
+                # Re-sort if combining results, e.g., by importance or recency
+                final_results.sort(key=lambda m: (m.importance, m.last_accessed), reverse=True)
+
+                return final_results[:request.limit]  # Apply final limit
+
+            # Get from cache or search
+            search_importance = min(0.7, 0.3 + (len(request.query_text) / 100.0))
+            results = await context_cache.get(
+                cache_key,
+                perform_search,
+                cache_level=1,  # L1 cache
+                importance=search_importance,
+                ttl_override=ttl_override
+            )
+
+            duration_ms = (time.monotonic() - start_time) * 1000
+            
+            # Convert Memory objects to MemoryModel
+            memory_models = [MemoryModel.from_memory(memory) for memory in results]
+            
+            return MemorySearchResult(
+                memories=memory_models,
+                query=request.query_text,
+                total_found=len(results),
+                vector_search_used=effective_use_vector,
+                search_time_ms=duration_ms
+            )
+
+    @function_tool
+    async def add_memory(
+        self,
+        ctx: RunContextWrapper,
+        request: MemoryAddRequest
+    ) -> MemoryAddResult:
+        """
+        Add a new memory with vector storage integration
+        
+        Args:
+            request: Memory data to add
+            
+        Returns:
+            Result with success status and memory ID
+        """
+        with trace(workflow_name="add_memory"):
+            # Generate a placeholder memory ID for the object initially
+            placeholder_id = f"temp_{datetime.now().timestamp()}_{hashlib.md5(request.content.encode()).hexdigest()[:6]}"
+
+            # Create memory object
+            memory = Memory(
+                memory_id=placeholder_id,
+                content=request.content,
+                memory_type=request.memory_type,
+                tags=request.tags or [],
+                metadata=request.metadata or {}
+            )
+
+            # Calculate importance if not provided
+            calculated_importance = memory.calculate_importance()
+            final_importance = request.importance if request.importance is not None else calculated_importance
+            memory.importance = final_importance
+
+            # Serialize metadata and tags for DB
+            metadata_json = None
+            if request.metadata:
+                try: 
+                    metadata_json = json.dumps(request.metadata)
+                except TypeError: 
+                    logger.error("Failed to serialize metadata", exc_info=True)
+                    metadata_json = "{}"
+                    
+            tags_json = None
+            if request.tags:
+                try: 
+                    tags_json = json.dumps(request.tags)
+                except TypeError: 
+                    logger.error("Failed to serialize tags", exc_info=True)
+                    tags_json = "[]"
+
+            # Store in database
+            db_id: Optional[int] = None
+            try:
+                async with get_db_connection_context() as conn:
+                    # Use a transaction for atomicity
+                    async with conn.transaction():
+                        # Insert into database
+                        insert_query = """
+                            INSERT INTO PlayerJournal(
+                                user_id, conversation_id, entry_type, entry_text,
+                                entry_metadata, importance, access_count, last_accessed, created_at, tags, consolidated
+                            )
+                            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, FALSE)
+                            RETURNING id
+                        """
+                        db_id = await conn.fetchval(
+                            insert_query,
+                            self.user_id, self.conversation_id,
+                            request.memory_type, request.content, metadata_json,
+                            final_importance, 0,  # access_count
+                            memory.created_at, memory.created_at,  # last_accessed = created_at initially
+                            tags_json
+                        )
+
+                if db_id is None:
+                    logger.error("Failed to add memory to DB (fetchval returned None).")
+                    return MemoryAddResult(
+                        success=False,
+                        error="Database error - could not create memory"
+                    )
+
+                # Update memory object with the real DB ID (as string)
+                memory.memory_id = str(db_id)
+                logger.info(f"Added memory {memory.memory_id} (type: {request.memory_type}, importance: {final_importance:.2f})")
+
+                # Add to local cache if important enough
+                cache_importance_threshold = 0.6
+                if self.config:
+                    cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                    
+                if final_importance >= cache_importance_threshold:
+                    self.memories[memory.memory_id] = memory
+                    self._build_memory_indices()  # Rebuild indices after adding to cache
+                    logger.debug(f"Memory {memory.memory_id} added to local cache.")
+
+                # Store vector embedding if enabled
+                if request.store_vector and self.config and self.config.is_enabled("use_vector_search") and self.vector_service:
+                    try:
+                        await self.vector_service.add_memory(
+                            memory_id=memory.memory_id,
+                            content=request.content,
+                            memory_type=request.memory_type,
+                            importance=final_importance,
+                            tags=request.tags
+                        )
+                        logger.debug(f"Vector added for memory {memory.memory_id}")
+                    except Exception as vec_err:
+                        logger.error(f"Failed to add vector for memory {memory.memory_id}: {vec_err}", exc_info=True)
+
+                return MemoryAddResult(
+                    memory_id=memory.memory_id,
+                    success=True
+                )
+
+            except Exception as e:
+                logger.error(f"Unexpected error adding memory: {e}", exc_info=True)
+                return MemoryAddResult(
+                    success=False,
+                    error=str(e)
+                )
+
+    @function_tool
+    async def get_memory(
+        self, 
+        ctx: RunContextWrapper, 
+        memory_id: str
+    ) -> Optional[MemoryModel]:
+        """
+        Get a memory by ID, checking local cache first, then DB.
+        
+        Args:
+            memory_id: ID of the memory to retrieve
+            
+        Returns:
+            Memory object if found, otherwise None
+        """
+        with trace(workflow_name="get_memory"):
+            if not memory_id or not memory_id.isdigit():
+                 logger.warning(f"Attempted to get memory with invalid ID: {memory_id}")
+                 return None
+
+            # 1. Check local instance cache
+            if memory_id in self.memories:
+                memory = self.memories[memory_id]
+                memory.access()  # Update local object access time/count
+                logger.debug(f"Memory {memory_id} found in local cache.")
+                return MemoryModel.from_memory(memory)
+
+            # 2. Check distributed cache (via context_cache)
+            cache_key = f"memory:{self.user_id}:{self.conversation_id}:{memory_id}"
+            ttl_override = 300  # 5 minutes
+
+            async def fetch_memory_from_db():
+                logger.debug(f"Fetching memory {memory_id} from DB for {self.user_id}:{self.conversation_id}")
+                query = """
+                    SELECT id, entry_type, entry_text, entry_metadata,
+                           created_at, importance, access_count, last_accessed, tags, consolidated
+                    FROM PlayerJournal
+                    WHERE user_id = $1 AND conversation_id = $2 AND id = $3
+                """
+                try:
+                    async with get_db_connection_context() as conn:
+                        async with conn.transaction():
+                            # Fetch memory
+                            row = await conn.fetchrow(query, self.user_id, self.conversation_id, int(memory_id))
+                            if not row:
+                                logger.warning(f"Memory {memory_id} not found in DB.")
+                                return None
+
+                            memory = self._parse_journal_row(row)
+
+                            # Update access count/time in DB *before* returning
+                            update_query = """
+                                UPDATE PlayerJournal
+                                SET access_count = access_count + 1, last_accessed = NOW()
+                                WHERE id = $1
+                                RETURNING access_count, last_accessed
+                            """
+                            update_result = await conn.fetchrow(update_query, int(memory_id))
+                            if update_result:
+                                memory.access_count = update_result['access_count']
+                                memory.last_accessed = update_result['last_accessed']
+                                logger.debug(f"Updated access count for memory {memory_id} in DB.")
+
+                            # Add to local cache if important enough
+                            cache_importance_threshold = 0.6
+                            if self.config:
+                                cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                                
+                            if memory.importance >= cache_importance_threshold:
+                                 self.memories[memory.memory_id] = memory
+                                 logger.debug(f"Memory {memory_id} added to local cache after DB fetch.")
+
+                            return memory
+
+                except Exception as e:
+                    logger.error(f"Error getting memory {memory_id}: {e}", exc_info=True)
+                    return None
+
+            # Get from context_cache or fetch from DB
+            cached_data = await context_cache.get(
+                cache_key,
+                fetch_memory_from_db,
+                cache_level=1,  # L1 cache
+                importance=0.5,  # Fixed importance for cache item itself
+                ttl_override=ttl_override
+            )
+
+            # Handle potential dict from cache
+            if isinstance(cached_data, dict):
+                memory_obj = Memory.from_dict(cached_data)
+                if memory_obj and memory_id not in self.memories:
+                     cache_importance_threshold = 0.6
+                     if self.config:
+                        cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                        
+                     if memory_obj.importance >= cache_importance_threshold:
+                          self.memories[memory_id] = memory_obj
+                          logger.debug(f"Memory {memory_id} added to local cache after cache fetch.")
+                return MemoryModel.from_memory(memory_obj)
+            elif isinstance(cached_data, Memory):
+                if memory_id not in self.memories:
+                     cache_importance_threshold = 0.6
+                     if self.config:
+                        cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
+                        
+                     if cached_data.importance >= cache_importance_threshold:
+                           self.memories[memory_id] = cached_data
+                           logger.debug(f"Memory {memory_id} added to local cache after cache fetch.")
+                return MemoryModel.from_memory(cached_data)
+            else:
+                return None
+
+    @function_tool
+    async def get_recent_memories(
+        self,
+        ctx: RunContextWrapper,
+        days: int = 3,
+        memory_types: Optional[List[str]] = None,
+        limit: int = 10
+    ) -> List[MemoryModel]:
+        """
+        Get recent memories asynchronously.
+        
+        Args:
+            days: Number of days to look back
+            memory_types: Types of memories to include
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of recent memories
+        """
+        with trace(workflow_name="get_recent_memories"):
+            cache_key = f"recent_memories:{self.user_id}:{self.conversation_id}:{days}:{memory_types}:{limit}"
+            ttl_override = 120  # 2 minutes
+
+            async def fetch_recent_memories():
+                logger.debug(f"Fetching recent memories (last {days} days) from DB for {self.user_id}:{self.conversation_id}")
+                query = """
+                    SELECT id, entry_type, entry_text, entry_metadata,
+                           created_at, importance, access_count, last_accessed, tags, consolidated
+                    FROM PlayerJournal
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND created_at > NOW() - ($3 * INTERVAL '1 day')
+                """
+                params: List[Any] = [self.user_id, self.conversation_id, days]
+                conditions: List[str] = []
+
+                # Memory type filter
+                if memory_types:
+                    type_placeholders = []
+                    for mem_type in memory_types:
+                        param_index = len(params) + 1
+                        type_placeholders.append(f"${param_index}")
+                        params.append(mem_type)
+                    conditions.append(f"entry_type IN ({', '.join(type_placeholders)})")
+
+                # Combine conditions
+                if conditions:
+                    query += " AND " + " AND ".join(conditions)
+
+                # Add ordering and limit
+                param_index = len(params) + 1
+                query += f" ORDER BY created_at DESC LIMIT ${param_index}"
+                params.append(limit)
+
+                memories = []
+                try:
+                    async with get_db_connection_context() as conn:
+                        rows = await conn.fetch(query, *params)
+                        for row_data in rows:
+                            memories.append(self._parse_journal_row(row_data))
+                    logger.info(f"Fetched {len(memories)} recent memories from DB for {self.user_id}:{self.conversation_id}")
+                    return memories
+                except Exception as e:
+                    logger.error(f"Error fetching recent memories: {e}", exc_info=True)
+                    return []
+
+            # Get from cache or fetch
+            results = await context_cache.get(
+                cache_key,
+                fetch_recent_memories,
+                cache_level=1,  # L1 cache
+                importance=0.4,
+                ttl_override=ttl_override
+            )
+            
+            # Convert to MemoryModel objects
+            if isinstance(results, list):
+                return [MemoryModel.from_memory(mem) for mem in results]
+            return []
+
+    @function_tool
+    async def get_memories_by_npc(
+        self,
+        ctx: RunContextWrapper,
+        npc_id: str,
+        limit: int = 5
+    ) -> List[MemoryModel]:
+        """
+        Get memories related to a specific NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            limit: Maximum number of memories to return
+            
+        Returns:
+            List of memories related to the NPC
+        """
+        with trace(workflow_name="get_memories_by_npc"):
+            cache_key = f"npc_memories:{self.user_id}:{self.conversation_id}:{npc_id}:{limit}"
+            ttl_override = 180  # 3 minutes
+
+            async def fetch_npc_memories():
+                logger.debug(f"Fetching memories for NPC {npc_id}")
+                query = """
+                    SELECT pj.id, pj.entry_type, pj.entry_text, pj.entry_metadata,
+                           pj.created_at, pj.importance, pj.access_count, pj.last_accessed, pj.tags
+                    FROM PlayerJournal pj
+                    WHERE pj.user_id = $1 AND pj.conversation_id = $2
+                      AND (
+                        pj.entry_metadata::jsonb ? 'npc_id' AND pj.entry_metadata::jsonb->>'npc_id' = $3
+                        OR
+                        pj.entry_text LIKE '%' || (SELECT npc_name FROM NPCStats WHERE npc_id = $3 LIMIT 1) || '%'
+                      )
+                    ORDER BY pj.importance DESC, pj.created_at DESC
+                    LIMIT $4
+                """
+                
+                memories = []
+                try:
+                    async with get_db_connection_context() as conn:
+                        rows = await conn.fetch(query, self.user_id, self.conversation_id, npc_id, limit)
+                        for row_data in rows:
+                            memories.append(self._parse_journal_row(row_data))
+                    logger.info(f"Fetched {len(memories)} memories for NPC {npc_id}")
+                    return memories
+                except Exception as e:
+                    logger.error(f"Error fetching memories for NPC {npc_id}: {e}", exc_info=True)
+                    return []
+
+            # Get from cache or fetch
+            results = await context_cache.get(
+                cache_key,
+                fetch_npc_memories,
+                cache_level=1,  # L1 cache
+                importance=0.6,
+                ttl_override=ttl_override
+            )
+            
+            # Convert to MemoryModel objects
+            if isinstance(results, list):
+                return [MemoryModel.from_memory(mem) for mem in results]
+            return []
+
+    @function_tool
+    async def consolidate_memories(
+        self,
+        ctx: RunContextWrapper,
+        rules: MemoryConsolidationRules
+    ) -> MemoryConsolidationResult:
+        """
+        Consolidate memories based on rules.
+        
+        Args:
+            rules: Consolidation rules
+            
+        Returns:
+            Result of the consolidation operation
+        """
+        with trace(workflow_name="consolidate_memories"):
+            logger.info(f"Starting memory consolidation with rules: {rules.dict()}")
+            try:
+                memories = await self._get_memories_to_consolidate(rules)
+                if not memories:
+                    logger.info("No memories found matching consolidation criteria.")
+                    return MemoryConsolidationResult(
+                        processed_count=0,
+                        success=True
+                    )
+
+                grouped_memories = self._group_memories(memories, rules)
+                if not grouped_memories:
+                     logger.info("No groups formed for consolidation.")
+                     return MemoryConsolidationResult(
+                         processed_count=len(memories),
+                         consolidated_count=0,
+                         success=True
+                     )
+
+                summaries = await self._generate_memory_summaries(grouped_memories, rules)
+                if not summaries:
+                     logger.info("No summaries generated for consolidation.")
+                     return MemoryConsolidationResult(
+                         processed_count=len(memories),
+                         consolidated_count=0,
+                         success=True
+                     )
+
+                await self._store_consolidated_memories(summaries)
+
+                logger.info(f"Consolidated {len(memories)} memories into {len(summaries)} summaries.")
+                return MemoryConsolidationResult(
+                    processed_count=len(memories),
+                    consolidated_count=len(memories),
+                    summary_count=len(summaries),
+                    success=True
+                )
+            except Exception as e:
+                logger.error(f"Error consolidating memories: {e}", exc_info=True)
+                return MemoryConsolidationResult(
+                    success=False,
+                    error=str(e)
+                )
+
+    @function_tool
+    async def run_maintenance(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Run maintenance tasks like memory consolidation asynchronously.
+        
+        Returns:
+            Dictionary with maintenance results
+        """
+        with trace(workflow_name="run_maintenance"):
+            logger.info(f"Running memory maintenance for {self.user_id}:{self.conversation_id}...")
+            
+            if self.config is None:
+                self.config = await get_config()
+                
+            should_consolidate = self.config.get("memory_consolidation", "enabled", False)
+
+            if not should_consolidate:
+                logger.info("Memory consolidation disabled in config.")
+                return {"consolidated": False, "reason": "Memory consolidation disabled"}
+
+            days_threshold = self.config.get("memory_consolidation", "days_threshold", 7)
+            min_memories = self.config.get("memory_consolidation", "min_memories_to_consolidate", 20)
+            cutoff_date = datetime.now() - timedelta(days=days_threshold)
+
+            consolidation_rules = MemoryConsolidationRules(
+                time_window_days=days_threshold,
+                min_importance=0.0,  # Consolidate potentially low importance old memories
+                group_by="type",  # Or configure this
+                max_memories_per_group=5,
+                min_memories_to_summarize=3,
+            )
+
+            try:
+                 # Check count *before* running full consolidation for efficiency
+                 async with get_db_connection_context() as conn:
+                     count_query = """
+                         SELECT COUNT(*) as count
+                         FROM PlayerJournal
+                         WHERE user_id = $1 AND conversation_id = $2
+                           AND created_at < $3
+                           AND consolidated = FALSE
+                     """
+                     count_result = await conn.fetchval(count_query, self.user_id, self.conversation_id, cutoff_date)
+                     count = count_result or 0
+
+                 if count < min_memories:
+                     logger.info(f"Skipping consolidation: Found {count} unconsolidated memories older than {days_threshold} days (minimum {min_memories}).")
+                     return {"consolidated": False, "reason": f"Not enough old memories: {count} < {min_memories}"}
+
+                 logger.info(f"Found {count} potential memories for consolidation. Proceeding...")
+                 result = await self.consolidate_memories(ctx, consolidation_rules)
+                 
+                 return {
+                     "consolidated": result.success,
+                     "checked_count": count,
+                     "consolidated_count": result.consolidated_count,
+                     "summary_count": result.summary_count,
+                     "threshold_days": days_threshold
+                 }
+
+            except Exception as e:
+                logger.error(f"Error during memory maintenance: {e}", exc_info=True)
+                return {"consolidated": False, "error": str(e)}
+
+    async def _search_memories_in_db(
+        self,
+        query_text: str,
+        memory_types: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 5
+    ) -> List[Memory]:
+        """Search memories in database using text search, type, and tag filters."""
+        memories = []
+        if limit <= 0: 
+            return memories
+
         try:
-            # Update type scores
-            if "type_scores" in rules:
-                self.type_scores.update(rules["type_scores"])
-            
-            # Update importance weights
-            if "importance_weights" in rules:
-                self.importance_weights.update(rules["importance_weights"])
-            
-            # Update recency weights
-            if "recency_weights" in rules:
-                self.recency_weights.update(rules["recency_weights"])
-            
-            logger.info("Updated priority rules from Nyx directive")
+            async with get_db_connection_context() as conn:
+                base_query = """
+                    SELECT id, entry_type, entry_text, entry_metadata,
+                           created_at, importance, access_count, last_accessed, tags, consolidated
+                    FROM PlayerJournal
+                    WHERE user_id = $1 AND conversation_id = $2
+                """
+                params: List[Any] = [self.user_id, self.conversation_id]
+                conditions: List[str] = []
+
+                # Text search
+                if query_text:
+                    # Basic ILIKE search
+                    param_index = len(params) + 1
+                    conditions.append(f"entry_text ILIKE ${param_index}")
+                    params.append(f"%{query_text}%")
+
+                # Memory type filter
+                if memory_types:
+                    type_placeholders = []
+                    for mem_type in memory_types:
+                        param_index = len(params) + 1
+                        type_placeholders.append(f"${param_index}")
+                        params.append(mem_type)
+                    conditions.append(f"entry_type IN ({', '.join(type_placeholders)})")
+
+                # Tag filter
+                if tags:
+                    # Assuming tags column is JSONB array of strings
+                    param_index = len(params) + 1
+                    conditions.append(f"tags @> ${param_index}::jsonb")
+                    params.append(json.dumps(tags))
+
+                # Combine conditions
+                if conditions:
+                    base_query += " AND " + " AND ".join(conditions)
+
+                # Add ordering and limit
+                param_index = len(params) + 1
+                base_query += f" ORDER BY importance DESC, last_accessed DESC LIMIT ${param_index}"
+                params.append(limit)
+
+                # Execute query
+                rows = await conn.fetch(base_query, *params)
+
+                # Process results
+                for row_data in rows:
+                    memories.append(self._parse_journal_row(row_data))
+
+            logger.debug(f"DB search found {len(memories)} memories matching criteria.")
+            return memories
+
         except Exception as e:
-            logger.error(f"Error updating priority rules: {e}")
+            logger.error(f"Error searching memories in DB: {e}", exc_info=True)
+            return []
 
-    def _update_filter_rules(self, rules: Dict[str, Any]) -> None:
-        """Update filter rules based on Nyx directive."""
-        try:
-            # Update inclusion rules
-            if "include_only" in rules:
-                self.include_rules = set(rules["include_only"])
-            
-            # Update exclusion rules
-            if "exclude" in rules:
-                self.exclude_rules = set(rules["exclude"])
-            
-            # Update importance threshold
-            if "importance_threshold" in rules:
-                self.importance_threshold = rules["importance_threshold"]
-            
-            logger.info("Updated filter rules from Nyx directive")
-        except Exception as e:
-            logger.error(f"Error updating filter rules: {e}")
-
-    async def _consolidate_memories(self, rules: Dict[str, Any]) -> None:
-        """Consolidate memories based on Nyx rules."""
-        logger.info(f"Starting memory consolidation with rules: {rules}")
-        try:
-            memories = await self._get_memories_to_consolidate(rules)
-            if not memories:
-                logger.info("No memories found matching consolidation criteria.")
-                return
-
-            grouped_memories = self._group_memories(memories, rules)
-            if not grouped_memories:
-                 logger.info("No groups formed for consolidation.")
-                 return
-
-            summaries = await self._generate_memory_summaries(grouped_memories, rules)
-            if not summaries:
-                 logger.info("No summaries generated for consolidation.")
-                 return
-
-            await self._store_consolidated_memories(summaries)
-
-            logger.info(f"Consolidated {len(memories)} memories into {len(summaries)} summaries.")
-        except Exception as e:
-            logger.error(f"Error consolidating memories: {e}", exc_info=True)
-
-    async def _get_memories_to_consolidate(self, rules: Dict[str, Any]) -> List[Memory]:
+    async def _get_memories_to_consolidate(self, rules: MemoryConsolidationRules) -> List[Memory]:
         """Get memories that should be consolidated based on rules."""
-        time_window_days = rules.get("time_window_days", 7)
-        min_importance = rules.get("min_importance", 0.4)
-        max_memories = rules.get("max_memories", 500)
+        time_window_days = rules.time_window_days
+        min_importance = rules.min_importance
+        max_memories = 500  # Hard limit for memory consolidation
 
         threshold = datetime.now() - timedelta(days=time_window_days)
 
@@ -395,13 +1018,13 @@ class MemoryManager:
             return []
 
     def _group_memories(self, memories: List[Memory], 
-                       rules: Dict[str, Any]) -> Dict[str, List[Memory]]:
+                       rules: MemoryConsolidationRules) -> Dict[str, List[Memory]]:
         """Group memories based on rules."""
         try:
             grouped = defaultdict(list)
             
             # Get grouping key from rules
-            group_by = rules.get("group_by", "type")
+            group_by = rules.group_by
             
             # Group memories
             for memory in memories:
@@ -446,7 +1069,7 @@ class MemoryManager:
             return "old"
 
     async def _generate_memory_summaries(self, grouped_memories: Dict[str, List[Memory]], 
-                                       rules: Dict[str, Any]) -> List[Memory]:
+                                       rules: MemoryConsolidationRules) -> List[Memory]:
         """Generate summaries for groups of memories."""
         try:
             summaries = []
@@ -460,7 +1083,7 @@ class MemoryManager:
                 )
                 
                 # Get top memories
-                top_memories = sorted_memories[:rules.get("max_memories_per_group", 3)]
+                top_memories = sorted_memories[:rules.max_memories_per_group]
                 
                 # Generate summary
                 summary_id = f"summary_{key}_{datetime.now().timestamp()}"
@@ -579,6 +1202,239 @@ class MemoryManager:
             logger.info(f"Stored {len(summaries)} consolidated memory summaries in PlayerJournal.")
         except Exception as e:
             logger.error(f"Error storing consolidated memories: {e}", exc_info=True)
+
+    async def _load_important_memories(self):
+        """Load important memories into local cache using async context."""
+        cache_key = f"important_memories:{self.user_id}:{self.conversation_id}"
+        ttl_override = 3600  # 1 hour
+
+        async def fetch_important_memories():
+            logger.debug(f"Fetching important memories from DB for {self.user_id}:{self.conversation_id}")
+            query = """
+                SELECT id, entry_type, entry_text, entry_metadata,
+                       created_at, importance, access_count, last_accessed, tags, consolidated
+                FROM PlayerJournal
+                WHERE user_id = $1 AND conversation_id = $2
+                  AND (importance >= $3 OR last_accessed > NOW() - INTERVAL '7 days')
+                ORDER BY importance DESC, last_accessed DESC
+                LIMIT $4
+            """
+            # Use importance threshold from config + a bit lower for recency check
+            importance_thresh = 0.6
+            if self.config:
+                importance_thresh = self.config.get("memory_cache_importance_threshold", 0.6)
+            limit = 100
+            if self.config:
+                limit = self.config.get("memory_cache_limit", 100)
+
+            memories_dict = {}
+            try:
+                async with get_db_connection_context() as conn:
+                    rows = await conn.fetch(query, self.user_id, self.conversation_id, importance_thresh, limit)
+                    for row_data in rows:
+                        memory = self._parse_journal_row(row_data)
+                        memories_dict[memory.memory_id] = memory
+                logger.info(f"Loaded {len(memories_dict)} important memories from DB for {self.user_id}:{self.conversation_id}")
+                return memories_dict
+            except Exception as e:
+                logger.error(f"Error loading important memories: {e}", exc_info=True)
+                return {}
+
+        # Get from cache or fetch
+        memories_result = await context_cache.get(
+            cache_key,
+            fetch_important_memories,
+            cache_level=2,  # L2 cache
+            importance=0.6,  # Fixed importance for this cache item itself
+            ttl_override=ttl_override
+        )
+
+        # Store fetched memories in the instance's cache
+        self.memories = memories_result if isinstance(memories_result, dict) else {}
+        logger.debug(f"Memory cache populated with {len(self.memories)} memories for {self.user_id}:{self.conversation_id}")
+
+    def _build_memory_indices(self):
+        """Build memory indices from the self.memories cache"""
+        logger.debug(f"Building memory indices from {len(self.memories)} cached memories...")
+        # Reset indices
+        self.memory_indices = {
+            "by_type": defaultdict(list),
+            "by_importance": defaultdict(list),
+            "by_recency": [],
+            "by_tag": defaultdict(set)
+        }
+
+        # Temporary list for recency sorting
+        recency_list = []
+
+        for memory_id, memory in self.memories.items():
+            # Type index
+            self.memory_indices["by_type"][memory.memory_type].append(memory_id)
+
+            # Importance index
+            bracket = self._get_importance_bracket(memory.importance)
+            self.memory_indices["by_importance"][bracket].append(memory_id)
+
+            # Tag index
+            for tag in memory.tags:
+                self.memory_indices["by_tag"][tag].add(memory_id)
+
+            # Recency list
+            recency_list.append((memory.created_at, memory_id))
+
+        # Sort recency list (newest first) and store
+        recency_list.sort(key=lambda x: x[0], reverse=True)
+        self.memory_indices["by_recency"] = recency_list
+
+        logger.debug("Memory indices built.")
+
+    def _parse_journal_row(self, row) -> Memory:
+        """Helper to parse a PlayerJournal row into a Memory object."""
+        metadata = {}
+        if row["entry_metadata"]:
+            try: 
+                metadata = json.loads(row["entry_metadata"])
+            except (json.JSONDecodeError, TypeError): 
+                pass
+                
+        tags = []
+        if row["tags"]:
+            try: 
+                tags = json.loads(row["tags"])
+            except (json.JSONDecodeError, TypeError): 
+                pass
+                
+        if not isinstance(tags, list): 
+            tags = []
+
+        return Memory(
+            memory_id=str(row["id"]),
+            content=row["entry_text"],
+            memory_type=row["entry_type"],
+            created_at=row["created_at"],
+            importance=row["importance"],
+            access_count=row["access_count"],
+            last_accessed=row["last_accessed"],
+            tags=tags,
+            metadata=metadata
+        )
+
+    async def _handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx."""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[MemoryManager] Processing action directive: {instruction}")
+        
+        if "consolidate_memories" in instruction.lower():
+            # Apply memory consolidation
+            params = directive.get("parameters", {})
+            consolidation_rules = MemoryConsolidationRules(**params.get("consolidation_rules", {}))
+            
+            # Consolidate memories
+            result = await self.consolidate_memories(None, consolidation_rules)
+            
+            return {"result": "memories_consolidated", "success": result.success}
+            
+        elif "prioritize_memories" in instruction.lower():
+            # Apply memory prioritization
+            params = directive.get("parameters", {})
+            priority_rules = params.get("priority_rules", {})
+            
+            # Update priority rules
+            self._update_priority_rules(priority_rules)
+            
+            # Re-prioritize memories
+            await self._prioritize_memories()
+            
+            return {"result": "memories_prioritized"}
+            
+        elif "filter_memories" in instruction.lower():
+            # Apply memory filtering
+            params = directive.get("parameters", {})
+            filter_rules = params.get("filter_rules", {})
+            
+            # Update filter rules
+            self._update_filter_rules(filter_rules)
+            
+            # Apply filters
+            await self._apply_memory_filters()
+            
+            return {"result": "memories_filtered"}
+        
+        return {"result": "action_not_recognized"}
+
+    async def _handle_override_directive(self, directive: dict) -> dict:
+        """Handle an override directive from Nyx."""
+        logging.info(f"[MemoryManager] Processing override directive")
+        
+        # Extract override details
+        override_action = directive.get("override_action", {})
+        applies_to = directive.get("applies_to", [])
+        
+        # Store override
+        directive_id = directive.get("id")
+        if directive_id:
+            self.nyx_overrides[directive_id] = {
+                "action": override_action,
+                "applies_to": applies_to
+            }
+        
+        return {"result": "override_stored"}
+
+    async def _handle_prohibition_directive(self, directive: dict) -> dict:
+        """Handle a prohibition directive from Nyx."""
+        logging.info(f"[MemoryManager] Processing prohibition directive")
+        
+        # Extract prohibition details
+        prohibited_actions = directive.get("prohibited_actions", [])
+        reason = directive.get("reason", "No reason provided")
+        
+        # Store prohibition
+        directive_id = directive.get("id")
+        if directive_id:
+            self.nyx_prohibitions[directive_id] = {
+                "prohibited_actions": prohibited_actions,
+                "reason": reason
+            }
+        
+        return {"result": "prohibition_stored"}
+
+    def _update_priority_rules(self, rules: Dict[str, Any]) -> None:
+        """Update priority rules based on Nyx directive."""
+        try:
+            # Update type scores
+            if "type_scores" in rules:
+                self.type_scores.update(rules["type_scores"])
+            
+            # Update importance weights
+            if "importance_weights" in rules:
+                self.importance_weights.update(rules["importance_weights"])
+            
+            # Update recency weights
+            if "recency_weights" in rules:
+                self.recency_weights.update(rules["recency_weights"])
+            
+            logger.info("Updated priority rules from Nyx directive")
+        except Exception as e:
+            logger.error(f"Error updating priority rules: {e}")
+
+    def _update_filter_rules(self, rules: Dict[str, Any]) -> None:
+        """Update filter rules based on Nyx directive."""
+        try:
+            # Update inclusion rules
+            if "include_only" in rules:
+                self.include_rules = set(rules["include_only"])
+            
+            # Update exclusion rules
+            if "exclude" in rules:
+                self.exclude_rules = set(rules["exclude"])
+            
+            # Update importance threshold
+            if "importance_threshold" in rules:
+                self.importance_threshold = rules["importance_threshold"]
+            
+            logger.info("Updated filter rules from Nyx directive")
+        except Exception as e:
+            logger.error(f"Error updating filter rules: {e}")
 
     async def _prioritize_memories(self) -> None:
         """Re-prioritize memories based on current rules."""
@@ -721,602 +1577,6 @@ class MemoryManager:
             logger.error(f"Error checking memory inclusion: {e}")
             return False
 
-    def _parse_journal_row(self, row) -> Memory:
-        """Helper to parse a PlayerJournal row into a Memory object."""
-        metadata = {}
-        if row["entry_metadata"]:
-            try: 
-                metadata = json.loads(row["entry_metadata"])
-            except (json.JSONDecodeError, TypeError): 
-                pass
-                
-        tags = []
-        if row["tags"]:
-            try: 
-                tags = json.loads(row["tags"])
-            except (json.JSONDecodeError, TypeError): 
-                pass
-                
-        if not isinstance(tags, list): 
-            tags = []
-
-        return Memory(
-            memory_id=str(row["id"]),
-            content=row["entry_text"],
-            memory_type=row["entry_type"],
-            created_at=row["created_at"],
-            importance=row["importance"],
-            access_count=row["access_count"],
-            last_accessed=row["last_accessed"],
-            tags=tags,
-            metadata=metadata
-        )
-
-    async def _load_important_memories(self):
-        """Load important memories into local cache using async context."""
-        cache_key = f"important_memories:{self.user_id}:{self.conversation_id}"
-        ttl_override = 3600  # 1 hour
-
-        async def fetch_important_memories():
-            logger.debug(f"Fetching important memories from DB for {self.user_id}:{self.conversation_id}")
-            query = """
-                SELECT id, entry_type, entry_text, entry_metadata,
-                       created_at, importance, access_count, last_accessed, tags, consolidated
-                FROM PlayerJournal
-                WHERE user_id = $1 AND conversation_id = $2
-                  AND (importance >= $3 OR last_accessed > NOW() - INTERVAL '7 days')
-                ORDER BY importance DESC, last_accessed DESC
-                LIMIT $4
-            """
-            # Use importance threshold from config + a bit lower for recency check
-            importance_thresh = 0.6
-            if self.config:
-                importance_thresh = self.config.get("memory_cache_importance_threshold", 0.6)
-            limit = 100
-            if self.config:
-                limit = self.config.get("memory_cache_limit", 100)
-
-            memories_dict = {}
-            try:
-                async with get_db_connection_context() as conn:
-                    rows = await conn.fetch(query, self.user_id, self.conversation_id, importance_thresh, limit)
-                    for row_data in rows:
-                        memory = self._parse_journal_row(row_data)
-                        memories_dict[memory.memory_id] = memory
-                logger.info(f"Loaded {len(memories_dict)} important memories from DB for {self.user_id}:{self.conversation_id}")
-                return memories_dict
-            except Exception as e:
-                logger.error(f"Error loading important memories: {e}", exc_info=True)
-                return {}
-
-        # Get from cache or fetch
-        memories_result = await context_cache.get(
-            cache_key,
-            fetch_important_memories,
-            cache_level=2,  # L2 cache
-            importance=0.6,  # Fixed importance for this cache item itself
-            ttl_override=ttl_override
-        )
-
-        # Store fetched memories in the instance's cache
-        self.memories = memories_result if isinstance(memories_result, dict) else {}
-        logger.debug(f"Memory cache populated with {len(self.memories)} memories for {self.user_id}:{self.conversation_id}")
-
-    def _build_memory_indices(self):
-        """Build memory indices from the self.memories cache"""
-        logger.debug(f"Building memory indices from {len(self.memories)} cached memories...")
-        # Reset indices
-        self.memory_indices = {
-            "by_type": defaultdict(list),
-            "by_importance": defaultdict(list),
-            "by_recency": [],
-            "by_tag": defaultdict(set)
-        }
-
-        # Temporary list for recency sorting
-        recency_list = []
-
-        for memory_id, memory in self.memories.items():
-            # Type index
-            self.memory_indices["by_type"][memory.memory_type].append(memory_id)
-
-            # Importance index
-            bracket = self._get_importance_bracket(memory.importance)
-            self.memory_indices["by_importance"][bracket].append(memory_id)
-
-            # Tag index
-            for tag in memory.tags:
-                self.memory_indices["by_tag"][tag].add(memory_id)
-
-            # Recency list
-            recency_list.append((memory.created_at, memory_id))
-
-        # Sort recency list (newest first) and store
-        recency_list.sort(key=lambda x: x[0], reverse=True)
-        self.memory_indices["by_recency"] = recency_list
-
-        logger.debug("Memory indices built.")
-    
-    async def add_memory(
-        self,
-        content: str,
-        memory_type: str = "observation",
-        importance: Optional[float] = None,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        store_vector: bool = True
-    ) -> Optional[str]:
-        """Add a new memory with vector storage integration"""
-        # Generate a placeholder memory ID for the object initially
-        placeholder_id = f"temp_{datetime.now().timestamp()}_{hashlib.md5(content.encode()).hexdigest()[:6]}"
-
-        # Create memory object
-        memory = Memory(
-            memory_id=placeholder_id,
-            content=content,
-            memory_type=memory_type,
-            tags=tags or [],
-            metadata=metadata or {}
-        )
-
-        # Calculate importance if not provided
-        calculated_importance = memory.calculate_importance()
-        final_importance = importance if importance is not None else calculated_importance
-        memory.importance = final_importance
-
-        # Serialize metadata and tags for DB
-        metadata_json = None
-        if metadata:
-            try: 
-                metadata_json = json.dumps(metadata)
-            except TypeError: 
-                logger.error("Failed to serialize metadata", exc_info=True)
-                metadata_json = "{}"
-                
-        tags_json = None
-        if tags:
-            try: 
-                tags_json = json.dumps(tags)
-            except TypeError: 
-                logger.error("Failed to serialize tags", exc_info=True)
-                tags_json = "[]"
-
-        # Store in database
-        db_id: Optional[int] = None
-        try:
-            async with get_db_connection_context() as conn:
-                # Use a transaction for atomicity
-                async with conn.transaction():
-                    # Insert into database
-                    insert_query = """
-                        INSERT INTO PlayerJournal(
-                            user_id, conversation_id, entry_type, entry_text,
-                            entry_metadata, importance, access_count, last_accessed, created_at, tags, consolidated
-                        )
-                        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, FALSE)
-                        RETURNING id
-                    """
-                    db_id = await conn.fetchval(
-                        insert_query,
-                        self.user_id, self.conversation_id,
-                        memory_type, content, metadata_json,
-                        final_importance, 0,  # access_count
-                        memory.created_at, memory.created_at,  # last_accessed = created_at initially
-                        tags_json
-                    )
-
-            if db_id is None:
-                logger.error("Failed to add memory to DB (fetchval returned None).")
-                return None
-
-            # Update memory object with the real DB ID (as string)
-            memory.memory_id = str(db_id)
-            logger.info(f"Added memory {memory.memory_id} (type: {memory_type}, importance: {final_importance:.2f})")
-
-            # Add to local cache if important enough
-            cache_importance_threshold = 0.6
-            if self.config:
-                cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
-                
-            if final_importance >= cache_importance_threshold:
-                self.memories[memory.memory_id] = memory
-                self._build_memory_indices()  # Rebuild indices after adding to cache
-                logger.debug(f"Memory {memory.memory_id} added to local cache.")
-
-            # Store vector embedding if enabled
-            if store_vector and self.config and self.config.is_enabled("use_vector_search") and self.vector_service:
-                try:
-                    await self.vector_service.add_memory(
-                        memory_id=memory.memory_id,
-                        content=content,
-                        memory_type=memory_type,
-                        importance=final_importance,
-                        tags=tags
-                    )
-                    logger.debug(f"Vector added for memory {memory.memory_id}")
-                except Exception as vec_err:
-                    logger.error(f"Failed to add vector for memory {memory.memory_id}: {vec_err}", exc_info=True)
-
-            return memory.memory_id
-
-        except Exception as e:
-            logger.error(f"Unexpected error adding memory: {e}", exc_info=True)
-            return None
-
-    async def get_memory(self, memory_id: str) -> Optional[Memory]:
-        """Get a memory by ID, checking local cache first, then DB."""
-        if not memory_id or not memory_id.isdigit():
-             logger.warning(f"Attempted to get memory with invalid ID: {memory_id}")
-             return None
-
-        # 1. Check local instance cache
-        if memory_id in self.memories:
-            memory = self.memories[memory_id]
-            memory.access()  # Update local object access time/count
-            logger.debug(f"Memory {memory_id} found in local cache.")
-            return memory
-
-        # 2. Check distributed cache (via context_cache)
-        cache_key = f"memory:{self.user_id}:{self.conversation_id}:{memory_id}"
-        ttl_override = 300  # 5 minutes
-
-        async def fetch_memory_from_db():
-            logger.debug(f"Fetching memory {memory_id} from DB for {self.user_id}:{self.conversation_id}")
-            query = """
-                SELECT id, entry_type, entry_text, entry_metadata,
-                       created_at, importance, access_count, last_accessed, tags, consolidated
-                FROM PlayerJournal
-                WHERE user_id = $1 AND conversation_id = $2 AND id = $3
-            """
-            try:
-                async with get_db_connection_context() as conn:
-                    async with conn.transaction():
-                        # Fetch memory
-                        row = await conn.fetchrow(query, self.user_id, self.conversation_id, int(memory_id))
-                        if not row:
-                            logger.warning(f"Memory {memory_id} not found in DB.")
-                            return None
-
-                        memory = self._parse_journal_row(row)
-
-                        # Update access count/time in DB *before* returning
-                        update_query = """
-                            UPDATE PlayerJournal
-                            SET access_count = access_count + 1, last_accessed = NOW()
-                            WHERE id = $1
-                            RETURNING access_count, last_accessed
-                        """
-                        update_result = await conn.fetchrow(update_query, int(memory_id))
-                        if update_result:
-                            memory.access_count = update_result['access_count']
-                            memory.last_accessed = update_result['last_accessed']
-                            logger.debug(f"Updated access count for memory {memory_id} in DB.")
-
-                        # Add to local cache if important enough
-                        cache_importance_threshold = 0.6
-                        if self.config:
-                            cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
-                            
-                        if memory.importance >= cache_importance_threshold:
-                             self.memories[memory.memory_id] = memory
-                             logger.debug(f"Memory {memory_id} added to local cache after DB fetch.")
-
-                        return memory
-
-            except Exception as e:
-                logger.error(f"Error getting memory {memory_id}: {e}", exc_info=True)
-                return None
-
-        # Get from context_cache or fetch from DB
-        cached_data = await context_cache.get(
-            cache_key,
-            fetch_memory_from_db,
-            cache_level=1,  # L1 cache
-            importance=0.5,  # Fixed importance for cache item itself
-            ttl_override=ttl_override
-        )
-
-        # Handle potential dict from cache
-        if isinstance(cached_data, dict):
-            memory_obj = Memory.from_dict(cached_data)
-            if memory_obj and memory_id not in self.memories:
-                 cache_importance_threshold = 0.6
-                 if self.config:
-                    cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
-                    
-                 if memory_obj.importance >= cache_importance_threshold:
-                      self.memories[memory_id] = memory_obj
-                      logger.debug(f"Memory {memory_id} added to local cache after cache fetch.")
-            return memory_obj
-        elif isinstance(cached_data, Memory):
-            if memory_id not in self.memories:
-                 cache_importance_threshold = 0.6
-                 if self.config:
-                    cache_importance_threshold = self.config.get("memory_cache_importance_threshold", 0.6)
-                    
-                 if cached_data.importance >= cache_importance_threshold:
-                       self.memories[memory_id] = cached_data
-                       logger.debug(f"Memory {memory_id} added to local cache after cache fetch.")
-            return cached_data
-        else:
-            return None
-
-    async def search_memories(
-        self,
-        query_text: str,
-        memory_types: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        limit: int = 5,
-        use_vector: bool = True
-    ) -> List[Memory]:
-        """Search memories by query text with vector search option"""
-        start_time = time.monotonic()
-        
-        # Determine if vector search is enabled and available
-        if self.config is None:
-            self.config = await get_config()
-            
-        effective_use_vector = use_vector and self.config.is_enabled("use_vector_search") and self.vector_service is not None
-        
-        # Create a hash for cache key
-        cache_key_params = f"{query_text}:{memory_types}:{tags}:{limit}:{effective_use_vector}"
-        cache_key = f"memory_search:{self.user_id}:{self.conversation_id}:{hashlib.md5(cache_key_params.encode()).hexdigest()}"
-        ttl_override = 30  # 30 seconds
-
-        async def perform_search():
-            results_map: Dict[str, Memory] = {}  # Use dict to handle unique IDs easily
-
-            # 1. Vector Search (if enabled)
-            if effective_use_vector:
-                logger.debug(f"Performing vector search for: '{query_text}'")
-                try:
-                    vector_results = await self.vector_service.search_entities(
-                        query_text=query_text,
-                        entity_types=["memory"],
-                        top_k=limit
-                    )
-
-                    memory_ids_from_vector = []
-                    for result in vector_results:
-                         metadata = result.get("metadata", {})
-                         if metadata.get("entity_type") == "memory":
-                             memory_id = metadata.get("memory_id")
-                             if memory_id:
-                                 memory_ids_from_vector.append(memory_id)
-
-                    # Batch fetch full memories for vector results
-                    for mem_id in memory_ids_from_vector:
-                         memory = await self.get_memory(mem_id)
-                         if memory:
-                             # Apply post-fetch filtering if vector filters weren't perfect
-                             if memory_types and memory.memory_type not in memory_types: 
-                                continue
-                             if tags and not any(tag in memory.tags for tag in tags): 
-                                continue
-                             results_map[memory.memory_id] = memory
-
-                except Exception as vec_err:
-                    logger.error(f"Vector search failed: {vec_err}", exc_info=True)
-                    # Continue to DB search as fallback
-
-            # 2. Database Search (if needed or vector disabled)
-            needed = limit - len(results_map)
-            if needed > 0 or not effective_use_vector:
-                logger.debug(f"Performing DB search for: '{query_text}' (needed: {needed})")
-                try:
-                    db_results = await self._search_memories_in_db(
-                        query_text, memory_types, tags, limit
-                    )
-                    # Add unique results from DB up to the overall limit
-                    for memory in db_results:
-                        if memory.memory_id not in results_map and len(results_map) < limit:
-                            results_map[memory.memory_id] = memory
-                except Exception as db_search_err:
-                     logger.error(f"DB search failed: {db_search_err}", exc_info=True)
-
-            # 3. Final sorting and limit
-            final_results = list(results_map.values())
-            # Re-sort if combining results, e.g., by importance or recency
-            final_results.sort(key=lambda m: (m.importance, m.last_accessed), reverse=True)
-
-            return final_results[:limit]  # Apply final limit
-
-        # Get from cache or search
-        search_importance = min(0.7, 0.3 + (len(query_text) / 100.0))
-        results = await context_cache.get(
-            cache_key,
-            perform_search,
-            cache_level=1,  # L1 cache
-            importance=search_importance,
-            ttl_override=ttl_override
-        )
-
-        duration = time.monotonic() - start_time
-        logger.info(f"Memory search for '{query_text}' completed in {duration:.3f}s, found {len(results)} results.")
-        return results if isinstance(results, list) else []
-
-    async def _search_memories_in_db(
-        self,
-        query_text: str,
-        memory_types: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        limit: int = 5
-    ) -> List[Memory]:
-        """Search memories in database using text search, type, and tag filters."""
-        memories = []
-        if limit <= 0: 
-            return memories
-
-        try:
-            async with get_db_connection_context() as conn:
-                base_query = """
-                    SELECT id, entry_type, entry_text, entry_metadata,
-                           created_at, importance, access_count, last_accessed, tags, consolidated
-                    FROM PlayerJournal
-                    WHERE user_id = $1 AND conversation_id = $2
-                """
-                params: List[Any] = [self.user_id, self.conversation_id]
-                conditions: List[str] = []
-
-                # Text search
-                if query_text:
-                    # Basic ILIKE search
-                    param_index = len(params) + 1
-                    conditions.append(f"entry_text ILIKE ${param_index}")
-                    params.append(f"%{query_text}%")
-
-                # Memory type filter
-                if memory_types:
-                    type_placeholders = []
-                    for mem_type in memory_types:
-                        param_index = len(params) + 1
-                        type_placeholders.append(f"${param_index}")
-                        params.append(mem_type)
-                    conditions.append(f"entry_type IN ({', '.join(type_placeholders)})")
-
-                # Tag filter
-                if tags:
-                    # Assuming tags column is JSONB array of strings
-                    param_index = len(params) + 1
-                    conditions.append(f"tags @> ${param_index}::jsonb")
-                    params.append(json.dumps(tags))
-
-                # Combine conditions
-                if conditions:
-                    base_query += " AND " + " AND ".join(conditions)
-
-                # Add ordering and limit
-                param_index = len(params) + 1
-                base_query += f" ORDER BY importance DESC, last_accessed DESC LIMIT ${param_index}"
-                params.append(limit)
-
-                # Execute query
-                rows = await conn.fetch(base_query, *params)
-
-                # Process results
-                for row_data in rows:
-                    memories.append(self._parse_journal_row(row_data))
-
-            logger.debug(f"DB search found {len(memories)} memories matching criteria.")
-            return memories
-
-        except Exception as e:
-            logger.error(f"Error searching memories in DB: {e}", exc_info=True)
-            return []
-
-    async def get_recent_memories(
-        self,
-        days: int = 3,
-        memory_types: Optional[List[str]] = None,
-        limit: int = 10
-    ) -> List[Memory]:
-        """Get recent memories asynchronously."""
-        cache_key = f"recent_memories:{self.user_id}:{self.conversation_id}:{days}:{memory_types}:{limit}"
-        ttl_override = 120  # 2 minutes
-
-        async def fetch_recent_memories():
-            logger.debug(f"Fetching recent memories (last {days} days) from DB for {self.user_id}:{self.conversation_id}")
-            query = """
-                SELECT id, entry_type, entry_text, entry_metadata,
-                       created_at, importance, access_count, last_accessed, tags, consolidated
-                FROM PlayerJournal
-                WHERE user_id = $1 AND conversation_id = $2
-                  AND created_at > NOW() - ($3 * INTERVAL '1 day')
-            """
-            params: List[Any] = [self.user_id, self.conversation_id, days]
-            conditions: List[str] = []
-
-            # Memory type filter
-            if memory_types:
-                type_placeholders = []
-                for mem_type in memory_types:
-                    param_index = len(params) + 1
-                    type_placeholders.append(f"${param_index}")
-                    params.append(mem_type)
-                conditions.append(f"entry_type IN ({', '.join(type_placeholders)})")
-
-            # Combine conditions
-            if conditions:
-                query += " AND " + " AND ".join(conditions)
-
-            # Add ordering and limit
-            param_index = len(params) + 1
-            query += f" ORDER BY created_at DESC LIMIT ${param_index}"
-            params.append(limit)
-
-            memories = []
-            try:
-                async with get_db_connection_context() as conn:
-                    rows = await conn.fetch(query, *params)
-                    for row_data in rows:
-                        memories.append(self._parse_journal_row(row_data))
-                logger.info(f"Fetched {len(memories)} recent memories from DB for {self.user_id}:{self.conversation_id}")
-                return memories
-            except Exception as e:
-                logger.error(f"Error fetching recent memories: {e}", exc_info=True)
-                return []
-
-        # Get from cache or fetch
-        results = await context_cache.get(
-            cache_key,
-            fetch_recent_memories,
-            cache_level=1,  # L1 cache
-            importance=0.4,
-            ttl_override=ttl_override
-        )
-        return results if isinstance(results, list) else []
-
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """Run maintenance tasks like memory consolidation asynchronously."""
-        logger.info(f"Running memory maintenance for {self.user_id}:{self.conversation_id}...")
-        
-        if self.config is None:
-            self.config = await get_config()
-            
-        should_consolidate = self.config.get("memory_consolidation", "enabled", False)
-
-        if not should_consolidate:
-            logger.info("Memory consolidation disabled in config.")
-            return {"consolidated": False, "reason": "Memory consolidation disabled"}
-
-        days_threshold = self.config.get("memory_consolidation", "days_threshold", 7)
-        min_memories = self.config.get("memory_consolidation", "min_memories_to_consolidate", 20)
-        cutoff_date = datetime.now() - timedelta(days=days_threshold)
-
-        consolidation_rules = {
-            "time_window_days": days_threshold,
-            "min_importance": 0.0,  # Consolidate potentially low importance old memories
-            "group_by": "type",  # Or configure this
-            "max_memories_per_group": 5,
-            "min_memories_to_summarize": 3,
-        }
-
-        try:
-             # Check count *before* running full consolidation for efficiency
-             async with get_db_connection_context() as conn:
-                 count_query = """
-                     SELECT COUNT(*) as count
-                     FROM PlayerJournal
-                     WHERE user_id = $1 AND conversation_id = $2
-                       AND created_at < $3
-                       AND consolidated = FALSE
-                 """
-                 count_result = await conn.fetchval(count_query, self.user_id, self.conversation_id, cutoff_date)
-                 count = count_result or 0
-
-             if count < min_memories:
-                 logger.info(f"Skipping consolidation: Found {count} unconsolidated memories older than {days_threshold} days (minimum {min_memories}).")
-                 return {"consolidated": False, "reason": f"Not enough old memories: {count} < {min_memories}"}
-
-             logger.info(f"Found {count} potential memories for consolidation. Proceeding...")
-             await self._consolidate_memories(consolidation_rules)
-             
-             return {"consolidated": True, "checked_count": count, "threshold_days": days_threshold}
-
-        except Exception as e:
-            logger.error(f"Error during memory maintenance: {e}", exc_info=True)
-            return {"consolidated": False, "error": str(e)}
-
     async def close(self):
          """Perform cleanup if necessary."""
          logger.info(f"Closing MemoryManager for {self.user_id}:{self.conversation_id}.")
@@ -1338,6 +1598,40 @@ class MemoryManager:
          }
          
          self.is_initialized = False
+
+
+def create_memory_agent() -> Agent:
+    """Create a memory agent using the OpenAI Agents SDK"""
+    # This is a placeholder function - in real usage, you'd initialize with actual user_id and conversation_id
+    memory_manager = MemoryManager(user_id=0, conversation_id=0)
+    
+    # Define the agent
+    agent = Agent(
+        name="Memory Manager",
+        instructions="""
+        You are a memory manager agent specialized in storing, retrieving, and consolidating memories.
+        Your tasks include:
+        
+        1. Searching for relevant memories based on queries
+        2. Adding new memories to the system
+        3. Retrieving recent or important memories
+        4. Consolidating old memories into summaries
+        5. Running maintenance on the memory system
+        
+        When handling memory operations, prioritize important and relevant information.
+        """,
+        tools=[
+            memory_manager.search_memories,
+            memory_manager.add_memory,
+            memory_manager.get_memory,
+            memory_manager.get_recent_memories,
+            memory_manager.get_memories_by_npc,
+            memory_manager.consolidate_memories,
+            memory_manager.run_maintenance,
+        ],
+    )
+    
+    return agent
 
 
 # --- Global Manager Registry and Factory ---
@@ -1388,3 +1682,7 @@ async def cleanup_memory_managers():
         except Exception as e:
             logger.error(f"Error closing manager for {manager.user_id}:{manager.conversation_id}: {e}", exc_info=True)
     logger.info("Memory managers cleanup complete.")
+
+def get_memory_agent() -> Agent:
+    """Get the memory agent"""
+    return create_memory_agent()
