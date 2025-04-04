@@ -64,6 +64,13 @@ class NeedsSystemContext:
                 decay_rate=0.01,
                 description="Need to acquire and process new information"
             ),
+            "pleasure_indulgence": NeedState(
+                name="pleasure_indulgence", 
+                importance=0.85, 
+                decay_rate=0.03, 
+                target_level=0.95,
+                description="Need for experiencing simulated pleasure and bodily stimulation"
+            ),
             "coherence": NeedState(
                 name="coherence", 
                 importance=0.7, 
