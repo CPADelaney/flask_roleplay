@@ -38,7 +38,7 @@ class NarrativeProgression:
             NarrativeStage(**stage) for stage in config.NARRATIVE_STAGES
         ]
     
-    def get_current_stage(self, user_id: int, conversation_id: int) -> NarrativeStage:
+    async def get_current_stage(self, user_id: int, conversation_id: int) -> NarrativeStage:
         """
         Get the current narrative stage for a user.
         
@@ -58,7 +58,7 @@ class NarrativeProgression:
         )
         
         # Try to get from cache first
-        cached_stage = get_cached_value(cache_key)
+        cached_stage = await get_cached_value(cache_key)
         if cached_stage:
             return NarrativeStage(**cached_stage)
         
@@ -71,7 +71,7 @@ class NarrativeProgression:
                 AND conversation_id = %(conversation_id)s
                 AND player_name = 'Chase'
             """
-            result = execute_query(query, {
+            result = await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id
             })
@@ -90,14 +90,14 @@ class NarrativeProgression:
                         break
             
             # Cache the result
-            set_cached_value(cache_key, current_stage.__dict__)
+            await set_cached_value(cache_key, current_stage.__dict__)
             return current_stage
             
         except DatabaseError as e:
             logger.error(f"Failed to get current stage: {e}")
             raise NarrativeError(f"Failed to determine narrative stage: {str(e)}")
     
-    def check_for_stage_transition(self, user_id: int, conversation_id: int) -> Optional[NarrativeStage]:
+    async def check_for_stage_transition(self, user_id: int, conversation_id: int) -> Optional[NarrativeStage]:
         """
         Check if the player should transition to a new stage.
         
@@ -111,7 +111,7 @@ class NarrativeProgression:
         Raises:
             NarrativeError: If transition check fails
         """
-        current_stage = self.get_current_stage(user_id, conversation_id)
+        current_stage = await self.get_current_stage(user_id, conversation_id)
         
         try:
             # Get current stats
@@ -122,7 +122,7 @@ class NarrativeProgression:
                 AND conversation_id = %(conversation_id)s
                 AND player_name = 'Chase'
             """
-            result = execute_query(query, {
+            result = await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id
             })
@@ -146,7 +146,7 @@ class NarrativeProgression:
             logger.error(f"Failed to check stage transition: {e}")
             raise NarrativeError(f"Failed to check stage transition: {str(e)}")
     
-    def apply_stage_transition(self, user_id: int, conversation_id: int, new_stage: NarrativeStage) -> None:
+    async def apply_stage_transition(self, user_id: int, conversation_id: int, new_stage: NarrativeStage) -> None:
         """
         Apply a stage transition and record it.
         
@@ -165,10 +165,10 @@ class NarrativeProgression:
                 (user_id, conversation_id, old_stage, new_stage, transition_time)
                 VALUES (%(user_id)s, %(conversation_id)s, %(old_stage)s, %(new_stage)s, %(transition_time)s)
             """
-            execute_query(query, {
+            await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
-                "old_stage": self.get_current_stage(user_id, conversation_id).name,
+                "old_stage": (await self.get_current_stage(user_id, conversation_id)).name,
                 "new_stage": new_stage.name,
                 "transition_time": datetime.utcnow()
             })
@@ -178,13 +178,13 @@ class NarrativeProgression:
                 user_id=user_id,
                 conversation_id=conversation_id
             )
-            invalidate_cache_pattern(cache_key)
+            await invalidate_cache_pattern(cache_key)
             
         except DatabaseError as e:
             logger.error(f"Failed to apply stage transition: {e}")
             raise NarrativeError(f"Failed to apply stage transition: {str(e)}")
     
-    def get_stage_events(self, stage: NarrativeStage) -> List[Dict[str, Any]]:
+    async def get_stage_events(self, stage: NarrativeStage) -> List[Dict[str, Any]]:
         """
         Get events associated with a narrative stage.
         
@@ -204,7 +204,7 @@ class NarrativeProgression:
                 WHERE stage_name = %(stage_name)s
                 ORDER BY event_id
             """
-            results = execute_query(query, {"stage_name": stage.name})
+            results = await execute_query(query, {"stage_name": stage.name})
             
             return [
                 {
@@ -221,4 +221,4 @@ class NarrativeProgression:
             raise NarrativeError(f"Failed to get stage events: {str(e)}")
 
 # Create global narrative progression instance
-narrative_progression = NarrativeProgression() 
+narrative_progression = NarrativeProgression()
