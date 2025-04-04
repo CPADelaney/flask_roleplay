@@ -173,7 +173,8 @@ class StoryDirectorContext:
             user_id=self.user_id,
             conversation_id=self.conversation_id,
             agent_type=AgentType.STORY_DIRECTOR,
-            agent_id="director"
+            agent_id="director",
+            governance=governance  # pass the object here
         )
         
         # Register directive handlers
