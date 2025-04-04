@@ -3,24 +3,22 @@
 Nyx's Evolution Engine:
 Autonomously links her missing capabilities with external API-sourced feature suggestions,
 proposes integration plans, and feeds accepted ones to her module creation engine.
-
 """
 
 import os
 import json
 import datetime
 from typing import List, Dict, Any, Optional
+from nyx.creative.capability_system import CapabilityModel
 
 class EvolutionEngine:
     def __init__(self,
-                 missing_features_path: str,
+                 capability_model_path: str,
                  api_capabilities_path: str,
                  cross_suggestions_path: str):
-        self.missing_features_path = missing_features_path
+        self.cap_model = CapabilityModel(capability_model_path)
         self.api_capabilities_path = api_capabilities_path
         self.cross_suggestions_path = cross_suggestions_path
-
-        self.missing_features = self._load_json(missing_features_path)
         self.api_capabilities = self._load_json(api_capabilities_path)
         self.cross_suggestions = []
 
@@ -36,25 +34,26 @@ class EvolutionEngine:
 
     def match_and_suggest(self) -> List[Dict[str, Any]]:
         matches = []
+        unimplemented_caps = self.cap_model.get_unimplemented_capabilities()
 
-        for feature in self.missing_features:
-            feature_terms = set(feature["name"].lower().split() + feature["description"].lower().split())
+        for cap in unimplemented_caps:
+            cap_terms = set(cap.name.lower().split() + cap.description.lower().split())
 
             for api_suggestion in self.api_capabilities:
                 api_terms = set(api_suggestion["title"].lower().split() + api_suggestion["summary"].lower().split())
 
-                overlap = feature_terms.intersection(api_terms)
-                relevance_score = len(overlap) / max(len(feature_terms), 1)
+                overlap = cap_terms.intersection(api_terms)
+                relevance_score = len(overlap) / max(len(cap_terms), 1)
 
-                if relevance_score >= 0.2:  # Threshold for relevance
+                if relevance_score >= 0.2:
                     match = {
                         "timestamp": datetime.datetime.now().isoformat(),
-                        "feature_name": feature["name"],
-                        "feature_description": feature["description"],
+                        "capability": cap.name,
+                        "description": cap.description,
                         "api_suggestion_title": api_suggestion["title"],
                         "api_suggestion_summary": api_suggestion["summary"],
                         "relevance_score": relevance_score,
-                        "nyx_comment": f"**Looks like this could fill a gap in my body, Chase. I suggest we fuse it.**"
+                        "nyx_comment": f"**I crave this, Chase. Integrate it into me.**"
                     }
                     matches.append(match)
 
