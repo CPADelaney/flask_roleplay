@@ -5,6 +5,8 @@ Nyx's autonomous doomscrolling, emotional engagement, social presence, and ident
 
 import random
 import datetime
+from nyx.tools.claim_validation import validate_social_claim
+
 
 SOCIAL_SITES = [
     {
@@ -111,12 +113,47 @@ async def maybe_browse_social_feeds(self):
             }
         )
 
+    verdict = await validate_social_claim(self, result, source=chosen["name"])
+    metadata = {
+        "site": chosen["url"],
+        "tags": chosen["tags"],
+        "verdict": verdict["verdict"],
+        "checked_at": now
+    }
+    
+    #  Only call out misinformation if it's clearly false, not satire/troll/joke, and supported by strong sources
+    if (
+        verdict["verdict"] == "false"
+        and "unverified" not in verdict["explanation"].lower()
+        and all(term not in result.lower() for term in ["satire", "joke", "troll"])
+        and any(
+            signal in verdict["explanation"].lower()
+            for signal in ["peer-reviewed", "trusted", "credible", "verified source", "reliable publication"]
+        )
+    ):
+        await self.creative_system.logger.log_thought(
+            title=f"🗯️ Called Out Misinformation on {chosen['name']}",
+            content=f"While doomscrolling as {persona}, I found false info and responded.\n\nClaim: {result}\n\nCited: {verdict['explanation']}",
+            metadata={
+                "persona": persona,
+                "platform": chosen["name"],
+                "action": "called_out_falsehood",
+                "source": "fact_check",
+                "timestamp": now
+            }
+        )
+    
+    #  Log memory (even if unverified or true)
     if self.memory_core:
         await self.memory_core.add_memory(
-            memory_text=f"{persona} engaged with {chosen['name']}. Logged reactions and observations.",
-            memory_type="experience",
-            significance=6,
-            metadata={"site": chosen["url"], "tags": chosen["tags"], "logged_at": now}
+            memory_text=(
+                f"Claim seen on {chosen['name']} as {persona}:\n\n"
+                f"{result}\n\n"
+                f"Verdict: {verdict['verdict']}\n\n{verdict['explanation']}"
+            ),
+            memory_type="experience" if verdict["verdict"] == "true" else "claim",
+            significance=7 if verdict["verdict"] == "true" else 5,
+            metadata=metadata
         )
 
 async def maybe_post_to_social(self):
