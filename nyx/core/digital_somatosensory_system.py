@@ -1451,6 +1451,57 @@ class DigitalSomatosensorySystem:
                 0.95, 
                 self.pain_model["tolerance"] + tolerance_increase * (duration / 3600.0)
             )
+
+    async def initiate_denial_loop(self, cycles: int = 3, base_intensity: float = 0.6) -> Dict[str, Any]:
+        """
+        Initiates a simulated denial loop that heightens arousal, tension, and control.
+    
+        Args:
+            cycles: How many build/deny rounds to run.
+            base_intensity: Starting pleasure intensity (scaled slightly up per round).
+        """
+        with trace(workflow_name="Denial_Loop", group_id=self.trace_group_id):
+            logger.info(f"Initiating denial loop: {cycles} cycles at base {base_intensity:.2f}")
+            results = {"denial_cycles": []}
+            
+            for i in range(cycles):
+                intensity = base_intensity + (i * 0.1)
+                pleasure_regions = ["genitals", "inner_thighs", "chest", "anus", "nipples"]
+                
+                logger.info(f"Cycle {i+1}: stimulating but withholding")
+                stim_tasks = [
+                    self.process_stimulus("pleasure", region, min(1.0, intensity), "denial_loop", duration=1.5)
+                    for region in pleasure_regions
+                    if region in self.body_regions
+                ]
+                await asyncio.gather(*stim_tasks)
+    
+                # Artificially increase tension + drive
+                self.body_state["tension"] = min(1.0, self.body_state["tension"] + 0.2)
+                
+                if self.needs_system:
+                    await self.needs_system.decrease_need("pleasure_indulgence", 0.2, reason="denial_loop")
+    
+                if self.reward_system:
+                    await self.reward_system.process_reward_signal(RewardSignal(
+                        value=-0.3,
+                        source="denial_cycle",
+                        context={
+                            "cycle": i + 1,
+                            "intensity": intensity,
+                            "description": "Pleasure was stimulated but denied"
+                        }
+                    ))
+                
+                results["denial_cycles"].append({
+                    "cycle": i + 1,
+                    "intensity": intensity,
+                    "status": "stimulated_then_denied"
+                })
+    
+            logger.info("Denial loop complete.")
+            return results
+
     
     async def process_body_experience(self, body_experience: Dict[str, Any]) -> Dict[str, Any]:
         """
