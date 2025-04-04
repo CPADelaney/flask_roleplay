@@ -10,11 +10,12 @@ It serves as the single point of interaction with the database for lore componen
 import logging
 import json
 import asyncio
+import os
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import asyncpg
 from datetime import datetime
 
-from db.connection import get_db_connection
+from db.connection import get_db_connection_context
 from embedding.vector_store import generate_embedding, vector_similarity
 
 logger = logging.getLogger(__name__)
@@ -48,9 +49,9 @@ class BaseDataAccess:
             
         try:
             # Initialize database connection
-            self.db = await get_db_connection()
-            self.initialized = True
-            return True
+            async with await get_db_connection_context() as conn:
+                self.initialized = True
+                return True
         except Exception as e:
             logger.error(f"Error initializing {self.__class__.__name__}: {e}")
             return False
@@ -71,15 +72,12 @@ class BaseDataAccess:
     async def cleanup(self):
         """Clean up resources."""
         try:
-            if self.db:
-                await self.db.close()
-                
             if self._connection_pool:
                 await self._connection_pool.close()
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
     
-    def add_user_conversation_filters(self, query: str, params: List[Any]) -> Tuple[str, List[Any]]:
+    async def add_user_conversation_filters(self, query: str, params: List[Any]) -> Tuple[str, List[Any]]:
         """
         Add user and conversation ID filters to a query.
         
@@ -152,30 +150,30 @@ class NPCDataAccess(BaseDataAccess):
                 query += " WHERE " + " AND ".join(conditions)
                 
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Add limit
             query += " LIMIT 1"
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, *params)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                row = await conn.fetchrow(query, *params)
                     
-                    if not row:
-                        return {}
-                        
-                    npc_data = dict(row)
+                if not row:
+                    return {}
                     
-                    # Parse JSON fields
-                    for field in ["personality_traits", "archetypes", "affiliations"]:
-                        if field in npc_data and isinstance(npc_data[field], str):
-                            try:
-                                npc_data[field] = json.loads(npc_data[field])
-                            except json.JSONDecodeError:
-                                npc_data[field] = []
+                npc_data = dict(row)
                     
-                    return npc_data
+                # Parse JSON fields
+                for field in ["personality_traits", "archetypes", "affiliations"]:
+                    if field in npc_data and isinstance(npc_data[field], str):
+                        try:
+                            npc_data[field] = json.loads(npc_data[field])
+                        except json.JSONDecodeError:
+                            npc_data[field] = []
+                    
+                return npc_data
                     
         except Exception as e:
             logger.error(f"Error getting NPC details: {e}")
@@ -204,13 +202,13 @@ class NPCDataAccess(BaseDataAccess):
             params = [npc_id]
             
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(query, *params)
-                    return [dict(row) for row in rows]
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                rows = await conn.fetch(query, *params)
+                return [dict(row) for row in rows]
                     
         except Exception as e:
             logger.error(f"Error getting NPC relationships: {e}")
@@ -246,74 +244,73 @@ class NPCDataAccess(BaseDataAccess):
                 "cultural_norms_followed": []
             }
             
-            # Get nationality
-            query = """
-                SELECT n.* FROM Nations n
-                JOIN NPCAttributes a ON n.id = a.value_id
-                WHERE a.npc_id = $1 AND a.attribute_type = 'nationality'
-            """
-            
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    nationality = await conn.fetchrow(query, npc_id)
-                    if nationality:
-                        cultural_data["nationality"] = dict(nationality)
-                    
-                    # Get faith/religion
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                # Get nationality
+                query = """
+                    SELECT n.* FROM Nations n
+                    JOIN NPCAttributes a ON n.id = a.value_id
+                    WHERE a.npc_id = $1 AND a.attribute_type = 'nationality'
+                """
+                nationality = await conn.fetchrow(query, npc_id)
+                if nationality:
+                    cultural_data["nationality"] = dict(nationality)
+                
+                # Get faith/religion
+                query = """
+                    SELECT ce.* FROM CulturalElements ce
+                    JOIN NPCAttributes a ON ce.id = a.value_id
+                    WHERE a.npc_id = $1 AND a.attribute_type = 'faith'
+                    AND ce.element_type = 'religion'
+                """
+                faith = await conn.fetchrow(query, npc_id)
+                if faith:
+                    cultural_data["faith"] = dict(faith)
+                
+                # Get languages
+                query = """
+                    SELECT l.*, la.fluency 
+                    FROM Languages l
+                    JOIN NPCLanguageAbilities la ON l.id = la.language_id
+                    WHERE la.npc_id = $1
+                    ORDER BY la.fluency DESC
+                """
+                languages = await conn.fetch(query, npc_id)
+                cultural_data["languages"] = [dict(lang) for lang in languages]
+                
+                # Get dialect
+                if cultural_data["languages"]:
                     query = """
-                        SELECT ce.* FROM CulturalElements ce
-                        JOIN NPCAttributes a ON ce.id = a.value_id
-                        WHERE a.npc_id = $1 AND a.attribute_type = 'faith'
-                        AND ce.element_type = 'religion'
+                        SELECT d.* FROM Dialects d
+                        JOIN NPCAttributes a ON d.id = a.value_id
+                        WHERE a.npc_id = $1 AND a.attribute_type = 'dialect'
                     """
-                    faith = await conn.fetchrow(query, npc_id)
-                    if faith:
-                        cultural_data["faith"] = dict(faith)
-                    
-                    # Get languages
-                    query = """
-                        SELECT l.*, la.fluency 
-                        FROM Languages l
-                        JOIN NPCLanguageAbilities la ON l.id = la.language_id
-                        WHERE la.npc_id = $1
-                        ORDER BY la.fluency DESC
-                    """
-                    languages = await conn.fetch(query, npc_id)
-                    cultural_data["languages"] = [dict(lang) for lang in languages]
-                    
-                    # Get dialect
-                    if cultural_data["languages"]:
+                    dialect = await conn.fetchrow(query, npc_id)
+                    if dialect:
+                        cultural_data["primary_dialect"] = dict(dialect)
+                        
+                        # Get dialect features
                         query = """
-                            SELECT d.* FROM Dialects d
-                            JOIN NPCAttributes a ON d.id = a.value_id
-                            WHERE a.npc_id = $1 AND a.attribute_type = 'dialect'
+                            SELECT feature_type, feature_value FROM DialectFeatures
+                            WHERE dialect_id = $1
                         """
-                        dialect = await conn.fetchrow(query, npc_id)
-                        if dialect:
-                            cultural_data["primary_dialect"] = dict(dialect)
-                            
-                            # Get dialect features
-                            query = """
-                                SELECT feature_type, feature_value FROM DialectFeatures
-                                WHERE dialect_id = $1
-                            """
-                            features = await conn.fetch(query, dialect["id"])
-                            for feature in features:
-                                feature_type = feature["feature_type"]
-                                if feature_type not in cultural_data["dialect_features"]:
-                                    cultural_data["dialect_features"][feature_type] = []
-                                cultural_data["dialect_features"][feature_type].append(
-                                    feature["feature_value"]
-                                )
-                    
-                    # Get cultural norms
-                    query = """
-                        SELECT * FROM CulturalNorms cn
-                        JOIN NPCAttributes a ON cn.id = a.value_id
-                        WHERE a.npc_id = $1 AND a.attribute_type = 'cultural_norm'
-                    """
-                    norms = await conn.fetch(query, npc_id)
-                    cultural_data["cultural_norms_followed"] = [dict(norm) for norm in norms]
+                        features = await conn.fetch(query, dialect["id"])
+                        for feature in features:
+                            feature_type = feature["feature_type"]
+                            if feature_type not in cultural_data["dialect_features"]:
+                                cultural_data["dialect_features"][feature_type] = []
+                            cultural_data["dialect_features"][feature_type].append(
+                                feature["feature_value"]
+                            )
+                
+                # Get cultural norms
+                query = """
+                    SELECT * FROM CulturalNorms cn
+                    JOIN NPCAttributes a ON cn.id = a.value_id
+                    WHERE a.npc_id = $1 AND a.attribute_type = 'cultural_norm'
+                """
+                norms = await conn.fetch(query, npc_id)
+                cultural_data["cultural_norms_followed"] = [dict(norm) for norm in norms]
             
             return cultural_data
             
@@ -438,20 +435,20 @@ class LocationDataAccess(BaseDataAccess):
                 query += " WHERE " + " AND ".join(conditions)
                 
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Add limit
             query += " LIMIT 1"
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, *params)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                row = await conn.fetchrow(query, *params)
+                
+                if not row:
+                    return {}
                     
-                    if not row:
-                        return {}
-                        
-                    return dict(row)
+                return dict(row)
                     
         except Exception as e:
             logger.error(f"Error getting location details: {e}")
@@ -495,19 +492,19 @@ class LocationDataAccess(BaseDataAccess):
                 WHERE location_id = $1
             """
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    lore = await conn.fetchrow(query, location_id)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                lore = await conn.fetchrow(query, location_id)
+                
+                if lore:
+                    lore_dict = dict(lore)
                     
-                    if lore:
-                        lore_dict = dict(lore)
-                        
-                        # Combine location and lore
-                        for key, value in lore_dict.items():
-                            if key not in ["id", "user_id", "conversation_id", "location_id"]:
-                                location[f"lore_{key}"] = value
-                    
-                    return location
+                    # Combine location and lore
+                    for key, value in lore_dict.items():
+                        if key not in ["id", "user_id", "conversation_id", "location_id"]:
+                            location[f"lore_{key}"] = value
+                
+                return location
                     
         except Exception as e:
             logger.error(f"Error getting location with lore: {e}")
@@ -538,44 +535,44 @@ class LocationDataAccess(BaseDataAccess):
                 AND lc.connection_type = 'practiced_at'
             """
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(
-                        query, 
-                        location_id, 
-                        self.user_id, 
-                        self.conversation_id
-                    )
-                    
-                    elements = [dict(row) for row in rows]
-                    
-                    # Also get religious elements
-                    religious_query = """
-                        SELECT ce.* 
-                        FROM CulturalElements ce
-                        JOIN LoreConnections lc ON ce.id = lc.source_id
-                        WHERE lc.target_id = $1
-                        AND ce.user_id = $2 AND ce.conversation_id = $3
-                        AND ce.element_type = 'religion'
-                        AND lc.source_type = 'CulturalElements'
-                        AND lc.target_type = 'Locations'
-                        AND lc.connection_type = 'practiced_at'
-                    """
-                    
-                    religious_rows = await conn.fetch(
-                        religious_query, 
-                        location_id, 
-                        self.user_id, 
-                        self.conversation_id
-                    )
-                    
-                    religious_elements = [dict(row) for row in religious_rows]
-                    
-                    return {
-                        "elements": elements,
-                        "religious_elements": religious_elements,
-                        "count": len(elements) + len(religious_elements)
-                    }
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    query, 
+                    location_id, 
+                    self.user_id, 
+                    self.conversation_id
+                )
+                
+                elements = [dict(row) for row in rows]
+                
+                # Also get religious elements
+                religious_query = """
+                    SELECT ce.* 
+                    FROM CulturalElements ce
+                    JOIN LoreConnections lc ON ce.id = lc.source_id
+                    WHERE lc.target_id = $1
+                    AND ce.user_id = $2 AND ce.conversation_id = $3
+                    AND ce.element_type = 'religion'
+                    AND lc.source_type = 'CulturalElements'
+                    AND lc.target_type = 'Locations'
+                    AND lc.connection_type = 'practiced_at'
+                """
+                
+                religious_rows = await conn.fetch(
+                    religious_query, 
+                    location_id, 
+                    self.user_id, 
+                    self.conversation_id
+                )
+                
+                religious_elements = [dict(row) for row in religious_rows]
+                
+                return {
+                    "elements": elements,
+                    "religious_elements": religious_elements,
+                    "count": len(elements) + len(religious_elements)
+                }
                     
         except Exception as e:
             logger.error(f"Error getting cultural context for location: {e}")
@@ -606,21 +603,21 @@ class LocationDataAccess(BaseDataAccess):
                 AND (lc.connection_type = 'controls' OR lc.connection_type = 'influences')
             """
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(
-                        query, 
-                        location_id, 
-                        self.user_id, 
-                        self.conversation_id
-                    )
-                    
-                    factions = [dict(row) for row in rows]
-                    
-                    return {
-                        "ruling_factions": factions,
-                        "count": len(factions)
-                    }
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    query, 
+                    location_id, 
+                    self.user_id, 
+                    self.conversation_id
+                )
+                
+                factions = [dict(row) for row in rows]
+                
+                return {
+                    "ruling_factions": factions,
+                    "count": len(factions)
+                }
                     
         except Exception as e:
             logger.error(f"Error getting political context for location: {e}")
@@ -647,14 +644,14 @@ class LocationDataAccess(BaseDataAccess):
                 LIMIT 1
             """
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, location_id)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                row = await conn.fetchrow(query, location_id)
+                
+                if not row:
+                    return {}
                     
-                    if not row:
-                        return {}
-                        
-                    return dict(row)
+                return dict(row)
                     
         except Exception as e:
             logger.error(f"Error getting environmental conditions: {e}")
@@ -685,27 +682,27 @@ class FactionDataAccess(BaseDataAccess):
             params = [faction_id]
             
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, *params)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                row = await conn.fetchrow(query, *params)
+                
+                if not row:
+                    return {}
                     
-                    if not row:
-                        return {}
-                        
-                    faction_data = dict(row)
-                    
-                    # Parse JSON arrays
-                    for field in ["values", "goals", "rivals", "allies"]:
-                        if field in faction_data and isinstance(faction_data[field], str):
-                            try:
-                                faction_data[field] = json.loads(faction_data[field])
-                            except json.JSONDecodeError:
-                                faction_data[field] = []
-                    
-                    return faction_data
+                faction_data = dict(row)
+                
+                # Parse JSON arrays
+                for field in ["values", "goals", "rivals", "allies"]:
+                    if field in faction_data and isinstance(faction_data[field], str):
+                        try:
+                            faction_data[field] = json.loads(faction_data[field])
+                        except json.JSONDecodeError:
+                            faction_data[field] = []
+                
+                return faction_data
                     
         except Exception as e:
             logger.error(f"Error getting faction details: {e}")
@@ -736,7 +733,7 @@ class FactionDataAccess(BaseDataAccess):
             params = [faction_id]
             
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Also get relationships where this faction is the target
             reverse_query = """
@@ -751,19 +748,19 @@ class FactionDataAccess(BaseDataAccess):
             reverse_params = [faction_id]
             
             # Add user/conversation filters
-            reverse_query, reverse_params = self.add_user_conversation_filters(reverse_query, reverse_params)
+            reverse_query, reverse_params = await self.add_user_conversation_filters(reverse_query, reverse_params)
             
             # Execute queries
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(query, *params)
-                    reverse_rows = await conn.fetch(reverse_query, *reverse_params)
-                    
-                    # Combine results
-                    all_relationships = [dict(row) for row in rows]
-                    all_relationships.extend([dict(row) for row in reverse_rows])
-                    
-                    return all_relationships
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                rows = await conn.fetch(query, *params)
+                reverse_rows = await conn.fetch(reverse_query, *reverse_params)
+                
+                # Combine results
+                all_relationships = [dict(row) for row in rows]
+                all_relationships.extend([dict(row) for row in reverse_rows])
+                
+                return all_relationships
                     
         except Exception as e:
             logger.error(f"Error getting faction relationships: {e}")
@@ -807,21 +804,21 @@ class LoreKnowledgeAccess(BaseDataAccess):
                     last_accessed = NOW()
             """
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        query,
-                        self.user_id,
-                        self.conversation_id,
-                        entity_type,
-                        entity_id,
-                        lore_type,
-                        lore_id,
-                        knowledge_level,
-                        is_secret
-                    )
-                    
-                    return True
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                await conn.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    entity_type,
+                    entity_id,
+                    lore_type,
+                    lore_id,
+                    knowledge_level,
+                    is_secret
+                )
+                
+                return True
                     
         except Exception as e:
             logger.error(f"Error adding lore knowledge: {e}")
@@ -850,61 +847,61 @@ class LoreKnowledgeAccess(BaseDataAccess):
             params = [entity_type, entity_id]
             
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(query, *params)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                rows = await conn.fetch(query, *params)
+                
+                knowledge_items = []
+                
+                # Get details for each knowledge item
+                for row in rows:
+                    knowledge = dict(row)
+                    lore_type = knowledge["lore_type"]
+                    lore_id = knowledge["lore_id"]
                     
-                    knowledge_items = []
+                    # Get the lore details based on type
+                    if lore_type == "Factions":
+                        lore_query = "SELECT * FROM Factions WHERE id = $1"
+                    elif lore_type == "WorldLore":
+                        lore_query = "SELECT * FROM WorldLore WHERE id = $1"
+                    elif lore_type == "CulturalElements":
+                        lore_query = "SELECT * FROM CulturalElements WHERE id = $1"
+                    elif lore_type == "HistoricalEvents":
+                        lore_query = "SELECT * FROM HistoricalEvents WHERE id = $1"
+                    elif lore_type == "LocationLore":
+                        lore_query = "SELECT * FROM LocationLore WHERE location_id = $1"
+                    else:
+                        # Unknown lore type
+                        continue
                     
-                    # Get details for each knowledge item
-                    for row in rows:
-                        knowledge = dict(row)
-                        lore_type = knowledge["lore_type"]
-                        lore_id = knowledge["lore_id"]
-                        
-                        # Get the lore details based on type
-                        if lore_type == "Factions":
-                            lore_query = "SELECT * FROM Factions WHERE id = $1"
-                        elif lore_type == "WorldLore":
-                            lore_query = "SELECT * FROM WorldLore WHERE id = $1"
-                        elif lore_type == "CulturalElements":
-                            lore_query = "SELECT * FROM CulturalElements WHERE id = $1"
-                        elif lore_type == "HistoricalEvents":
-                            lore_query = "SELECT * FROM HistoricalEvents WHERE id = $1"
-                        elif lore_type == "LocationLore":
-                            lore_query = "SELECT * FROM LocationLore WHERE location_id = $1"
-                        else:
-                            # Unknown lore type
-                            continue
-                        
-                        # Get lore details
-                        lore_row = await conn.fetchrow(lore_query, lore_id)
-                        
-                        if lore_row:
-                            lore_data = dict(lore_row)
-                            
-                            # Combine knowledge and lore data
-                            combined = {
-                                "knowledge_id": knowledge["knowledge_id"],
-                                "entity_type": entity_type,
-                                "entity_id": entity_id,
-                                "lore_type": lore_type,
-                                "lore_id": lore_id,
-                                "knowledge_level": knowledge["knowledge_level"],
-                                "is_secret": knowledge["is_secret"]
-                            }
-                            
-                            # Add lore details
-                            for key, value in lore_data.items():
-                                if key not in ["id", "user_id", "conversation_id"]:
-                                    combined[f"lore_{key}"] = value
-                            
-                            knowledge_items.append(combined)
+                    # Get lore details
+                    lore_row = await conn.fetchrow(lore_query, lore_id)
                     
-                    return knowledge_items
+                    if lore_row:
+                        lore_data = dict(lore_row)
+                        
+                        # Combine knowledge and lore data
+                        combined = {
+                            "knowledge_id": knowledge["knowledge_id"],
+                            "entity_type": entity_type,
+                            "entity_id": entity_id,
+                            "lore_type": lore_type,
+                            "lore_id": lore_id,
+                            "knowledge_level": knowledge["knowledge_level"],
+                            "is_secret": knowledge["is_secret"]
+                        }
+                        
+                        # Add lore details
+                        for key, value in lore_data.items():
+                            if key not in ["id", "user_id", "conversation_id"]:
+                                combined[f"lore_{key}"] = value
+                        
+                        knowledge_items.append(combined)
+                
+                return knowledge_items
                     
         except Exception as e:
             logger.error(f"Error getting entity knowledge: {e}")
@@ -943,22 +940,22 @@ class LoreKnowledgeAccess(BaseDataAccess):
             params = [lore_id]
             
             # Add user/conversation filters
-            query, params = self.add_user_conversation_filters(query, params)
+            query, params = await self.add_user_conversation_filters(query, params)
             
             # Execute query
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(query, *params)
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                row = await conn.fetchrow(query, *params)
+                
+                if not row:
+                    return {}
                     
-                    if not row:
-                        return {}
-                        
-                    lore_data = dict(row)
-                    
-                    # Add lore type
-                    lore_data["lore_type"] = lore_type
-                    
-                    return lore_data
+                lore_data = dict(row)
+                
+                # Add lore type
+                lore_data["lore_type"] = lore_type
+                
+                return lore_data
                     
         except Exception as e:
             logger.error(f"Error getting lore by ID: {e}")
@@ -990,61 +987,61 @@ class LoreKnowledgeAccess(BaseDataAccess):
             
             all_results = []
             
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    # Search each lore type
-                    for lore_type in search_types:
-                        if lore_type == "Factions":
-                            table = "Factions"
-                            columns = "id, name, type, description"
-                        elif lore_type == "WorldLore":
-                            table = "WorldLore"
-                            columns = "id, name, category, description"
-                        elif lore_type == "CulturalElements":
-                            table = "CulturalElements"
-                            columns = "id, name, type, description"
-                        elif lore_type == "HistoricalEvents":
-                            table = "HistoricalEvents"
-                            columns = "id, name, date_description, description"
-                        elif lore_type == "LocationLore":
-                            table = "LocationLore l JOIN Locations loc ON l.location_id = loc.id"
-                            columns = "l.location_id as id, loc.location_name as name, 'location' as type, loc.description"
-                        else:
-                            # Unknown lore type
+            connection_pool = await self.get_connection_pool()
+            async with connection_pool.acquire() as conn:
+                # Search each lore type
+                for lore_type in search_types:
+                    if lore_type == "Factions":
+                        table = "Factions"
+                        columns = "id, name, type, description"
+                    elif lore_type == "WorldLore":
+                        table = "WorldLore"
+                        columns = "id, name, category, description"
+                    elif lore_type == "CulturalElements":
+                        table = "CulturalElements"
+                        columns = "id, name, type, description"
+                    elif lore_type == "HistoricalEvents":
+                        table = "HistoricalEvents"
+                        columns = "id, name, date_description, description"
+                    elif lore_type == "LocationLore":
+                        table = "LocationLore l JOIN Locations loc ON l.location_id = loc.id"
+                        columns = "l.location_id as id, loc.location_name as name, 'location' as type, loc.description"
+                    else:
+                        # Unknown lore type
+                        continue
+                    
+                    # Build query
+                    search_query = f"""
+                        SELECT {columns}, embedding
+                        FROM {table}
+                        WHERE user_id = $1 AND conversation_id = $2
+                    """
+                    
+                    # Execute query
+                    rows = await conn.fetch(search_query, self.user_id, self.conversation_id)
+                    
+                    # Calculate relevance for each item
+                    for row in rows:
+                        item = dict(row)
+                        
+                        # Skip if no embedding
+                        if "embedding" not in item or not item["embedding"]:
                             continue
-                        
-                        # Build query
-                        search_query = f"""
-                            SELECT {columns}, embedding
-                            FROM {table}
-                            WHERE user_id = $1 AND conversation_id = $2
-                        """
-                        
-                        # Execute query
-                        rows = await conn.fetch(search_query, self.user_id, self.conversation_id)
-                        
-                        # Calculate relevance for each item
-                        for row in rows:
-                            item = dict(row)
                             
-                            # Skip if no embedding
-                            if "embedding" not in item or not item["embedding"]:
-                                continue
-                                
-                            # Calculate similarity
-                            similarity = vector_similarity(query_embedding, item["embedding"])
+                        # Calculate similarity
+                        similarity = vector_similarity(query_embedding, item["embedding"])
+                        
+                        # Only include if above threshold
+                        if similarity >= min_relevance:
+                            # Add lore type and similarity
+                            item["lore_type"] = lore_type
+                            item["relevance"] = similarity
                             
-                            # Only include if above threshold
-                            if similarity >= min_relevance:
-                                # Add lore type and similarity
-                                item["lore_type"] = lore_type
-                                item["relevance"] = similarity
-                                
-                                # Remove embedding to reduce response size
-                                if "embedding" in item:
-                                    del item["embedding"]
-                                
-                                all_results.append(item)
+                            # Remove embedding to reduce response size
+                            if "embedding" in item:
+                                del item["embedding"]
+                            
+                            all_results.append(item)
             
             # Sort by relevance and limit results
             all_results.sort(key=lambda x: x["relevance"], reverse=True)
