@@ -142,6 +142,22 @@ async def maybe_browse_social_feeds(self):
                 "timestamp": now
             }
         )
+
+    # Emotional profiling
+    emotion_profile = await self.sentiment_engine.analyze_feed(chosen["url"])
+    await self.creative_system.logger.log_thought(
+        title=f"Sentiment Profile: {chosen['name']}",
+        content=f"Dominant Mood: {emotion_profile['dominant_mood']}\n\nSpectrum: {emotion_profile['spectrum']}",
+        metadata=emotion_profile
+    )
+    
+    # Persona drift detection
+    if self.persona_monitor.detect_drift(persona):
+        await self.creative_system.logger.log_thought(
+            title=f"Persona Drift Alert: {persona}",
+            content=f"Emotional bleed-through detected in {persona}. Consider recalibration.",
+            metadata={"persona": persona}
+        )
     
     #  Log memory (even if unverified or true)
     if self.memory_core:
@@ -154,6 +170,14 @@ async def maybe_browse_social_feeds(self):
             memory_type="experience" if verdict["verdict"] == "true" else "claim",
             significance=7 if verdict["verdict"] == "true" else 5,
             metadata=metadata
+        )
+
+    if self.memory_core:
+        await self.memory_core.add_memory(
+            memory_text="Craving: Better context reconstruction when origin thread is unclear.",
+            memory_type="desire",
+            significance=6,
+            metadata={"detected_at": now, "source": chosen["name"]}
         )
 
 async def maybe_post_to_social(self):
