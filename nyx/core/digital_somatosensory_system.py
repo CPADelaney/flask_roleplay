@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 # =============== Models for Structured Output ===============
 
-# =============== Models for Structured Output ===============
-
 class BodyRegion(BaseModel):
     """Representation of a body region with sensory data"""
     name: str = Field(..., description="Name of body region")
