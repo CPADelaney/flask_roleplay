@@ -9,6 +9,7 @@ import logging
 import json
 import asyncio
 from typing import Dict, Any, Optional
+from agents import ModelSettings
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,17 @@ DEFAULT_CONFIG = {
         "use_memory_system": True,
         "use_delta_updates": True,
         "track_performance": True
+    },
+    
+    # Agent SDK settings
+    "agent_sdk": {
+        "default_model": "gpt-4",
+        "model_settings": {
+            "temperature": 0.1,
+            "top_p": 0.9
+        },
+        "workflow_name": "context_optimization",
+        "trace_include_sensitive_data": False
     }
 }
 
@@ -254,6 +266,31 @@ class ContextConfig:
         
         # Calculate budget
         return int(total_budget * percentage)
+    
+    def get_model_settings(self) -> ModelSettings:
+        """
+        Get model settings for Agents SDK.
+        
+        Returns:
+            ModelSettings object for the OpenAI Agents SDK
+        """
+        settings = self.get_section("agent_sdk").get("model_settings", {})
+        return ModelSettings(
+            temperature=settings.get("temperature", 0.1),
+            top_p=settings.get("top_p", 0.9),
+            max_tokens=settings.get("max_tokens", None),
+            presence_penalty=settings.get("presence_penalty", None),
+            frequency_penalty=settings.get("frequency_penalty", None),
+        )
+    
+    def get_default_model(self) -> str:
+        """
+        Get default model for Agents SDK.
+        
+        Returns:
+            Model name string
+        """
+        return self.get_section("agent_sdk").get("default_model", "gpt-4")
 
 
 # Async singleton access function
