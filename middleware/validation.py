@@ -23,7 +23,7 @@ PATTERNS = {
     'float': re.compile(r'^-?\d+(\.\d+)?$'),
 }
 
-def sanitize_string(text, max_length=None, allowed_tags=None):
+async def sanitize_string(text, max_length=None, allowed_tags=None):
     """
     Sanitize a string input.
     
@@ -69,7 +69,7 @@ def sanitize_string(text, max_length=None, allowed_tags=None):
     
     return text
 
-def is_valid_pattern(text, pattern_name):
+async def is_valid_pattern(text, pattern_name):
     """
     Check if text matches a named pattern.
     
@@ -90,7 +90,7 @@ def is_valid_pattern(text, pattern_name):
     
     return bool(pattern.match(str(text)))
 
-def sanitize_json(json_data, schema):
+async def sanitize_json(json_data, schema):
     """
     Sanitize a JSON object according to a schema.
     
@@ -142,14 +142,14 @@ def sanitize_json(json_data, schema):
                 continue
             
             # Apply pattern validation if specified
-            if 'pattern' in rules and not is_valid_pattern(value, rules['pattern']):
+            if 'pattern' in rules and not await is_valid_pattern(value, rules['pattern']):
                 errors[field] = f"Invalid format for {field}"
                 continue
             
             # Apply sanitization
             max_length = rules.get('max_length')
             allowed_tags = rules.get('allowed_tags')
-            sanitized[field] = sanitize_string(value, max_length, allowed_tags)
+            sanitized[field] = await sanitize_string(value, max_length, allowed_tags)
             
         elif field_type == 'integer':
             try:
@@ -210,7 +210,7 @@ def sanitize_json(json_data, schema):
                 for i, item in enumerate(value):
                     if isinstance(rules['items'], dict):
                         # Recursive sanitization for objects
-                        item_sanitized, item_error = sanitize_json({0: item}, {0: rules['items']})
+                        item_sanitized, item_error = await sanitize_json({0: item}, {0: rules['items']})
                         if item_error:
                             item_errors.append((i, item_error))
                         else:
@@ -219,7 +219,7 @@ def sanitize_json(json_data, schema):
                         # Simple type validation
                         item_type = rules['items']
                         if item_type == 'string' and isinstance(item, str):
-                            sanitized_items.append(sanitize_string(item, rules.get('item_max_length')))
+                            sanitized_items.append(await sanitize_string(item, rules.get('item_max_length')))
                         elif item_type == 'integer' and isinstance(item, int):
                             sanitized_items.append(item)
                         elif item_type == 'float' and isinstance(item, (int, float)):
@@ -241,7 +241,7 @@ def sanitize_json(json_data, schema):
                 
             # Recursive sanitization for nested objects
             if 'properties' in rules:
-                obj_sanitized, obj_errors = sanitize_json(value, rules['properties'])
+                obj_sanitized, obj_errors = await sanitize_json(value, rules['properties'])
                 if obj_errors:
                     errors[field] = obj_errors
                 sanitized[field] = obj_sanitized
@@ -263,7 +263,7 @@ def validate_request(schema):
     """
     def decorator(f):
         @wraps(f)
-        def decorated_function(*args, **kwargs):
+        async def decorated_function(*args, **kwargs):
             # Get request data based on content type
             if request.is_json:
                 data = request.get_json()
@@ -273,7 +273,7 @@ def validate_request(schema):
                 data = request.args.to_dict()
             
             # Sanitize and validate
-            sanitized, errors = sanitize_json(data, schema)
+            sanitized, errors = await sanitize_json(data, schema)
             
             if errors:
                 return jsonify({
@@ -285,6 +285,6 @@ def validate_request(schema):
             # Add sanitized data to request object for the route to use
             request.sanitized_data = sanitized
             
-            return f(*args, **kwargs)
+            return await f(*args, **kwargs)
         return decorated_function
-    return decorator 
+    return decorator
