@@ -23,6 +23,7 @@ from nyx.nyx_emotional_system import EmotionalSystem
 from nyx.nyx_performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
 from .nyx_enhanced_system import NyxEnhancedSystem, NyxGoal
+from nyx.core.sync.strategy_controller import get_active_strategies
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,12 @@ async def detect_user_revelations(ctx, user_message: str) -> str:
         })
     
     return json.dumps(revelations)
+
+@function_tool
+async def enhance_context_with_strategies(context: Dict[str, Any], conn) -> Dict[str, Any]:
+    strategies = await get_active_strategies(conn)
+    context["nyx2_strategies"] = strategies
+    return context
 
 
 @function_tool
@@ -2591,6 +2598,9 @@ async def process_user_input(
         # Get memories and enhance context
         memories = await retrieve_memories(ctx, user_input)
         enhanced_context = enhance_context_with_memories(context_data or {}, memories)
+
+        conn = await get_db_connection_context().__aenter__()
+        enhanced_context = await enhance_context_with_strategies(enhanced_context, conn)
         
         # Get user model guidance
         user_guidance = await get_user_model_guidance(ctx)
@@ -2607,6 +2617,12 @@ async def process_user_input(
             narrative_response.message,
             enhanced_context
         )
+
+        # Evaluate if strategy should be logged or marked noisy
+        if "nyx2_strategies" in enhanced_context:
+            for strategy in enhanced_context["nyx2_strategies"]:
+                if "keyword" in user_input.lower():  # placeholder for better eval
+                    await mark_strategy_for_review(conn, strategy["id"], user_id, reason="User-triggered phrase")
         
         # Update response with filtered version
         narrative_response.message = filtered_response
