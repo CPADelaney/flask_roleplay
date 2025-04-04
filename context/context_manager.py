@@ -568,7 +568,8 @@ class ContextManager:
                 user_id,
                 conversation_id,
                 AgentType.CONTEXT_MANAGER,
-                self.component_id
+                self.component_id,
+                governance=governance  # pass the object here
             )
             
             # Register handlers
