@@ -6,8 +6,7 @@ from typing import Dict, List, Any
 
 class MatriarchalThemingUtils:
     """
-    Streamlined utility class for applying matriarchal theming to different types of lore content.
-    Uses a data-driven approach to apply theming based on content type.
+    Utility class for applying matriarchal theming to different types of lore content.
     """
     
     # Dictionary of regex patterns to replacement strings for basic feminization
@@ -48,14 +47,14 @@ class MatriarchalThemingUtils:
         r"\bkingly\b": "queenly",
     }
     
-    # Supreme feminine figure titles for random selection
+    # Random synonyms for a supreme feminine figure
     DIVINE_TITLES = [
         "Supreme Goddess", "High Empress", "Great Matriarch", "Divine Mother",
         "Infinite Mistress of Creation", "Eternal Goddess", "All-Mother",
         "Sovereign Matriarch", "Celestial Queen", "Grand Mistress of Existence",
     ]
     
-    # Themed content by lore type - organized for better maintenance
+    # Themed content by lore type
     THEMED_CONTENT = {
         # Cosmological content
         "cosmology": "At the heart of all creation is the Feminine Principle, the source of all life and power. "
@@ -130,7 +129,7 @@ class MatriarchalThemingUtils:
     @classmethod
     def apply_matriarchal_theme(cls, lore_type: str, content: str, emphasis_level: int = 2) -> str:
         """
-        Apply appropriate matriarchal theming based on lore type with improved performance.
+        Apply appropriate matriarchal theming based on lore type.
         
         Args:
             lore_type: Type of lore content ('cosmology', 'magic_system', 'history', etc.)
@@ -162,7 +161,6 @@ class MatriarchalThemingUtils:
     @classmethod
     def _has_matriarchal_content(cls, text: str) -> bool:
         """Efficiently check if text already has strong matriarchal themes."""
-        # Compile patterns once for better performance
         patterns = [
             re.compile(pattern, re.IGNORECASE) 
             for pattern in [
@@ -229,3 +227,112 @@ class MatriarchalThemingUtils:
         )
         
         return text.strip() + insertion
+    
+    @classmethod
+    def _inject_contextual_lore(cls, text: str, insertion: str, label: str = "", append_if_not_found: bool = True) -> str:
+        """
+        Insert 'insertion' text after a specific label or heading (case-insensitive).
+        If label not found and append_if_not_found is True, just append at the end.
+        """
+        if not label:
+            # No label provided, always append at the end
+            return text.strip() + "\n\n" + insertion
+
+        pattern = re.compile(rf"({re.escape(label)})", re.IGNORECASE)
+        match = pattern.search(text)
+
+        if match:
+            # Insert after the matched label
+            idx = match.end()
+            # Insert a blank line before the snippet
+            return text[:idx] + "\n\n" + insertion + text[idx:]
+        else:
+            if append_if_not_found:
+                return text.strip() + "\n\n" + insertion
+            else:
+                # Return unchanged if not found and we don't want to append
+                return text
+    
+    @classmethod
+    def feminize_cosmology(cls, cosmology: str) -> str:
+        """
+        Create a comprehensive, feminized version of the cosmology, ensuring references
+        to gods, powers, and origins are dominated by feminine authority.
+        """
+        # 1) Basic replacements (god->Goddess, king->Queen, etc.)
+        result = cls._replace_gendered_words(cosmology)
+
+        # 2) Ensure we have at least one reference to a goddess or matriarchal figure
+        result = cls._ensure_divine_reference(result)
+
+        # 3) Insert text about the 'Feminine Principle' after a "COSMOLOGY" heading, if present
+        feminine_principle = cls.THEMED_CONTENT["cosmology"]
+        result = cls._inject_contextual_lore(result, feminine_principle, label="COSMOLOGY")
+
+        # 4) Optionally emphasize the matriarchal tone
+        result = result + cls.EMPHASIS_MESSAGES[2]
+
+        return result
+    
+    @classmethod
+    def gender_magic_system(cls, magic_system: str) -> str:
+        """
+        Apply gendered dynamics to the magic system, making feminine energies
+        paramount and male magic supportive or secondary.
+        """
+        # 1) Feminize references
+        result = cls._replace_gendered_words(magic_system)
+
+        # 2) Ensure mention of a goddess figure for continuity
+        result = cls._ensure_divine_reference(result)
+
+        # 3) Insert advanced lore about women's superior magical authority
+        gendered_magic = cls.THEMED_CONTENT["magic_system"]
+        result = cls._inject_contextual_lore(result, gendered_magic, label="MAGIC")
+
+        # 4) Emphasize
+        result = result + cls.EMPHASIS_MESSAGES[2]
+
+        return result
+    
+    @classmethod
+    def matriarchalize_history(cls, history: str) -> str:
+        """
+        Overhaul historical accounts so that women have always held power,
+        shaping the course of civilization through matriarchal leadership.
+        """
+        # 1) Feminize references
+        result = cls._replace_gendered_words(history)
+
+        # 2) Ensure mention of goddess figure
+        result = cls._ensure_divine_reference(result)
+
+        # 3) Insert matriarchal historical note
+        matriarchal_history = cls.THEMED_CONTENT["world_history"]
+        result = cls._inject_contextual_lore(result, matriarchal_history, label="HISTORY")
+
+        # 4) Emphasize
+        result = result + cls.EMPHASIS_MESSAGES[2]
+
+        return result
+    
+    @classmethod
+    def feminize_calendar(cls, calendar_system: str) -> str:
+        """
+        Make the calendar reflect significant feminine milestones, lunar cycles,
+        and holidays honoring matriarchal power and achievements.
+        """
+        # 1) Feminize references
+        result = cls._replace_gendered_words(calendar_system)
+
+        # 2) Ensure mention of a goddess figure
+        result = cls._ensure_divine_reference(result)
+
+        # 3) Insert note about matriarchal calendar features
+        feminine_calendar = cls.THEMED_CONTENT["calendar_system"]
+        result = cls._inject_contextual_lore(result, feminine_calendar, label="CALENDAR")
+
+        # 4) Emphasize
+        result = result + cls.EMPHASIS_MESSAGES[2]
+
+        return result
