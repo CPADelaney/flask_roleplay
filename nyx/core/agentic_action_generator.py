@@ -2703,6 +2703,27 @@ class EnhancedAgenticActionGenerator:
         async with self._lock:
             # Update motivations based on current internal state
             await self.update_motivations()
+
+            # Optional: Self-improvement trigger
+            try:
+                from nyx.core.evolution_engine import EvolutionEngine
+            
+                # Create the engine
+                self.evolution_engine = EvolutionEngine(
+                    missing_features_path="nyx_feature_suggestions/code_analysis/unimplemented_features.json",
+                    api_capabilities_path="nyx_feature_suggestions/api_features/openai_capability_suggestions.json",
+                    cross_suggestions_path="nyx_feature_suggestions/cross_linked_suggestions.json"
+                )
+            
+                # Trigger self-improvement reflection if motivation for self_improvement is high
+                if self.motivations.get("self_improvement", 0) > 0.6:
+                    suggestions = self.evolution_engine.match_and_suggest()
+                    if suggestions:
+                        logger.info(f"🧠 Nyx generated {len(suggestions)} evolution suggestions.")
+                        # Optionally: store in memory, journal, or escalate to module_optimizer
+            
+            except Exception as e:
+                logger.error(f"Error triggering evolution engine: {e}")
             
             # Update temporal context if available
             await self._update_temporal_context(context)
