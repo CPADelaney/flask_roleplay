@@ -2446,7 +2446,7 @@ async def end_of_day():
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
-        
+
         data = request.get_json() or {}
         conv_id = data.get("conversation_id")
         if not conv_id:
@@ -2454,51 +2454,51 @@ async def end_of_day():
 
         # Initialize IntegratedNPCSystem
         npc_system = IntegratedNPCSystem(user_id, int(conv_id))
-        
+
         # Get current time to validate we're at night
         year, month, day, time_of_day = await npc_system.get_current_game_time()
-        
+
         # Advance to next day if not already at night
         if time_of_day != "Night":
             await npc_system.set_game_time(year, month, day, "Night")
-            
+
         # Call nightly maintenance for memory fading, summarizing
         await nightly_maintenance(user_id, int(conv_id))
-        
+
         # Run comprehensive memory lifecycle management
         maintenance_result = await manage_npc_memory_lifecycle(npc_system)
-        
+
         # Process daily income and resource changes
         resource_manager = ResourceManager(user_id, int(conv_id))
-        
+
         # Base daily income
         money_income = 10
         supplies_income = 5
         influence_income = 2
-        
+
         # Apply income
         money_result = await resource_manager.modify_money(
             money_income, "daily_income", "Daily income"
         )
-        
+
         supplies_result = await resource_manager.modify_supplies(
             supplies_income, "daily_income", "Daily supplies"
         )
-        
+
         influence_result = await resource_manager.modify_influence(
             influence_income, "daily_income", "Daily influence gain"
         )
-        
+
         # Recover some energy overnight
         energy_result = await resource_manager.modify_energy(
-            20, "rest", "Overnight rest"  # Recover 20 energy overnight
+            20, "rest", "Overnight rest"  # Recover 20 energy
         )
-        
-        # Decrease hunger (negative value = more hungry)
+
+        # Decrease hunger (negative = more hungry)
         hunger_result = await resource_manager.modify_hunger(
-            -15, "metabolism", "Overnight metabolism"  # Lose 15 hunger overnight
+            -15, "metabolism", "Overnight metabolism"
         )
-        
+
         # Process conflict daily updates
         conflict_integration = ConflictSystemIntegration(user_id, int(conv_id))
         conflict_update = await conflict_integration.run_daily_update()
@@ -2509,7 +2509,6 @@ async def end_of_day():
         AGGREGATOR_CACHE.clear()
         TIME_CACHE.clear()
 
-        # Add everything to the response
         resource_changes = {
             "money": money_result,
             "supplies": supplies_result,
@@ -2526,6 +2525,10 @@ async def end_of_day():
             "current_resources": await resource_manager.get_resources(),
             "current_vitals": await resource_manager.get_vitals()
         })
+
+    except Exception as e:
+        logger.error(f"Error during end_of_day: {e}", exc_info=True)
+        return jsonify({"error": "Server error", "details": str(e)}), 500
 
 @timed_function(name="process_user_message")
 async def process_user_message(user_id, conv_id, user_input):
