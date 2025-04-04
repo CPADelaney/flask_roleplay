@@ -23,3 +23,17 @@ async def mark_noise_for_review(conn, noise_id):
     await conn.execute("""
         UPDATE nyx1_response_noise SET marked_for_review = TRUE WHERE id = $1
     """, noise_id)
+    
+async def get_active_strategies(conn) -> List[Dict[str, Any]]:
+    records = await conn.fetch("""
+        SELECT * FROM nyx1_strategy_injections
+        WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY created_at DESC
+    """)
+    return [dict(r) for r in records]
+
+async def mark_strategy_for_review(conn, strategy_id: int, user_id: int, reason: str):
+    await conn.execute("""
+        INSERT INTO nyx2_review_queue (strategy_id, user_id, reason)
+        VALUES ($1, $2, $3)
+    """, strategy_id, user_id, reason)
