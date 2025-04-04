@@ -16,6 +16,7 @@ from embedding.vector_store import generate_embedding
 from lore.core.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
+from lore.core.cache import GLOBAL_LORE_CACHE
 
 class RegionalCultureSystem(BaseLoreManager):
     """
@@ -26,13 +27,16 @@ class RegionalCultureSystem(BaseLoreManager):
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+        self.cache_namespace = "regional_culture"
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
         if not self.initialized:
             await super().ensure_initialized()
             await self.initialize_tables()
-        
+            await self.register_with_governance()
+            self.initialized = True
+    
     async def initialize_tables(self):
         """Ensure regional culture tables exist"""
         table_definitions = {
@@ -111,6 +115,18 @@ class RegionalCultureSystem(BaseLoreManager):
         
         await self.initialize_tables_for_class(table_definitions)
     
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await super().register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="regional_culture_system",
+            directive_text="Create and manage cultural systems that reflect matriarchal power structures.",
+            scope="world_building",
+            priority=DirectivePriority.MEDIUM
+        )
+        
+        logging.info(f"RegionalCultureSystem registered with governance for user {self.user_id}, conversation {self.conversation_id}")
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_languages",
@@ -128,7 +144,7 @@ class RegionalCultureSystem(BaseLoreManager):
             List of generated languages
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context=ctx.context)
+        run_ctx = self.create_run_context(ctx)
         
         # Get nations for context
         nations = await self.geopolitical_manager.get_all_nations(run_ctx)
@@ -212,11 +228,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 language_data["primary_regions"] = [n["id"] for n in primary_nations]
                 language_data["minority_regions"] = [n["id"] for n in minority_nations]
                 
-                # Generate embedding
-                embedding_text = f"{language_data['name']} {language_data['description']}"
-                embedding = await generate_embedding(embedding_text)
-                
-                # Store in database
                 # Store in database
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -270,7 +281,7 @@ class RegionalCultureSystem(BaseLoreManager):
             List of generated cultural norms
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context=ctx.context)
+        run_ctx = self.create_run_context(ctx)
         
         # Get nation details
         async with self.get_connection_pool() as pool:
@@ -338,10 +349,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 if not all(k in norm_data for k in ["category", "description"]):
                     continue
                 
-                # Generate embedding
-                embedding_text = f"{category} {norm_data['description']}"
-                embedding = await generate_embedding(embedding_text)
-                
                 # Store in database
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -349,9 +356,9 @@ class RegionalCultureSystem(BaseLoreManager):
                             INSERT INTO CulturalNorms (
                                 nation_id, category, description, formality_level,
                                 gender_specific, female_variation, male_variation,
-                                taboo_level, consequence, regional_variations, embedding
+                                taboo_level, consequence, regional_variations
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                             RETURNING id
                         """,
                         nation_id,
@@ -363,8 +370,11 @@ class RegionalCultureSystem(BaseLoreManager):
                         norm_data.get("male_variation"),
                         norm_data.get("taboo_level", 5),
                         norm_data.get("consequence"),
-                        json.dumps(norm_data.get("regional_variations", {})),
-                        embedding)
+                        json.dumps(norm_data.get("regional_variations", {})))
+                        
+                        # Generate and store embedding
+                        embedding_text = f"{category} {norm_data['description']}"
+                        await self.generate_and_store_embedding(embedding_text, conn, "CulturalNorms", "id", norm_id)
                         
                         norm_data["id"] = norm_id
                         norm_data["nation_id"] = nation_id
@@ -392,7 +402,7 @@ class RegionalCultureSystem(BaseLoreManager):
             List of generated etiquette systems
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context=ctx.context)
+        run_ctx = self.create_run_context(ctx)
         
         # Get nation details
         async with self.get_connection_pool() as pool:
@@ -459,10 +469,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 if not all(k in etiquette_data for k in ["context", "greeting_ritual"]):
                     continue
                 
-                # Generate embedding
-                embedding_text = f"{context} etiquette {etiquette_data['greeting_ritual']} {etiquette_data.get('respect_indicators', '')}"
-                embedding = await generate_embedding(embedding_text)
-                
                 # Store in database
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -471,9 +477,9 @@ class RegionalCultureSystem(BaseLoreManager):
                                 nation_id, context, title_system, greeting_ritual,
                                 body_language, eye_contact, distance_norms, gift_giving,
                                 dining_etiquette, power_display, respect_indicators,
-                                gender_distinctions, taboos, embedding
+                                gender_distinctions, taboos
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                             RETURNING id
                         """,
                         nation_id,
@@ -488,8 +494,11 @@ class RegionalCultureSystem(BaseLoreManager):
                         etiquette_data.get("power_display"),
                         etiquette_data.get("respect_indicators"),
                         etiquette_data.get("gender_distinctions"),
-                        etiquette_data.get("taboos", []),
-                        embedding)
+                        etiquette_data.get("taboos", []))
+                        
+                        # Generate and store embedding
+                        embedding_text = f"{context} etiquette {etiquette_data['greeting_ritual']} {etiquette_data.get('respect_indicators', '')}"
+                        await self.generate_and_store_embedding(embedding_text, conn, "Etiquette", "id", etiquette_id)
                         
                         etiquette_data["id"] = etiquette_id
                         etiquette_data["nation_id"] = nation_id
@@ -517,8 +526,8 @@ class RegionalCultureSystem(BaseLoreManager):
             Dictionary with nation's cultural information
         """
         # Check cache first
-        cache_key = f"nation_culture_{nation_id}_{self.user_id}_{self.conversation_id}"
-        cached = GLOBAL_LORE_CACHE.get(cache_key)
+        cache_key = f"nation_culture_{nation_id}"
+        cached = self.get_cache(cache_key)
         if cached:
             return cached
         
@@ -569,6 +578,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 }
                 
                 # Cache the result
-                GLOBAL_LORE_CACHE.set(cache_key, result)
+                self.set_cache(cache_key, result)
                 
                 return result
