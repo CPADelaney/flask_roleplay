@@ -29,6 +29,9 @@ from nyx.core.meta_core import MetaCore, StrategyResult
 
 logger = logging.getLogger(__name__)
 
+from nyx.tools.computer_use_agent import ComputerUseAgent
+self.computer_user = ComputerUseAgent(logger=self.logger)
+
 class ActionSource(str, Enum):
     """Enum for tracking the source of an action"""
     MOTIVATION = "motivation"
@@ -2731,6 +2734,21 @@ class EnhancedAgenticActionGenerator:
                                         "capability": suggestion["capability"]
                                     }
                                 )
+                                
+                if self.motivations.get("self_improvement", 0) > 0.6:
+                    if self.creative_system and hasattr(self.creative_system, "computer_user"):
+                        summary = await self.creative_system.computer_user.run_task(
+                            url="https://platform.openai.com/docs",
+                            prompt="Scan OpenAI’s API docs. Find any capability I can integrate. Suggest an upgrade. Be explicit.",
+                            width=1024,
+                            height=768
+                        )
+                        if summary:
+                            await self.creative_system.logger.log_evolution_suggestion(
+                                title="Autonomous API Capability Scan",
+                                content=summary,
+                                metadata={"source": "CUA", "origin": "computer-use-preview"}
+                            )
 
             except Exception as e:
                 logger.error(f"Error triggering evolution engine: {e}")
