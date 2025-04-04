@@ -45,7 +45,7 @@ class TokenBucket:
             self.tokens = min(self.capacity, self.tokens + refill_amount)
             self.last_refill = now
     
-    def consume(self, tokens: int = 1) -> bool:
+    async def consume(self, tokens: int = 1) -> bool:
         """Try to consume tokens from the bucket."""
         with self.lock:
             self._refill()
@@ -63,14 +63,14 @@ class RateLimiter:
         self.local_buckets: Dict[str, TokenBucket] = {}
         self.lock = threading.Lock()
     
-    def _get_redis(self) -> redis.Redis:
+    async def _get_redis(self) -> redis.Redis:
         """Get or create Redis connection."""
         if not hasattr(g, 'rate_limit_redis'):
             redis_url = current_app.config.get('REDIS_URL', 'redis://localhost:6379/0')
             g.rate_limit_redis = redis.from_url(redis_url)
         return g.rate_limit_redis
     
-    def _get_bucket(self, key: str, config: TokenBucketConfig) -> TokenBucket:
+    async def _get_bucket(self, key: str, config: TokenBucketConfig) -> TokenBucket:
         """Get or create a token bucket."""
         with self.lock:
             if key not in self.local_buckets:
@@ -101,7 +101,7 @@ class RateLimiter:
         try:
             if distributed:
                 # Use Redis-based distributed rate limiting
-                redis_client = self._get_redis()
+                redis_client = await self._get_redis()
                 
                 # Use token bucket algorithm with Redis
                 bucket_key = f"bucket:{key}"
@@ -152,8 +152,8 @@ class RateLimiter:
                     refill_rate=limit / period,
                     refill_time=1.0  # Refill every second
                 )
-                bucket = self._get_bucket(key, config)
-                allowed = bucket.consume(cost)
+                bucket = await self._get_bucket(key, config)
+                allowed = await bucket.consume(cost)
                 remaining = bucket.tokens
             
             reset_time = int(time.time() + period)
@@ -254,7 +254,7 @@ def rate_limit(
 async def get_rate_limit_stats(key_pattern: str = "*") -> Dict:
     """Get rate limiting statistics."""
     try:
-        redis_client = rate_limiter._get_redis()
+        redis_client = await rate_limiter._get_redis()
         stats = {}
         
         # Get all analytics keys
