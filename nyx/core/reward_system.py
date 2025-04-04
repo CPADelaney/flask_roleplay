@@ -388,7 +388,9 @@ class RewardSignalProcessor:
                 if recent_avg <= previous_avg:
                     for action in self.novelty_decay:
                         self.novelty_decay[action] *= 0.95  # shrink novelty faster
-                
+
+                await self.needs_system.decrease_need("pleasure_indulgence", 0.3, reason="denied_gratification")
+
                 # 7. Return processing results
                 return {
                     "dopamine_change": dopamine_change,
@@ -1196,6 +1198,10 @@ class RewardSignalProcessor:
     
             # Strong novelty bias when Nyx is dominant + aroused
             adjusted_novelty = novelty + control_boost
+
+            # Optional: boost preference for pleasure when needy
+            pleasure_drive = self.needs_system.get_needs_state().get("pleasure_indulgence", {}).get("drive_strength", 0.0)
+            combined_score += pleasure_drive * 0.1
     
             combined_score = (
                 q * q_weight +
