@@ -1,3 +1,5 @@
+# logic/lore/core/system.py
+
 """
 Main Lore System class that integrates all components.
 """
@@ -25,7 +27,7 @@ class LoreSystem:
         self.narrative = narrative_progression
         self.social_links = social_links_manager
     
-    def get_current_state(
+    async def get_current_state(
         self,
         user_id: int,
         conversation_id: int
@@ -45,16 +47,16 @@ class LoreSystem:
         """
         try:
             # Get current narrative stage
-            current_stage = self.narrative.get_current_stage(user_id, conversation_id)
+            current_stage = await self.narrative.get_current_stage(user_id, conversation_id)
             
             # Get all social links for the player
-            player_links = self.social_links.get_entity_links(
+            player_links = await self.social_links.get_entity_links(
                 user_id, conversation_id,
                 "player", 1  # Assuming player ID is 1
             )
             
             # Get stage events
-            stage_events = self.narrative.get_stage_events(current_stage)
+            stage_events = await self.narrative.get_stage_events(current_stage)
             
             return {
                 "narrative_stage": {
@@ -88,7 +90,7 @@ class LoreSystem:
             logger.error(f"Failed to get current state: {e}")
             raise LoreError(f"Failed to retrieve current state: {str(e)}")
     
-    def update_social_link(
+    async def update_social_link(
         self,
         user_id: int,
         conversation_id: int,
@@ -118,21 +120,21 @@ class LoreSystem:
         """
         try:
             # Get or create the social link
-            link = self.social_links.get_social_link(
+            link = await self.social_links.get_social_link(
                 user_id, conversation_id,
                 "player", 1,  # Assuming player ID is 1
                 entity_type, entity_id
             )
             
             if not link:
-                link = self.social_links.create_social_link(
+                link = await self.social_links.create_social_link(
                     user_id, conversation_id,
                     "player", 1,
                     entity_type, entity_id
                 )
             
             # Update the link
-            updated_link = self.social_links.update_social_link(
+            updated_link = await self.social_links.update_social_link(
                 link,
                 link_level=link_level,
                 link_type=link_type,
@@ -140,7 +142,7 @@ class LoreSystem:
             )
             
             # Check for narrative progression
-            new_stage = self.narrative.check_for_stage_transition(
+            new_stage = await self.narrative.check_for_stage_transition(
                 user_id, conversation_id
             )
             
@@ -156,17 +158,17 @@ class LoreSystem:
             
             if new_stage:
                 # Apply the stage transition
-                self.narrative.apply_stage_transition(
+                await self.narrative.apply_stage_transition(
                     user_id, conversation_id, new_stage
                 )
                 
                 # Get stage events
-                stage_events = self.narrative.get_stage_events(new_stage)
+                stage_events = await self.narrative.get_stage_events(new_stage)
                 
                 result["narrative_change"] = {
-                    "old_stage": self.narrative.get_current_stage(
+                    "old_stage": (await self.narrative.get_current_stage(
                         user_id, conversation_id
-                    ).name,
+                    )).name,
                     "new_stage": {
                         "name": new_stage.name,
                         "description": new_stage.description,
@@ -180,7 +182,7 @@ class LoreSystem:
             logger.error(f"Failed to update social link: {e}")
             raise LoreError(f"Failed to update social link: {str(e)}")
     
-    def get_available_events(
+    async def get_available_events(
         self,
         user_id: int,
         conversation_id: int
@@ -199,16 +201,16 @@ class LoreSystem:
             LoreError: If event retrieval fails
         """
         try:
-            current_stage = self.narrative.get_current_stage(
+            current_stage = await self.narrative.get_current_stage(
                 user_id, conversation_id
             )
-            return self.narrative.get_stage_events(current_stage)
+            return await self.narrative.get_stage_events(current_stage)
             
         except NarrativeError as e:
             logger.error(f"Failed to get available events: {e}")
             raise LoreError(f"Failed to retrieve available events: {str(e)}")
     
-    def get_relationship_network(
+    async def get_relationship_network(
         self,
         user_id: int,
         conversation_id: int,
@@ -232,7 +234,7 @@ class LoreSystem:
         """
         try:
             # Get all links for the entity
-            links = self.social_links.get_entity_links(
+            links = await self.social_links.get_entity_links(
                 user_id, conversation_id,
                 entity_type, entity_id
             )
@@ -275,4 +277,4 @@ class LoreSystem:
             raise LoreError(f"Failed to retrieve relationship network: {str(e)}")
 
 # Create global lore system instance
-lore_system = LoreSystem() 
+lore_system = LoreSystem()
