@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 from nyx.tools.computer_use_agent import ComputerUseAgent
 self.computer_user = ComputerUseAgent(logger=self.logger)
 
-from nyx.patches.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
+from nyx.tools.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
 
 class ActionSource(str, Enum):
     """Enum for tracking the source of an action"""
