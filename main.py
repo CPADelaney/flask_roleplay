@@ -74,6 +74,8 @@ from db.connection import (
 from middleware.rate_limiting import rate_limit, ip_block_list
 from middleware.validation import validate_request
 
+from logic.aggregator_sdk import init_singletons
+
 # Config and utilities
 from .config.settings import config
 from .utils.health_check import HealthCheck
@@ -365,6 +367,9 @@ async def initialize_systems(app):
         logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
         logger.info("All asynchronous system initializations completed.")
+
+        await init_singletons()  # Initialize aggregator_sdk singletons here
+        logger.info("Aggregator SDK singletons are ready.")
 
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
