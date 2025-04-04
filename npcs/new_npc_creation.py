@@ -2383,46 +2383,46 @@ class NPCCreationHandler:
                     logging.error(f"Error generating semantic memory for NPC {npc_id}: {e}")
 
     
-def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
-        """
-        Create a reciprocal memory from the perspective of the second NPC.
-        
-        Args:
-            original_memory: The original memory text
-            npc1_name: Name of the first NPC (original memory owner)
-            npc2_name: Name of the second NPC (reciprocal memory owner)
-            relationship_type: Original relationship type
-            reciprocal_type: Reciprocal relationship type
+    def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relationship_type, reciprocal_type):
+            """
+            Create a reciprocal memory from the perspective of the second NPC.
             
-        Returns:
-            Reciprocal memory string or None if error
-        """
-        try:
-            # Simple conversion for prototype
-            # In a full implementation, this would use GPT to create a properly
-            # transformed memory from the other perspective
-            
-            # Replace names
-            memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
-            memory = memory.replace(npc2_name, "MYSELF")
-            memory = memory.replace("THE_OTHER_PERSON", npc1_name)
-            memory = memory.replace("MYSELF", "I")
-            
-            # Flip perspective words
-            memory = memory.replace("I told them", f"{npc1_name} told me")
-            memory = memory.replace("I noticed", f"{npc1_name} seemed to notice")
-            memory = memory.replace("my hand", "her hand")
-            memory = memory.replace("I suggested", f"{npc1_name} suggested")
-            
-            # Convert to first person
-            memory = memory.replace(f"{npc2_name} was", "I was")
-            memory = memory.replace(f"{npc2_name} had", "I had")
-            memory = memory.replace(f"{npc2_name} and I", f"{npc1_name} and I")
-            
-            return memory
-        except Exception as e:
-            logging.error(f"Error creating reciprocal memory: {e}")
-            return None
+            Args:
+                original_memory: The original memory text
+                npc1_name: Name of the first NPC (original memory owner)
+                npc2_name: Name of the second NPC (reciprocal memory owner)
+                relationship_type: Original relationship type
+                reciprocal_type: Reciprocal relationship type
+                
+            Returns:
+                Reciprocal memory string or None if error
+            """
+            try:
+                # Simple conversion for prototype
+                # In a full implementation, this would use GPT to create a properly
+                # transformed memory from the other perspective
+                
+                # Replace names
+                memory = original_memory.replace(npc1_name, "THE_OTHER_PERSON")
+                memory = memory.replace(npc2_name, "MYSELF")
+                memory = memory.replace("THE_OTHER_PERSON", npc1_name)
+                memory = memory.replace("MYSELF", "I")
+                
+                # Flip perspective words
+                memory = memory.replace("I told them", f"{npc1_name} told me")
+                memory = memory.replace("I noticed", f"{npc1_name} seemed to notice")
+                memory = memory.replace("my hand", "her hand")
+                memory = memory.replace("I suggested", f"{npc1_name} suggested")
+                
+                # Convert to first person
+                memory = memory.replace(f"{npc2_name} was", "I was")
+                memory = memory.replace(f"{npc2_name} had", "I had")
+                memory = memory.replace(f"{npc2_name} and I", f"{npc1_name} and I")
+                
+                return memory
+            except Exception as e:
+                logging.error(f"Error creating reciprocal memory: {e}")
+                return None
     
     # --- API Methods ---
     
