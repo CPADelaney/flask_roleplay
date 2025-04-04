@@ -1,0 +1,106 @@
+# nyx/core/sync/nyx_sync_daemon.py
+
+import asyncio
+import asyncpg
+import logging
+from datetime import datetime, timezone
+
+from nyx.nyx_agent_sdk import add_memory
+from nyx.nyx_model_manager import UserModelManager
+from nyx.nyx_memory_system import NyxMemorySystem
+
+logger = logging.getLogger(__name__)
+
+DB_DSN = "postgresql://nyx_user:your_password@localhost/nyx_db"
+
+class NyxSyncDaemon:
+    def __init__(self, db_dsn=DB_DSN):
+        self.db_dsn = db_dsn
+        self.interval_seconds = 60  # configurable polling time
+
+    async def start(self):
+        while True:
+            try:
+                await self.run_sync_cycle()
+            except Exception as e:
+                logger.error(f"Sync cycle failed: {e}")
+            await asyncio.sleep(self.interval_seconds)
+
+    async def run_sync_cycle(self):
+        logger.info("Running Nyx Sync Daemon cycle...")
+        conn = await asyncpg.connect(dsn=self.db_dsn)
+
+        try:
+            # --- Strategy Injection ---
+            active_strategies = await conn.fetch("""
+                SELECT * FROM nyx1_strategy_injections
+                WHERE status = 'active'
+                AND (expires_at IS NULL OR expires_at > NOW())
+            """)
+
+            for strategy in active_strategies:
+                await self.inject_strategy(strategy, conn)
+
+            # --- Scene Templates ---
+            active_scenes = await conn.fetch("""
+                SELECT * FROM nyx1_scene_templates
+                WHERE active = TRUE
+            """)
+
+            for scene in active_scenes:
+                await self.inject_scene(scene, conn)
+
+        finally:
+            await conn.close()
+
+    async def inject_strategy(self, strategy_row, conn):
+        strategy_id = strategy_row['id']
+        strategy_type = strategy_row['strategy_type']
+        payload = strategy_row['payload']
+        strategy_name = strategy_row['strategy_name']
+
+        user_ids = await conn.fetch("SELECT DISTINCT user_id FROM user_model_states")
+
+        for user in user_ids:
+            user_id = user['user_id']
+            logger.info(f"Injecting strategy '{strategy_name}' to user {user_id}")
+
+            memory_text = f"Nyx's strategic layer updated: {strategy_type.upper()} - {strategy_name}\n{payload.get('description', '')}"
+
+            # Inject memory
+            ctx = await self._get_context(user_id)
+            await add_memory(ctx, memory_text, memory_type="abstraction", significance=7)
+
+            # Log the event
+            await conn.execute("""
+                INSERT INTO nyx1_strategy_logs (strategy_id, user_id, event_type, message_snippet, kink_profile)
+                VALUES ($1, $2, 'triggered', $3, $4)
+            """, strategy_id, user_id, memory_text[:250], await self._get_kink_profile(user_id))
+
+    async def inject_scene(self, scene_row, conn):
+        prompt_template = scene_row['prompt_template']
+        scene_title = scene_row['title'] or "Untitled Scene"
+        intensity = scene_row['intensity_level'] or 5
+
+        logger.info(f"Injecting scene template: {scene_title} (Intensity {intensity})")
+
+        user_ids = await conn.fetch("SELECT DISTINCT user_id FROM user_model_states")
+
+        for user in user_ids:
+            user_id = user['user_id']
+            ctx = await self._get_context(user_id)
+
+            await add_memory(
+                ctx,
+                f"New scene template loaded: {scene_title}\n{prompt_template}",
+                memory_type="template",
+                significance=6
+            )
+
+    async def _get_context(self, user_id):
+        return await UserModelManager.get_instance(user_id, conversation_id=1)  # placeholder
+
+    async def _get_kink_profile(self, user_id):
+        model = await UserModelManager.get_instance(user_id, conversation_id=1)
+        profile = await model.get_kink_profile()
+        return profile
