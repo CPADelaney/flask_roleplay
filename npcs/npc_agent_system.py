@@ -265,26 +265,26 @@ class NPCAgentSystem:
     ) -> Dict[str, Any]:
         """
         Handle a player action and determine NPC responses with memory integration.
-
+        
         Depending on how many NPCs are affected (one vs many), this
         method will delegate to the appropriate single/group logic.
-
+    
         Args:
             player_action: A dictionary describing what the player is doing or saying
-            context: Optional additional context (like current location/time)
-
+            context: Optional additional context (e.g., current location/time)
+    
         Returns:
             A dictionary with NPC responses
         """
         if context is None:
             context = {}
-
+    
         # Create trace for debugging and monitoring
         with trace(
-            f"player_action_{self.user_id}_{self.conversation_id}", 
+            f"player_action_{self.user_id}_{self.conversation_id}",
             group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
         ):
-            # Get memory system for creating player action memories
+            # Get the memory system for creating player action memories
             memory_system = await self._get_memory_system()
     
             # Create a memory of this action from the player's perspective
@@ -316,7 +316,8 @@ class NPCAgentSystem:
                 return await self.handle_single_npc_interaction(npc_id, player_action, context)
     
             # Multiple NPCs => group logic
-            return await self.(affected_npcs, player_action, context)
+            # Make sure this method exists in your class
+            return await self.handle_multiple_npc_interactions(affected_npcs, player_action, context)
 
     @function_tool
     async def determine_affected_npcs(
