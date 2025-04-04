@@ -119,7 +119,7 @@ def track_latency(metric: Histogram, labels: Optional[Dict[str, str]] = None):
         return wrapper
     return decorator
 
-def update_system_metrics():
+async def update_system_metrics():
     """Update system-level metrics."""
     try:
         # Update memory usage
@@ -139,7 +139,7 @@ def update_system_metrics():
     except Exception as e:
         logger.error(f"Error updating system metrics: {e}")
 
-def record_request_metric(method: str, endpoint: str, status: int, duration: float):
+async def record_request_metric(method: str, endpoint: str, status: int, duration: float):
     """Record metrics for an HTTP request."""
     REQUEST_COUNT.labels(
         method=method,
@@ -152,13 +152,13 @@ def record_request_metric(method: str, endpoint: str, status: int, duration: flo
         endpoint=endpoint
     ).observe(duration)
 
-def record_memory_operation(operation_type: str, duration: float):
+async def record_memory_operation(operation_type: str, duration: float):
     """Record metrics for a memory operation."""
     MEMORY_OPERATION_LATENCY.labels(
         operation_type=operation_type
     ).observe(duration)
 
-def record_npc_operation(operation_type: str, duration: float):
+async def record_npc_operation(operation_type: str, duration: float):
     """Record metrics for an NPC operation."""
     NPC_OPERATIONS.labels(
         operation_type=operation_type
@@ -168,7 +168,7 @@ def record_npc_operation(operation_type: str, duration: float):
         interaction_type=operation_type
     ).observe(duration)
 
-def record_cache_operation(cache_type: str, hit: bool, size_bytes: Optional[int] = None):
+async def record_cache_operation(cache_type: str, hit: bool, size_bytes: Optional[int] = None):
     """Record metrics for a cache operation."""
     if hit:
         CACHE_HIT_COUNT.labels(cache_type=cache_type).inc()
