@@ -144,7 +144,7 @@ class StoryDirectorContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     metrics: StoryDirectorMetrics = field(default_factory=StoryDirectorMetrics)
     last_state_update: Optional[datetime] = None
-    directive_handler: Optional[Any] = None
+    : Optional[Any] = None
     
     # NEW: Context management components
     context_service: Optional[Any] = None
@@ -167,6 +167,8 @@ class StoryDirectorContext:
         if not self.activity_analyzer:
             from logic.activity_analyzer import ActivityAnalyzer
             self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
+            
+        governance = await get_central_governance(user_id, conversation_id)
             
         # Initialize directive handler
         self.directive_handler = DirectiveHandler(
