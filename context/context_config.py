@@ -7,6 +7,7 @@ Configuration settings for the context optimization system.
 import os
 import logging
 import json
+import asyncio
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -66,40 +67,65 @@ class ContextConfig:
     """
     
     _instance = None
+    _initialized = False
+    _init_lock = asyncio.Lock()
     
     @classmethod
-    def get_instance(cls):
-        """Get the singleton instance"""
+    async def get_instance(cls):
+        """Get the singleton instance asynchronously"""
         if cls._instance is None:
-            cls._instance = cls()
+            async with cls._init_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+                    await cls._instance.initialize()
+        elif not cls._instance._initialized:
+            await cls._instance.initialize()
         return cls._instance
     
     def __init__(self):
         """Initialize with default configuration"""
         self.config = DEFAULT_CONFIG.copy()
-        self._load_config()
+        self._initialized = False
     
-    def _load_config(self):
-        """Load configuration from environment or config file"""
+    async def initialize(self):
+        """Initialize the configuration asynchronously"""
+        if not self._initialized:
+            await self._load_config()
+            self._initialized = True
+    
+    async def _load_config(self):
+        """Load configuration from environment or config file asynchronously"""
         # Check for config file
         config_path = os.environ.get("CONTEXT_CONFIG_PATH", "config/context_config.json")
         
         if os.path.exists(config_path):
             try:
-                with open(config_path, "r") as f:
-                    file_config = json.load(f)
+                # Use asyncio.to_thread for file I/O to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                file_content = await loop.run_in_executor(None, self._read_config_file, config_path)
                 
-                # Update config with file values
-                self._update_nested_dict(self.config, file_config)
-                logger.info(f"Loaded context configuration from {config_path}")
+                if file_content:
+                    file_config = json.loads(file_content)
+                    # Update config with file values
+                    self._update_nested_dict(self.config, file_config)
+                    logger.info(f"Loaded context configuration from {config_path}")
             except Exception as e:
                 logger.error(f"Error loading config from {config_path}: {e}")
         
         # Check for environment variables
-        self._load_from_env()
+        await self._load_from_env()
     
-    def _load_from_env(self):
-        """Load configuration from environment variables"""
+    def _read_config_file(self, config_path):
+        """Read the config file synchronously (called via run_in_executor)"""
+        try:
+            with open(config_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error reading config file {config_path}: {e}")
+            return None
+    
+    async def _load_from_env(self):
+        """Load configuration from environment variables asynchronously"""
         # Check for flat environment variables like CONTEXT_CACHE_ENABLED
         prefix = "CONTEXT_"
         
@@ -230,14 +256,12 @@ class ContextConfig:
         return int(total_budget * percentage)
 
 
-# Singleton instance
-config = ContextConfig.get_instance()
-
-def get_config() -> ContextConfig:
+# Async singleton access function
+async def get_config() -> ContextConfig:
     """
-    Get the singleton configuration instance.
+    Get the singleton configuration instance asynchronously.
     
     Returns:
         ContextConfig instance
     """
-    return config
+    return await ContextConfig.get_instance()
