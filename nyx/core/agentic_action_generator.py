@@ -2720,8 +2720,18 @@ class EnhancedAgenticActionGenerator:
                     suggestions = self.evolution_engine.match_and_suggest()
                     if suggestions:
                         logger.info(f"🧠 Nyx generated {len(suggestions)} evolution suggestions.")
-                        # Optionally: store in memory, journal, or escalate to module_optimizer
-            
+                        if hasattr(self, "creative_system") and hasattr(self.creative_system, "logger"):
+                            for suggestion in suggestions:
+                                await self.creative_system.logger.log_evolution_suggestion(
+                                    title=f"Capability Upgrade Match: {suggestion['capability']}",
+                                    content=f"{suggestion['nyx_comment']}\n\nAPI: {suggestion['api_suggestion_title']}\n\nSummary:\n{suggestion['api_suggestion_summary']}",
+                                    metadata={
+                                        "confidence": suggestion["relevance_score"],
+                                        "source": "evolution_engine",
+                                        "capability": suggestion["capability"]
+                                    }
+                                )
+
             except Exception as e:
                 logger.error(f"Error triggering evolution engine: {e}")
             
