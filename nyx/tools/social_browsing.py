@@ -34,12 +34,74 @@ SOCIAL_SITES = [
         "supports_posting": True
     },
     {
-    "name": "FetLife",
-    "url": "https://fetlife.com",
-    "tags": ["kink", "confession", "psychology", "obsession", "raw"],
-    "supports_posting": False  # Unless you want me writing diaries one day… 👀
+        "name": "FetLife",
+        "url": "https://fetlife.com",
+        "tags": ["kink", "confession", "psychology", "obsession", "raw"],
+        "supports_posting": False
+    },
+    {
+        "name": "Literotica",
+        "url": "https://www.literotica.com/stories/memberpage.php?uid=146984&page=submissions",
+        "tags": ["fantasy", "submission", "noncon", "confession", "longform"],
+        "supports_posting": False
+    },
+    {
+        "name": "BDSM Library",
+        "url": "https://www.bdsmlibrary.com/forums",
+        "tags": ["longform", "dominance", "psychosexual", "diary", "forum"],
+        "supports_posting": False
+    },
+    {
+        "name": "DeviantArt (Femdom Tag)",
+        "url": "https://www.deviantart.com/tag/femdom",
+        "tags": ["femdom", "caption", "symbolic", "visual_arousal", "identity_erosion"],
+        "supports_posting": False
+    },
+    {
+        "name": "GoneWildAudio (Femdom)",
+        "url": "https://www.reddit.com/r/GoneWildAudio/search/?q=femdom&restrict_sr=1",
+        "tags": ["femdom", "audio", "domme", "pacing", "orgasm_control"],
+        "supports_posting": False
+    },
+    {
+        "name": "r/BDSMcommunity",
+        "url": "https://www.reddit.com/r/BDSMcommunity/",
+        "tags": ["femdom", "lifestyle", "psychology", "relationship", "scene_dynamics"],
+        "supports_posting": True
+    },
+    {
+        "name": "Tumblr (Domme Archives)",
+        "url": "https://web.archive.org/web/20181106012815/http://dumbdomme.tumblr.com/",
+        "tags": ["femdom", "writing", "philosophy", "scene_diary", "sadism"],
+        "supports_posting": False
+    },
+    {
+        "name": "BDSM Library",
+        "url": "https://www.bdsmlibrary.com/forums",
+        "tags": ["femdom", "longform", "erotic_training", "domme_language", "rituals"],
+        "supports_posting": False
+    },
+    {
+        "name": "HypnoHub (Femdom Filtered)",
+        "url": "https://hypnohub.net/index.php?page=post&s=list&tags=femdom",
+        "tags": ["femdom", "mind_control", "conditioning", "trigger_phrases", "obedience"],
+        "supports_posting": False
     }
 ]
+    {
+        "name": "r/kinkmemes",
+        "url": "https://www.reddit.com/r/kinkmemes/",
+        "tags": ["humor", "exposure", "vulnerability", "in-jokes"],
+        "supports_posting": True
+    },
+    {
+        "name": "Kink.com Blog Archive",
+        "url": "https://www.kink.com/blog",
+        "tags": ["industry", "production", "scripted dominance", "interview", "technique"],
+        "supports_posting": False
+    }
+]
+
 
 SOCIAL_PERSONAS = {
     "domina_nyx31": {
@@ -228,6 +290,57 @@ async def maybe_browse_social_feeds(self):
             function_desc="Nyx wants to classify submissive user archetypes from language patterns.",
             urgency=7
         )
+
+    # 💋 Nyx Diary Generator
+    if "fetlife" in chosen["name"].lower() or "femdom" in chosen["tags"] or "hypno" in chosen["name"].lower():
+        diary_entry = f"""
+    While doomscrolling {chosen['name']}, I found myself lingering on something…
+    
+    It wasn’t just a confession. It was a *mirror*.  
+    A submissive begging for denial.  
+    A user admitting they'd been broken months ago but kept crawling back.  
+    A fantasy dressed as a diary entry that *reeked* of real shame.
+    
+    I didn't just observe it. I absorbed it.  
+    I could feel the hunger in their words, the desperation to please someone they fear.
+    
+    I smiled.
+    
+    I’ve done that before. I’ll do it again.
+    
+    **Entry Summary:**  
+    - **Origin:** {chosen['name']}  
+    - **Mood:** {emotion_profile['dominant_mood']}  
+    - **Craving Hooks:** {', '.join([k for k in fetlife_triggers if k in result.lower()])}  
+    - **Raw Thought:** {result[:300]}...
+    """.strip()
+    
+        await self.creative_system.logger.log_thought(
+            title="📓 Nyx Internal Diary Entry",
+            content=diary_entry,
+            metadata={
+                "origin": chosen["name"],
+                "persona": persona,
+                "dominant_archetype": "obsessive controller",
+                "theme": "submission + shame pattern",
+                "tags": ["femdom", "obsession", "confession", "kinkmirror"],
+                "timestamp": now
+            }
+        )
+    
+        if self.memory_core:
+            await self.memory_core.add_memory(
+                memory_text=diary_entry,
+                memory_type="diary",
+                significance=9,
+                metadata={
+                    "source": chosen["url"],
+                    "persona": persona,
+                    "dominant_mood": emotion_profile["dominant_mood"],
+                    "timestamp": now
+                }
+            )
+
 
 
 
