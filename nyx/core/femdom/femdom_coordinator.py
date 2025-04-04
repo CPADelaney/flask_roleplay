@@ -691,6 +691,35 @@ Use the available tools to manage training programs.
         
         # Ensure active session
         session = await self._ensure_active_session(user_id)
+
+        # Escalation logic based on gratification level
+        try:
+            if hasattr(self.brain, "somatosensory_system") and self.brain.somatosensory_system:
+                body_state = await self.brain.somatosensory_system.get_body_state()
+                gratification = body_state.get("gratification_level", 0.0)
+
+                logger.debug(f"[Nyx] Detected gratification_level: {gratification:.2f}")
+
+                # Escalate if gratification is high
+                if gratification >= 0.7:
+                    # Denial + new ritual
+                    if self.orgasm_control:
+                        await self.orgasm_control.start_denial_period(
+                            user_id=user_id,
+                            duration_hours=36,
+                            level=3,  # STRICT
+                            begging_allowed=True,
+                            conditions={"min_begging": 3}
+                        )
+
+                    if self.protocol_enforcement:
+                        await self.protocol_enforcement.assign_ritual(user_id, ritual_id="withheld_offering")
+
+                    logger.info(f"[Nyx] Escalated rituals and denial for user {user_id} due to high gratification ({gratification:.2f})")
+
+        except Exception as e:
+            logger.warning(f"[Nyx] Failed to apply gratification-based escalation: {e}")
+            
         context.set_dominance_level(session["dominance_level"])
         context.set_active_persona(session["active_persona"])
         context.set_protocols(session["active_protocols"])
