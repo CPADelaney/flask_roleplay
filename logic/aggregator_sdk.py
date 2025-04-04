@@ -1,6 +1,22 @@
+# aggregator_sdk.py
+
 """
-Optimized replacement for aggregator_sdk.py that integrates with the
+Optimized replacement for aggregator.py that integrates with the
 unified context service for improved performance and efficiency.
+
+Usage:
+  1) Import in your main or startup code:
+       from logic.aggregator_sdk import init_singletons
+  2) Call `await init_singletons()` once in an async startup routine
+     to initialize global singletons like context_cache or incremental_context_manager.
+
+Then use:
+  from logic.aggregator_sdk import (
+      get_aggregated_roleplay_context,
+      context_cache,
+      incremental_context_manager,
+      ...
+  )
 """
 
 import asyncio
@@ -17,25 +33,25 @@ from context.context_service import (
 from context.context_config import get_config
 from context.context_performance import PerformanceMonitor, track_performance
 
-# UPDATED: Using new async context manager
+# Using new async context manager for DB connections
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
 ###############################################################################
-# Globals that will be lazily initialized
+# Global Singletons: Will be set by init_singletons()
 ###############################################################################
 context_cache: Optional["OptimizedContextCache"] = None
 incremental_context_manager: Optional["OptimizedIncrementalContextManager"] = None
 
 
 ###############################################################################
-# Public Initialization Function
+# Public Initialization
 ###############################################################################
 async def init_singletons() -> None:
     """
-    Initialize the global context_cache and incremental_context_manager singletons.
-    Must be called once in an async startup context, e.g.:
+    Initialize global singletons in aggregator_sdk. Must be called once in an async context.
+    For example, in main.py after creating your Flask app, do:
 
         import asyncio
         from logic.aggregator_sdk import init_singletons
@@ -45,9 +61,16 @@ async def init_singletons() -> None:
 
         if __name__ == "__main__":
             asyncio.run(startup())
+            # Then run your Flask/Quart server
 
-    For a web framework like FastAPI/Quart, you can call this in an
-    `@app.on_event("startup")` or similar.
+    or, if you're using an async framework's startup event (FastAPI, etc.):
+
+        @app.on_event("startup")
+        async def startup():
+            await init_singletons()
+
+    After calling init_singletons(), you can safely access context_cache or
+    incremental_context_manager in aggregator_sdk.
     """
     global context_cache, incremental_context_manager
     logger.info("Initializing aggregator_sdk singletons...")
@@ -59,7 +82,7 @@ async def init_singletons() -> None:
 
 
 ###############################################################################
-# Optimized Context Retrieval
+# Main Context Retrieval
 ###############################################################################
 
 @track_performance("get_aggregated_roleplay_context")
@@ -71,15 +94,15 @@ async def get_aggregated_roleplay_context(
     location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Optimized drop-in replacement for the original get_aggregated_roleplay_context
-    
+    Optimized drop-in replacement for the original get_aggregated_roleplay_context.
+
     Args:
         user_id: User ID
         conversation_id: Conversation ID
         player_name: Name of the player (default: "Chase")
         current_input: Current user input for relevance scoring
         location: Optional location override
-        
+
     Returns:
         Aggregated context dictionary
     """
@@ -89,8 +112,7 @@ async def get_aggregated_roleplay_context(
     use_delta = config.is_enabled("use_incremental_context")
 
     try:
-        # Get comprehensive context via the unified service
-        context = await get_comprehensive_context(
+        context_data = await get_comprehensive_context(
             user_id=user_id,
             conversation_id=conversation_id,
             input_text=current_input,
@@ -99,15 +121,15 @@ async def get_aggregated_roleplay_context(
             use_vector_search=use_vector_search,
             use_delta=use_delta
         )
-        return format_context_for_compatibility(context)
+        return format_context_for_compatibility(context_data)
 
     except Exception as e:
-        logger.error(f"Error in optimized get_aggregated_roleplay_context: {e}")
+        logger.error(f"Error in get_aggregated_roleplay_context: {e}", exc_info=True)
         # Fallback to DB if needed
         try:
             return await fallback_get_context(user_id, conversation_id, player_name)
-        except Exception as inner_e:
-            logger.error(f"Error in fallback context retrieval: {inner_e}")
+        except Exception as fallback_err:
+            logger.error(f"Error in fallback context retrieval: {fallback_err}", exc_info=True)
             # Return minimal context to avoid complete failure
             return {
                 "player_stats": {},
@@ -146,9 +168,10 @@ def format_context_for_compatibility(optimized_context: Dict[str, Any]) -> Dict[
 
     # Location details
     if "location_details" in optimized_context:
-        location_details = optimized_context.get("location_details", {})
+        location_details = optimized_context["location_details"]
         compatible["current_location"] = location_details.get(
-            "location_name", optimized_context.get("current_location", "Unknown")
+            "location_name",
+            optimized_context.get("current_location", "Unknown")
         )
         compatible["location_details"] = location_details
     else:
@@ -172,12 +195,13 @@ def format_context_for_compatibility(optimized_context: Dict[str, Any]) -> Dict[
     if "token_usage" in optimized_context:
         compatible["token_usage"] = optimized_context["token_usage"]
 
-    # Copy remaining fields
+    # Copy any other fields
+    ignored_keys = {
+        "time_info", "npcs", "location_details", "is_delta",
+        "delta_changes", "token_usage", "timestamp"
+    }
     for key, value in optimized_context.items():
-        if key not in compatible and key not in [
-            "time_info", "npcs", "location_details", "is_delta",
-            "delta_changes", "token_usage", "timestamp"
-        ]:
+        if key not in compatible and key not in ignored_keys:
             compatible[key] = value
 
     return compatible
@@ -189,10 +213,10 @@ async def fallback_get_context(
     player_name: str = "Chase"
 ) -> Dict[str, Any]:
     """
-    Fallback context retrieval directly from database.
+    Fallback context retrieval directly from the database.
     """
     try:
-        context = {
+        minimal_context = {
             "player_stats": {},
             "introduced_npcs": [],
             "unintroduced_npcs": [],
@@ -204,7 +228,7 @@ async def fallback_get_context(
         }
 
         async with get_db_connection_context() as conn:
-            # Player stats
+            # 1. Player stats
             row = await conn.fetchrow(
                 """
                 SELECT corruption, confidence, willpower,
@@ -217,9 +241,9 @@ async def fallback_get_context(
                 user_id, conversation_id
             )
             if row:
-                context["player_stats"] = dict(row)
+                minimal_context["player_stats"] = dict(row)
 
-            # Introduced NPCs
+            # 2. Introduced NPCs
             rows = await conn.fetch(
                 """
                 SELECT npc_id, npc_name, dominance, cruelty, closeness,
@@ -232,9 +256,9 @@ async def fallback_get_context(
                 user_id, conversation_id
             )
             for r in rows:
-                context["introduced_npcs"].append(dict(r))
+                minimal_context["introduced_npcs"].append(dict(r))
 
-            # Time info
+            # 3. Time info
             time_keys = [
                 ("CurrentYear", "year"),
                 ("CurrentMonth", "month"),
@@ -251,9 +275,9 @@ async def fallback_get_context(
                     user_id, conversation_id, key
                 )
                 if row:
-                    context[context_key] = row["value"]
+                    minimal_context[context_key] = row["value"]
 
-            # Current roleplay data
+            # 4. Current roleplay data
             rows = await conn.fetch(
                 """
                 SELECT key, value
@@ -263,12 +287,12 @@ async def fallback_get_context(
                 user_id, conversation_id
             )
             for r in rows:
-                context["current_roleplay"][r["key"]] = r["value"]
+                minimal_context["current_roleplay"][r["key"]] = r["value"]
 
-        return context
+        return minimal_context
 
     except Exception as e:
-        logger.error(f"Error in fallback context retrieval: {e}")
+        logger.error(f"Error in fallback_get_context: {e}", exc_info=True)
         return {
             "player_stats": {},
             "introduced_npcs": [],
@@ -279,36 +303,43 @@ async def fallback_get_context(
 
 
 ###############################################################################
-# Optimized Context Cache with Multi-Level Support
+# Optimized Context Cache
 ###############################################################################
 
 class OptimizedContextCache:
     """
-    Optimized context cache wrapper that integrates with unified cache.
+    Multi-level context cache wrapper that integrates with the unified cache.
     """
 
     def __init__(self, config):
+        # All the real config usage is here, no `await`.
         self.l1_ttl = config.get("cache", "l1_ttl_seconds", 60)
         self.l2_ttl = config.get("cache", "l2_ttl_seconds", 300)
         self.l3_ttl = config.get("cache", "l3_ttl_seconds", 3600)
         self.enabled = config.get("cache", "enabled", True)
 
     @classmethod
-    async def create(cls):
-        """Async factory method to create the cache once we can await."""
-        config = await get_config()
-        return cls(config)
+    async def create(cls) -> "OptimizedContextCache":
+        """
+        Async factory that awaits get_config() so we don't do it in __init__.
+        """
+        cfg = await get_config()
+        return cls(cfg)
 
     async def get(self, key: str, fetch_func, cache_level: int = 1) -> Any:
         """
-        Get an item from cache or fetch and store it.
+        Get an item from cache or fetch it if not found. Then store it.
+
+        Args:
+            key: Cache key
+            fetch_func: Async function to fetch data if cache miss
+            cache_level: Which level of the cache (1, 2, or 3)
         """
         if not self.enabled:
             return await fetch_func()
 
         from context.unified_cache import context_cache
 
-        # Determine TTL by cache level
         if cache_level == 1:
             ttl = self.l1_ttl
         elif cache_level == 2:
@@ -325,7 +356,7 @@ class OptimizedContextCache:
 
     def invalidate(self, key_prefix: str) -> None:
         """
-        Invalidate cache entries matching a prefix.
+        Invalidate cache entries that match a given prefix.
         """
         from context.unified_cache import context_cache
         context_cache.invalidate(key_prefix)
@@ -337,7 +368,8 @@ class OptimizedContextCache:
 
 class OptimizedIncrementalContextManager:
     """
-    Optimized incremental context manager that leverages unified context service.
+    Incremental context manager that leverages the unified context service
+    for partial updates.
     """
 
     def __init__(self, config):
@@ -346,10 +378,12 @@ class OptimizedIncrementalContextManager:
         self.use_vector = config.is_enabled("use_vector_search")
 
     @classmethod
-    async def create(cls):
-        """Async factory method for incremental manager."""
-        config = await get_config()
-        return cls(config)
+    async def create(cls) -> "OptimizedIncrementalContextManager":
+        """
+        Async factory method to create an instance once we can await get_config().
+        """
+        cfg = await get_config()
+        return cls(cfg)
 
     async def get_context(
         self,
@@ -363,12 +397,10 @@ class OptimizedIncrementalContextManager:
         Get context with delta tracking if enabled.
         """
         if not self.enabled or not include_delta:
-            return await self.get_full_context(
-                user_id, conversation_id, user_input, location
-            )
+            return await self.get_full_context(user_id, conversation_id, user_input, location)
 
         context_service = await get_context_service(user_id, conversation_id)
-        context = await context_service.get_context(
+        context_data = await context_service.get_context(
             input_text=user_input,
             location=location,
             context_budget=self.token_budget,
@@ -377,13 +409,12 @@ class OptimizedIncrementalContextManager:
         )
 
         result = {
-            "full_context": format_context_for_compatibility(context),
-            "is_incremental": context.get("is_delta", False)
+            "full_context": format_context_for_compatibility(context_data),
+            "is_incremental": context_data.get("is_delta", False)
         }
 
-        # Add delta context if available
-        if context.get("is_delta", False) and "delta_changes" in context:
-            result["delta_context"] = context["delta_changes"]
+        if context_data.get("is_delta", False) and "delta_changes" in context_data:
+            result["delta_context"] = context_data["delta_changes"]
 
         return result
 
@@ -395,22 +426,22 @@ class OptimizedIncrementalContextManager:
         location: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Get full context without delta tracking.
+        Get the full context without delta tracking.
         """
-        context = await get_aggregated_roleplay_context(
+        context_data = await get_aggregated_roleplay_context(
             user_id=user_id,
             conversation_id=conversation_id,
             current_input=user_input,
             location=location
         )
         return {
-            "full_context": context,
+            "full_context": context_data,
             "is_incremental": False
         }
 
 
 ###############################################################################
-# Optimized Context Retrieval and Formatting
+# Additional Utilities
 ###############################################################################
 
 async def get_optimized_context(
@@ -420,24 +451,24 @@ async def get_optimized_context(
     location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Get optimized context based on input relevance and budget constraints.
+    Similar to get_aggregated_roleplay_context, but specifically for an "optimized" flow.
     """
     config = await get_config()
     context_budget = config.get("token_budget", "default_budget", 4000)
 
     context_service = await get_context_service(user_id, conversation_id)
-    context = await context_service.get_context(
+    context_data = await context_service.get_context(
         input_text=current_input,
         location=location,
         context_budget=context_budget,
         use_delta=False
     )
-    return format_context_for_compatibility(context)
+    return format_context_for_compatibility(context_data)
 
 
 def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
     """
-    Build the aggregator text from the provided data.
+    Build aggregator text from the provided data for display or logging.
     """
     if "aggregator_text" in aggregated_data:
         return aggregated_data["aggregator_text"]
@@ -450,49 +481,41 @@ def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
 
     introduced_npcs = aggregated_data.get("introduced_npcs", [])
 
-    # Format date/time
     date_line = f"- It is {year}, {month} {day}, {time_of_day}.\n"
-    # Format location
     location_line = f"- Current location: {current_location}\n"
 
-    # NPC lines
     npc_lines = ["Introduced NPCs in the area:"]
-    for npc in introduced_npcs[:5]:  # Limit to 5
-        npc_location = npc.get("current_location", "Unknown")
-        npc_lines.append(f"  - {npc.get('npc_name')} is at {npc_location}")
+    for npc in introduced_npcs[:5]:
+        npc_loc = npc.get("current_location", "Unknown")
+        npc_name = npc.get("npc_name", "Unnamed NPC")
+        npc_lines.append(f"  - {npc_name} is at {npc_loc}")
 
-    npc_section = "\n".join(npc_lines) if introduced_npcs else "No NPCs currently in the area."
+    if introduced_npcs:
+        npc_section = "\n".join(npc_lines)
+    else:
+        npc_section = "No NPCs currently in the area."
 
-    aggregator_text = (
-        f"{date_line}"
-        f"{location_line}\n"
-        f"{npc_section}\n"
-    )
+    text = f"{date_line}{location_line}\n{npc_section}\n"
 
-    # Environment
     environment_desc = aggregated_data.get("current_roleplay", {}).get("EnvironmentDesc")
     if environment_desc:
-        aggregator_text += f"\nEnvironment:\n{environment_desc}\n"
+        text += f"\nEnvironment:\n{environment_desc}\n"
 
-    # Player Role
     player_role = aggregated_data.get("current_roleplay", {}).get("PlayerRole")
     if player_role:
-        aggregator_text += f"\nPlayer Role:\n{player_role}\n"
+        text += f"\nPlayer Role:\n{player_role}\n"
 
-    aggregator_text += "\n\n<!-- Context optimized with unified context system -->"
+    text += "\n\n<!-- Context optimized with unified context system -->"
 
-    has_relevance = any(
-        "relevance_score" in npc or "relevance" in npc
-        for npc in introduced_npcs
-    )
+    has_relevance = any("relevance_score" in npc or "relevance" in npc for npc in introduced_npcs)
     if has_relevance:
-        aggregator_text += "\n<!-- NPCs sorted by relevance to current context -->"
+        text += "\n<!-- NPCs sorted by relevance to current context -->"
 
-    return aggregator_text
+    return text
 
 
 ###############################################################################
-# Maintenance Functions
+# Maintenance and Migration
 ###############################################################################
 
 async def run_context_maintenance(user_id: int, conversation_id: int) -> Dict[str, Any]:
@@ -503,16 +526,9 @@ async def run_context_maintenance(user_id: int, conversation_id: int) -> Dict[st
     return await context_service.run_maintenance()
 
 
-###############################################################################
-# Migration Helpers
-###############################################################################
-
-async def migrate_old_context_to_new(
-    user_id: int,
-    conversation_id: int
-) -> Dict[str, Any]:
+async def migrate_old_context_to_new(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
-    Migrate data from old context system to new optimized system.
+    Migrate data from old context system to the new optimized system.
     """
     try:
         from logic.aggregator_sdk import get_aggregated_roleplay_context as old_get_context
@@ -522,12 +538,11 @@ async def migrate_old_context_to_new(
         from context.memory_manager import get_memory_manager
         memory_manager = await get_memory_manager(user_id, conversation_id)
 
-        # Migrate memories
         memory_migrations = 0
         if "memories" in old_context:
-            for memory in old_context["memories"]:
-                content = memory.get("content") or memory.get("text") or ""
-                memory_type = memory.get("type") or "observation"
+            for mem in old_context["memories"]:
+                content = mem.get("content") or mem.get("text") or ""
+                memory_type = mem.get("type", "observation")
                 if content:
                     await memory_manager.add_memory(
                         content=content,
@@ -536,14 +551,12 @@ async def migrate_old_context_to_new(
                     )
                     memory_migrations += 1
 
-        # Possibly store vector embeddings for NPCs
         npc_migrations = 0
         config = await get_config()
         if config.is_enabled("use_vector_search"):
             from context.vector_service import get_vector_service
             vector_service = await get_vector_service(user_id, conversation_id)
             if "introduced_npcs" in old_context:
-                # Implementation would add NPCs to the vector DB
                 npc_migrations = len(old_context["introduced_npcs"])
 
         return {
@@ -553,7 +566,7 @@ async def migrate_old_context_to_new(
         }
 
     except Exception as e:
-        logger.error(f"Error during context migration: {e}")
+        logger.error(f"Error during context migration: {e}", exc_info=True)
         return {
             "error": str(e),
             "success": False
@@ -561,13 +574,12 @@ async def migrate_old_context_to_new(
 
 
 ###############################################################################
-# Apply Monkey Patching (Optional)
+# Optional Monkey Patching
 ###############################################################################
 
-def apply_context_optimizations():
+def apply_context_optimizations() -> bool:
     """
-    Apply context optimizations by monkey patching existing functions.
-    This replaces existing context retrieval functions with optimized versions.
+    Apply context optimizations by monkey patching existing aggregator functions.
     """
     import sys
     aggregator_sdk = sys.modules.get("logic.aggregator_sdk")
@@ -577,9 +589,8 @@ def apply_context_optimizations():
 
     original_get_context = getattr(aggregator_sdk, "get_aggregated_roleplay_context", None)
     original_build_text = getattr(aggregator_sdk, "build_aggregator_text", None)
-
     if not original_get_context or not original_build_text:
-        logger.warning("Required functions not found in aggregator_sdk")
+        logger.warning("Required aggregator functions not found in aggregator_sdk")
         return False
 
     setattr(aggregator_sdk, "get_aggregated_roleplay_context", get_aggregated_roleplay_context)
@@ -589,7 +600,7 @@ def apply_context_optimizations():
     setattr(aggregator_sdk, "get_optimized_context", get_optimized_context)
     setattr(aggregator_sdk, "run_context_maintenance", run_context_maintenance)
 
-    logger.info("Applied context optimizations via monkey patching")
+    logger.info("Applied context optimizations via monkey patching.")
     return True
 
 
@@ -600,12 +611,12 @@ async def update_context_with_universal_updates(
     conversation_id: str
 ) -> dict:
     """
-    Update context with universal updates while maintaining consistency.
+    Update the context with universal updates while maintaining consistency.
     """
     try:
         updated_context = context.copy()
 
-        # NPC updates
+        # NPC Updates
         if "npc_updates" in universal_updates:
             for npc_update in universal_updates["npc_updates"]:
                 npc_id = npc_update.get("npc_id")
@@ -616,10 +627,15 @@ async def update_context_with_universal_updates(
                 if npc_id not in updated_context["npcs"]:
                     updated_context["npcs"][npc_id] = {}
 
+                # Update NPC stats
                 if "stats" in npc_update:
                     updated_context["npcs"][npc_id]["stats"] = npc_update["stats"]
+
+                # Update NPC location
                 if "location" in npc_update:
                     updated_context["npcs"][npc_id]["current_location"] = npc_update["location"]
+
+                # Update NPC memory
                 if "memory" in npc_update:
                     if "memory" not in updated_context["npcs"][npc_id]:
                         updated_context["npcs"][npc_id]["memory"] = []
@@ -629,13 +645,16 @@ async def update_context_with_universal_updates(
         if "social_links" in universal_updates:
             if "relationships" not in updated_context:
                 updated_context["relationships"] = {}
+
             for link in universal_updates["social_links"]:
                 e1_type = link.get("entity1_type")
                 e1_id = link.get("entity1_id")
                 e2_type = link.get("entity2_type")
                 e2_id = link.get("entity2_id")
+
                 if not all([e1_type, e1_id, e2_type, e2_id]):
                     continue
+
                 link_key = f"{e1_type}_{e1_id}_{e2_type}_{e2_id}"
                 updated_context["relationships"][link_key] = {
                     "type": link.get("link_type", "neutral"),
@@ -662,10 +681,8 @@ async def update_context_with_universal_updates(
         # Inventory updates
         if "inventory_updates" in universal_updates:
             if "inventory" not in updated_context:
-                updated_context["inventory"] = {
-                    "items": {},
-                    "removed_items": []
-                }
+                updated_context["inventory"] = {"items": {}, "removed_items": []}
+
             for item in universal_updates["inventory_updates"].get("added_items", []):
                 if isinstance(item, str):
                     item_name = item
@@ -673,6 +690,7 @@ async def update_context_with_universal_updates(
                 else:
                     item_name = item.get("name")
                     item_data = item
+
                 if item_name:
                     updated_context["inventory"]["items"][item_name] = item_data
 
@@ -700,10 +718,9 @@ async def update_context_with_universal_updates(
                         "setting": activity.get("setting_variant", "")
                     })
 
-        # Update last_modified
         updated_context["last_modified"] = datetime.now().isoformat()
         return updated_context
 
     except Exception as e:
-        logging.error(f"Error updating context with universal updates: {e}")
-        return context  # Return original on error
+        logger.error(f"Error updating context with universal updates: {e}", exc_info=True)
+        return context  # Return original context on error
