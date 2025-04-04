@@ -70,6 +70,8 @@ from db.connection import (
     get_db_connection_context # Async context manager
 )
 
+from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
+
 # Middleware
 from middleware.rate_limiting import rate_limit, ip_block_list
 from middleware.validation import validate_request
@@ -234,7 +236,6 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
-
 async def initialize_systems(app):
     """Initialize systems required for the application AFTER app creation."""
     logger.info("Starting asynchronous system initializations...")
@@ -266,6 +267,11 @@ async def initialize_systems(app):
         async def cleanup_pool_on_exit():
             logger.info("Running async pool cleanup...")
             await close_connection_pool()
+
+        def start_background_services():
+            loop = asyncio.get_event_loop()
+            daemon = NyxSyncDaemon()
+            loop.create_task(daemon.start())
 
         # Wrap the async cleanup for atexit (use with caution)
         def run_async_cleanup():
