@@ -125,7 +125,7 @@ class MemoryManager:
         self.memory_indices: Dict[str, defaultdict] = {
             "by_type": defaultdict(list),
             "by_importance": defaultdict(list),
-            "by_recency": defaultdict(list)
+            "by_recency": defaultdict(list),
             # "tag" index was mentioned in _build_memory_indices but not here? Adding it.
             "by_tag": defaultdict(set) # Use set for tags
         }
