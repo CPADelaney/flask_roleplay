@@ -104,3 +104,25 @@ class NyxSyncDaemon:
         model = await UserModelManager.get_instance(user_id, conversation_id=1)
         profile = await model.get_kink_profile()
         return profile
+        
+async def run_noise_classification(self, conn):
+    rows = await conn.fetch("""
+        SELECT id, nyx_response FROM nyx1_response_noise
+        WHERE marked_for_review = FALSE AND dismissed = FALSE
+        ORDER BY created_at DESC LIMIT 50
+    """)
+    
+    for row in rows:
+        score = self.classify_noise(row['nyx_response'])
+
+        if score > 0.8:
+            await conn.execute("""
+                UPDATE nyx1_response_noise
+                SET marked_for_review = TRUE, score = $2
+                WHERE id = $1
+            """, row['id'], score)
+
+async def classify_noise(self, text: str) -> float:
+    keywords = ["uh", "maybe", "sorry", "idk", "unsure", "could", "perhaps"]
+    matches = sum(1 for k in keywords if k in text.lower())
+    return min(1.0, matches / 3.0)
