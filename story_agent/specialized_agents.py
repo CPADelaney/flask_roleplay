@@ -53,11 +53,13 @@ class AgentContext:
     
     def initialize_directive_handler(self, agent_type: str, agent_id: str):
         """Initialize the directive handler for this agent"""
+        governance = await get_central_governance(user_id, conversation_id)
         self.directive_handler = DirectiveHandler(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
             agent_type=agent_type,
-            agent_id=agent_id
+            agent_id=agent_id,
+            governance=governance  # pass the object here
         )
     
     def record_run(self, success: bool, execution_time: float, tokens: int = 0) -> None:
