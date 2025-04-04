@@ -25,6 +25,334 @@ def test_task():
     logger.info("Executing test task!")
     return "Hello from dummy task!"
 
+async def background_chat_task_with_memory(conversation_id, user_input, user_id, universal_update=None):
+    """
+    Enhanced background chat task that includes memory retrieval.
+    """
+    global socketio
+    if not socketio:
+        logger.error("SocketIO instance not available in background_chat_task")
+        return
+
+    logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
+    try:
+        # Get aggregator context
+        from logic.aggregator import get_aggregated_roleplay_context
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+
+        context = {
+            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+            "player_name": aggregator_data.get("playerName", "Chase"),
+            "npc_present": aggregator_data.get("npcsPresent", []),
+            "aggregator_data": aggregator_data
+        }
+
+        # Apply universal update if provided
+        if universal_update:
+            logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
+            try:
+                from logic.universal_updater import apply_universal_updates_async
+                async with get_db_connection_context() as conn:
+                    await apply_universal_updates_async(
+                        user_id,
+                        conversation_id,
+                        universal_update,
+                        conn
+                    )
+                logger.info(f"[BG Task {conversation_id}] Applied universal updates.")
+                # Refresh aggregator data post-update
+                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+                context["aggregator_data"] = aggregator_data
+            except Exception as update_err:
+                logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
+                socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                return
+
+        # NEW: Enrich context with relevant memories
+        try:
+            from memory.memory_integration import enrich_context_with_memories
+            
+            logger.info(f"[BG Task {conversation_id}] Enriching context with memories...")
+            context = await enrich_context_with_memories(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_input=user_input,
+                context=context
+            )
+            logger.info(f"[BG Task {conversation_id}] Context enriched with memories.")
+        except Exception as memory_err:
+            logger.error(f"[BG Task {conversation_id}] Error enriching context with memories: {memory_err}", exc_info=True)
+            # Continue without memories if error occurs
+
+        # Process the user_input with OpenAI-enhanced Nyx agent
+        from nyx.nyx_agent_sdk import process_user_input_with_openai
+        logger.info(f"[BG Task {conversation_id}] Processing input with Nyx agent...")
+        response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+        logger.info(f"[BG Task {conversation_id}] Nyx agent processing complete.")
+
+        if not response or not response.get("success", False):
+            error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
+            logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
+            socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            return
+
+        # Extract the message content
+        message_content = response.get("message", "")
+        if not message_content and "function_args" in response:
+            message_content = response["function_args"].get("narrative", "")
+        
+        # Store the Nyx response in DB
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    """INSERT INTO messages (conversation_id, sender, content, created_at)
+                       VALUES ($1, $2, $3, NOW())""",
+                    conversation_id, "Nyx", message_content
+                )
+            logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
+            
+            # NEW: Store as memory as well
+            try:
+                from memory.memory_integration import add_memory_from_message
+                
+                # Add AI response as a memory
+                memory_id = await add_memory_from_message(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    message_text=message_content,
+                    entity_type="memory",
+                    metadata={
+                        "source": "ai_response",
+                        "importance": 0.7  # Higher importance for AI responses
+                    }
+                )
+                logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
+            except Exception as memory_err:
+                logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
+                # Continue even if memory storage fails
+                
+        except Exception as db_err:
+            logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
+
+        # Check if we should generate an image
+        should_generate = response.get("generate_image", False)
+        if "function_args" in response and "image_generation" in response["function_args"]:
+            img_settings = response["function_args"]["image_generation"]
+            should_generate = should_generate or img_settings.get("generate", False)
+
+        # Generate image if needed
+        if should_generate:
+            logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
+            try:
+                img_data = {
+                    "narrative": message_content,
+                    "image_generation": response.get("function_args", {}).get("image_generation", {
+                        "generate": True, "priority": "medium", "focus": "balanced",
+                        "framing": "medium_shot", "reason": "Narrative moment"
+                    })
+                }
+                res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
+
+                if res and "image_urls" in res and res["image_urls"]:
+                    image_url = res["image_urls"][0]
+                    prompt_used = res.get('prompt_used', '')
+                    reason = img_data["image_generation"].get("reason", "Narrative moment")
+                    logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
+                    socketio.emit('image', {
+                        'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
+                    }, room=str(conversation_id))
+                else:
+                    logger.warning(f"[BG Task {conversation_id}] Image generation task ran but produced no valid URLs.")
+            except Exception as img_err:
+                logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
+
+        # Stream the text tokens
+        if message_content:
+            logger.debug(f"[BG Task {conversation_id}] Streaming tokens...")
+            chunk_size = 5
+            delay = 0.01
+            for i in range(0, len(message_content), chunk_size):
+                token = message_content[i:i+chunk_size]
+                socketio.emit('new_token', {'token': token}, room=str(conversation_id))
+                await asyncio.sleep(delay)
+
+            socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
+            logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
+        else:
+            logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
+            socketio.emit('done', {'full_text': ''}, room=str(conversation_id))
+
+    except Exception as e:
+        logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
+        socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+
+# --- Memory System Celery Tasks ---
+
+@celery_app.task
+def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
+    """
+    Celery task to process a memory embedding asynchronously.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        message_text: Message text
+        entity_type: Entity type (memory, npc, location, narrative)
+        metadata: Optional metadata
+        
+    Returns:
+        Dictionary with task result
+    """
+    from memory.memory_integration import process_memory_task
+    
+    logger.info(f"Processing memory embedding for user {user_id}, conversation {conversation_id}")
+    
+    # Call the async task wrapper
+    result = process_memory_task(user_id, conversation_id, message_text, entity_type)
+    
+    return result
+
+@celery_app.task
+def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
+    """
+    Celery task to retrieve relevant memories.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        query_text: Query text
+        entity_types: List of entity types to search
+        top_k: Number of results to return
+        
+    Returns:
+        Dictionary with task result
+    """
+    from memory.memory_integration import memory_celery_task
+    
+    logger.info(f"Retrieving memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
+    
+    # Define async function
+    async def retrieve_memories_async():
+        from memory.memory_integration import retrieve_relevant_memories
+        
+        try:
+            memories = await retrieve_relevant_memories(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                query_text=query_text,
+                entity_types=entity_types,
+                top_k=top_k
+            )
+            
+            return {
+                "success": True,
+                "memories": memories,
+                "message": f"Successfully retrieved {len(memories)} memories"
+            }
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            return {
+                "success": False,
+                "memories": [],
+                "error": str(e)
+            }
+    
+    # Create and use the task wrapper
+    wrapper = memory_celery_task(retrieve_memories_async)
+    result = wrapper()
+    
+    return result
+
+@celery_app.task
+def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
+    """
+    Celery task to analyze a query with relevant memories.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        query_text: Query text
+        entity_types: List of entity types to search
+        top_k: Number of results to return
+        
+    Returns:
+        Dictionary with task result
+    """
+    from memory.memory_integration import memory_celery_task
+    
+    logger.info(f"Analyzing query with memories for user {user_id}, conversation {conversation_id}, query: {query_text[:50]}...")
+    
+    # Define async function
+    async def analyze_with_memory_async():
+        from memory.memory_integration import analyze_with_memory
+        
+        try:
+            result = await analyze_with_memory(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                query_text=query_text,
+                entity_types=entity_types,
+                top_k=top_k
+            )
+            
+            return {
+                "success": True,
+                "result": result,
+                "message": "Successfully analyzed query with memories"
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing with memories: {e}")
+            return {
+                "success": False,
+                "result": None,
+                "error": str(e)
+            }
+    
+    # Create and use the task wrapper
+    wrapper = memory_celery_task(analyze_with_memory_async)
+    result = wrapper()
+    
+    return result
+
+@celery_app.task
+def memory_maintenance_task():
+    """
+    Celery task to perform maintenance on the memory system.
+    This task should be scheduled to run periodically.
+    """
+    from memory.memory_integration import memory_celery_task
+    
+    logger.info("Running memory system maintenance task")
+    
+    # Define async function
+    async def memory_maintenance_async():
+        from memory.memory_integration import cleanup_memory_services, cleanup_memory_retrievers
+        
+        try:
+            # Run any needed maintenance tasks
+            
+            # Finally, clean up resources
+            await cleanup_memory_services()
+            await cleanup_memory_retrievers()
+            
+            return {
+                "success": True,
+                "message": "Memory system maintenance completed"
+            }
+        except Exception as e:
+            logger.error(f"Error during memory maintenance: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    # Create and use the task wrapper
+    wrapper = memory_celery_task(memory_maintenance_async)
+    result = wrapper()
+    
+    return result
+
 # --- New Task for NPC Learning Cycle ---
 @celery_app.task
 async def run_npc_learning_cycle_task():
