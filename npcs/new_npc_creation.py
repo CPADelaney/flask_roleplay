@@ -2429,10 +2429,10 @@ def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relati
     async def create_npc_api(self, request):
         """
         API endpoint to create a new NPC.
-        
+
         Args:
             request: NPCCreationRequest object
-            
+
         Returns:
             Dict with basic NPC info
         """
@@ -2443,44 +2443,48 @@ def create_reciprocal_memory(self, original_memory, npc1_name, npc2_name, relati
             environment_desc = request.environment_desc
             archetype_names = request.archetype_names
             specific_traits = request.specific_traits
-            
+
             # Create context wrapper
             ctx = RunContextWrapper({
                 "user_id": user_id,
                 "conversation_id": conversation_id
             })
-            
+
             # Use existing function to create NPC
             result = await self.create_npc(
-                ctx, 
-                archetype_names=archetype_names, 
-                physical_desc=None, 
+                ctx,
+                archetype_names=archetype_names,
+                physical_desc=None,
                 starting_traits=specific_traits.get("personality_traits") if specific_traits else None
             )
-            
+
             # Extract basic info for immediate return
             npc_id = result.get("npc_id")
             npc_name = result.get("npc_name")
             physical_description = result.get("physical_description", "")
-            
+
             # Get personality traits from result
             personality = result.get("personality", {})
             if isinstance(personality, dict):
                 personality_traits = personality.get("personality_traits", [])
             else:
                 personality_traits = []
-            
+
             # Get archetypes from result
             archetypes = result.get("archetypes", {})
             if isinstance(archetypes, dict):
                 archetype_names = archetypes.get("archetype_names", [])
             else:
                 archetype_names = []
-            
+
             return {
                 "npc_id": npc_id,
                 "npc_name": npc_name,
-                "physical_description": physical_description[:100] + "..." if len(physical_description) > 100 else physical_description,
+                "physical_description": (
+                    physical_description[:100] + "..."
+                    if len(physical_description) > 100
+                    else physical_description
+                ),
                 "personality_traits": personality_traits,
                 "archetypes": archetype_names,
                 "current_location": result.get("current_location", ""),
