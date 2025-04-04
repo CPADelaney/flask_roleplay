@@ -84,6 +84,8 @@ validators==0.20.0
 jsonschema==4.20.0
 pendulum==2.1.2
 
+playwright
+
 # Vector Database
 qdrant-client==1.7.0
 grpcio==1.59.3  # For gRPC support
