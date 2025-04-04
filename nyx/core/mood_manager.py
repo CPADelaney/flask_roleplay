@@ -197,6 +197,21 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
                     needs_influence_arousal = avg_deficit * 0.3   # Slight agitation
                     needs_influence_control = -avg_deficit * 0.2  # Reduced sense of control
 
+                    # Add valence/arousal/control from pleasure deprivation
+                    pleasure_state = needs_state.get("pleasure_indulgence", {})
+                    pleasure_deficit = pleasure_state.get("deficit", 0.0)
+                    pleasure_importance = pleasure_state.get("importance", 0.0)
+                    
+                    valence_drop = -pleasure_deficit * pleasure_importance * 0.6
+                    arousal_boost = pleasure_deficit * 0.4
+                    control_bias = pleasure_deficit * 0.2
+                    
+                    target_valence += valence_drop * weight
+                    target_arousal += arousal_boost * weight
+                    target_control += control_bias * weight
+                    
+                    influences["pleasure_deprivation"] = pleasure_deficit * weight
+
                     # Apply needs weight
                     weight = manager_ctx.influence_weights["needs"]
                     target_valence += needs_influence_valence * weight
