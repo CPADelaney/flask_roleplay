@@ -1,6 +1,8 @@
 # lore/main.py
 
 import logging
+import re
+import random
 from datetime import datetime
 import json
 from typing import Dict, List, Any, Optional
@@ -62,7 +64,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         
         # First apply matriarchal theming to the event description
-        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
+        themed_event = await MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
         
         # Create response structure
         response = {
@@ -120,7 +122,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
         # Generate foundation lore with matriarchal theming
         foundation_data = await dynamic_lore.initialize_world_lore(environment_desc)
         for key, content in foundation_data.items():
-            foundation_data[key] = MatriarchalThemingUtils.apply_matriarchal_theme(key, content)
+            foundation_data[key] = await MatriarchalThemingUtils.apply_matriarchal_theme(key, content)
         progress["foundation_lore"] = foundation_data
         
         # 2. Generate factions with matriarchal power structures
@@ -204,7 +206,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
             Current world state
         """
         # Check cache first
-        cached = self.get_cache("world_state")
+        cached = await self.get_cache("world_state")
         if cached:
             return cached
         
@@ -276,7 +278,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
         }
         
         # Cache result
-        self.set_cache("world_state", result, ttl=3600)  # 1 hour TTL
+        await self.set_cache("world_state", result, ttl=3600)  # 1 hour TTL
         
         return result
     
@@ -307,13 +309,22 @@ class MatriarchalLoreSystem(BaseLoreManager):
         parameters = parameters or {}
         
         # Map content types to manager methods
+        content_generators = {}
+        
+        # Get the appropriate generator
+        lore_dynamics = await self.registry.get_lore_dynamics()
+        geopolitical_manager = await self.registry.get_geopolitical_manager()
+        world_politics = await self.registry.get_world_politics_manager()
+        regional_culture = await self.registry.get_regional_culture_system()
+        
+        # Build the content generators dictionary
         content_generators = {
-            "faction": (await self.registry.get_lore_dynamics()).generate_additional_faction,
-            "location": (await self.registry.get_lore_dynamics()).generate_additional_locations,
-            "cultural_element": (await self.registry.get_lore_dynamics()).generate_additional_cultural_elements,
-            "nation": (await self.registry.get_geopolitical_manager()).generate_additional_nation,
-            "conflict": (await self.registry.get_world_politics_manager()).generate_initial_conflicts,
-            "language": (await self.registry.get_regional_culture_system()).generate_languages,
+            "faction": lore_dynamics.generate_additional_faction,
+            "location": lore_dynamics.generate_additional_locations,
+            "cultural_element": lore_dynamics.generate_additional_cultural_elements,
+            "nation": geopolitical_manager.generate_additional_nation,
+            "conflict": world_politics.generate_initial_conflicts,
+            "language": regional_culture.generate_languages,
         }
         
         # Special case for religion content
@@ -455,85 +466,114 @@ _GODDESS_SYNONYMS = [
 # Default emphasis level for matriarchal theming (1=low, 3=very high)
 _DEFAULT_EMPHASIS_LEVEL = 2
 
+class MatriarchalThemingUtils:
+    @staticmethod
+    async def _apply_basic_replacements(text: str) -> str:
+        """
+        Runs a set of regex-based replacements to feminize words/phrases.
+        Respects case; if the original word is capitalized, keep it capitalized.
+        """
+        result = text
 
-def _apply_basic_replacements(text: str) -> str:
-    """
-    Runs a set of regex-based replacements to feminize words/phrases.
-    Respects case; if the original word is capitalized, keep it capitalized.
-    """
-    result = text
+        for pattern_str, replacement_str in _FEMDOM_WORD_MAP.items():
+            pattern = re.compile(pattern_str, re.IGNORECASE)
 
-    for pattern_str, replacement_str in _FEMDOM_WORD_MAP.items():
-        pattern = re.compile(pattern_str, re.IGNORECASE)
+            def _replacement_func(match):
+                original = match.group(0)
+                # If the original word starts with uppercase, we uppercase the replacement's first letter
+                if original and original[0].isupper():
+                    return replacement_str.capitalize()
+                return replacement_str
 
-        def _replacement_func(match):
-            original = match.group(0)
-            # If the original word starts with uppercase, we uppercase the replacement's first letter
-            if original and original[0].isupper():
-                return replacement_str.capitalize()
-            return replacement_str
+            result = pattern.sub(_replacement_func, result)
 
-        result = pattern.sub(_replacement_func, result)
+        return result
 
-    return result
+    @staticmethod
+    async def _ensure_goddess_reference(text: str) -> str:
+        """
+        If there's no mention of 'Goddess' or a similar figure, insert a default reference
+        to a supreme feminine force at the end of the text.
+        """
+        if not re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
+            chosen_title = random.choice(_GODDESS_SYNONYMS)
+            insertion = (
+                f"\n\nAt the cosmic center stands {chosen_title}, "
+                "the eternal wellspring of existence. Her dominion weaves reality itself."
+            )
+            text += insertion
 
+        return text
 
-def _ensure_goddess_reference(text: str) -> str:
-    """
-    If there's no mention of 'Goddess' or a similar figure, insert a default reference
-    to a supreme feminine force at the end of the text.
-    """
-    if not re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
-        chosen_title = random.choice(_GODDESS_SYNONYMS)
-        insertion = (
-            f"\n\nAt the cosmic center stands {chosen_title}, "
-            "the eternal wellspring of existence. Her dominion weaves reality itself."
-        )
-        text += insertion
-
-    return text
-
-
-def _inject_contextual_lore(text: str, insertion: str, label: str = "", append_if_not_found: bool = True) -> str:
-    """
-    Insert 'insertion' text after a specific label or heading (case-insensitive).
-    If label not found and append_if_not_found is True, just append at the end.
-    """
-    if not label:
-        # No label provided, always append at the end
-        return text.strip() + "\n\n" + insertion
-
-    pattern = re.compile(rf"({re.escape(label)})", re.IGNORECASE)
-    match = pattern.search(text)
-
-    if match:
-        # Insert after the matched label
-        idx = match.end()
-        # Insert a blank line before the snippet
-        return text[:idx] + "\n\n" + insertion + text[idx:]
-    else:
-        if append_if_not_found:
+    @staticmethod
+    async def _inject_contextual_lore(text: str, insertion: str, label: str = "", append_if_not_found: bool = True) -> str:
+        """
+        Insert 'insertion' text after a specific label or heading (case-insensitive).
+        If label not found and append_if_not_found is True, just append at the end.
+        """
+        if not label:
+            # No label provided, always append at the end
             return text.strip() + "\n\n" + insertion
+
+        pattern = re.compile(rf"({re.escape(label)})", re.IGNORECASE)
+        match = pattern.search(text)
+
+        if match:
+            # Insert after the matched label
+            idx = match.end()
+            # Insert a blank line before the snippet
+            return text[:idx] + "\n\n" + insertion + text[idx:]
         else:
-            # Return unchanged if not found and we don't want to append
-            return text
+            if append_if_not_found:
+                return text.strip() + "\n\n" + insertion
+            else:
+                # Return unchanged if not found and we don't want to append
+                return text
 
+    @staticmethod
+    async def _emphasize_feminine_power(text: str, emphasis_level: int = _DEFAULT_EMPHASIS_LEVEL) -> str:
+        """
+        Add extra lines emphasizing matriarchal/feminine power, depending on emphasis_level.
+        1 = minimal emphasis
+        2 = moderate emphasis
+        3 = strong emphasis
+        """
+        if emphasis_level >= 2:
+            text += (
+                "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
+                "unquestioned and unassailable."
+            )
+        if emphasis_level >= 3:
+            text += (
+                "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
+                "the primal wellspring of creation itself."
+            )
+        return text
 
-def _emphasize_feminine_power(text: str, emphasis_level: int = _DEFAULT_EMPHASIS_LEVEL) -> str:
-    """
-    Add extra lines emphasizing matriarchal/feminine power, depending on emphasis_level.
-    1 = minimal emphasis
-    2 = moderate emphasis
-    3 = strong emphasis
-    """
-    if emphasis_level >= 2:
-        text += (
-            "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
-            "unquestioned and unassailable."
-        )
-    if emphasis_level >= 3:
-        text += (
-            "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
-            "the primal wellspring of creation itself."
-        )
-    return text
+    @staticmethod
+    async def apply_matriarchal_theme(content_type: str, text: str, emphasis_level: int = _DEFAULT_EMPHASIS_LEVEL) -> str:
+        """Apply matriarchal theming to text based on the content type."""
+        # First apply basic feminizing replacements
+        result = await MatriarchalThemingUtils._apply_basic_replacements(text)
+
+        # Apply different emphasis based on content type
+        if content_type in ["foundation_lore", "cosmology", "creation_myth"]:
+            # Ensure there's a goddess reference in cosmological content
+            result = await MatriarchalThemingUtils._ensure_goddess_reference(result)
+            result = await MatriarchalThemingUtils._emphasize_feminine_power(result, emphasis_level)
+        elif content_type in ["social_structure", "politics"]:
+            # Emphasize matriarchal social structure
+            if "matriarch" not in result.lower() and "matriarchal" not in result.lower():
+                insertion = "The matriarchal order provides the foundation of society's structure."
+                result = await MatriarchalThemingUtils._inject_contextual_lore(result, insertion)
+        elif content_type in ["religion", "faith"]:
+            # Ensure divine feminine emphasis in religious content
+            if "goddess" not in result.lower():
+                insertion = "The divine feminine manifests through all aspects of religious practice."
+                result = await MatriarchalThemingUtils._inject_contextual_lore(result, insertion)
+
+        # Add general emphasis for all content if emphasis level is high
+        if emphasis_level >= 3:
+            result = await MatriarchalThemingUtils._emphasize_feminine_power(result, emphasis_level)
+
+        return result
