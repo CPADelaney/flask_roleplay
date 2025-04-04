@@ -1,3 +1,5 @@
+# logic/lore/core/narrative.py
+
 """
 Core narrative progression system for the Lore System.
 """
