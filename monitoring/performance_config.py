@@ -85,7 +85,7 @@ NEWRELIC_CONFIG = {
     }
 }
 
-def init_performance_monitoring(app) -> None:
+async def init_performance_monitoring(app) -> None:
     """Initialize performance monitoring for the application."""
     config = PerformanceConfig()
     
@@ -109,7 +109,7 @@ def init_performance_monitoring(app) -> None:
         import newrelic.agent
         newrelic.agent.initialize()
 
-def record_operation_metrics(operation_type: str, duration: float, success: bool) -> None:
+async def record_operation_metrics(operation_type: str, duration: float, success: bool) -> None:
     """Record operation metrics."""
     if operation_type.startswith('npc_'):
         NPC_OPERATIONS.labels(operation_type=operation_type).inc()
