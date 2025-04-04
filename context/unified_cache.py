@@ -245,8 +245,7 @@ class UnifiedCache:
             await self._maybe_cleanup()
             
             return value
-    
-    @function_tool
+
     async def get_item(
         self, 
         ctx: RunContextWrapper,
