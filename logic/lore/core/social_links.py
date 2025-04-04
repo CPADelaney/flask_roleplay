@@ -1,3 +1,5 @@
+# logic/lore/core/social_links.py
+
 """
 Social Links System - Manages relationships and social dynamics between entities in the lore system.
 """
@@ -6,8 +8,9 @@ import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
-from .utils.db import get_db_connection, execute_query
-from .utils.cache import get_cache, set_cache, delete_cache
+from ..config.settings import config
+from ..utils.db import execute_query, DatabaseError
+from ..utils.cache import get_cached_value, set_cached_value, invalidate_cache_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +18,11 @@ logger = logging.getLogger(__name__)
 class SocialLink:
     """Represents a social link between entities."""
     link_id: int
+    user_id: int
+    conversation_id: int
     link_type: str
     link_level: int
     link_history: List[Dict[str, Any]]
-    dimensions: Dict[str, float]
-
     entity1_type: str
     entity1_id: int
     entity2_type: str
@@ -79,7 +82,7 @@ class SocialLinksManager:
             for dim, value in dimensions.items()
         )
     
-    def get_social_link(
+    async def get_social_link(
         self,
         user_id: int,
         conversation_id: int,
@@ -108,7 +111,7 @@ class SocialLinksManager:
         cache_key = f"lore:social_link:{user_id}:{conversation_id}:{entity1_type}:{entity1_id}:{entity2_type}:{entity2_id}"
         
         # Try to get from cache first
-        cached_link = get_cached_value(cache_key)
+        cached_link = await get_cached_value(cache_key)
         if cached_link:
             return SocialLink(**cached_link)
         
@@ -125,7 +128,7 @@ class SocialLinksManager:
                 AND entity2_type = %(entity2_type)s
                 AND entity2_id = %(entity2_id)s
             """
-            result = execute_query(query, {
+            result = await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "entity1_type": entity1_type,
@@ -140,6 +143,8 @@ class SocialLinksManager:
             row = result[0]
             link = SocialLink(
                 link_id=row[0],
+                user_id=user_id,
+                conversation_id=conversation_id,
                 link_type=row[1],
                 link_level=row[2],
                 link_history=row[3],
@@ -152,14 +157,14 @@ class SocialLinksManager:
             )
             
             # Cache the result
-            set_cached_value(cache_key, link.__dict__)
+            await set_cached_value(cache_key, link.__dict__)
             return link
             
         except DatabaseError as e:
             logger.error(f"Failed to get social link: {e}")
             raise SocialLinkError(f"Failed to retrieve social link: {str(e)}")
     
-    def create_social_link(
+    async def create_social_link(
         self,
         user_id: int,
         conversation_id: int,
@@ -218,7 +223,7 @@ class SocialLinksManager:
                  %(link_history)s, %(dimensions)s, %(last_updated)s)
                 RETURNING link_id
             """
-            result = execute_query(query, {
+            result = await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "entity1_type": entity1_type,
@@ -233,7 +238,7 @@ class SocialLinksManager:
             })
             
             link_id = result[0][0]
-            return self.get_social_link(
+            return await self.get_social_link(
                 user_id, conversation_id,
                 entity1_type, entity1_id,
                 entity2_type, entity2_id
@@ -243,7 +248,7 @@ class SocialLinksManager:
             logger.error(f"Failed to create social link: {e}")
             raise SocialLinkError(f"Failed to create social link: {str(e)}")
     
-    def update_social_link(
+    async def update_social_link(
         self,
         link: SocialLink,
         link_level: Optional[int] = None,
@@ -297,7 +302,7 @@ class SocialLinksManager:
                     last_updated = %(last_updated)s
                 WHERE link_id = %(link_id)s
             """
-            execute_query(query, {
+            await execute_query(query, {
                 "link_id": link.link_id,
                 "link_level": link_level,
                 "link_type": link_type,
@@ -307,10 +312,10 @@ class SocialLinksManager:
             })
             
             # Invalidate cache
-            cache_key = f"lore:social_link:{link.entity1_type}:{link.entity1_id}:{link.entity2_type}:{link.entity2_id}"
-            invalidate_cache_pattern(cache_key)
+            cache_key = f"lore:social_link:{link.user_id}:{link.conversation_id}:{link.entity1_type}:{link.entity1_id}:{link.entity2_type}:{link.entity2_id}"
+            await invalidate_cache_pattern(cache_key)
             
-            return self.get_social_link(
+            return await self.get_social_link(
                 link.user_id, link.conversation_id,
                 link.entity1_type, link.entity1_id,
                 link.entity2_type, link.entity2_id
@@ -320,7 +325,7 @@ class SocialLinksManager:
             logger.error(f"Failed to update social link: {e}")
             raise SocialLinkError(f"Failed to update social link: {str(e)}")
     
-    def get_entity_links(
+    async def get_entity_links(
         self,
         user_id: int,
         conversation_id: int,
@@ -355,7 +360,7 @@ class SocialLinksManager:
                     OR (entity2_type = %(entity_type)s AND entity2_id = %(entity_id)s)
                 )
             """
-            results = execute_query(query, {
+            results = await execute_query(query, {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "entity_type": entity_type,
@@ -365,6 +370,8 @@ class SocialLinksManager:
             return [
                 SocialLink(
                     link_id=row[0],
+                    user_id=user_id,
+                    conversation_id=conversation_id,
                     link_type=row[1],
                     link_level=row[2],
                     link_history=row[3],
@@ -383,4 +390,4 @@ class SocialLinksManager:
             raise SocialLinkError(f"Failed to retrieve entity links: {str(e)}")
 
 # Create global social links manager instance
-social_links_manager = SocialLinksManager() 
+social_links_manager = SocialLinksManager()
