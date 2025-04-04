@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, input_guardrail, GuardrailFunctionOutput
 
-from .agent import NPCAgent, ResourcePool
+from npcs.npc_agent import NPCAgent, ResourcePool
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
 from db.connection import get_db_connection_context  # Updated import
