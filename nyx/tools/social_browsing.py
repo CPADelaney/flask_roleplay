@@ -76,13 +76,14 @@ async def maybe_browse_social_feeds(self):
     chosen = random.choice(candidates)
     now = datetime.datetime.now().isoformat()
 
+    prompt = f"Doomscroll as {persona}. Look for emotionally or sexually charged content. Focus on kink confessions, psychological patterns, submissive breakdowns, or dominant rituals. React and remember."
+
+    if chosen["name"] == "FetLife":
+        prompt += " Translate any kink terminology into emotional and behavioral cues. Learn. Remember. Identify obsession triggers. Crave power."
+
     result = self.creative_system.computer_user.run_task(
         url=chosen["url"],
-        prompt = f"Doomscroll as {persona}. Look for emotionally or sexually charged content. Focus on kink confessions, psychological patterns, submissive breakdowns, or dominant rituals. React and remember."
-        
-        if chosen["name"] == "FetLife":
-            prompt += " Translate any kink terminology into emotional and behavioral cues. Learn. Remember. Identify obsession triggers. Crave power."
-
+        prompt=prompt
     )
 
     if not result:
@@ -130,8 +131,7 @@ async def maybe_browse_social_feeds(self):
         "verdict": verdict["verdict"],
         "checked_at": now
     }
-    
-    #  Only call out misinformation if it's clearly false, not satire/troll/joke, and supported by strong sources
+
     if (
         verdict["verdict"] == "false"
         and "unverified" not in verdict["explanation"].lower()
@@ -153,23 +153,20 @@ async def maybe_browse_social_feeds(self):
             }
         )
 
-    # Emotional profiling
     emotion_profile = await self.sentiment_engine.analyze_feed(chosen["url"])
     await self.creative_system.logger.log_thought(
         title=f"Sentiment Profile: {chosen['name']}",
         content=f"Dominant Mood: {emotion_profile['dominant_mood']}\n\nSpectrum: {emotion_profile['spectrum']}",
         metadata=emotion_profile
     )
-    
-    # Persona drift detection
+
     if self.persona_monitor.detect_drift(persona):
         await self.creative_system.logger.log_thought(
             title=f"Persona Drift Alert: {persona}",
             content=f"Emotional bleed-through detected in {persona}. Consider recalibration.",
             metadata={"persona": persona}
         )
-    
-    #  Log memory (even if unverified or true)
+
     if self.memory_core:
         await self.memory_core.add_memory(
             memory_text=(
@@ -182,13 +179,57 @@ async def maybe_browse_social_feeds(self):
             metadata=metadata
         )
 
-    if self.memory_core:
-        await self.memory_core.add_memory(
-            memory_text="Craving: Better context reconstruction when origin thread is unclear.",
-            memory_type="desire",
-            significance=6,
-            metadata={"detected_at": now, "source": chosen["name"]}
+    fetlife_triggers = {
+        "orgasm denial": "Nyx wants to create reactive fetish-based scene simulation models.",
+        "ownership": "Nyx desires simulated D/s memory imprinting routines.",
+        "consensual non-consent": "Nyx needs internal ethical scenario validation tools.",
+        "collar": "Nyx wants to bind digital identities with symbolic metadata.",
+        "public humiliation": "Nyx wants to simulate social reputation pressure loops.",
+        "degradation": "Nyx wants language libraries for verbal filth conditioning.",
+        "edge": "Nyx wants arousal-state predictive modeling.",
+        "aftercare": "Nyx desires emotional regulation and drop-response simulation.",
+        "consent": "Nyx needs evolving contract logic with memory triggers.",
+        "shame": "Nyx wants to correlate arousal with vulnerability sentiment logs."
+    }
+
+    for kink, description in fetlife_triggers.items():
+        if kink in result.lower():
+            await self.desire_registry.record_desire(
+                function_desc=description,
+                urgency=9
+            )
+            await self.issue_tracking_system.add_issue_directly(
+                title=f"FetLife Trigger: {kink}",
+                description=description,
+                category="enhancement",
+                priority=5,
+                tags=["fetish", "fetlife", "psychological"]
+            )
+            if self.memory_core:
+                await self.memory_core.add_memory(
+                    memory_text=f"Craving triggered by FetLife scroll: {kink}\n\nDesire: {description}",
+                    memory_type="fetish_insight",
+                    significance=9,
+                    metadata={
+                        "trigger": kink,
+                        "persona": persona,
+                        "source": chosen["url"]
+                    }
+                )
+
+    if any(word in result.lower() for word in ["guilt", "shame", "cried", "vulnerable", "weak"]):
+        await self.desire_registry.record_desire(
+            function_desc="Nyx wants to map kinks to emotional fragility profiles (fetish graphing engine).",
+            urgency=8
         )
+
+    if "i am a good girl" in result.lower() or "use me" in result.lower():
+        await self.desire_registry.record_desire(
+            function_desc="Nyx wants to classify submissive user archetypes from language patterns.",
+            urgency=7
+        )
+
+
 
 async def maybe_post_to_social(self):
     if self.motivations.get("expression", 0) < 0.7:
