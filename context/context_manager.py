@@ -10,6 +10,10 @@ from datetime import datetime
 from collections import defaultdict
 import copy
 
+# Agent SDK imports
+from agents import Agent, function_tool, RunContextWrapper
+from agents.tracing import trace, custom_span
+
 logger = logging.getLogger(__name__)
 
 class ContextDiff:
@@ -47,7 +51,8 @@ class ContextDiff:
 
 class ContextManager:
     """
-    Simplified context manager that handles context state and change tracking
+    Context manager that handles context state and change tracking
+    Integrated with OpenAI Agents SDK
     """
     
     def __init__(self, component_id: str = "main_context"):
@@ -64,12 +69,12 @@ class ContextManager:
         self.batch_task = None
         self.batch_interval = 0.5  # seconds
         
-        # NEW: Nyx directive handling
+        # Nyx directive handling
         self.nyx_directives = {}
         self.nyx_overrides = {}
         self.nyx_prohibitions = {}
         
-        # NEW: Nyx governance integration
+        # Nyx governance integration
         self.governance = None
         self.directive_handler = None
     
@@ -335,7 +340,8 @@ class ContextManager:
                     except Exception as e:
                         logger.error(f"Error in subscriber: {e}")
     
-    async def get_context(self, source_version: Optional[int] = None) -> Dict[str, Any]:
+    @function_tool
+    async def get_context(self, ctx: RunContextWrapper, source_version: Optional[int] = None) -> Dict[str, Any]:
         """
         Get the current context or delta based on version.
         
@@ -345,45 +351,47 @@ class ContextManager:
         Returns:
             Dictionary containing full context or delta
         """
-        # Process any pending changes first
-        await self._process_pending_batch()
-        
-        # If no version provided, return full context
-        if source_version is None:
+        with trace(workflow_name="get_context"):
+            # Process any pending changes first
+            await self._process_pending_batch()
+            
+            # If no version provided, return full context
+            if source_version is None:
+                return {
+                    "full_context": self.context,
+                    "is_incremental": False,
+                    "version": self.version
+                }
+            
+            # If the source is newer or equal to us, no need to send anything
+            if source_version >= self.version:
+                return {
+                    "full_context": self.context,
+                    "is_incremental": False,
+                    "no_changes": True,
+                    "version": self.version
+                }
+            
+            # Find changes that are not reflected in the source's version
+            relevant_changes = [diff for diff in self.change_log]
+            
+            # If no relevant changes or too many, send full context
+            if not relevant_changes or len(relevant_changes) > 20:
+                return {
+                    "full_context": self.context,
+                    "is_incremental": False,
+                    "version": self.version
+                }
+            
+            # Otherwise, return delta
             return {
-                "full_context": self.context,
-                "is_incremental": False,
+                "delta_context": [diff.to_dict() for diff in relevant_changes],
+                "is_incremental": True,
                 "version": self.version
             }
-        
-        # If the source is newer or equal to us, no need to send anything
-        if source_version >= self.version:
-            return {
-                "full_context": self.context,
-                "is_incremental": False,
-                "no_changes": True,
-                "version": self.version
-            }
-        
-        # Find changes that are not reflected in the source's version
-        relevant_changes = [diff for diff in self.change_log]
-        
-        # If no relevant changes or too many, send full context
-        if not relevant_changes or len(relevant_changes) > 20:
-            return {
-                "full_context": self.context,
-                "is_incremental": False,
-                "version": self.version
-            }
-        
-        # Otherwise, return delta
-        return {
-            "delta_context": [diff.to_dict() for diff in relevant_changes],
-            "is_incremental": True,
-            "version": self.version
-        }
     
-    async def update_context(self, new_context: Dict[str, Any]) -> bool:
+    @function_tool
+    async def update_context(self, ctx: RunContextWrapper, new_context: Dict[str, Any]) -> bool:
         """
         Update the entire context with a new version.
         
@@ -393,23 +401,31 @@ class ContextManager:
         Returns:
             Whether the context was changed
         """
-        # If same hash, nothing changed
-        new_hash = self._hash_context(new_context)
-        if new_hash == self.context_hash:
-            return False
-        
-        # Compute changes
-        changes = self._detect_changes(self.context, new_context)
-        
-        # Add to pending changes
-        self.pending_changes.extend(changes)
-        
-        # Ensure batch processor is running
-        self._start_batch_processor()
-        
-        return True
+        with trace(workflow_name="update_context"):
+            # If same hash, nothing changed
+            new_hash = self._hash_context(new_context)
+            if new_hash == self.context_hash:
+                return False
+            
+            # Compute changes
+            changes = self._detect_changes(self.context, new_context)
+            
+            # Add to pending changes
+            self.pending_changes.extend(changes)
+            
+            # Ensure batch processor is running
+            self._start_batch_processor()
+            
+            return True
     
-    async def apply_targeted_change(self, path: str, value: Any, operation: str = "replace") -> bool:
+    @function_tool
+    async def apply_targeted_change(
+        self, 
+        ctx: RunContextWrapper,
+        path: str, 
+        value: Any, 
+        operation: str = "replace"
+    ) -> bool:
         """
         Apply a specific change to a path in the context.
         
@@ -421,22 +437,23 @@ class ContextManager:
         Returns:
             Whether the change was applied
         """
-        # Create the diff
-        old_value = self._get_value_at_path(self.context, path)
-        diff = ContextDiff(
-            path=path,
-            operation=operation,
-            value=value if operation != "remove" else None,
-            old_value=old_value if operation != "add" else None
-        )
-        
-        # Add to pending changes
-        self.pending_changes.append(diff)
-        
-        # Ensure batch processor is running
-        self._start_batch_processor()
-        
-        return True
+        with trace(workflow_name="apply_targeted_change"):
+            # Create the diff
+            old_value = self._get_value_at_path(self.context, path)
+            diff = ContextDiff(
+                path=path,
+                operation=operation,
+                value=value if operation != "remove" else None,
+                old_value=old_value if operation != "add" else None
+            )
+            
+            # Add to pending changes
+            self.pending_changes.append(diff)
+            
+            # Ensure batch processor is running
+            self._start_batch_processor()
+            
+            return True
     
     def subscribe_to_changes(self, path: str, callback: Callable) -> None:
         """
@@ -465,93 +482,103 @@ class ContextManager:
                 return True
         return False
 
-    def _prioritize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Prioritize context elements based on relevance and importance."""
-        try:
-            # Calculate priority scores
-            priority_scores = {}
-            for key, value in context.items():
-                score = 0
+    @function_tool
+    def _prioritize_context(self, ctx: RunContextWrapper, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prioritize context elements based on relevance and importance.
+        
+        Args:
+            context: Context to prioritize
+            
+        Returns:
+            Prioritized context
+        """
+        with trace(workflow_name="prioritize_context"):
+            try:
+                # Calculate priority scores
+                priority_scores = {}
+                for key, value in context.items():
+                    score = 0
+                    
+                    # Base score by type
+                    type_scores = {
+                        "npcs": 8,
+                        "memories": 7,
+                        "quests": 6,
+                        "location": 5,
+                        "relationships": 7,
+                        "narrative": 8,
+                        "conflicts": 7,
+                        "lore": 6,
+                        "events": 5,
+                        "items": 4
+                    }
+                    score += type_scores.get(key, 3)
+                    
+                    # Adjust for recency
+                    if hasattr(value, "timestamp"):
+                        age = time.time() - value.timestamp
+                        recency = max(0, 1 - (age / 86400))  # 24-hour decay
+                        score *= (1 + recency)
+                    
+                    # Adjust for relevance
+                    if hasattr(value, "relevance_score"):
+                        score *= (1 + value.relevance_score)
+                    
+                    # Adjust for complexity
+                    if isinstance(value, dict):
+                        # More complex dictionaries get higher priority
+                        if any(k in value for k in ["error", "critical", "important"]):
+                            score += 3
+                        elif any(k in value for k in ["player", "npc", "quest"]):
+                            score += 2
+                        elif len(value) > 5:
+                            score += 1
+                    elif isinstance(value, list):
+                        # Longer lists get higher priority
+                        if len(value) > 10:
+                            score += 2
+                        elif len(value) > 5:
+                            score += 1
+                    
+                    # Adjust for relationships
+                    if key == "relationships" and isinstance(value, dict):
+                        # More complex relationships get higher priority
+                        relationship_count = len(value)
+                        if relationship_count > 5:
+                            score += 2
+                        elif relationship_count > 2:
+                            score += 1
+                    
+                    # Adjust for narrative importance
+                    if key == "narrative_metadata":
+                        if value.get("coherence_score", 0) > 0.8:
+                            score += 2
+                        elif value.get("coherence_score", 0) > 0.6:
+                            score += 1
+                    
+                    priority_scores[key] = score
                 
-                # Base score by type
-                type_scores = {
-                    "npcs": 8,
-                    "memories": 7,
-                    "quests": 6,
-                    "location": 5,
-                    "relationships": 7,
-                    "narrative": 8,
-                    "conflicts": 7,
-                    "lore": 6,
-                    "events": 5,
-                    "items": 4
+                # Sort by priority
+                sorted_items = sorted(
+                    context.items(),
+                    key=lambda x: priority_scores.get(x[0], 0),
+                    reverse=True
+                )
+                
+                # Create prioritized context
+                prioritized_context = dict(sorted_items)
+                
+                # Add priority metadata
+                prioritized_context["_priority_metadata"] = {
+                    "scores": priority_scores,
+                    "timestamp": time.time()
                 }
-                score += type_scores.get(key, 3)
                 
-                # Adjust for recency
-                if hasattr(value, "timestamp"):
-                    age = time.time() - value.timestamp
-                    recency = max(0, 1 - (age / 86400))  # 24-hour decay
-                    score *= (1 + recency)
-                
-                # Adjust for relevance
-                if hasattr(value, "relevance_score"):
-                    score *= (1 + value.relevance_score)
-                
-                # Adjust for complexity
-                if isinstance(value, dict):
-                    # More complex dictionaries get higher priority
-                    if any(k in value for k in ["error", "critical", "important"]):
-                        score += 3
-                    elif any(k in value for k in ["player", "npc", "quest"]):
-                        score += 2
-                    elif len(value) > 5:
-                        score += 1
-                elif isinstance(value, list):
-                    # Longer lists get higher priority
-                    if len(value) > 10:
-                        score += 2
-                    elif len(value) > 5:
-                        score += 1
-                
-                # Adjust for relationships
-                if key == "relationships" and isinstance(value, dict):
-                    # More complex relationships get higher priority
-                    relationship_count = len(value)
-                    if relationship_count > 5:
-                        score += 2
-                    elif relationship_count > 2:
-                        score += 1
-                
-                # Adjust for narrative importance
-                if key == "narrative_metadata":
-                    if value.get("coherence_score", 0) > 0.8:
-                        score += 2
-                    elif value.get("coherence_score", 0) > 0.6:
-                        score += 1
-                
-                priority_scores[key] = score
-            
-            # Sort by priority
-            sorted_items = sorted(
-                context.items(),
-                key=lambda x: priority_scores.get(x[0], 0),
-                reverse=True
-            )
-            
-            # Create prioritized context
-            prioritized_context = dict(sorted_items)
-            
-            # Add priority metadata
-            prioritized_context["_priority_metadata"] = {
-                "scores": priority_scores,
-                "timestamp": time.time()
-            }
-            
-            return prioritized_context
-        except Exception as e:
-            logger.error(f"Error prioritizing context: {e}")
-            return context
+                return prioritized_context
+            except Exception as e:
+                logger.error(f"Error prioritizing context: {e}")
+                return context
 
     async def initialize_nyx_integration(self, user_id: int, conversation_id: int):
         """Initialize Nyx governance integration."""
@@ -568,8 +595,7 @@ class ContextManager:
                 user_id,
                 conversation_id,
                 AgentType.CONTEXT_MANAGER,
-                self.component_id,
-                governance=governance  # pass the object here
+                self.component_id
             )
             
             # Register handlers
@@ -595,7 +621,7 @@ class ContextManager:
             self._update_priority_rules(priority_rules)
             
             # Re-prioritize current context
-            self.context = self._prioritize_context(self.context)
+            self.context = self._prioritize_context(None, self.context)
             
             return {"result": "context_prioritized"}
             
@@ -707,117 +733,34 @@ class ContextManager:
             logger.error(f"Error consolidating context: {e}")
             return self.context
 
-    def _consolidate_group(self, group: Any, rules: Dict[str, Any]) -> Any:
-        """Consolidate a group of items based on rules."""
-        try:
-            if isinstance(group, list):
-                # Apply list consolidation rules
-                if "max_items" in rules:
-                    group = group[:rules["max_items"]]
-                if "group_by" in rules:
-                    # Group items by specified key
-                    grouped = defaultdict(list)
-                    for item in group:
-                        key = item.get(rules["group_by"])
-                        if key:
-                            grouped[key].append(item)
-                    # Convert back to list with summaries
-                    group = [
-                        self._summarize_group(items, rules.get("summary_rules", {}))
-                        for items in grouped.values()
-                    ]
-            elif isinstance(group, dict):
-                # Apply dictionary consolidation rules
-                if "max_keys" in rules:
-                    # Keep only top N keys by importance
-                    sorted_keys = sorted(
-                        group.keys(),
-                        key=lambda k: self._calculate_key_importance(k, group[k]),
-                        reverse=True
-                    )[:rules["max_keys"]]
-                    group = {k: group[k] for k in sorted_keys}
-            
-            return group
-        except Exception as e:
-            logger.error(f"Error consolidating group: {e}")
-            return group
 
-    def _summarize_group(self, items: List[Any], rules: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a summary of a group of items."""
-        try:
-            summary = {
-                "count": len(items),
-                "items": items[:rules.get("max_summary_items", 3)],
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Add additional summary fields based on rules
-            if "include_stats" in rules:
-                summary["stats"] = self._calculate_group_stats(items, rules["include_stats"])
-            
-            return summary
-        except Exception as e:
-            logger.error(f"Error summarizing group: {e}")
-            return {"count": len(items), "items": items[:3]}
-
-    def _calculate_key_importance(self, key: str, value: Any) -> float:
-        """Calculate importance of a dictionary key."""
-        try:
-            importance = 0.0
-            
-            # Base importance by key name
-            if key in ["error", "critical", "important"]:
-                importance += 3.0
-            elif key in ["player", "npc", "quest"]:
-                importance += 2.0
-            
-            # Adjust by value type and size
-            if isinstance(value, dict):
-                importance += min(2.0, len(value) * 0.2)
-            elif isinstance(value, list):
-                importance += min(2.0, len(value) * 0.1)
-            
-            return importance
-        except Exception as e:
-            logger.error(f"Error calculating key importance: {e}")
-            return 0.0
-
-    def _calculate_group_stats(self, items: List[Any], stat_types: List[str]) -> Dict[str, Any]:
-        """Calculate statistics for a group of items."""
-        try:
-            stats = {}
-            
-            for stat_type in stat_types:
-                if stat_type == "count":
-                    stats["count"] = len(items)
-                elif stat_type == "importance":
-                    # Calculate average importance
-                    importance_values = [
-                        item.get("importance", 0.5)
-                        for item in items
-                        if isinstance(item, dict)
-                    ]
-                    if importance_values:
-                        stats["avg_importance"] = sum(importance_values) / len(importance_values)
-                elif stat_type == "recency":
-                    # Calculate average recency
-                    timestamps = [
-                        datetime.fromisoformat(item["timestamp"])
-                        for item in items
-                        if isinstance(item, dict) and "timestamp" in item
-                    ]
-                    if timestamps:
-                        now = datetime.now()
-                        avg_age = sum(
-                            (now - ts).total_seconds()
-                            for ts in timestamps
-                        ) / len(timestamps)
-                        stats["avg_age_seconds"] = avg_age
-            
-            return stats
-        except Exception as e:
-            logger.error(f"Error calculating group stats: {e}")
-            return {}
+def create_context_manager_agent() -> Agent:
+    """Create an agent for the context manager"""
+    context_manager = ContextManager()
+    
+    # Create an agent for the context manager
+    agent = Agent(
+        name="ContextManager",
+        instructions="""
+        You are a context manager for RPG interactions. Your responsibilities include:
+        
+        1. Managing the context state
+        2. Tracking changes to the context
+        3. Providing relevant context for the current interaction
+        4. Optimizing context for token efficiency
+        
+        When handling context operations, prioritize important information and ensure
+        efficient use of the token budget.
+        """,
+        tools=[
+            context_manager.get_context,
+            context_manager.update_context,
+            context_manager.apply_targeted_change,
+            context_manager._prioritize_context,
+        ]
+    )
+    
+    return agent
 
 
 # Global instance
@@ -829,3 +772,8 @@ def get_context_manager() -> ContextManager:
     if _context_manager is None:
         _context_manager = ContextManager()
     return _context_manager
+
+
+def get_context_manager_agent() -> Agent:
+    """Get the context manager agent"""
+    return create_context_manager_agent()
