@@ -6,7 +6,7 @@ Unified Configuration System
 Manages all configuration settings for the lore system.
 """
 
-from typing import Dict, Any, Optional, List, Union, Type
+from typing import Dict, List, Any, Optional, Union, Type
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import yaml
@@ -145,26 +145,25 @@ class ConfigManager:
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or os.getenv('LORE_CONFIG_PATH', 'config')
         self.config: Dict[str, Any] = {}
-        self._load_config()
         
-    async def _load_config(self):
+    async def load_config(self):
         """Load configuration from environment variables and config files."""
         # Load environment variables
         load_dotenv()
         
         # Load base config file
-        base_config = self._load_json_file('config.json')
+        base_config = await self._load_json_file('config.json')
         if base_config:
             self.config.update(base_config)
             
         # Load environment-specific config
         env = os.getenv('LORE_ENV', 'development')
-        env_config = self._load_json_file(f'config.{env}.json')
+        env_config = await self._load_json_file(f'config.{env}.json')
         if env_config:
             self.config.update(env_config)
             
         # Override with environment variables
-        self._load_env_vars()
+        await self._load_env_vars()
         
     async def _load_json_file(self, filename: str) -> Optional[Dict[str, Any]]:
         """Load configuration from a JSON file."""
@@ -183,7 +182,7 @@ class ConfigManager:
             if key.startswith('LORE_'):
                 # Convert LORE_DATABASE_HOST to database.host
                 config_key = key[5:].lower().replace('_', '.')
-                self._set_nested_value(self.config, config_key, value)
+                await self._set_nested_value(self.config, config_key, value)
                 
     async def _set_nested_value(self, d: dict, key: str, value: Any):
         """Set a nested dictionary value using dot notation."""
@@ -206,51 +205,51 @@ class ConfigManager:
     async def get_database_config(self) -> Dict[str, Any]:
         """Get database configuration."""
         return {
-            'host': self.get('database.host', 'localhost'),
-            'port': int(self.get('database.port', 5432)),
-            'database': self.get('database.name', 'lore_db'),
-            'user': self.get('database.user', 'lore_user'),
-            'password': self.get('database.password', ''),
-            'min_size': int(self.get('database.pool.min_size', 1)),
-            'max_size': int(self.get('database.pool.max_size', 10))
+            'host': await self.get('database.host', 'localhost'),
+            'port': int(await self.get('database.port', 5432)),
+            'database': await self.get('database.name', 'lore_db'),
+            'user': await self.get('database.user', 'lore_user'),
+            'password': await self.get('database.password', ''),
+            'min_size': int(await self.get('database.pool.min_size', 1)),
+            'max_size': int(await self.get('database.pool.max_size', 10))
         }
         
     async def get_cache_config(self) -> Dict[str, Any]:
         """Get cache configuration."""
         return {
-            'type': self.get('cache.type', 'memory'),
-            'host': self.get('cache.host', 'localhost'),
-            'port': int(self.get('cache.port', 6379)),
-            'db': int(self.get('cache.db', 0)),
-            'ttl': int(self.get('cache.ttl', 3600))
+            'type': await self.get('cache.type', 'memory'),
+            'host': await self.get('cache.host', 'localhost'),
+            'port': int(await self.get('cache.port', 6379)),
+            'db': int(await self.get('cache.db', 0)),
+            'ttl': int(await self.get('cache.ttl', 3600))
         }
         
     async def get_logging_config(self) -> Dict[str, Any]:
         """Get logging configuration."""
         return {
-            'level': self.get('logging.level', 'INFO'),
-            'format': self.get('logging.format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
-            'file': self.get('logging.file', 'lore.log'),
-            'max_size': int(self.get('logging.max_size', 10485760)),  # 10MB
-            'backup_count': int(self.get('logging.backup_count', 5))
+            'level': await self.get('logging.level', 'INFO'),
+            'format': await self.get('logging.format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
+            'file': await self.get('logging.file', 'lore.log'),
+            'max_size': int(await self.get('logging.max_size', 10485760)),  # 10MB
+            'backup_count': int(await self.get('logging.backup_count', 5))
         }
         
     async def get_api_config(self) -> Dict[str, Any]:
         """Get API configuration."""
         return {
-            'host': self.get('api.host', '0.0.0.0'),
-            'port': int(self.get('api.port', 8000)),
-            'debug': self.get('api.debug', False),
-            'rate_limit': int(self.get('api.rate_limit', 100))
+            'host': await self.get('api.host', '0.0.0.0'),
+            'port': int(await self.get('api.port', 8000)),
+            'debug': await self.get('api.debug', False),
+            'rate_limit': int(await self.get('api.rate_limit', 100))
         }
         
     async def get_metrics_config(self) -> Dict[str, Any]:
         """Get metrics configuration."""
         return {
-            'enabled': self.get('metrics.enabled', True),
-            'host': self.get('metrics.host', '0.0.0.0'),
-            'port': int(self.get('metrics.port', 9090)),
-            'path': self.get('metrics.path', '/metrics')
+            'enabled': await self.get('metrics.enabled', True),
+            'host': await self.get('metrics.host', '0.0.0.0'),
+            'port': int(await self.get('metrics.port', 9090)),
+            'path': await self.get('metrics.path', '/metrics')
         }
         
     async def get_all_config(self) -> Dict[str, Any]:
@@ -260,7 +259,7 @@ class ConfigManager:
     async def update_config(self, updates: Dict[str, Any]):
         """Update configuration values."""
         for key, value in updates.items():
-            self._set_nested_value(self.config, key, value)
+            await self._set_nested_value(self.config, key, value)
             
     async def save_config(self):
         """Save current configuration to file."""
@@ -304,9 +303,11 @@ config = ConfigManager()
 @lru_cache()
 async def get_config() -> Dict[str, Any]:
     """Get the global configuration dictionary"""
+    await config.load_config()  # Ensure config is loaded
     return config.config
 
 @lru_cache()
 async def get_lore_config() -> LoreConfig:
     """Get the global LoreConfig instance"""
-    return config.get_lore_config()
+    await config.load_config()  # Ensure config is loaded
+    return await config.get_lore_config()
