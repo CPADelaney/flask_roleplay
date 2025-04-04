@@ -17,14 +17,14 @@ import random
 # Database connection
 from db.connection import get_db_connection_context
 
-# Caching support
-# FIX: Import the specific cache instance we need
-from utils.caching import NPC_CACHE # Import the MemoryCache instance
+# Import cache manager directly
+from utils.cache_manager import CacheManager
 
 # Configure logger
-# Ensure logger is properly configured at the application entry point
-# For this module:
-logger = logging.getLogger(__name__) # Use standard Python logging
+logger = logging.getLogger(__name__)
+
+# Create a dedicated NPC cache
+NPC_CACHE = CacheManager(name="npc_cache", max_size=500, ttl=3600)
 
 class NPCDataAccessError(Exception):
     """Base exception for NPC data access errors"""
@@ -45,8 +45,6 @@ class NPCDataAccess:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        # Cache metrics are now handled within the MemoryCache instance (NPC_CACHE.stats())
-        # self.cache_metrics = ... # Remove local cache metrics tracking
 
     async def get_npc_details(self, npc_id: Optional[int] = None, npc_name: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -56,17 +54,10 @@ class NPCDataAccess:
             raise ValueError("Either npc_id or npc_name must be provided")
 
         # Check cache first
-        # Use a specific prefix for clarity if desired
         cache_key = f"npc:details:{self.user_id}:{self.conversation_id}:{npc_id or npc_name}"
-        # FIX: Use NPC_CACHE.get()
-        cached_result = NPC_CACHE.get(cache_key)
+        cached_result = await NPC_CACHE.get(cache_key)
         if cached_result:
-            # Logging handled by MemoryCache get method
-            # self.cache_metrics['hits'] += 1
             return cached_result
-
-        # Logging handled by MemoryCache get method
-        # self.cache_metrics['misses'] += 1
 
         try:
             async with get_db_connection_context() as conn:
@@ -95,7 +86,7 @@ class NPCDataAccess:
 
                 if not row:
                     error_msg = f"NPC not found: user={self.user_id}, convo={self.conversation_id}, id/name={npc_id or npc_name}"
-                    logger.warning(error_msg) # Use warning or error based on expected frequency
+                    logger.warning(error_msg)
                     raise NPCNotFoundError(error_msg)
 
                 # Build the NPC details with parsed JSON fields
@@ -127,8 +118,7 @@ class NPCDataAccess:
                 }
 
                 # Store in cache
-                # FIX: Use NPC_CACHE.set() with 'ttl' argument
-                NPC_CACHE.set(cache_key, npc_details, ttl=300)  # Cache for 5 minutes
+                await NPC_CACHE.set(cache_key, npc_details, ttl=300)  # Cache for 5 minutes
 
                 return npc_details
 
@@ -136,7 +126,7 @@ class NPCDataAccess:
              raise # Re-raise specific error
         except Exception as e:
             error_msg = f"Error getting NPC details (key: {cache_key}): {str(e)}"
-            logger.exception(error_msg) # Use exception to include traceback
+            logger.exception(error_msg)
             raise NPCDataAccessError(error_msg) from e
 
     async def get_npc_name(self, npc_id: int) -> str:
@@ -144,8 +134,7 @@ class NPCDataAccess:
         Get the name of an NPC by ID.
         """
         cache_key = f"npc:name:{self.user_id}:{self.conversation_id}:{npc_id}"
-        # FIX: Use NPC_CACHE.get()
-        cached_result = NPC_CACHE.get(cache_key)
+        cached_result = await NPC_CACHE.get(cache_key)
         if cached_result:
             return cached_result
 
@@ -163,8 +152,7 @@ class NPCDataAccess:
                 npc_name = row["npc_name"]
 
                 # Store in cache
-                # FIX: Use NPC_CACHE.set() with 'ttl' argument
-                NPC_CACHE.set(cache_key, npc_name, ttl=3600)  # Cache for 1 hour
+                await NPC_CACHE.set(cache_key, npc_name, ttl=3600)  # Cache for 1 hour
 
                 return npc_name
 
@@ -339,9 +327,7 @@ class NPCDataAccess:
         sorted_keys = sorted([e1_key, e2_key])
         cache_key = f"relationship:{self.user_id}:{self.conversation_id}:{sorted_keys[0]}:{sorted_keys[1]}"
 
-        # FIX: Use NPC_CACHE.get() (or potentially a different cache instance like RELATIONSHIP_CACHE if defined)
-        # Using NPC_CACHE here for consistency with the original code's import attempt.
-        cached_result = NPC_CACHE.get(cache_key)
+        cached_result = await NPC_CACHE.get(cache_key)
         if cached_result:
             return cached_result
 
@@ -384,8 +370,7 @@ class NPCDataAccess:
                             "experienced_rituals": experienced_rituals
                         }
 
-                        # FIX: Use NPC_CACHE.set() with ttl
-                        NPC_CACHE.set(cache_key, relationship, ttl=300) # Cache for 5 min
+                        await NPC_CACHE.set(cache_key, relationship, ttl=300) # Cache for 5 min
                         return relationship
 
             # No relationship found, return a default empty structure
@@ -399,8 +384,7 @@ class NPCDataAccess:
             }
 
             # Cache the 'empty' result to avoid repeated DB lookups for non-existent relationships
-            # FIX: Use NPC_CACHE.set() with ttl
-            NPC_CACHE.set(cache_key, empty_relationship, ttl=300) # Cache 'not found' state briefly
+            await NPC_CACHE.set(cache_key, empty_relationship, ttl=300) # Cache 'not found' state briefly
             return empty_relationship
 
         except Exception as e:
@@ -534,14 +518,12 @@ class NPCDataAccess:
         Add a memory to an NPC (updating both NPCStats and unified_memories).
         Invalidates relevant NPC cache entries.
         """
-        # Implementation remains similar, but ensure cache invalidation at the end
         try:
             memory_id = -1 # Default invalid ID
             async with get_db_connection_context() as conn:
                 # Transaction for atomicity
                  async with conn.transaction():
                     # 1. Update the memory array in NPCStats (if still used)
-                    # Consider deprecating this if unified_memories is primary
                     query_select_mem = "SELECT memory FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3 FOR UPDATE"
                     row = await conn.fetchrow(query_select_mem, self.user_id, self.conversation_id, npc_id)
 
@@ -574,7 +556,7 @@ class NPCDataAccess:
 
             # Invalidate cache for this NPC after successful DB updates
             if memory_id > 0:
-                 self._invalidate_npc_cache(npc_id)
+                 await self._invalidate_npc_cache(npc_id)
                  logger.info(f"Added memory (ID: {memory_id}) for NPC {npc_id} and invalidated cache.")
             else:
                  logger.error(f"Failed to add memory for NPC {npc_id} (unified_memories insert failed?).")
@@ -592,7 +574,6 @@ class NPCDataAccess:
         """
         Update stats for an NPC. Invalidates relevant cache.
         """
-        # Implementation remains similar, but ensure cache invalidation
         try:
              new_stats = {}
              async with get_db_connection_context() as conn:
@@ -623,12 +604,12 @@ class NPCDataAccess:
                     if new_stats:
                         # Build SET clause dynamically for provided stats
                         set_clauses = [f"{stat}=${i+4}" for i, stat in enumerate(new_stats.keys())]
-                        params = list(new_stats.values()) + [self.user_id, self.conversation_id, npc_id]
+                        params = [self.user_id, self.conversation_id, npc_id] + list(new_stats.values())
 
                         update_query = f"""
                             UPDATE NPCStats
                             SET {', '.join(set_clauses)}
-                            WHERE user_id=${len(params)-2} AND conversation_id=${len(params)-1} AND npc_id=${len(params)}
+                            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
                         """
                         await conn.execute(update_query, *params)
                         logger.info(f"Updated stats for NPC {npc_id}: {stats_changes}. New values: {new_stats}")
@@ -639,7 +620,7 @@ class NPCDataAccess:
 
 
              # Invalidate cache for this NPC after successful DB update
-             self._invalidate_npc_cache(npc_id)
+             await self._invalidate_npc_cache(npc_id)
 
              # Return the final calculated stats (either updated or original if no changes)
              final_stats_to_return = {**current_stats, **new_stats}
@@ -670,7 +651,7 @@ class NPCDataAccess:
                      raise NPCNotFoundError(f"NPC not found for location update: {npc_id}")
 
              # Invalidate cache for this NPC
-             self._invalidate_npc_cache(npc_id)
+             await self._invalidate_npc_cache(npc_id)
              logger.info(f"Updated location for NPC {npc_id} to '{new_location}' and invalidated cache.")
              return True
 
@@ -685,19 +666,16 @@ class NPCDataAccess:
     def _parse_json_field(self, field_value: Optional[Union[str, Dict, List]], default_value: Any = None) -> Any:
         """Safely parse JSON field, handling potential errors and non-string inputs."""
         if field_value is None:
-             # logger.debug("JSON field is None, returning default.")
              return default_value
 
         # If it's already parsed (e.g., asyncpg might do this), return directly
         if isinstance(field_value, (dict, list)):
-            # logger.debug("JSON field already parsed, returning directly.")
             return field_value
 
         if isinstance(field_value, str):
             try:
                 # Handle empty strings explicitly
                 if not field_value.strip():
-                    # logger.debug("JSON field is empty string, returning default.")
                     return default_value
                 return json.loads(field_value)
             except (json.JSONDecodeError, TypeError) as e:
@@ -709,31 +687,20 @@ class NPCDataAccess:
             return default_value
 
     
-    def _invalidate_npc_cache(self, npc_id: int) -> None:
+    async def _invalidate_npc_cache(self, npc_id: int) -> None:
         """Invalidate specific cache entries related to an NPC."""
         logger.debug(f"Invalidating cache entries for NPC ID: {npc_id}")
 
         # Invalidate NPC details cache
         details_key = f"npc:details:{self.user_id}:{self.conversation_id}:{npc_id}"
-        # FIX: Use NPC_CACHE.delete()
-        NPC_CACHE.delete(details_key)
+        await NPC_CACHE.delete(details_key)
 
         # Invalidate NPC name cache
         name_key = f"npc:name:{self.user_id}:{self.conversation_id}:{npc_id}"
-        # FIX: Use NPC_CACHE.delete()
-        NPC_CACHE.delete(name_key)
-
-        # Add invalidation for other related keys if necessary
-        # e.g., invalidate related relationship caches, location caches containing the NPC, etc.
-        # Example: Invalidate relationship caches involving this NPC
-        # This requires knowing potential relationship partners, which might be complex.
-        # A simpler approach might be pattern deletion if keys are structured well,
-        # but be cautious with performance implications of pattern matching.
-        # relation_pattern = f"relationship:{self.user_id}:{self.conversation_id}:.*npc:{npc_id}.*"
-        # removed_count = NPC_CACHE.remove_pattern(f"npc:{npc_id}") # Example pattern
+        await NPC_CACHE.delete(name_key)
 
         logger.debug(f"Completed cache invalidation for keys related to NPC ID: {npc_id}")
-        
+    
     async def get_npc_count(self) -> int:
         """
         Get the total count of NPCs for the current user/conversation.
@@ -760,7 +727,7 @@ class NPCDataAccess:
             error_msg = f"Error getting NPC count: {str(e)}"
             logger.error(error_msg, exc_info=True)
             raise NPCDataAccessError(error_msg)
-    
+            
     async def get_npcs_by_faction(self, faction_id: int) -> List[Dict[str, Any]]:
         """
         Get all NPCs that belong to a specific faction.
