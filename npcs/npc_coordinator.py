@@ -18,7 +18,7 @@ from agents import Agent, Runner, function_tool, handoff, trace, InputGuardrail,
 from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 
-from .agent import NPCAgent, ResourcePool
+from npcs.npc_agent import NPCAgent, ResourcePool
 
 logger = logging.getLogger(__name__)
 
