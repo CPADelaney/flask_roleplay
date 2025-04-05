@@ -6,20 +6,29 @@ from typing import Dict, List, Any, Optional, Tuple, Set, Union
 import asyncio
 from datetime import datetime
 
-from agents import Agent, ModelSettings, Runner, function_tool, trace, TracingProcessor, handoff
-from agents import InputGuardrail, GuardrailFunctionOutput, RunContextWrapper
+# --- OPENAI AGENTS SDK IMPORTS ---
+# We'll import only what's actually used in this module:
+from agents import (
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool,
+    trace,            # For creating a trace context
+)
 from agents.run import RunConfig
-from agents.tracing import add_trace_processor
+from agents.run_context import RunContextWrapper
 
+# --- NYX/PROJECT-SPECIFIC IMPORTS ---
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.governance_helpers import with_governance_permission
 from nyx.directive_handler import DirectiveHandler
 
 from db.connection import get_db_connection
 from embedding.vector_store import generate_embedding, vector_similarity
 
 from lore.core.cache import GLOBAL_LORE_CACHE
+
 
 class BaseLoreManager:
     """
@@ -51,16 +60,13 @@ class BaseLoreManager:
             'embedding': 'VECTOR(1536)'
         }
         
-        # Initialize tracing for this manager instance
+        # Prepare tracing metadata for this manager instance
         self._setup_tracing()
     
     def _setup_tracing(self):
-        """Set up tracing for this manager instance"""
-        # Configure a descriptive trace name for this manager type
+        """Set up naming/metadata for traces from this manager instance."""
         self.trace_name = f"{self.__class__.__name__}Workflow"
-        # Use conversation ID as the trace group to link related traces
         self.trace_group_id = f"conversation_{self.conversation_id}"
-        # Standard metadata for all traces from this manager
         self.trace_metadata = {
             "user_id": str(self.user_id),
             "conversation_id": str(self.conversation_id),
@@ -117,7 +123,6 @@ class BaseLoreManager:
                     await conn.execute(create_statement)
                     logging.info(f"{table_name} table created")
 
-    # Enhanced governance registration with sensible defaults
     async def register_with_governance(
         self, 
         agent_type: AgentType = None, 
@@ -156,10 +161,15 @@ class BaseLoreManager:
             duration_minutes=24*60  # 24 hours
         )
         
-        logging.info(f"{agent_id} registered with governance for user {self.user_id}, conversation {self.conversation_id}")
+        logging.info(
+            f"{agent_id} registered with governance for "
+            f"user {self.user_id}, conversation {self.conversation_id}"
+        )
     
-    # Standardized CRUD operations with error handling and permission checking
-    
+    # ---------------------------
+    # Standardized CRUD Operations
+    # ---------------------------
+
     @with_governance_permission
     @function_tool
     async def create_record(self, table_name: str, data: Dict[str, Any]) -> int:
@@ -196,7 +206,13 @@ class BaseLoreManager:
                 # Generate embedding if text data is provided
                 if 'name' in data and 'description' in data and 'embedding' not in data:
                     embedding_text = f"{data['name']} {data['description']}"
-                    await self.generate_and_store_embedding(embedding_text, conn, table_name, "id", record_id)
+                    await self.generate_and_store_embedding(
+                        embedding_text,
+                        conn,
+                        table_name,
+                        "id",
+                        record_id
+                    )
                 
                 return record_id
         except Exception as e:
@@ -232,7 +248,6 @@ class BaseLoreManager:
                 
                 if record:
                     result = dict(record)
-                    # Cache the result
                     self.set_cache(cache_key, result)
                     return result
                 return None
@@ -274,12 +289,20 @@ class BaseLoreManager:
                 
                 # Update embedding if text content changed
                 if ('name' in data or 'description' in data):
-                    # Get full record data
-                    record = await conn.fetchrow(f"SELECT * FROM {table_name} WHERE id = $1", record_id)
+                    record = await conn.fetchrow(
+                        f"SELECT * FROM {table_name} WHERE id = $1",
+                        record_id
+                    )
                     if record:
                         record_dict = dict(record)
                         embedding_text = f"{record_dict.get('name', '')} {record_dict.get('description', '')}"
-                        await self.generate_and_store_embedding(embedding_text, conn, table_name, "id", record_id)
+                        await self.generate_and_store_embedding(
+                            embedding_text,
+                            conn,
+                            table_name,
+                            "id",
+                            record_id
+                        )
                 
                 # Invalidate cache
                 self.invalidate_cache(f"{table_name}_{record_id}")
@@ -310,9 +333,7 @@ class BaseLoreManager:
                     WHERE id = $1
                 """, record_id)
                 
-                # Invalidate cache
                 self.invalidate_cache(f"{table_name}_{record_id}")
-                
                 return result != "DELETE 0"
         except Exception as e:
             logging.error(f"Error deleting record {record_id} from {table_name}: {e}")
@@ -320,8 +341,13 @@ class BaseLoreManager:
     
     @with_governance_permission
     @function_tool
-    async def query_records(self, table_name: str, conditions: Dict[str, Any] = None, 
-                           limit: int = 100, order_by: str = None) -> List[Dict[str, Any]]:
+    async def query_records(
+        self,
+        table_name: str,
+        conditions: Dict[str, Any] = None,
+        limit: int = 100,
+        order_by: str = None
+    ) -> List[Dict[str, Any]]:
         """
         Query records with conditions and governance oversight.
         
@@ -335,7 +361,6 @@ class BaseLoreManager:
             List of records as dictionaries
         """
         try:
-            # Build query
             query = f"SELECT * FROM {table_name}"
             values = []
             
@@ -351,7 +376,6 @@ class BaseLoreManager:
                 
             query += f" LIMIT {limit}"
             
-            # Execute query
             db_pool = await self._initialize_db_pool()
             async with db_pool.acquire() as conn:
                 records = await conn.fetch(query, *values)
@@ -383,7 +407,8 @@ class BaseLoreManager:
                 has_embedding = await conn.fetchval(f"""
                     SELECT EXISTS (
                         SELECT FROM information_schema.columns 
-                        WHERE table_name = '{table_name.lower()}' AND column_name = 'embedding'
+                        WHERE table_name = '{table_name.lower()}' 
+                          AND column_name = 'embedding'
                     );
                 """)
                 
@@ -406,11 +431,11 @@ class BaseLoreManager:
     
     @function_tool
     async def generate_and_store_embedding(
-        self, 
-        text: str, 
-        conn, 
-        table_name: str, 
-        id_field: str, 
+        self,
+        text: str,
+        conn,
+        table_name: str,
+        id_field: str,
         id_value: Any
     ):
         """
@@ -424,20 +449,21 @@ class BaseLoreManager:
             id_value: Value of the ID
         """
         try:
-            # Generate embedding
             embedding = await generate_embedding(text)
-            
-            # Update the table
             await conn.execute(f"""
                 UPDATE {table_name}
                 SET embedding = $1
                 WHERE {id_field} = $2
             """, embedding, id_value)
         except Exception as e:
-            logging.error(f"Error generating embedding for {table_name}.{id_field}={id_value}: {e}")
+            logging.error(
+                f"Error generating embedding for {table_name}.{id_field}={id_value}: {e}"
+            )
     
-    # Standardized caching methods
-    
+    # ---------------------------
+    # Caching Methods
+    # ---------------------------
+
     @function_tool
     def get_cache(self, key: str) -> Any:
         """
@@ -449,7 +475,12 @@ class BaseLoreManager:
         Returns:
             Cached value or None if not found
         """
-        return GLOBAL_LORE_CACHE.get(self.cache_namespace, key, self.user_id, self.conversation_id)
+        return GLOBAL_LORE_CACHE.get(
+            self.cache_namespace,
+            key,
+            self.user_id,
+            self.conversation_id
+        )
     
     @function_tool
     def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
@@ -461,7 +492,14 @@ class BaseLoreManager:
             value: Value to cache
             ttl: Time-to-live in seconds (None for default)
         """
-        GLOBAL_LORE_CACHE.set(self.cache_namespace, key, value, ttl, self.user_id, self.conversation_id)
+        GLOBAL_LORE_CACHE.set(
+            self.cache_namespace,
+            key,
+            value,
+            ttl,
+            self.user_id,
+            self.conversation_id
+        )
     
     @function_tool
     def invalidate_cache(self, key: str) -> None:
@@ -471,7 +509,12 @@ class BaseLoreManager:
         Args:
             key: Cache key to invalidate
         """
-        GLOBAL_LORE_CACHE.invalidate(self.cache_namespace, key, self.user_id, self.conversation_id)
+        GLOBAL_LORE_CACHE.invalidate(
+            self.cache_namespace,
+            key,
+            self.user_id,
+            self.conversation_id
+        )
     
     @function_tool
     def invalidate_cache_pattern(self, pattern: str) -> None:
@@ -481,18 +524,25 @@ class BaseLoreManager:
         Args:
             pattern: Pattern to match cache keys
         """
-        GLOBAL_LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern, self.user_id, self.conversation_id)
+        GLOBAL_LORE_CACHE.invalidate_pattern(
+            self.cache_namespace,
+            pattern,
+            self.user_id,
+            self.conversation_id
+        )
     
     @function_tool
     def clear_cache(self) -> None:
         """Clear all cache entries for this manager."""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
     
-    # Utility methods
-    
+    # ---------------------------
+    # Utility / Agent Interaction
+    # ---------------------------
+
     def create_run_context(self, ctx):
         """
-        Create a run context from context.
+        Create a run context from context data or object.
         
         Args:
             ctx: Context object or data
@@ -506,19 +556,19 @@ class BaseLoreManager:
     
     async def execute_llm_prompt(self, prompt: str, agent_name: str = None, model: str = "o3-mini") -> str:
         """
-        Execute a prompt with an LLM agent.
+        Execute a prompt with an LLM agent via the OpenAI Agents SDK.
         
         Args:
             prompt: Prompt text to send to the agent
             agent_name: Optional name for the agent
-            model: Model identifier to use
+            model: Model identifier to use (defaults to "o3-mini")
             
         Returns:
-            Response from the agent
+            Response text from the agent
         """
         # Create a trace for better monitoring and debugging
         with trace(
-            self.trace_name, 
+            workflow_name=self.trace_name,
             group_id=self.trace_group_id,
             metadata={
                 **self.trace_metadata,
@@ -527,30 +577,34 @@ class BaseLoreManager:
                 "model": model
             }
         ):
-            # Create run context
-            run_ctx = RunContextWrapper(context={
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-            
-            # Create agent with proper configuration
-            agent = Agent(
-                name=agent_name or f"{self.__class__.__name__}Agent",
-                instructions=f"You help with generating content for {self.__class__.__name__}.",
-                model=model,
-                model_settings=ModelSettings(temperature=0.7)
+            # Build run context
+            run_ctx = RunContextWrapper(
+                context={
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                }
             )
             
-            # Configure the run with proper tracing
+            # Configure the agent
+            agent = Agent(
+                name=agent_name or f"{self.__class__.__name__}Agent",
+                instructions=(
+                    f"You help with generating content for {self.__class__.__name__}."
+                ),
+                model=model,
+                model_settings=ModelSettings(temperature=0.7),
+            )
+            
+            # Set up a run config with our trace metadata
             run_config = RunConfig(
                 workflow_name=f"{self.__class__.__name__}Prompt",
                 trace_metadata=self.trace_metadata
             )
             
-            # Run prompt
+            # Run the agent with the prompt
             result = await Runner.run(
-                agent, 
-                prompt, 
+                starting_agent=agent,
+                input=prompt,
                 context=run_ctx.context,
                 run_config=run_config
             )
@@ -558,16 +612,21 @@ class BaseLoreManager:
             return result.final_output
     
     @function_tool
-    async def create_table_definition(self, table_name: str, extra_columns: Dict[str, str] = None,
-                                     include_standard: bool = True, foreign_keys: Dict[str, str] = None) -> str:
+    async def create_table_definition(
+        self,
+        table_name: str,
+        extra_columns: Dict[str, str] = None,
+        include_standard: bool = True,
+        foreign_keys: Dict[str, str] = None
+    ) -> str:
         """
         Create a standardized table definition.
         
         Args:
             table_name: Name of the table
-            extra_columns: Additional columns beyond the standard ones
+            extra_columns: Additional columns
             include_standard: Whether to include standard columns
-            foreign_keys: Dictionary mapping column names to referenced tables/columns
+            foreign_keys: Dict mapping columns -> referenced_table(column)
             
         Returns:
             SQL CREATE TABLE statement
@@ -588,15 +647,17 @@ class BaseLoreManager:
         # Add foreign keys
         if foreign_keys:
             for column, reference in foreign_keys.items():
-                column_defs.append(f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE CASCADE")
+                column_defs.append(
+                    f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE CASCADE"
+                )
         
-        # Create the SQL statement
+        # Construct the SQL
         sql = f"""
             CREATE TABLE {table_name} (
                 {', '.join(column_defs)}
             );
             
-            CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding 
+            CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding
             ON {table_name} USING ivfflat (embedding vector_cosine_ops);
         """
         
