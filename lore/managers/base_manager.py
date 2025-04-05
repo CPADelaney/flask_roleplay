@@ -5,9 +5,9 @@ import logging
 from datetime import datetime
 from lore.data_access import BaseDataAccess
 from lore.utils.caching import LoreCache
-from lore.error_handler import ErrorHandler
-from lore.monitoring import metrics
-from lore.lore_cache_manager import LoreCacheManager
+from lore.error_manager import ErrorHandler
+from lore.resource_manager import MetricsManager
+from lore.core.cache import LoreCache
 import asyncio
 
 logger = logging.getLogger(__name__)
