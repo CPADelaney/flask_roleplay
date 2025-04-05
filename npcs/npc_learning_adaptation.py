@@ -21,7 +21,7 @@ import json
 # Update the import to use the new async connection context
 from db.connection import get_db_connection_context
 from memory.wrapper import MemorySystem
-from nyx.nyx_governance import AgentType, DirectiveType, NyxGovernanceManager
+from nyx.nyx_governance import AgentType, DirectiveType, NyxUnifiedGovernor
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from npcs.npc_relationship import NPCRelationshipManager
 
