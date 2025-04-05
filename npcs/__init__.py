@@ -8,5 +8,5 @@ from .npc_decisions import NPCDecisionEngine
 from .npc_perception import EnvironmentPerception
 from .npc_relationship import NPCRelationshipManager
 from .new_npc_creation import NPCCreationHandler
-from .npc_handler import NPCInteractionHandler
+from .npc_handler import NPCHandler
 from .npc_behavior import BehaviorEvolution
