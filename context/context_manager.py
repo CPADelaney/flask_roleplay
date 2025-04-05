@@ -276,12 +276,10 @@ class ContextManager:
         return max(1, min(priority, 10))
     
     def _start_batch_processor(self):
-        """Start the background batch processor if not already running"""
         if self.batch_task is None or self.batch_task.done():
             self.batch_task = asyncio.create_task(self._process_batches())
     
     async def _process_batches(self):
-        """Process batches of changes at regular intervals"""
         while True:
             try:
                 await asyncio.sleep(self.batch_interval)
@@ -292,213 +290,131 @@ class ContextManager:
                 logger.error(f"Error in batch processor: {e}")
     
     async def _process_pending_batch(self):
-        """Process any pending changes as a single batch"""
         if not self.pending_changes:
             return
-            
-        # Get all pending changes
+        
         changes = self.pending_changes
         self.pending_changes = []
         
-        # Apply all changes
         modified_context = self.context
         for diff in changes:
             modified_context = self._apply_diff(modified_context, diff)
         
-        # Update the version
         self.version += 1
-        
-        # Update context and hash
         self.context = modified_context
         self.context_hash = self._hash_context(modified_context)
-        
-        # Add to change log
         self.change_log.extend(changes)
-        
-        # Trim change log if needed
         while len(self.change_log) > self.max_change_log_size:
             self.change_log.pop(0)
         
-        # Notify subscribers
+        # Notify
         await self._notify_subscribers(changes)
     
     async def _notify_subscribers(self, changes: List[ContextDiff]):
-        """Notify all subscribers of changes"""
         paths_changed = {diff.path for diff in changes}
-        
-        # Group changes by subscription path
-        for path, subscribers in self.change_subscriptions.items():
-            matching_changes = [diff for diff in changes if diff.path.startswith(path)]
+        for path, subs in self.change_subscriptions.items():
+            matching_changes = [d for d in changes if d.path.startswith(path)]
             if matching_changes:
-                # Notify all subscribers for this path
-                for subscriber in subscribers:
+                for sub in subs:
                     try:
-                        if asyncio.iscoroutinefunction(subscriber):
-                            await subscriber(matching_changes)
+                        if asyncio.iscoroutinefunction(sub):
+                            await sub(matching_changes)
                         else:
-                            subscriber(matching_changes)
+                            sub(matching_changes)
                     except Exception as e:
                         logger.error(f"Error in subscriber: {e}")
     
-    @function_tool
-    async def get_context(self, ctx: RunContextWrapper, source_version: Optional[int] = None) -> Dict[str, Any]:
+    async def _get_context(self, source_version: Optional[int] = None) -> Dict[str, Any]:
         """
-        Get the current context or delta based on version.
-        
-        Args:
-            source_version: Version of the requester (if any)
-            
-        Returns:
-            Dictionary containing full context or delta
+        Internal method to get the current context (or a delta) based on source_version.
         """
-        with trace(workflow_name="get_context"):
-            # Process any pending changes first
-            await self._process_pending_batch()
-            
-            # If no version provided, return full context
-            if source_version is None:
-                return {
-                    "full_context": self.context,
-                    "is_incremental": False,
-                    "version": self.version
-                }
-            
-            # If the source is newer or equal to us, no need to send anything
-            if source_version >= self.version:
-                return {
-                    "full_context": self.context,
-                    "is_incremental": False,
-                    "no_changes": True,
-                    "version": self.version
-                }
-            
-            # Find changes that are not reflected in the source's version
-            relevant_changes = [diff for diff in self.change_log]
-            
-            # If no relevant changes or too many, send full context
-            if not relevant_changes or len(relevant_changes) > 20:
-                return {
-                    "full_context": self.context,
-                    "is_incremental": False,
-                    "version": self.version
-                }
-            
-            # Otherwise, return delta
+        await self._process_pending_batch()
+
+        if source_version is None:
+            # Return full context if no version provided
             return {
-                "delta_context": [diff.to_dict() for diff in relevant_changes],
-                "is_incremental": True,
+                "full_context": self.context,
+                "is_incremental": False,
                 "version": self.version
             }
-    
-    @function_tool
-    async def update_context(self, ctx: RunContextWrapper, new_context: Dict[str, Any]) -> bool:
-        """
-        Update the entire context with a new version.
         
-        Args:
-            new_context: New context dictionary
-            
-        Returns:
-            Whether the context was changed
-        """
-        with trace(workflow_name="update_context"):
-            # If same hash, nothing changed
-            new_hash = self._hash_context(new_context)
-            if new_hash == self.context_hash:
-                return False
-            
-            # Compute changes
-            changes = self._detect_changes(self.context, new_context)
-            
-            # Add to pending changes
-            self.pending_changes.extend(changes)
-            
-            # Ensure batch processor is running
-            self._start_batch_processor()
-            
-            return True
-    
-    @function_tool
-    async def apply_targeted_change(
-        self, 
-        ctx: RunContextWrapper,
-        path: str, 
-        value: Any, 
-        operation: str = "replace"
-    ) -> bool:
-        """
-        Apply a specific change to a path in the context.
+        if source_version >= self.version:
+            # Requester is up-to-date
+            return {
+                "full_context": self.context,
+                "is_incremental": False,
+                "no_changes": True,
+                "version": self.version
+            }
         
-        Args:
-            path: Path to change
-            value: New value
-            operation: "add", "remove", or "replace"
-            
-        Returns:
-            Whether the change was applied
+        # Attempt to build a delta from change_log
+        relevant_changes = [diff for diff in self.change_log]
+        if not relevant_changes or len(relevant_changes) > 20:
+            # If no or too many changes, just send the full context
+            return {
+                "full_context": self.context,
+                "is_incremental": False,
+                "version": self.version
+            }
+        
+        return {
+            "delta_context": [d.to_dict() for d in relevant_changes],
+            "is_incremental": True,
+            "version": self.version
+        }
+
+    async def _update_context(self, new_context: Dict[str, Any]) -> bool:
         """
-        with trace(workflow_name="apply_targeted_change"):
-            # Create the diff
-            old_value = self._get_value_at_path(self.context, path)
-            diff = ContextDiff(
-                path=path,
-                operation=operation,
-                value=value if operation != "remove" else None,
-                old_value=old_value if operation != "add" else None
-            )
-            
-            # Add to pending changes
-            self.pending_changes.append(diff)
-            
-            # Ensure batch processor is running
-            self._start_batch_processor()
-            
-            return True
+        Internal method to replace the entire context with `new_context`.
+        Returns True if changed, False if no change.
+        """
+        new_hash = self._hash_context(new_context)
+        if new_hash == self.context_hash:
+            return False
+        
+        diffs = self._detect_changes(self.context, new_context)
+        self.pending_changes.extend(diffs)
+        self._start_batch_processor()
+        return True
+    
+    async def _apply_targeted_change(self, path: str, value: Any, operation: str = "replace") -> bool:
+        """
+        Internal method to apply a single change (add/remove/replace) at a specific path.
+        """
+        old_value = self._get_value_at_path(self.context, path)
+        diff = ContextDiff(
+            path=path,
+            operation=operation,
+            value=value if operation != "remove" else None,
+            old_value=old_value if operation != "add" else None
+        )
+        self.pending_changes.append(diff)
+        self._start_batch_processor()
+        return True
     
     def subscribe_to_changes(self, path: str, callback: Callable) -> None:
-        """
-        Subscribe to changes at a specific path.
-        
-        Args:
-            path: Path to monitor
-            callback: Function to call when changes occur
-        """
+        """Subscribe to changes at a given path."""
         self.change_subscriptions[path].append(callback)
-    
+
     def unsubscribe_from_changes(self, path: str, callback: Callable) -> bool:
-        """
-        Unsubscribe from changes.
-        
-        Args:
-            path: Path that was being monitored
-            callback: Function to remove
-            
-        Returns:
-            Whether the subscription was removed
-        """
+        """Remove a subscription callback for a given path."""
         if path in self.change_subscriptions:
             if callback in self.change_subscriptions[path]:
                 self.change_subscriptions[path].remove(callback)
                 return True
         return False
 
-    @function_tool
-    def _prioritize_context(self, ctx: RunContextWrapper, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _prioritize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Prioritize context elements based on relevance and importance.
-        
-        Args:
-            context: Context to prioritize
+        Internal method to reorder or annotate context by priority.
+        This was once a tool method, now a normal instance method.
+        """
+        try:
+            # Example logic: apply some scoring
+            priority_scores = {}
             
-        Returns:
-            Prioritized context
-        """
-        with trace(workflow_name="prioritize_context"):
-            try:
-                # Calculate priority scores
-                priority_scores = {}
-                for key, value in context.items():
-                    score = 0
+            for key, val in context.items():
+                base_score = type_scores.get(key, 3)
                     
                     # Base score by type
                     type_scores = {
@@ -587,18 +503,13 @@ class ContextManager:
             from nyx.directive_handler import DirectiveHandler
             from nyx.nyx_governance import AgentType
             
-            # Get governance system
             self.governance = await get_central_governance(user_id, conversation_id)
-            
-            # Initialize directive handler
             self.directive_handler = DirectiveHandler(
                 user_id,
                 conversation_id,
                 AgentType.CONTEXT_MANAGER,
                 self.component_id
             )
-            
-            # Register handlers
             self.directive_handler.register_handler("action", self._handle_action_directive)
             self.directive_handler.register_handler("override", self._handle_override_directive)
             self.directive_handler.register_handler("prohibition", self._handle_prohibition_directive)
