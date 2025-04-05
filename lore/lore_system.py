@@ -1,270 +1,151 @@
 # lore/lore_system.py
 
 """
-Lore System - Main Entry Point
+Lore System - Main Entry Point (Refactored)
 
-This module serves as the primary interface for all lore-related functionality,
-with enhanced capabilities and proper governance integration.
+Now integrates all specialized managers (Education, Religion, LocalLore, etc.)
+alongside existing data access and generator components, to serve as a true
+'unified orchestrator' for all lore operations in the system.
 """
 
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Union
 from datetime import datetime
 
-# Import data access layer
+# 1. Import specialized managers
+from lore.managers.education import EducationalSystemManager
+from lore.managers.religion import ReligionManager
+from lore.managers.local_lore import LocalLoreManager
+from lore.managers.geopolitical import GeopoliticalSystemManager
+from lore.managers.regional_culture import RegionalCultureSystem
+from lore.managers.base_manager import BaseLoreManager
+from lore.managers.politics import WorldPoliticsManager
+from lore.managers.dynamics import LoreDynamicsSystem  # example if you want the 'dynamics system' too
+
+# 2. Existing data-access and integration imports
 from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
-
-# Import integration components
 from .integration import NPCLoreIntegration, ConflictIntegration, ContextEnhancer
-
-# Import generator component
 from .lore_generator import DynamicLoreGenerator
 
-# Import Nyx governance
+# 3. Nyx governance
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
-
-# Import for caching
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
 # Cache for LoreSystem instances
-LORE_SYSTEM_INSTANCES = {}
-
-# Global cache for all lore subsystems
-class LoreCache:
-    """Unified cache system for all lore types with improved organization"""
-    
-    _instance = None
-    
-    @classmethod
-    def get_instance(cls, max_size=1000, ttl=7200):
-        """Get singleton instance of the cache"""
-        if cls._instance is None:
-            cls._instance = LoreCache(max_size, ttl)
-        return cls._instance
-    
-    def __init__(self, max_size=1000, ttl=7200):
-        self.cache = {}
-        self.max_size = max_size
-        self.default_ttl = ttl
-        self.access_times = {}
-        self._lock = None  # Will be initialized as asyncio.Lock() when needed
-    
-    async def get(self, namespace, key, user_id=None, conversation_id=None):
-        """Get an item from the cache with async support"""
-        import asyncio
-        
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            
-        full_key = self._create_key(namespace, key, user_id, conversation_id)
-        
-        async with self._lock:
-            if full_key in self.cache:
-                value, expiry = self.cache[full_key]
-                if expiry > datetime.now().timestamp():
-                    # Update access time for LRU
-                    self.access_times[full_key] = datetime.now().timestamp()
-                    return value
-                # Remove expired item
-                self._remove_key(full_key)
-        return None
-    
-    async def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None):
-        """Set an item in the cache with async support"""
-        import asyncio
-        
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            
-        full_key = self._create_key(namespace, key, user_id, conversation_id)
-        expiry = datetime.now().timestamp() + (ttl or self.default_ttl)
-        
-        async with self._lock:
-            # Manage cache size - use LRU strategy
-            if len(self.cache) >= self.max_size:
-                # Find oldest accessed item
-                oldest_key = min(self.access_times.items(), key=lambda x: x[1])[0]
-                self._remove_key(oldest_key)
-                
-            self.cache[full_key] = (value, expiry)
-            self.access_times[full_key] = datetime.now().timestamp()
-    
-    async def invalidate(self, namespace, key, user_id=None, conversation_id=None):
-        """Invalidate a specific key with async support"""
-        import asyncio
-        
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            
-        full_key = self._create_key(namespace, key, user_id, conversation_id)
-        async with self._lock:
-            self._remove_key(full_key)
-    
-    async def invalidate_pattern(self, namespace, pattern, user_id=None, conversation_id=None):
-        """Invalidate keys matching a pattern with async support"""
-        import asyncio
-        
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            
-        namespace_pattern = f"{namespace}:"
-        async with self._lock:
-            keys_to_remove = []
-            
-            for key in self.cache.keys():
-                if key.startswith(namespace_pattern):
-                    # Extract the key part after the namespace
-                    key_part = key.split(':', 1)[1]
-                    if pattern in key_part:
-                        keys_to_remove.append(key)
-            
-            for key in keys_to_remove:
-                self._remove_key(key)
-    
-    async def clear_namespace(self, namespace):
-        """Clear all items in a namespace with async support"""
-        import asyncio
-        
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-            
-        namespace_pattern = f"{namespace}:"
-        async with self._lock:
-            keys_to_remove = [k for k in self.cache.keys() if k.startswith(namespace_pattern)]
-            for key in keys_to_remove:
-                self._remove_key(key)
-    
-    def _create_key(self, namespace, key, user_id=None, conversation_id=None):
-        """Create a unique cache key with proper namespacing"""
-        if user_id and conversation_id:
-            return f"{namespace}:{user_id}:{conversation_id}:{key}"
-        elif user_id:
-            return f"{namespace}:{user_id}:global:{key}"
-        else:
-            return f"{namespace}:global:{key}"
-    
-    def _remove_key(self, full_key):
-        """Remove a key from both cache and access times"""
-        if full_key in self.cache:
-            del self.cache[full_key]
-        if full_key in self.access_times:
-            del self.access_times[full_key]
+LORE_SYSTEM_INSTANCES: Dict[str, "LoreSystem"] = {}
 
 class LoreSystem:
     """
-    Unified interface for all lore-related functionality with enhanced capabilities.
-    
-    This class serves as the main entry point for all lore operations,
-    delegating to specialized components and ensuring proper governance integration.
+    Unified interface for *all* lore-related functionality, now referencing
+    specialized managers for Education, Religion, LocalLore, Politics, etc.
     """
-    
+
     def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
         """Initialize the LoreSystem with optional user and conversation context."""
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.initialized = False
         self.governor = None
-        self.cache = LoreCache.get_instance()
-        
-        # Initialize data access components
+
+        # 4. Built-in managers from your system
         self.npc_data = NPCDataAccess(user_id, conversation_id)
         self.location_data = LocationDataAccess(user_id, conversation_id)
         self.faction_data = FactionDataAccess(user_id, conversation_id)
         self.lore_knowledge = LoreKnowledgeAccess(user_id, conversation_id)
-        
-        # Initialize integration components
+
         self.npc_integration = NPCLoreIntegration(user_id, conversation_id)
         self.conflict_integration = ConflictIntegration(user_id, conversation_id)
         self.context_enhancer = ContextEnhancer(user_id, conversation_id)
-        
-        # Initialize generator component
         self.generator = DynamicLoreGenerator(user_id, conversation_id)
-        
-        # Store prohibited actions from directives
+
+        # 5. Additional specialized managers from your code base
+        self.education_manager = EducationalSystemManager(user_id, conversation_id)
+        self.religion_manager = ReligionManager(user_id, conversation_id)
+        self.local_lore_manager = LocalLoreManager(user_id, conversation_id)
+        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+        self.regional_culture_system = RegionalCultureSystem(user_id, conversation_id)
+        self.world_politics_manager = WorldPoliticsManager(user_id, conversation_id)
+        # Or whichever other managers you'd like to unify
+
+        # For the new "dynamics" system as well:
+        self.lore_dynamics_system = LoreDynamicsSystem(user_id, conversation_id)
+
+        # Store prohibited actions from directives, if any
         self.prohibited_actions = []
-        
-        # Store action modifications from directives
+        # Store modifications from directives
         self.action_modifications = {}
-    
+
     @classmethod
-    def get_instance(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> 'LoreSystem':
-        """
-        Get a singleton instance of LoreSystem for the given user and conversation.
-        
-        Args:
-            user_id: Optional user ID for filtering
-            conversation_id: Optional conversation ID for filtering
-            
-        Returns:
-            LoreSystem instance
-        """
+    def get_instance(cls, user_id: Optional[int] = None, conversation_id: Optional[int] = None) -> "LoreSystem":
+        """Singleton instance retrieval for a given user/conversation context."""
         key = f"{user_id or 'global'}:{conversation_id or 'global'}"
-        
         if key not in LORE_SYSTEM_INSTANCES:
             LORE_SYSTEM_INSTANCES[key] = cls(user_id, conversation_id)
-            
         return LORE_SYSTEM_INSTANCES[key]
-    
+
     async def initialize(self) -> bool:
-        """
-        Initialize the LoreSystem and all its components.
-        
-        Returns:
-            True if initialization successful, False otherwise
-        """
+        """Initialize the LoreSystem and all its components."""
         if self.initialized:
             return True
-            
+
         try:
             # Initialize governance
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
-            
-            # Initialize all components
+
+            # 6. Initialize the data access + integration components
             await self.npc_data.initialize()
             await self.location_data.initialize()
             await self.faction_data.initialize()
             await self.lore_knowledge.initialize()
-            
+
             await self.npc_integration.initialize()
             await self.conflict_integration.initialize()
             await self.context_enhancer.initialize()
-            
             await self.generator.initialize()
-            
+
+            # 7. Initialize the newly integrated managers
+            await self.education_manager.ensure_initialized()
+            await self.religion_manager.ensure_initialized()
+            await self.local_lore_manager.ensure_initialized()
+            await self.geopolitical_manager.ensure_initialized()
+            await self.regional_culture_system.ensure_initialized()
+            await self.world_politics_manager.ensure_initialized()
+            await self.lore_dynamics_system.ensure_initialized()
+
             # Register with governance
             await self.register_with_governance()
-            
+
             self.initialized = True
             return True
         except Exception as e:
             logger.error(f"Error initializing LoreSystem: {e}")
             return False
-    
+
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
         if not self.governor:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        
+
         # Register this system with governance
         await self.governor.register_agent(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_system",
             agent_instance=self
         )
-        
+
         # Issue standard directives
         await self._issue_standard_directives()
-    
+
     async def _issue_standard_directives(self):
         """Issue standard directives for the lore system."""
         if not self.governor:
             return
-            
-        # Directive for lore generation
+
+        # Example directive for lore generation
         await self.governor.issue_directive(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_generator",
@@ -274,10 +155,10 @@ class LoreSystem:
                 "scope": "narrative"
             },
             priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
+            duration_minutes=24 * 60  # 24 hours
         )
-        
-        # Directive for NPC lore integration
+
+        # Example directive for NPC lore integration
         await self.governor.issue_directive(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="npc_lore_integration",
@@ -287,50 +168,31 @@ class LoreSystem:
                 "scope": "narrative"
             },
             priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
+            duration_minutes=24 * 60
         )
-    
-    #---------------------------
+
+    # ---------------------------------------------------------------------
     # NPC Lore Methods
-    #---------------------------
-    
+    # ---------------------------------------------------------------------
+
     async def get_npc_lore_knowledge(self, npc_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all lore known by an NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            
-        Returns:
-            List of lore items known by the NPC
-        """
+        """Get all lore known by an NPC."""
         return await self.lore_knowledge.get_entity_knowledge("npc", npc_id)
-    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="initialize_npc_lore_knowledge",
         action_description="Initializing lore knowledge for NPC {npc_id}",
         id_from_context=lambda ctx: "lore_system"
     )
-    async def initialize_npc_lore_knowledge(self, ctx, npc_id: int, 
-                                         cultural_background: str,
-                                         faction_affiliations: List[str]) -> Dict[str, Any]:
-        """
-        Initialize an NPC's knowledge of lore based on their background.
-        
-        Args:
-            ctx: Governance context
-            npc_id: ID of the NPC
-            cultural_background: Cultural background of the NPC
-            faction_affiliations: List of faction names the NPC is affiliated with
-            
-        Returns:
-            Dictionary of knowledge granted
-        """
+    async def initialize_npc_lore_knowledge(self, ctx, npc_id: int,
+                                            cultural_background: str,
+                                            faction_affiliations: List[str]) -> Dict[str, Any]:
+        """Initialize an NPC's lore knowledge based on background."""
         return await self.npc_integration.initialize_npc_lore_knowledge(
             ctx, npc_id, cultural_background, faction_affiliations
         )
-    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="process_npc_lore_interaction",
@@ -338,35 +200,17 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def process_npc_lore_interaction(self, ctx, npc_id: int, player_input: str) -> Dict[str, Any]:
-        """
-        Process a potential lore interaction between the player and an NPC.
-        
-        Args:
-            ctx: Governance context
-            npc_id: ID of the NPC
-            player_input: The player's input text
-            
-        Returns:
-            Lore response information if relevant
-        """
+        """Handle a lore interaction between the player and an NPC."""
         return await self.npc_integration.process_npc_lore_interaction(ctx, npc_id, player_input)
-    
-    #---------------------------
+
+    # ---------------------------------------------------------------------
     # Location Lore Methods
-    #---------------------------
-    
+    # ---------------------------------------------------------------------
+
     async def get_location_lore(self, location_id: int) -> Dict[str, Any]:
-        """
-        Get lore specific to a location.
-        
-        Args:
-            location_id: ID of the location
-            
-        Returns:
-            Dictionary with location lore
-        """
+        """Get lore specific to a location."""
         return await self.location_data.get_location_with_lore(location_id)
-    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_comprehensive_location_context",
@@ -374,34 +218,17 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def get_comprehensive_location_context(self, ctx, location_name: str) -> Dict[str, Any]:
-        """
-        Get comprehensive lore context for a specific location.
-        
-        Args:
-            ctx: Governance context
-            location_name: Name of the location
-            
-        Returns:
-            Dictionary with comprehensive location lore
-        """
+        """Get a full lore context for a location, including culture/politics environment."""
         location = await self.location_data.get_location_by_name(location_name)
         if not location:
             return {}
-            
+
         location_id = location.get("id")
-        
-        # Get basic location lore
         location_lore = await self.location_data.get_location_with_lore(location_id)
-        
-        # Get cultural context
         cultural_info = await self.location_data.get_cultural_context_for_location(location_id)
-        
-        # Get political context
         political_info = await self.location_data.get_political_context_for_location(location_id)
-        
-        # Get environmental context
         environment_info = await self.location_data.get_environmental_conditions(location_id)
-        
+
         return {
             "location": location,
             "lore": location_lore,
@@ -409,7 +236,7 @@ class LoreSystem:
             "political_context": political_info,
             "environment": environment_info
         }
-    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_scene_description",
@@ -417,22 +244,52 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def generate_scene_description_with_lore(self, ctx, location: str) -> Dict[str, Any]:
-        """
-        Generate a scene description enhanced with relevant lore.
-        
-        Args:
-            ctx: Governance context
-            location: Current location name
-            
-        Returns:
-            Enhanced scene description
-        """
+        """Generate a scene description enhanced with relevant lore."""
         return await self.context_enhancer.generate_scene_description(location)
-    
-    #---------------------------
-    # Lore Generation Methods
-    #---------------------------
-    
+
+    # ---------------------------------------------------------------------
+    # Education / Religion / Local Lore Accessors
+    # ---------------------------------------------------------------------
+
+    async def generate_educational_systems(self) -> List[Dict[str, Any]]:
+        """
+        High-level call to produce educational systems (or retrieve them)
+        by delegating to the EducationalSystemManager.
+        """
+        # For example:
+        return await self.education_manager.generate_educational_systems(None)
+
+    async def generate_knowledge_traditions(self) -> List[Dict[str, Any]]:
+        """
+        Similarly, a high-level call to produce knowledge traditions
+        from the EducationalSystemManager.
+        """
+        return await self.education_manager.generate_knowledge_traditions(None)
+
+    async def generate_religion(self) -> Dict[str, Any]:
+        """
+        High-level call to produce a complete faith system
+        from the ReligionManager.
+        """
+        return await self.religion_manager.generate_complete_faith_system(None)
+
+    async def distribute_religions_across_nations(self) -> List[Dict[str, Any]]:
+        """
+        Use ReligionManager to distribute religions across world nations.
+        """
+        return await self.religion_manager.distribute_religions(None)
+
+    async def generate_local_lore_for_location(self, location_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        High-level call to produce local myths/histories/landmarks
+        from the LocalLoreManager.
+        """
+        return await self.local_lore_manager.generate_location_lore(None, location_data)
+
+    # ---------------------------------------------------------------------
+    # Lore Generation & Evolution
+    # ---------------------------------------------------------------------
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_complete_lore",
@@ -440,18 +297,9 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def generate_complete_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
-        """
-        Generate a complete set of lore for a game world.
-        
-        Args:
-            ctx: Governance context
-            environment_desc: Description of the environment
-            
-        Returns:
-            Complete lore package
-        """
+        """Generate a complete set of lore for a game world via the generator."""
         return await self.generator.generate_complete_lore(environment_desc)
-    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_lore_with_event",
@@ -459,112 +307,53 @@ class LoreSystem:
         id_from_context=lambda ctx: "lore_system"
     )
     async def evolve_lore_with_event(self, ctx, event_description: str) -> Dict[str, Any]:
-        """
-        Update world lore based on a significant narrative event.
-        
-        Args:
-            ctx: Governance context
-            event_description: Description of the narrative event
-            
-        Returns:
-            Dictionary with lore updates
-        """
+        """Update world lore based on a significant narrative event."""
         return await self.generator.evolve_lore_with_event(event_description)
+
+    # Additionally, you could unify dynamic-lore updates with the LoreDynamicsSystem:
+    async def mature_world_over_time(self, days_passed: int = 7) -> Dict[str, Any]:
+        """Example: call the LoreDynamicsSystem to mature lore over time."""
+        return await self.lore_dynamics_system.mature_lore_over_time(days_passed)
     
-    #---------------------------
-    # Context Enhancement Methods
-    #---------------------------
-    
-    async def enhance_context_with_lore(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Enhance a context object with relevant lore.
-        
-        Args:
-            context: Current context
-            
-        Returns:
-            Enhanced context with relevant lore
-        """
-        return await self.context_enhancer.enhance_context(context)
-    
-    #---------------------------
-    # Cache Methods
-    #---------------------------
-    
-    async def get_cached_lore(self, lore_type: str, lore_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get lore from cache if available, otherwise fetch from database.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of the lore element
-            
-        Returns:
-            Lore data or None if not found
-        """
-        # Try cache first
-        cache_key = f"{lore_type}_{lore_id}"
-        cached = await self.cache.get("lore", cache_key, self.user_id, self.conversation_id)
-        if cached:
-            return cached
-            
-        # Fetch from database
-        lore = None
-        if lore_type == "WorldLore":
-            # Get world lore
-            pass
-        elif lore_type == "Factions":
-            lore = await self.faction_data.get_faction_details(lore_id)
-        elif lore_type == "Locations":
-            lore = await self.location_data.get_location_with_lore(lore_id)
-        
-        # Cache for future use
-        if lore:
-            await self.cache.set("lore", cache_key, lore, None, self.user_id, self.conversation_id)
-            
-        return lore
-    
-    async def invalidate_lore_cache(self, lore_type: str, lore_id: Optional[int] = None):
-        """
-        Invalidate lore cache entries.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: Optional ID of specific lore element or None to invalidate all of type
-        """
-        if lore_id is not None:
-            cache_key = f"{lore_type}_{lore_id}"
-            await self.cache.invalidate("lore", cache_key, self.user_id, self.conversation_id)
-        else:
-            pattern = lore_type
-            await self.cache.invalidate_pattern("lore", pattern, self.user_id, self.conversation_id)
-    
-    #---------------------------
-    # Utility Methods
-    #---------------------------
-    
+# ---------------------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------------------
     async def cleanup(self):
-        """Clean up resources used by the LoreSystem."""
+        """Clean up resources used by the LoreSystem (and managers)."""
         try:
-            # Cleanup all components
-            await self.npc_data.cleanup()
-            await self.location_data.cleanup()
-            await self.faction_data.cleanup()
-            await self.lore_knowledge.cleanup()
-            
-            await self.npc_integration.cleanup()
-            await self.conflict_integration.cleanup()
-            await self.context_enhancer.cleanup()
-            
-            await self.generator.cleanup()
-            
-            # Remove from instances cache
+            # Collect all cleanup tasks in parallel
+            cleanup_tasks = [
+                self.npc_data.cleanup(),
+                self.location_data.cleanup(),
+                self.faction_data.cleanup(),
+                self.lore_knowledge.cleanup(),
+                self.npc_integration.cleanup(),
+                self.conflict_integration.cleanup(),
+                self.context_enhancer.cleanup(),
+                self.generator.cleanup()
+            ]
+    
+            # Example approach: if each manager implements a 'cleanup' method, call it
+            for manager in [
+                self.education_manager,
+                self.religion_manager,
+                self.local_lore_manager,
+                self.geopolitical_manager,
+                self.regional_culture_system,
+                self.world_politics_manager,
+                self.lore_dynamics_system
+            ]:
+                if hasattr(manager, "cleanup") and callable(manager.cleanup):
+                    cleanup_tasks.append(manager.cleanup())
+    
+            # Execute all cleanup tasks concurrently
+            import asyncio
+            await asyncio.gather(*cleanup_tasks)
+    
+            # Remove this instance from the global cache
             key = f"{self.user_id or 'global'}:{self.conversation_id or 'global'}"
             if key in LORE_SYSTEM_INSTANCES:
                 del LORE_SYSTEM_INSTANCES[key]
-                
+    
         except Exception as e:
             logger.error(f"Error during LoreSystem cleanup: {e}")
-
-# Create a singleton instance for easy access
-lore_system = LoreSystem()
