@@ -1,389 +1,258 @@
 # lore/frameworks/matriarchal.py
 
-import random
+import json
 from typing import Dict, List, Any
 
-# Assuming this base manager is already refactored to use the Agents SDK
+# Agents SDK imports
+from agents import (
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool
+)
+from agents.run_context import RunContextWrapper
+from agents.run import RunConfig
+
+# Project-specific import
 from lore.core.base_manager import BaseLoreManager
 
-from agents import function_tool  # If we want to expose certain methods as tools
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
-    Defines core principles for power dynamics in femdom settings,
-    ensuring consistency across all generated lore.
+    Defines core principles for power dynamics in femdom/matriarchal settings,
+    ensuring consistency across generated lore. 
+    This version is fully agent-ified so everything is dynamic and narrative-heavy.
     """
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
-        self.core_principles = self._initialize_core_principles()
+
+        # We now rely on an Agent to generate or transform everything, 
+        # instead of using a fixed dictionary or random sampling.
+        self.transformation_agent = Agent(
+            name="MatriarchalTransformationAgent",
+            instructions=(
+                "You are an expert at crafting narrative-rich, matriarchal (femdom) lore. "
+                "Given instructions and context, you generate or rewrite text in a strongly matriarchal style. "
+                "Your output should be immersive, cohesive, and consistent with the premise that "
+                "women hold most or all power, and men occupy subordinate or service-based roles."
+            ),
+            model="o3-mini",  # You can change this to a more capable model if desired
+            model_settings=ModelSettings(temperature=0.9)
+        )
+
+    # ------------------------------------------------------------------
+    # INTERNAL HELPERS
+    # ------------------------------------------------------------------
+
+    async def _transform_text(self, original_text: str, context_desc: str) -> str:
+        """
+        Send `original_text` to the LLM-based transformation_agent, 
+        requesting a matriarchal rewrite based on context_desc.
+        """
+        prompt = (
+            f"CONTEXT:\n{context_desc}\n\n"
+            f"ORIGINAL TEXT:\n{original_text}\n\n"
+            "Rewrite or transform the text to reflect a strongly matriarchal society. "
+            "Focus on narrative immersion and creative detail. Only output the final text."
+        )
+
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "matriarchal transformation"
+        })
+        run_cfg = RunConfig(
+            workflow_name="MatriarchalRewrite",
+            trace_metadata=self.trace_metadata
+        )
         
-    def _initialize_core_principles(self) -> Dict[str, Any]:
-        """Initialize core principles for matriarchal power structures."""
-        return {
-            "power_dynamics": {
-                "dominant_gender": "female",
-                "power_expression": [
-                    "political",
-                    "economic",
-                    "religious",
-                    "domestic",
-                    "sexual"
-                ],
-                "hierarchy_types": [
-                    "matrilineal",
-                    "matrifocal",
-                    "matriarchal",
-                    "gynocentric"
-                ],
-                "masculine_roles": [
-                    "service",
-                    "support",
-                    "nurture",
-                    "protection",
-                    "resources"
-                ],
-                "counter_dynamics": [
-                    "resistance movements",
-                    "historical shifts",
-                    "regional variations"
-                ]
-            },
-            "societal_norms": {
-                "female_leadership": {
-                    "political",
-                    "religious",
-                    "economic",
-                    "familial",
-                    "military"
-                },
-                "female_property_rights": {
-                    "land ownership",
-                    "business ownership",
-                    "inheritance"
-                },
-                "male_status_markers": {
-                    "service quality",
-                    "obedience",
-                    "beauty",
-                    "utility",
-                    "devotion"
-                },
-                "relationship_structures": {
-                    "polygyny",
-                    "polyandry",
-                    "monoandry",
-                    "collective households"
-                },
-                "enforcement_mechanisms": {
-                    "social pressure",
-                    "legal restrictions",
-                    "physical punishment",
-                    "economic sanctions"
+        result = await Runner.run(
+            starting_agent=self.transformation_agent,
+            input=prompt,
+            context=run_ctx.context,
+            run_config=run_cfg
+        )
+        return result.final_output
+
+    async def _call_transformation_agent_for_json(self, prompt_text: str, workflow_name: str) -> Any:
+        """
+        Helper function that sends a prompt requesting strictly valid JSON output. 
+        If the response is invalid JSON, returns None or an empty structure.
+        """
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "fetching JSON data for matriarchal lore"
+        })
+        run_cfg = RunConfig(
+            workflow_name=workflow_name,
+            trace_metadata=self.trace_metadata
+        )
+
+        result = await Runner.run(
+            starting_agent=self.transformation_agent,
+            input=prompt_text,
+            context=run_ctx.context,
+            run_config=run_cfg
+        )
+
+        try:
+            return json.loads(result.final_output)
+        except json.JSONDecodeError:
+            return None  # or return an empty dict/list if you prefer
+
+    # ------------------------------------------------------------------
+    # 1) Generating Core Principles
+    # ------------------------------------------------------------------
+    @function_tool
+    async def generate_core_principles(self) -> Dict[str, Any]:
+        """
+        Dynamically generate a set of 'core principles' for a femdom/matriarchal world,
+        returning a JSON structure with sections like power_dynamics, societal_norms,
+        symbolic_representations, etc.
+
+        Returns:
+            A dictionary representing the newly generated principles. 
+            Example shape:
+                {
+                    "power_dynamics": {...},
+                    "societal_norms": {...},
+                    "symbolic_representations": {...}
                 }
-            },
-            "symbolic_representations": {
-                "feminine_symbols": [
-                    "chalice",
-                    "circle",
-                    "spiral",
-                    "dome",
-                    "moon"
-                ],
-                "masculine_symbols": [
-                    "kneeling figures",
-                    "chains",
-                    "collars",
-                    "restraints"
-                ],
-                "cultural_motifs": [
-                    "female nurture",
-                    "female authority",
-                    "male submission",
-                    "service ethics"
-                ]
-            }
-        }
-    
+        """
+        prompt = (
+            "Generate a JSON object describing the core principles of a strongly matriarchal (femdom) world. "
+            "Include sections like 'power_dynamics', 'societal_norms', and 'symbolic_representations'. "
+            "Each section should be detailed, engaging, and suitable for a narrative-heavy setting. "
+            "Your output must be valid JSON, with no extra text. Example structure:\n\n"
+            "{\n"
+            '  "power_dynamics": {\n'
+            '      "dominant_gender": "female",\n'
+            '      "power_expressions": ["..."],\n'
+            '      ...\n'
+            "  },\n"
+            '  "societal_norms": {\n'
+            '      ...\n'
+            "  },\n"
+            '  "symbolic_representations": {\n'
+            '      ...\n'
+            "  }\n"
+            "}"
+        )
+
+        data = await self._call_transformation_agent_for_json(
+            prompt_text=prompt, 
+            workflow_name="GenerateCorePrinciples"
+        )
+        if not data:
+            return {}
+        return data
+
+    # ------------------------------------------------------------------
+    # 2) Generating Hierarchical Constraints
+    # ------------------------------------------------------------------
+    @function_tool
+    async def generate_hierarchical_constraints(self) -> Dict[str, Any]:
+        """
+        Use the LLM to produce an immersive, narrative-heavy JSON object that 
+        describes the hierarchical constraints in a matriarchal setting. 
+        This replaces the old random-sampling approach with agent-driven creativity.
+
+        Returns:
+            A dict describing hierarchy_type, power_expressions, roles, etc., 
+            but in a dynamic, story-driven format.
+        """
+        prompt = (
+            "Produce a JSON object describing hierarchical constraints in a femdom/matriarchal world. "
+            "It must include items such as:\n"
+            "- 'dominant_hierarchy_type': a key string or short phrase.\n"
+            "- 'description': a short narrative statement clarifying that hierarchy.\n"
+            "- 'power_expressions': an array of unique ways female power is exerted.\n"
+            "- 'masculine_roles': an array describing how men fit into each expression.\n"
+            "- 'leadership_domains': an array listing spheres where women hold undisputed authority.\n"
+            "- 'property_rights': an array or statement about how ownership is allocated.\n"
+            "- 'status_markers': how men achieve or lose status.\n"
+            "- 'relationship_structure': e.g., polygyny, polyandry, etc.\n"
+            "- 'enforcement_mechanisms': how rules are enforced.\n\n"
+            "Make it interesting, unique, and fully valid JSON with no wrapping text."
+        )
+
+        data = await self._call_transformation_agent_for_json(
+            prompt_text=prompt, 
+            workflow_name="GenerateHierarchicalConstraints"
+        )
+        if not data:
+            return {}
+        return data
+
+    # ------------------------------------------------------------------
+    # 3) LENS APPLICATION (foundation_data transformation)
+    # ------------------------------------------------------------------
     @function_tool
     async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Apply a matriarchal lens to generated foundation lore.
-
-        Args:
-            foundation_data: Original foundation lore
-
-        Returns:
-            The foundation lore transformed through a matriarchal lens
+        Apply a matriarchal lens to the foundation lore, rewriting each 
+        relevant field via the transformation agent for an engaging, 
+        narrative-rich output.
         """
-        # Transform generic social structures into matriarchal ones
         if "social_structure" in foundation_data:
-            foundation_data["social_structure"] = self._transform_to_matriarchal(
-                foundation_data["social_structure"]
+            foundation_data["social_structure"] = await self._transform_text(
+                foundation_data["social_structure"],
+                context_desc="Rewrite the social structure in a strongly matriarchal style."
             )
         
-        # Transform cosmology to reflect feminine primacy
         if "cosmology" in foundation_data:
-            foundation_data["cosmology"] = self._feminize_cosmology(
-                foundation_data["cosmology"]
+            foundation_data["cosmology"] = await self._transform_text(
+                foundation_data["cosmology"],
+                context_desc="Emphasize feminine primacy, goddess-centered beliefs, or gendered myth."
             )
         
-        # Transform magic system to reflect gendered power dynamics
         if "magic_system" in foundation_data:
-            foundation_data["magic_system"] = self._gender_magic_system(
-                foundation_data["magic_system"]
+            foundation_data["magic_system"] = await self._transform_text(
+                foundation_data["magic_system"],
+                context_desc="Highlight how women wield greater or central magical authority."
             )
         
-        # Ensure world history reflects matriarchal development
         if "world_history" in foundation_data:
-            foundation_data["world_history"] = self._matriarchalize_history(
-                foundation_data["world_history"]
+            foundation_data["world_history"] = await self._transform_text(
+                foundation_data["world_history"],
+                context_desc="Reflect matriarchal development, female-led conquests, or shifts in power."
             )
             
-        # Ensure calendar system reflects feminine significance
         if "calendar_system" in foundation_data:
-            foundation_data["calendar_system"] = self._feminize_calendar(
-                foundation_data["calendar_system"]
+            foundation_data["calendar_system"] = await self._transform_text(
+                foundation_data["calendar_system"],
+                context_desc="Show feminine significance in months, lunar cycles, and symbolic rituals."
             )
             
         return foundation_data
-    
-    def _transform_to_matriarchal(self, social_structure: str) -> str:
-        """
-        Transform a generic social structure description into a matriarchal one.
 
-        Args:
-            social_structure: Original social structure description
-
-        Returns:
-            A matriarchal social structure description
-        """
-        principles = self.core_principles["power_dynamics"]
-        norms = self.core_principles["societal_norms"]
-        
-        # Extract key elements from the original structure
-        lower_structure = social_structure.lower()
-        has_monarchy = "monarchy" in lower_structure
-        has_aristocracy = (
-            "aristocracy" in lower_structure or "noble" in lower_structure
-        )
-        has_democracy = (
-            "democracy" in lower_structure or "republic" in lower_structure
-        )
-        has_theocracy = (
-            "theocracy" in lower_structure or "religious" in lower_structure
-        )
-        has_tribal = "tribal" in lower_structure or "clan" in lower_structure
-        
-        # Begin constructing a matriarchal description
-        transformed = "This society is fundamentally matriarchal. "
-        
-        if has_monarchy:
-            transformed += (
-                "The supreme ruler is always a Queen or Empress, "
-                "with succession passed through the maternal line. "
-            )
-        if has_aristocracy:
-            transformed += (
-                "Noble titles and land are held predominantly by women, "
-                "with men serving as consorts or stewards. "
-            )
-        if has_democracy:
-            transformed += (
-                "While there is a democratic process, only women may vote "
-                "or hold significant office. Men may serve in supportive administrative roles. "
-            )
-        if has_theocracy:
-            transformed += (
-                "Religious authority is held exclusively by women, "
-                "with male clergy serving in subordinate positions. "
-            )
-        if has_tribal:
-            transformed += (
-                "Clan and tribal leadership passes through the maternal line, "
-                "with Matriarchs holding ultimate authority. "
-            )
-            
-        # Add detail about male status
-        transformed += (
-            "Men are valued for their service to women and society, with status "
-            "determined by their usefulness and loyalty. "
-        )
-        
-        # Add societal norms
-        transformed += (
-            "Female property ownership is absolute, with inheritance flowing "
-            "through the maternal line. Cultural practices, laws, and social norms "
-            "all reinforce the natural authority of women over men. "
-        )
-        
-        # Optionally merge with original text if it's substantial
-        if len(social_structure) > 200:
-            transformed += (
-                "While maintaining these fundamental matriarchal principles, the society "
-                "also incorporates elements of its historical development: "
-            ) + social_structure
-            
-        return transformed
-    
-    def _feminize_cosmology(self, cosmology: str) -> str:
-        """Transform cosmology to reflect feminine primacy."""
-        # Placeholder implementation
-        return cosmology
-        
-    def _gender_magic_system(self, magic_system: str) -> str:
-        """Transform magic system to reflect gendered power dynamics."""
-        # Placeholder implementation
-        return magic_system
-        
-    def _matriarchalize_history(self, world_history: str) -> str:
-        """Ensure world history reflects matriarchal development."""
-        # Placeholder implementation
-        return world_history
-        
-    def _feminize_calendar(self, calendar_system: str) -> str:
-        """Ensure calendar system reflects feminine significance."""
-        # Placeholder implementation
-        return calendar_system
-    
+    # ------------------------------------------------------------------
+    # 4) Generating Power Expressions
+    # ------------------------------------------------------------------
     @function_tool
-    def generate_hierarchical_constraints(self) -> Dict[str, Any]:
+    async def generate_power_expressions(self) -> List[Dict[str, Any]]:
         """
-        Generate consistent rules about power hierarchies.
+        Generate a list of power expressions describing ways in which 
+        female authority and male submission manifest in the world, 
+        each accompanied by narrative detail. 
+        Returns a parsed list from a JSON response.
+        """
+        prompt = (
+            "Generate a JSON array, each item describing a unique 'power expression' in a "
+            "femdom/matriarchal fantasy world. Include fields:\n"
+            "- 'domain': (political, economic, religious, domestic, sexual, etc.)\n"
+            "- 'title': short name or label for the expression.\n"
+            "- 'description': a story-like explanation of how women's power is exercised.\n"
+            "- 'male_role': how men specifically submit or contribute.\n\n"
+            "Output strictly valid JSON with no additional formatting."
+        )
 
-        Returns:
-            A dictionary of hierarchical constraints to maintain across lore
-        """
-        hierarchy_types = self.core_principles["power_dynamics"]["hierarchy_types"]
-        chosen_type = random.choice(hierarchy_types)
-        
-        constraints = {
-            "dominant_hierarchy_type": chosen_type,
-            "power_expressions": random.sample(
-                self.core_principles["power_dynamics"]["power_expression"], 3
-            ),
-            "masculine_roles": random.sample(
-                self.core_principles["power_dynamics"]["masculine_roles"], 3
-            ),
-            "leadership_domains": random.sample(
-                list(self.core_principles["societal_norms"]["female_leadership"]), 3
-            ),
-            "property_rights": random.sample(
-                list(self.core_principles["societal_norms"]["female_property_rights"]), 2
-            ),
-            "status_markers": random.sample(
-                list(self.core_principles["societal_norms"]["male_status_markers"]), 3
-            ),
-            "relationship_structure": random.choice(
-                list(self.core_principles["societal_norms"]["relationship_structures"])
-            ),
-            "enforcement_mechanisms": random.sample(
-                list(self.core_principles["societal_norms"]["enforcement_mechanisms"]), 2
-            )
-        }
-        
-        if chosen_type == "matrilineal":
-            constraints["description"] = (
-                "Descent and inheritance pass through the maternal line, "
-                "with women controlling family resources."
-            )
-        elif chosen_type == "matrifocal":
-            constraints["description"] = (
-                "Women are the center of family life and decision-making, "
-                "with men in peripheral roles."
-            )
-        elif chosen_type == "matriarchal":
-            constraints["description"] = (
-                "Women hold formal political, economic, and social power over men in all domains."
-            )
-        elif chosen_type == "gynocentric":
-            constraints["description"] = (
-                "Society and culture are centered on feminine needs, values, and perspectives."
-            )
-        
-        return constraints
-    
-    @function_tool
-    def generate_power_expressions(self) -> List[Dict[str, Any]]:
-        """
-        Generate specific expressions of female power and male submission.
-
-        Returns:
-            A list of power expression descriptions
-        """
-        expressions = []
-        
-        # Political expressions
-        expressions.append({
-            "domain": "political",
-            "title": "Council of Matriarchs",
-            "description": (
-                "The ruling council composed exclusively of senior women who "
-                "make all major decisions for the community."
-            ),
-            "male_role": (
-                "Advisors and administrators who carry out the Matriarchs' decisions without question."
-            )
-        })
-        
-        # Economic expressions
-        expressions.append({
-            "domain": "economic",
-            "title": "Female Property Ownership",
-            "description": (
-                "All significant property, businesses, and resources are owned and controlled by women."
-            ),
-            "male_role": (
-                "Men manage resources only as agents of their female relatives or superiors."
-            )
-        })
-        
-        # Religious expressions
-        expressions.append({
-            "domain": "religious",
-            "title": "Priestesshood",
-            "description": (
-                "Religious authority vested in female clergy who interpret the will of the Goddesses."
-            ),
-            "male_role": (
-                "Temple servants who handle mundane tasks and participate in rituals as directed."
-            )
-        })
-        
-        # Domestic expressions
-        expressions.append({
-            "domain": "domestic",
-            "title": "Household Governance",
-            "description": (
-                "Women control the household, making all significant decisions about family life."
-            ),
-            "male_role": (
-                "Men handle domestic labor and childcare under female direction."
-            )
-        })
-        
-        # Sexual expressions
-        expressions.append({
-            "domain": "sexual",
-            "title": "Female Sexual Agency",
-            "description": (
-                "Women determine when, how, and with whom sexual activity occurs."
-            ),
-            "male_role": (
-                "Men's sexuality is considered a resource to be managed and directed by women."
-            )
-        })
-        
-        # Military expressions
-        expressions.append({
-            "domain": "military",
-            "title": "Feminine Command",
-            "description": (
-                "Military leadership is exclusively female, with generals and officers all being women."
-            ),
-            "male_role": (
-                "Men serve as foot soldiers, following orders from their female superiors."
-            )
-        })
-        
-        return expressions
+        data = await self._call_transformation_agent_for_json(
+            prompt_text=prompt,
+            workflow_name="GeneratePowerExpressions"
+        )
+        if not data or not isinstance(data, list):
+            return []
+        return data
