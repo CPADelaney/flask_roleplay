@@ -144,7 +144,7 @@ class StoryDirectorContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     metrics: StoryDirectorMetrics = field(default_factory=StoryDirectorMetrics)
     last_state_update: Optional[datetime] = None
-    : Optional[Any] = None
+#    : Optional[Any] = None
     
     # NEW: Context management components
     context_service: Optional[Any] = None
