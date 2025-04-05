@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # --- Pydantic Models ---
 
+
 class CacheItemModel(BaseModel):
     """Model for a cache item"""
     key: str
@@ -134,9 +135,9 @@ class UnifiedCache:
         self.l2_cache = {}
         self.l3_cache = {}
         
-        self.l1_ttl = 60  # 1 minute
+        self.l1_ttl = 60   # 1 minute
         self.l2_ttl = 300  # 5 minutes
-        self.l3_ttl = 1800  # 30 minutes
+        self.l3_ttl = 1800 # 30 minutes
         
         self.l1_max_size = 100
         self.l2_max_size = 500
@@ -173,240 +174,42 @@ class UnifiedCache:
         except Exception as e:
             logger.error(f"Error in cache cleanup task: {e}")
     
-    async def get(
-        self, 
-        key: str, 
-        fetch_func: Callable, 
-        cache_level: int = 1,
-        importance: float = 0.5,
-        ttl_override: Optional[float] = None
-    ) -> Any:
-        """
-        Get an item from cache, or fetch and cache it if not found.
-        
-        Args:
-            key: Cache key
-            fetch_func: Async function to call if cache miss
-            cache_level: Desired cache level (1-3)
-            importance: Importance score (0.0 to 1.0)
-            ttl_override: Optional TTL override in seconds
+    async def _cleanup(self) -> None:
+        """Remove stale items (triggered periodically)"""
+        with custom_span("cache_cleanup"):
+            start = time.time()
+            removed = 0
             
-        Returns:
-            The cached or fetched value
-        """
-        with trace(workflow_name="cache.get"):
-            cache_level = min(max(1, cache_level), 3)
+            # Clean L1 cache
+            stale_keys = [k for k, item in self.l1_cache.items() if item.is_stale(self.l1_ttl)]
+            for key in stale_keys:
+                del self.l1_cache[key]
+                removed += 1
             
-            # Try to get from all cache levels
-            for level in range(cache_level, 0, -1):
-                cache = self._get_cache_by_level(level)
-                ttl = ttl_override or self._get_ttl_by_level(level)
-                
-                if key in cache:
-                    item = cache[key]
-                    
-                    if not item.is_stale(ttl):
-                        # Cache hit
-                        item.access()
-                        self.hits += 1
-                        
-                        # Promote to higher level if needed
-                        self._promote_item(item, level, cache_level)
-                        
-                        return item.value
-                    else:
-                        # Stale item, remove it
-                        del cache[key]
+            # Clean L2 cache
+            stale_keys = [k for k, item in self.l2_cache.items() if item.is_stale(self.l2_ttl)]
+            for key in stale_keys:
+                del self.l2_cache[key]
+                removed += 1
             
-            # Cache miss
-            self.misses += 1
+            # Clean L3 cache
+            stale_keys = [k for k, item in self.l3_cache.items() if item.is_stale(self.l3_ttl)]
+            for key in stale_keys:
+                del self.l3_cache[key]
+                removed += 1
             
-            # Fetch data
-            try:
-                value = await fetch_func()
-            except Exception as e:
-                logger.error(f"Error fetching data for key {key}: {e}")
-                raise
-            
-            # Store in cache at requested level
-            item = CacheItem(
-                key=key,
-                value=value,
-                importance=importance
-            )
-            
-            cache = self._get_cache_by_level(cache_level)
-            cache[key] = item
-            
-            # Check size limit
-            self._check_size_limit(cache_level)
-            
-            # Maybe run cleanup
-            await self._maybe_cleanup()
-            
-            return value
+            duration = time.time() - start
+            logger.debug(f"Cache cleanup completed in {duration:.3f}s: removed {removed} items")
 
-    async def get_item(
-        self, 
-        ctx: RunContextWrapper,
-        request: CacheOperationRequest,
-        fetch_func: Optional[Callable] = None
-    ) -> Any:
-        """
-        Get an item from cache
-        
-        Args:
-            request: Cache operation request
-            fetch_func: Function to fetch data if not in cache (if None, only check cache)
-            
-        Returns:
-            The cached value or None if not found
-        """
-        with custom_span("cache_get_item"):
-            cache_level = min(max(1, request.cache_level), 3)
-            
-            # Try to get from all cache levels
-            for level in range(cache_level, 0, -1):
-                cache = self._get_cache_by_level(level)
-                ttl = request.ttl_override or self._get_ttl_by_level(level)
-                
-                if request.key in cache:
-                    item = cache[request.key]
-                    
-                    if not item.is_stale(ttl):
-                        # Cache hit
-                        item.access()
-                        self.hits += 1
-                        
-                        # Promote to higher level if needed
-                        self._promote_item(item, level, cache_level)
-                        
-                        return item.value
-                    else:
-                        # Stale item, remove it
-                        del cache[request.key]
-            
-            # Cache miss
-            self.misses += 1
-            
-            # If no fetch function, return None
-            if fetch_func is None:
-                return None
-            
-            # Fetch data
-            try:
-                value = await fetch_func()
-            except Exception as e:
-                logger.error(f"Error fetching data for key {request.key}: {e}")
-                raise
-            
-            # Store in cache at requested level
-            item = CacheItem(
-                key=request.key,
-                value=value,
-                importance=request.importance
-            )
-            
-            cache = self._get_cache_by_level(cache_level)
-            cache[request.key] = item
-            
-            # Check size limit
-            self._check_size_limit(cache_level)
-            
-            # Maybe run cleanup
-            await self._maybe_cleanup()
-            
-            return value
-    
-    @function_tool
-    async def set_item(
-        self, 
-        ctx: RunContextWrapper,
-        request: CacheOperationRequest,
-        value: Any
-    ) -> bool:
-        """
-        Set an item in the cache
-        
-        Args:
-            request: Cache operation request
-            value: Value to cache
-            
-        Returns:
-            Success status
-        """
-        with custom_span("cache_set_item"):
-            cache_level = min(max(1, request.cache_level), 3)
-            
-            # Store in cache at requested level
-            item = CacheItem(
-                key=request.key,
-                value=value,
-                importance=request.importance
-            )
-            
-            cache = self._get_cache_by_level(cache_level)
-            cache[request.key] = item
-            
-            # Check size limit
-            self._check_size_limit(cache_level)
-            
-            return True
-    
-    @function_tool
-    async def invalidate(
-        self, 
-        ctx: RunContextWrapper,
-        request: CacheInvalidateRequest
-    ) -> int:
-        """
-        Invalidate cache entries by key prefix.
-        
-        Args:
-            request: Cache invalidation request
-            
-        Returns:
-            Number of invalidated items
-        """
-        with custom_span("cache_invalidate"):
-            count = 0
-            
-            for cache in [self.l1_cache, self.l2_cache, self.l3_cache]:
-                if request.key_prefix is None:
-                    # Invalidate all
-                    count += len(cache)
-                    cache.clear()
-                else:
-                    # Invalidate by prefix
-                    keys_to_remove = [k for k in cache if k.startswith(request.key_prefix)]
-                    for key in keys_to_remove:
-                        del cache[key]
-                    count += len(keys_to_remove)
-            
-            return count
-    
-    @function_tool
-    async def get_stats(self, ctx: RunContextWrapper) -> CacheStatsModel:
-        """
-        Get cache performance metrics
-        
-        Returns:
-            Cache statistics
-        """
-        with custom_span("cache_get_stats"):
-            total_requests = self.hits + self.misses
-            hit_rate = self.hits / total_requests if total_requests > 0 else 0
-            
-            return CacheStatsModel(
-                hits=self.hits,
-                misses=self.misses,
-                hit_rate=hit_rate,
-                l1_size=len(self.l1_cache),
-                l2_size=len(self.l2_cache),
-                l3_size=len(self.l3_cache),
-                total_items=len(self.l1_cache) + len(self.l2_cache) + len(self.l3_cache)
-            )
-    
+    async def _maybe_cleanup(self) -> None:
+        """Periodically run cleanup operations"""
+        now = time.time()
+        if now - self.last_cleanup < self.cleanup_interval:
+            return
+        # Run cleanup asynchronously
+        self.last_cleanup = now
+        asyncio.create_task(self._cleanup())
+
     def _get_cache_by_level(self, level: int) -> Dict[str, CacheItem]:
         """Get cache dictionary by level"""
         if level == 1:
@@ -435,7 +238,7 @@ class UnifiedCache:
             return self.l3_max_size
     
     def _promote_item(self, item: CacheItem, current_level: int, max_level: int) -> None:
-        """Promote an item to higher cache levels"""
+        """Promote an item to higher cache levels if it has enough accesses"""
         # Only promote items with multiple accesses
         if item.access_count < 2:
             return
@@ -477,50 +280,184 @@ class UnifiedCache:
             if key in cache:
                 del cache[key]
     
-    async def _maybe_cleanup(self) -> None:
-        """Periodically run cleanup operations"""
-        now = time.time()
-        if now - self.last_cleanup < self.cleanup_interval:
-            return
+    # ---------------------------------------------------------------------
+    #           INTERNAL METHODS (no @function_tool, have `self`)
+    # ---------------------------------------------------------------------
+
+    async def _get_item(
+        self,
+        request: CacheOperationRequest,
+        fetch_func: Optional[Callable] = None
+    ) -> Any:
+        """Internal method to get or fetch an item from cache (no run_context)."""
+        with custom_span("cache_get_item"):
+            cache_level = min(max(1, request.cache_level), 3)
             
-        # Run cleanup asynchronously
-        self.last_cleanup = now
-        asyncio.create_task(self._cleanup())
-    
-    async def _cleanup(self) -> None:
-        """Remove stale items"""
-        with custom_span("cache_cleanup"):
-            start = time.time()
-            removed = 0
+            # Try to get from all cache levels
+            for level in range(cache_level, 0, -1):
+                cache = self._get_cache_by_level(level)
+                ttl = request.ttl_override or self._get_ttl_by_level(level)
+                
+                if request.key in cache:
+                    item = cache[request.key]
+                    
+                    if not item.is_stale(ttl):
+                        # Cache hit
+                        item.access()
+                        self.hits += 1
+                        
+                        # Promote to higher level if needed
+                        self._promote_item(item, level, cache_level)
+                        return item.value
+                    else:
+                        # Stale item, remove it
+                        del cache[request.key]
             
-            # Clean L1 cache
-            stale_keys = [k for k, item in self.l1_cache.items() if item.is_stale(self.l1_ttl)]
-            for key in stale_keys:
-                del self.l1_cache[key]
-                removed += 1
+            # Cache miss
+            self.misses += 1
             
-            # Clean L2 cache
-            stale_keys = [k for k, item in self.l2_cache.items() if item.is_stale(self.l2_ttl)]
-            for key in stale_keys:
-                del self.l2_cache[key]
-                removed += 1
+            # If no fetch function, return None
+            if fetch_func is None:
+                return None
             
-            # Clean L3 cache
-            stale_keys = [k for k, item in self.l3_cache.items() if item.is_stale(self.l3_ttl)]
-            for key in stale_keys:
-                del self.l3_cache[key]
-                removed += 1
+            # Fetch data
+            try:
+                value = await fetch_func()
+            except Exception as e:
+                logger.error(f"Error fetching data for key {request.key}: {e}")
+                raise
             
-            duration = time.time() - start
-            logger.debug(f"Cache cleanup completed in {duration:.3f}s: removed {removed} items")
+            # Store in cache at requested level
+            item = CacheItem(
+                key=request.key,
+                value=value,
+                importance=request.importance
+            )
+            
+            target_cache = self._get_cache_by_level(cache_level)
+            target_cache[request.key] = item
+            
+            # Check size limit
+            self._check_size_limit(cache_level)
+            
+            # Maybe run cleanup
+            await self._maybe_cleanup()
+            
+            return value
+
+    async def _set_item(
+        self,
+        request: CacheOperationRequest,
+        value: Any
+    ) -> bool:
+        """Internal method to set an item in the cache."""
+        with custom_span("cache_set_item"):
+            cache_level = min(max(1, request.cache_level), 3)
+            
+            item = CacheItem(
+                key=request.key,
+                value=value,
+                importance=request.importance
+            )
+            
+            cache = self._get_cache_by_level(cache_level)
+            cache[request.key] = item
+            
+            self._check_size_limit(cache_level)
+            return True
+
+    async def _invalidate(
+        self,
+        request: CacheInvalidateRequest
+    ) -> int:
+        """Internal method to invalidate cache entries (no run_context)."""
+        with custom_span("cache_invalidate"):
+            count = 0
+            
+            for cache_dict in [self.l1_cache, self.l2_cache, self.l3_cache]:
+                if request.key_prefix is None:
+                    # Invalidate all
+                    count += len(cache_dict)
+                    cache_dict.clear()
+                else:
+                    # Invalidate by prefix
+                    keys_to_remove = [k for k in cache_dict if k.startswith(request.key_prefix)]
+                    for key in keys_to_remove:
+                        del cache_dict[key]
+                    count += len(keys_to_remove)
+            
+            return count
+
+    async def _get_stats(self) -> CacheStatsModel:
+        """Internal method to get cache performance metrics."""
+        with custom_span("cache_get_stats"):
+            total_requests = self.hits + self.misses
+            hit_rate = self.hits / total_requests if total_requests else 0
+            
+            return CacheStatsModel(
+                hits=self.hits,
+                misses=self.misses,
+                hit_rate=hit_rate,
+                l1_size=len(self.l1_cache),
+                l2_size=len(self.l2_cache),
+                l3_size=len(self.l3_cache),
+                total_items=len(self.l1_cache) + len(self.l2_cache) + len(self.l3_cache)
+            )
+
+# ---------------------------------------------------------------------
+#         STANDALONE TOOL FUNCTIONS (run_context is first param)
+# ---------------------------------------------------------------------
+
+context_cache = UnifiedCache()  # The singleton instance
+
+@function_tool
+async def get_item_tool(
+    ctx: RunContextWrapper,
+    request: CacheOperationRequest
+) -> Any:
+    """
+    Tool: get or fetch an item from the cache.
+    (Expects a run_context as first param, per agents library requirements)
+    """
+    return await context_cache._get_item(request)
+
+
+@function_tool
+async def set_item_tool(
+    ctx: RunContextWrapper,
+    request: CacheOperationRequest,
+    value: Any
+) -> bool:
+    """
+    Tool: set an item in the cache.
+    """
+    return await context_cache._set_item(request, value)
+
+
+@function_tool
+async def invalidate_tool(
+    ctx: RunContextWrapper,
+    request: CacheInvalidateRequest
+) -> int:
+    """
+    Tool: invalidate cache entries by key prefix.
+    """
+    return await context_cache._invalidate(request)
+
+
+@function_tool
+async def get_stats_tool(
+    ctx: RunContextWrapper
+) -> CacheStatsModel:
+    """
+    Tool: get cache statistics.
+    """
+    return await context_cache._get_stats()
 
 
 def create_cache_agent() -> Agent:
-    """Create a cache agent using the OpenAI Agents SDK"""
-    # Get the singleton instance
-    cache = context_cache
-    
-    # Define the agent
+    """Create a cache agent using the OpenAI Agents SDK."""
+    # We define the agent with the new standalone tool functions:
     agent = Agent(
         name="Cache Manager",
         instructions="""
@@ -535,19 +472,16 @@ def create_cache_agent() -> Agent:
         When handling cache operations, prioritize efficiency and performance.
         """,
         tools=[
-            cache.get_item,
-            cache.set_item,
-            cache.invalidate,
-            cache.get_stats,
+            get_item_tool,
+            set_item_tool,
+            invalidate_tool,
+            get_stats_tool,
         ],
     )
     
     return agent
 
 
-# Singleton instance
-context_cache = UnifiedCache()
-
 def get_cache_agent() -> Agent:
-    """Get the cache agent"""
+    """Get the singleton cache agent."""
     return create_cache_agent()
