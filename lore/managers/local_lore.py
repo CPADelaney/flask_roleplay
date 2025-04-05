@@ -2,32 +2,39 @@
 
 import logging
 import json
-from typing import Dict, List, Any, Optional
 import random
+from typing import Dict, List, Any, Optional
 
-from agents import Agent, Runner
+# Agents SDK imports
+from agents import Agent, function_tool, Runner
 from agents.run_context import RunContextWrapper
+from agents.run import RunConfig
+from agents.models import ModelSettings
 
+# Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
+# Project imports
 from embedding.vector_store import generate_embedding
-
 from lore.core.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
 
+logger = logging.getLogger(__name__)
+
+
 class LocalLoreManager(BaseLoreManager):
     """
-    Consolidated manager for local lore elements including urban myths, local histories,
-    landmarks, and other location-specific narratives.
+    Consolidated manager for local lore elements including urban myths, 
+    local histories, landmarks, and other location-specific narratives.
     """
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.cache_namespace = "locallore"
-    
+
     async def initialize_tables(self):
-        """Ensure all local lore tables exist"""
+        """Ensure all local lore tables exist."""
         table_definitions = {
             "UrbanMyths": """
                 CREATE TABLE UrbanMyths (
@@ -47,7 +54,6 @@ class LocalLoreManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_urbanmyths_embedding 
                 ON UrbanMyths USING ivfflat (embedding vector_cosine_ops);
             """,
-            
             "LocalHistories": """
                 CREATE TABLE LocalHistories (
                     id SERIAL PRIMARY KEY,
@@ -70,7 +76,6 @@ class LocalLoreManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_localhistories_location
                 ON LocalHistories(location_id);
             """,
-            
             "Landmarks": """
                 CREATE TABLE Landmarks (
                     id SERIAL PRIMARY KEY,
@@ -93,20 +98,23 @@ class LocalLoreManager(BaseLoreManager):
                 ON Landmarks(location_id);
             """
         }
-        
         await self.initialize_tables_for_class(table_definitions)
-    
+
+    # ------------------------------------------------------------------------
+    # 1) Add an urban myth
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_urban_myth",
         action_description="Adding urban myth: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
+    @function_tool
     async def add_urban_myth(
-        self, 
+        self,
         ctx,
-        name: str, 
-        description: str, 
+        name: str,
+        description: str,
         origin_location: Optional[str] = None,
         origin_event: Optional[str] = None,
         believability: int = 6,
@@ -114,34 +122,19 @@ class LocalLoreManager(BaseLoreManager):
         regions_known: List[str] = None
     ) -> int:
         """
-        Add a new urban myth to the database
-        
-        Args:
-            name: Name of the urban myth
-            description: Full description of the myth
-            origin_location: Where the myth originated
-            origin_event: What event spawned the myth
-            believability: How believable the myth is (1-10)
-            spread_rate: How quickly the myth is spreading (1-10)
-            regions_known: List of regions where the myth is known
-            
-        Returns:
-            ID of the created urban myth
+        Add a new urban myth to the database (now a function tool).
         """
-        # Ensure tables exist
+
         await self.ensure_initialized()
-        
-        # Set defaults
         regions_known = regions_known or ["local area"]
-        
-        # Apply matriarchal theming
+
+        # Theming
         description = MatriarchalThemingUtils.apply_matriarchal_theme("myth", description)
-        
-        # Generate embedding for the myth
+
+        # Embedding
         embedding_text = f"{name} {description}"
         embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
+
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 myth_id = await conn.fetchval("""
@@ -151,19 +144,24 @@ class LocalLoreManager(BaseLoreManager):
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING id
-                """, name, description, origin_location, origin_event,
-                     believability, spread_rate, regions_known, embedding)
-                
+                """,
+                name, description, origin_location, origin_event,
+                believability, spread_rate, regions_known, embedding)
+
                 return myth_id
-    
+
+    # ------------------------------------------------------------------------
+    # 2) Add local history
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_local_history",
         action_description="Adding local history event: {event_name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
+    @function_tool
     async def add_local_history(
-        self, 
+        self,
         ctx,
         location_id: int,
         event_name: str,
@@ -176,36 +174,17 @@ class LocalLoreManager(BaseLoreManager):
         commemoration: str = None
     ) -> int:
         """
-        Add a local historical event to the database
-        
-        Args:
-            location_id: ID of the associated location
-            event_name: Name of the historical event
-            description: Description of the event
-            date_description: When it occurred
-            significance: Importance from 1-10
-            impact_type: Type of impact (political, cultural, etc.)
-            notable_figures: People involved
-            current_relevance: How it affects the present
-            commemoration: How it's remembered/celebrated
-            
-        Returns:
-            ID of the created local history event
+        Add a local historical event to the database (function tool).
         """
-        # Ensure tables exist
+
         await self.ensure_initialized()
-        
-        # Set defaults
         notable_figures = notable_figures or []
-        
-        # Apply matriarchal theming
+
         description = MatriarchalThemingUtils.apply_matriarchal_theme("history", description)
-        
-        # Generate embedding
+
         embedding_text = f"{event_name} {description} {date_description}"
         embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
+
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 event_id = await conn.fetchval("""
@@ -216,23 +195,27 @@ class LocalLoreManager(BaseLoreManager):
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING id
-                """, location_id, event_name, description, date_description,
-                     significance, impact_type, notable_figures,
-                     current_relevance, commemoration, embedding)
-                
+                """,
+                location_id, event_name, description, date_description,
+                significance, impact_type, notable_figures,
+                current_relevance, commemoration, embedding)
+
                 # Invalidate relevant cache
                 self.invalidate_cache_pattern(f"local_history_{location_id}")
-                
                 return event_id
-    
+
+    # ------------------------------------------------------------------------
+    # 3) Add landmark
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_landmark",
         action_description="Adding landmark: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
+    @function_tool
     async def add_landmark(
-        self, 
+        self,
         ctx,
         name: str,
         location_id: int,
@@ -244,35 +227,17 @@ class LocalLoreManager(BaseLoreManager):
         legends: List[str] = None
     ) -> int:
         """
-        Add a landmark to the database
-        
-        Args:
-            name: Name of the landmark
-            location_id: ID of the associated location
-            landmark_type: Type of landmark (monument, building, natural feature, etc.)
-            description: Description of the landmark
-            historical_significance: Historical importance
-            current_use: How it's used today
-            controlled_by: Who controls/owns it
-            legends: Associated legends or stories
-            
-        Returns:
-            ID of the created landmark
+        Add a landmark to the database (function tool).
         """
-        # Ensure tables exist
+
         await self.ensure_initialized()
-        
-        # Set defaults
         legends = legends or []
-        
-        # Apply matriarchal theming
+
         description = MatriarchalThemingUtils.apply_matriarchal_theme("landmark", description)
-        
-        # Generate embedding
+
         embedding_text = f"{name} {landmark_type} {description}"
         embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
+
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 landmark_id = await conn.fetchval("""
@@ -283,15 +248,17 @@ class LocalLoreManager(BaseLoreManager):
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING id
-                """, name, location_id, landmark_type, description,
-                     historical_significance, current_use, controlled_by,
-                     legends, embedding)
-                
-                # Invalidate relevant cache
+                """,
+                name, location_id, landmark_type, description,
+                historical_significance, current_use, controlled_by,
+                legends, embedding)
+
                 self.invalidate_cache_pattern(f"landmarks_{location_id}")
-                
                 return landmark_id
-    
+
+    # ------------------------------------------------------------------------
+    # 4) Get location lore
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_location_lore",
@@ -300,36 +267,27 @@ class LocalLoreManager(BaseLoreManager):
     )
     async def get_location_lore(self, ctx, location_id: int) -> Dict[str, Any]:
         """
-        Get all lore associated with a location (myths, history, landmarks)
-        
-        Args:
-            location_id: ID of the location
-            
-        Returns:
-            Dictionary with all lore for the location
+        Get all lore associated with a location (myths, history, landmarks).
         """
-        # Check cache first
+
         cache_key = f"location_lore_{location_id}"
         cached = self.get_cache(cache_key)
         if cached:
             return cached
-        
-        # Get location details
+
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                # Get location name
                 location = await conn.fetchrow("""
                     SELECT id, location_name
                     FROM Locations
                     WHERE id = $1
                 """, location_id)
-                
                 if not location:
                     return {"error": "Location not found"}
-                
+
                 location_name = location["location_name"]
-                
-                # Get all local histories
+
+                # Histories
                 histories = await conn.fetch("""
                     SELECT id, event_name, description, date_description,
                            significance, impact_type, notable_figures,
@@ -338,8 +296,8 @@ class LocalLoreManager(BaseLoreManager):
                     WHERE location_id = $1
                     ORDER BY significance DESC
                 """, location_id)
-                
-                # Get all landmarks
+
+                # Landmarks
                 landmarks = await conn.fetch("""
                     SELECT id, name, landmark_type, description,
                            historical_significance, current_use,
@@ -347,27 +305,26 @@ class LocalLoreManager(BaseLoreManager):
                     FROM Landmarks
                     WHERE location_id = $1
                 """, location_id)
-                
-                # Get all myths
+
+                # Myths
                 myths = await conn.fetch("""
                     SELECT id, name, description, believability, spread_rate
                     FROM UrbanMyths
                     WHERE origin_location = $1 OR $1 = ANY(regions_known)
                 """, location_name)
-                
-                # Compile result
+
                 result = {
                     "location": dict(location),
-                    "histories": [dict(hist) for hist in histories],
-                    "landmarks": [dict(landmark) for landmark in landmarks],
-                    "myths": [dict(myth) for myth in myths]
+                    "histories": [dict(h) for h in histories],
+                    "landmarks": [dict(l) for l in landmarks],
+                    "myths": [dict(m) for m in myths]
                 }
-                
-                # Cache result
                 self.set_cache(cache_key, result)
-                
                 return result
-    
+
+    # ------------------------------------------------------------------------
+    # 5) Generate location lore
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_location_lore",
@@ -376,104 +333,86 @@ class LocalLoreManager(BaseLoreManager):
     )
     async def generate_location_lore(self, ctx, location_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Generate comprehensive lore for a location
-        
-        Args:
-            location_data: Dictionary with location details
-            
-        Returns:
-            Dictionary with generated lore
+        Generate comprehensive lore for a location using LLM calls 
+        for myths, local histories, and landmarks.
         """
-        # Create run context
+
         run_ctx = self.create_run_context(ctx)
-        
-        # Ensure location data is valid
+
         if not location_data or "id" not in location_data:
             return {"error": "Invalid location data"}
-        
+
         location_id = location_data["id"]
-        
+
         # Generate myths
         myths = await self._generate_myths_for_location(run_ctx, location_data)
-        
         # Generate local histories
         histories = await self._generate_local_history(run_ctx, location_data)
-        
         # Generate landmarks
         landmarks = await self._generate_landmarks(run_ctx, location_data)
-        
-        # Invalidate location lore cache
+
         self.invalidate_cache(f"location_lore_{location_id}")
-        
+
         return {
             "location": location_data,
             "generated_myths": myths,
             "generated_histories": histories,
             "generated_landmarks": landmarks
         }
-    
+
+    # ------------------------------------------------------------------------
+    # Private generation methods for location lore
+    # ------------------------------------------------------------------------
     async def _generate_myths_for_location(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate urban myths for a location"""
-        # Extract relevant details
+        """Generate urban myths for a location."""
         location_id = location_data.get('id')
         location_name = location_data.get('location_name', 'Unknown Location')
         location_type = location_data.get('location_type', 'place')
-        description = location_data.get('description', '')
-        
-        # Create a prompt for the LLM
+        desc = location_data.get('description', '')
+
         prompt = f"""
         Generate 2-3 urban myths or local legends associated with this location:
-        
+
         LOCATION: {location_name} ({location_type})
-        DESCRIPTION: {description}
-        
-        Create urban myths that feel authentic to this location. Each myth should:
-        1. Be somewhat believable but with fantastical elements
-        2. Reflect local concerns, features, or history
-        3. Have some connection to matriarchal power structures
-        
-        Format your response as a JSON array where each object has:
-        - "name": The name/title of the myth
-        - "description": A detailed description of the myth
-        - "believability": Number from 1-10 indicating how believable it is
-        - "spread_rate": Number from 1-10 indicating how widely it has spread
-        - "origin": Brief statement of how the myth originated
+        DESCRIPTION: {desc}
+
+        Requirements:
+        1. Somewhat believable but with fantastical elements
+        2. Reflect local concerns or history
+        3. Ties to matriarchal power structures
+
+        Return JSON array with:
+        - name
+        - description
+        - believability (1-10)
+        - spread_rate (1-10)
+        - origin
         """
-        
-        # Create an agent for myth generation
+
         myth_agent = Agent(
             name="UrbanMythAgent",
             instructions="You create urban myths and local legends for locations.",
-            model="o3-mini"
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
         )
-        
-        # Get the response
-        result = await Runner.run(myth_agent, prompt, context=ctx.context)
-        
+        run_config = RunConfig(workflow_name="GenerateMyths")
+        result = await Runner.run(myth_agent, prompt, context=ctx.context, run_config=run_config)
+
+        saved_myths = []
         try:
-            # Parse the JSON response
             myths = json.loads(result.final_output)
-            
-            # Ensure we got a list
             if not isinstance(myths, list):
-                if isinstance(myths, dict):
-                    myths = [myths]
-                else:
-                    myths = []
-            
-            # Store each myth
-            saved_myths = []
+                myths = [myths] if isinstance(myths, dict) else []
+
             for myth in myths:
-                # Extract myth details
                 name = myth.get('name')
                 description = myth.get('description')
-                believability = myth.get('believability', random.randint(4, 8))
-                spread_rate = myth.get('spread_rate', random.randint(3, 7))
-                
+                believability = myth.get('believability', random.randint(4,8))
+                spread_rate = myth.get('spread_rate', random.randint(3,7))
+
                 if not name or not description:
                     continue
-                
-                # Save the myth
+
                 try:
                     myth_id = await self.add_urban_myth(
                         ctx,
@@ -484,86 +423,71 @@ class LocalLoreManager(BaseLoreManager):
                         spread_rate=spread_rate,
                         regions_known=[location_name]
                     )
-                    
-                    # Add to results
                     myth['id'] = myth_id
                     saved_myths.append(myth)
                 except Exception as e:
-                    logging.error(f"Error saving urban myth '{name}': {e}")
-            
-            return saved_myths
+                    logger.error(f"Error saving urban myth '{name}': {e}")
+
         except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response for urban myths: {result.final_output}")
-            return []
-    
+            logger.error(f"Failed to parse myths JSON: {result.final_output}")
+
+        return saved_myths
+
     async def _generate_local_history(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate local historical events for a location"""
-        # Extract relevant details
+        """Generate local historical events for a location."""
         location_id = location_data.get('id')
         location_name = location_data.get('location_name', 'Unknown Location')
         location_type = location_data.get('location_type', 'place')
-        description = location_data.get('description', '')
-        
-        # Create a prompt for the LLM
+        desc = location_data.get('description', '')
+
         prompt = f"""
-        Generate 2-3 local historical events specific to this location:
-        
+        Generate 2-3 local historical events for this location:
+
         LOCATION: {location_name} ({location_type})
-        DESCRIPTION: {description}
-        
-        Create local historical events that feel authentic to this location. Each event should:
-        1. Be specific to this location rather than world-changing
-        2. Reflect local development, conflicts, or cultural shifts
-        3. Include at least one event related to matriarchal power structures
-        4. Include a range of timeframes (some recent, some older)
-        
-        Format your response as a JSON array where each object has:
-        - "event_name": The name of the historical event
-        - "description": A detailed description of what happened
-        - "date_description": When it occurred (e.g., "50 years ago", "during the reign of...")
-        - "significance": Number from 1-10 indicating historical importance
-        - "impact_type": Type of impact (political, cultural, economic, religious, etc.)
-        - "notable_figures": Array of names of people involved
-        - "current_relevance": How it still affects the location today
+        DESCRIPTION: {desc}
+
+        Requirements:
+        - Reflect local development, conflict, or cultural shifts
+        - At least one event about matriarchal power
+        - Different time frames
+
+        Return JSON array with:
+        - event_name
+        - description
+        - date_description
+        - significance (1-10)
+        - impact_type
+        - notable_figures
+        - current_relevance
         """
-        
-        # Create an agent for history generation
+
         history_agent = Agent(
             name="LocalHistoryAgent",
-            instructions="You create local historical events for specific locations.",
-            model="o3-mini"
+            instructions="You create local historical events for locations.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
         )
-        
-        # Get the response
-        result = await Runner.run(history_agent, prompt, context=ctx.context)
-        
+        run_config = RunConfig(workflow_name="GenerateLocalHistory")
+        result = await Runner.run(history_agent, prompt, context=ctx.context, run_config=run_config)
+
+        saved_events = []
         try:
-            # Parse the JSON response
             events = json.loads(result.final_output)
-            
-            # Ensure we got a list
             if not isinstance(events, list):
-                if isinstance(events, dict):
-                    events = [events]
-                else:
-                    events = []
-            
-            # Store each event
-            saved_events = []
-            for event in events:
-                # Extract event details
-                event_name = event.get('event_name')
-                description = event.get('description')
-                date_description = event.get('date_description', 'Some time ago')
-                significance = event.get('significance', 5)
-                impact_type = event.get('impact_type', 'cultural')
-                notable_figures = event.get('notable_figures', [])
-                current_relevance = event.get('current_relevance')
-                
+                events = [events] if isinstance(events, dict) else []
+
+            for evt in events:
+                event_name = evt.get('event_name')
+                description = evt.get('description')
+                date_description = evt.get('date_description', 'Some time ago')
+                significance = evt.get('significance', 5)
+                impact_type = evt.get('impact_type', 'cultural')
+                notable_figures = evt.get('notable_figures', [])
+                current_relevance = evt.get('current_relevance')
+
                 if not event_name or not description:
                     continue
-                
-                # Save the event
+
                 try:
                     event_id = await self.add_local_history(
                         ctx,
@@ -576,109 +500,96 @@ class LocalLoreManager(BaseLoreManager):
                         notable_figures=notable_figures,
                         current_relevance=current_relevance
                     )
-                    
-                    # Add to results
-                    event['id'] = event_id
-                    saved_events.append(event)
+                    evt['id'] = event_id
+                    saved_events.append(evt)
                 except Exception as e:
-                    logging.error(f"Error saving local historical event '{event_name}': {e}")
-            
-            return saved_events
+                    logger.error(f"Error saving local history '{event_name}': {e}")
+
         except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response for local history: {result.final_output}")
-            return []
-    
+            logger.error(f"Failed to parse local history JSON: {result.final_output}")
+
+        return saved_events
+
     async def _generate_landmarks(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate landmarks for a location"""
-        # Extract relevant details
+        """Generate landmarks for a location."""
         location_id = location_data.get('id')
         location_name = location_data.get('location_name', 'Unknown Location')
         location_type = location_data.get('location_type', 'place')
-        description = location_data.get('description', '')
-        
-        # Create a prompt for the LLM
+        desc = location_data.get('description', '')
+
         prompt = f"""
-        Generate 2-3 landmarks found in this location:
-        
+        Generate 2-3 landmarks for this location:
+
         LOCATION: {location_name} ({location_type})
-        DESCRIPTION: {description}
-        
-        Create landmarks that feel authentic to this location. Include:
-        1. At least one natural landmark (if appropriate)
+        DESCRIPTION: {desc}
+
+        Requirements:
+        1. At least one natural landmark (if relevant)
         2. At least one architectural/built landmark
-        3. At least one landmark related to matriarchal power structures
-        
-        Format your response as a JSON array where each object has:
-        - "name": The name of the landmark
-        - "landmark_type": Type of landmark (monument, building, natural feature, temple, etc.)
-        - "description": A detailed physical description
-        - "historical_significance": Its importance to local history
-        - "current_use": How it's used today (ceremonial, practical, tourist attraction, etc.)
-        - "controlled_by": Which faction or group controls it
-        - "legends": Array of brief legends or stories associated with it
+        3. At least one linked to matriarchal power
+
+        Return JSON array with:
+        - name
+        - landmark_type
+        - description
+        - historical_significance
+        - current_use
+        - controlled_by
+        - legends (array)
         """
-        
-        # Create an agent for landmark generation
+
         landmark_agent = Agent(
             name="LandmarkAgent",
             instructions="You create landmarks for specific locations.",
-            model="o3-mini"
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
         )
-        
-        # Get the response
-        result = await Runner.run(landmark_agent, prompt, context=ctx.context)
-        
+        run_config = RunConfig(workflow_name="GenerateLandmarks")
+        result = await Runner.run(landmark_agent, prompt, context=ctx.context, run_config=run_config)
+
+        saved_landmarks = []
         try:
-            # Parse the JSON response
             landmarks = json.loads(result.final_output)
-            
-            # Ensure we got a list
             if not isinstance(landmarks, list):
-                if isinstance(landmarks, dict):
-                    landmarks = [landmarks]
-                else:
-                    landmarks = []
-            
-            # Store each landmark
-            saved_landmarks = []
-            for landmark in landmarks:
-                # Extract landmark details
-                name = landmark.get('name')
-                landmark_type = landmark.get('landmark_type', 'building')
-                description = landmark.get('description')
-                historical_significance = landmark.get('historical_significance')
-                current_use = landmark.get('current_use')
-                controlled_by = landmark.get('controlled_by')
-                legends = landmark.get('legends', [])
-                
+                landmarks = [landmarks] if isinstance(landmarks, dict) else []
+
+            for lm in landmarks:
+                name = lm.get('name')
+                lm_type = lm.get('landmark_type', 'building')
+                description = lm.get('description')
+                hist_signif = lm.get('historical_significance')
+                current_use = lm.get('current_use')
+                controlled_by = lm.get('controlled_by')
+                legends = lm.get('legends', [])
+
                 if not name or not description:
                     continue
-                
-                # Save the landmark
+
                 try:
                     landmark_id = await self.add_landmark(
                         ctx,
                         name=name,
                         location_id=location_id,
-                        landmark_type=landmark_type,
+                        landmark_type=lm_type,
                         description=description,
-                        historical_significance=historical_significance,
+                        historical_significance=hist_signif,
                         current_use=current_use,
                         controlled_by=controlled_by,
                         legends=legends
                     )
-                    
-                    # Add to results
-                    landmark['id'] = landmark_id
-                    saved_landmarks.append(landmark)
+                    lm['id'] = landmark_id
+                    saved_landmarks.append(lm)
                 except Exception as e:
-                    logging.error(f"Error saving landmark '{name}': {e}")
-            
-            return saved_landmarks
+                    logger.error(f"Error saving landmark '{name}': {e}")
+
         except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response for landmarks: {result.final_output}")
-            return []
-    
+            logger.error(f"Failed to parse landmark JSON: {result.final_output}")
+
+        return saved_landmarks
+
+    # ------------------------------------------------------------------------
+    # 6) Evolve location lore
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_location_lore",
@@ -687,222 +598,186 @@ class LocalLoreManager(BaseLoreManager):
     )
     async def evolve_location_lore(self, ctx, location_id: int, event_description: str) -> Dict[str, Any]:
         """
-        Evolve the lore of a location based on an event
-        
-        Args:
-            location_id: ID of the location
-            event_description: Description of the event affecting the location
-            
-        Returns:
-            Dictionary with evolution results
+        Evolve the lore of a location based on an event, 
+        using agent calls to produce new or updated content.
         """
-        # Create run context
+
         run_ctx = self.create_run_context(ctx)
-        
-        # Get current location lore
         location_lore = await self.get_location_lore(ctx, location_id)
-        
         if "error" in location_lore:
             return location_lore
-        
+
         # Theming the event
         themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
-        
-        # Get location name
-        location_name = location_lore.get('location', {}).get('location_name', 'Unknown Location')
-        
-        # Create an agent for lore evolution
+
+        location_name = location_lore.get('location', {}).get('location_name', 'Unknown')
         evolution_agent = Agent(
             name="LoreEvolutionAgent",
-            instructions="You evolve location lore based on events that affect the location.",
-            model="o3-mini"
+            instructions="You evolve location lore based on an event that occurs.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
         )
-        
-        # Process each type of lore and generate updates
-        
-        # 1. Generate a new historical entry for this event
+
+        # We'll do a triple-prompt approach as before
         history_prompt = f"""
-        Based on this event that occurred at {location_name}, create a new historical entry:
-
-        EVENT:
-        {themed_event}
-
-        Create a new historical entry for this event.
-
-        Format your response as a JSON object with:
+        The location is: {location_name}
+        EVENT: {themed_event}
+        
+        Create one new historical entry in JSON:
         "new_history": {{
-            "event_name": "Name for this historical event",
-            "description": "Detailed description of what happened",
-            "date_description": "Recently",
-            "significance": Number from 1-10 indicating historical importance,
-            "impact_type": Type of impact (political, cultural, etc.),
-            "notable_figures": Array of people involved,
-            "current_relevance": How it affects the location now
+          "event_name": "...",
+          "description": "...",
+          "date_description": "Recently",
+          "significance": int (1-10),
+          "impact_type": "...",
+          "notable_figures": [...],
+          "current_relevance": "..."
         }}
         """
-        
-        # 2. Maybe add a new landmark or modify existing one
-        landmark_prompt = f"""
-        Based on this event that occurred at {location_name}, determine if it would create a new landmark 
-        or significantly modify an existing one:
 
-        EVENT:
-        {themed_event}
+        landmark_prompt = f"""
+        The location is: {location_name}
+        EVENT: {themed_event}
 
         CURRENT LANDMARKS:
         {json.dumps(location_lore.get('landmarks', [])[:2], indent=2)}
 
-        Format your response as a JSON object with:
-        - "new_landmark": Optional details for a new landmark if the event creates one
-        - "modified_landmark_id": Optional ID of a landmark to modify
-        - "landmark_update": Optional new description for the modified landmark
+        Decide if we add or modify a landmark. Return JSON:
+        - "new_landmark": ... (same structure as add_landmark call)
+        - "modified_landmark_id": ...
+        - "landmark_update": "New description if modifying"
         """
-        
-        # 3. Maybe add a new urban myth
+
         myth_prompt = f"""
-        Based on this event that occurred at {location_name}, determine if it would spawn a new urban myth:
+        The location is: {location_name}
+        EVENT: {themed_event}
 
-        EVENT:
-        {themed_event}
-
-        Format your response as a JSON object with:
-        "new_myth": {{
-            "name": "Name of the new myth",
-            "description": "Detailed description of the myth",
-            "believability": Number from 1-10,
-            "spread_rate": Number from 1-10
+        Possibly create a new myth. Return JSON with "new_myth": {{
+          "name": "...",
+          "description": "...",
+          "believability": int,
+          "spread_rate": int
         }}
         """
-        
-        # Execute all three prompts
+
+        # Run them
         history_result = await Runner.run(evolution_agent, history_prompt, context=run_ctx.context)
         landmark_result = await Runner.run(evolution_agent, landmark_prompt, context=run_ctx.context)
         myth_result = await Runner.run(evolution_agent, myth_prompt, context=run_ctx.context)
-        
-        # Process the results and apply updates
+
+        # Process results
+        new_history = None
+        new_landmark = None
+        updated_landmark = None
+        new_myth = None
+
         try:
-            # Add new history entry
-            history_changes = json.loads(history_result.final_output)
-            new_history = None
-            
-            if "new_history" in history_changes:
-                history_entry = history_changes["new_history"]
-                
-                # Add the history entry
+            # 1) Add new history
+            history_data = json.loads(history_result.final_output)
+            if "new_history" in history_data:
+                h = history_data["new_history"]
                 try:
-                    history_id = await self.add_local_history(
+                    hist_id = await self.add_local_history(
                         run_ctx,
                         location_id=location_id,
-                        event_name=history_entry.get("event_name", "Recent Event"),
-                        description=history_entry.get("description", ""),
-                        date_description=history_entry.get("date_description", "Recently"),
-                        significance=history_entry.get("significance", 5),
-                        impact_type=history_entry.get("impact_type", "event"),
-                        notable_figures=history_entry.get("notable_figures", []),
-                        current_relevance=history_entry.get("current_relevance")
+                        event_name=h.get("event_name","Recent Event"),
+                        description=h.get("description",""),
+                        date_description=h.get("date_description","Recently"),
+                        significance=h.get("significance",5),
+                        impact_type=h.get("impact_type","cultural"),
+                        notable_figures=h.get("notable_figures",[]),
+                        current_relevance=h.get("current_relevance")
                     )
-                    
-                    history_entry["id"] = history_id
-                    new_history = history_entry
+                    h["id"] = hist_id
+                    new_history = h
                 except Exception as e:
-                    logging.error(f"Error adding new history entry: {e}")
-            
-            # Process landmark changes
-            landmark_changes = json.loads(landmark_result.final_output)
-            new_landmark = None
-            updated_landmark = None
-            
-            # Add new landmark if suggested
-            if "new_landmark" in landmark_changes and landmark_changes["new_landmark"]:
-                landmark_info = landmark_changes["new_landmark"]
+                    logger.error(f"Error adding new history: {e}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed parsing new_history: {history_result.final_output}")
+
+        try:
+            # 2) Landmark changes
+            landmark_data = json.loads(landmark_result.final_output)
+            if "new_landmark" in landmark_data and landmark_data["new_landmark"]:
+                nl = landmark_data["new_landmark"]
                 try:
-                    landmark_id = await self.add_landmark(
+                    lm_id = await self.add_landmark(
                         run_ctx,
-                        name=landmark_info.get("name", "New Landmark"),
+                        name=nl.get("name","New Landmark"),
                         location_id=location_id,
-                        landmark_type=landmark_info.get("landmark_type", "structure"),
-                        description=landmark_info.get("description", ""),
-                        historical_significance=landmark_info.get("historical_significance", f"Created during the {themed_event}"),
-                        current_use=landmark_info.get("current_use"),
-                        controlled_by=landmark_info.get("controlled_by")
+                        landmark_type=nl.get("landmark_type","structure"),
+                        description=nl.get("description",""),
+                        historical_significance=nl.get("historical_significance"),
+                        current_use=nl.get("current_use"),
+                        controlled_by=nl.get("controlled_by"),
+                        legends=nl.get("legends",[])
                     )
-                    
-                    landmark_info["id"] = landmark_id
-                    new_landmark = landmark_info
+                    nl["id"] = lm_id
+                    new_landmark = nl
                 except Exception as e:
-                    logging.error(f"Error adding new landmark: {e}")
-            
-            # Update existing landmark if suggested
-            if "modified_landmark_id" in landmark_changes and landmark_changes["modified_landmark_id"] and "landmark_update" in landmark_changes:
-                landmark_id = landmark_changes["modified_landmark_id"]
-                new_description = landmark_changes["landmark_update"]
-                
-                try:
-                    async with self.get_connection_pool() as pool:
-                        async with pool.acquire() as conn:
-                            # Get current landmark to verify it exists
-                            landmark = await conn.fetchrow("""
-                                SELECT * FROM Landmarks WHERE id = $1 AND location_id = $2
-                            """, landmark_id, location_id)
-                            
-                            if landmark:
-                                # Apply update
-                                await conn.execute("""
-                                    UPDATE Landmarks 
-                                    SET description = $1
-                                    WHERE id = $2
-                                """, new_description, landmark_id)
-                                
-                                updated_landmark = {
-                                    "id": landmark_id,
-                                    "name": landmark["name"],
-                                    "old_description": landmark["description"],
-                                    "new_description": new_description
-                                }
-                except Exception as e:
-                    logging.error(f"Error updating landmark {landmark_id}: {e}")
-            
-            # Process myth changes
-            myth_changes = json.loads(myth_result.final_output)
-            new_myth = None
-            
-            if "new_myth" in myth_changes and myth_changes["new_myth"]:
-                myth_info = myth_changes["new_myth"]
+                    logger.error(f"Error adding new landmark: {e}")
+
+            if "modified_landmark_id" in landmark_data and "landmark_update" in landmark_data:
+                mod_id = landmark_data["modified_landmark_id"]
+                mod_desc = landmark_data["landmark_update"]
+                if mod_id and mod_desc:
+                    try:
+                        async with self.get_connection_pool() as pool:
+                            async with pool.acquire() as conn:
+                                # verify
+                                existing = await conn.fetchrow("""
+                                    SELECT * FROM Landmarks WHERE id=$1 AND location_id=$2
+                                """, mod_id, location_id)
+                                if existing:
+                                    await conn.execute("""
+                                        UPDATE Landmarks SET description=$1
+                                        WHERE id=$2
+                                    """, mod_desc, mod_id)
+                                    updated_landmark = {
+                                        "id": mod_id,
+                                        "name": existing["name"],
+                                        "old_description": existing["description"],
+                                        "new_description": mod_desc
+                                    }
+                    except Exception as e:
+                        logger.error(f"Error updating landmark {mod_id}: {e}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed parsing new_landmark or modification: {landmark_result.final_output}")
+
+        try:
+            # 3) Myth changes
+            myth_data = json.loads(myth_result.final_output)
+            if "new_myth" in myth_data and myth_data["new_myth"]:
+                nm = myth_data["new_myth"]
                 try:
                     myth_id = await self.add_urban_myth(
                         run_ctx,
-                        name=myth_info.get("name", "New Myth"),
-                        description=myth_info.get("description", ""),
-                        origin_location=location_name,
+                        name=nm.get("name","New Myth"),
+                        description=nm.get("description",""),
+                        origin_location=location_lore["location"].get("location_name"),
                         origin_event=themed_event,
-                        believability=myth_info.get("believability", 5),
-                        spread_rate=myth_info.get("spread_rate", 3),
-                        regions_known=[location_name]
+                        believability=nm.get("believability",5),
+                        spread_rate=nm.get("spread_rate",3),
+                        regions_known=[location_lore["location"].get("location_name")]
                     )
-                    
-                    myth_info["id"] = myth_id
-                    new_myth = myth_info
+                    nm["id"] = myth_id
+                    new_myth = nm
                 except Exception as e:
-                    logging.error(f"Error adding new myth: {e}")
-            
-            # Invalidate cache for this location
-            self.invalidate_cache(f"location_lore_{location_id}")
-            
-            # Return results
-            return {
-                "event": themed_event,
-                "location_id": location_id,
-                "location_name": location_name,
-                "new_history": new_history,
-                "new_landmark": new_landmark,
-                "updated_landmark": updated_landmark,
-                "new_myth": new_myth
-            }
-            
-        except Exception as e:
-            logging.error(f"Error processing location lore evolution: {e}")
-            return {"error": f"Failed to evolve location lore: {str(e)}"}
-    
+                    logger.error(f"Error adding new myth: {e}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed parsing new_myth: {myth_result.final_output}")
+
+        self.invalidate_cache(f"location_lore_{location_id}")
+        return {
+            "event": themed_event,
+            "location_id": location_id,
+            "location_name": location_lore["location"].get("location_name","Unknown"),
+            "new_history": new_history,
+            "new_landmark": new_landmark,
+            "updated_landmark": updated_landmark,
+            "new_myth": new_myth
+        }
+
     async def register_with_governance(self):
         """Register with Nyx governance system."""
         await super().register_with_governance(
