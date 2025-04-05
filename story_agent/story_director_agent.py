@@ -144,7 +144,6 @@ class StoryDirectorContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     metrics: StoryDirectorMetrics = field(default_factory=StoryDirectorMetrics)
     last_state_update: Optional[datetime] = None
-#    : Optional[Any] = None
     
     # NEW: Context management components
     context_service: Optional[Any] = None
@@ -157,7 +156,7 @@ class StoryDirectorContext:
     last_context_version: Optional[int] = None
     
     def __post_init__(self):
-        """Initialize managers if not provided"""
+        """Synchronous post-init; cannot contain 'await'."""
         if not self.conflict_manager:
             from logic.conflict_system.conflict_manager import ConflictManager
             self.conflict_manager = ConflictManager(self.user_id, self.conversation_id)
@@ -167,10 +166,31 @@ class StoryDirectorContext:
         if not self.activity_analyzer:
             from logic.activity_analyzer import ActivityAnalyzer
             self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
-            
-        governance = await get_central_governance(user_id, conversation_id)
-            
-        # Initialize directive handler
+        
+        # We can't await anything here. We'll do governance/directed handler setup
+        # later in an async method, so we just do the rest of the synchronous setup.
+
+        # We'll subscribe to context changes AFTER we finish governance initialization
+        # in the async method below. The subscription can remain here if it doesn't require `await`.
+        
+    async def initialize_context_components(self):
+        """Initialize context components that require async calls."""
+        self.context_service = await get_context_service(self.user_id, self.conversation_id)
+        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+
+        # Initialize performance monitor and context manager
+        self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
+        self.context_manager = get_context_manager()
+        
+        # Subscribe to changes
+        self.context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
+        self.context_manager.subscribe_to_changes("/conflicts", self.handle_conflict_change)
+
+        ## [ FIX APPLIED ]: The governance call must be in an async method, not __post_init__
+        governance = await get_central_governance(self.user_id, self.conversation_id)
+        
+        # Now initialize the directive handler with the governance object
         self.directive_handler = DirectiveHandler(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -188,20 +208,6 @@ class StoryDirectorContext:
             DirectiveType.OVERRIDE,
             self.handle_override_directive
         )
-            
-        # NEW: Initialize context management components
-        self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
-        self.context_manager = get_context_manager()
-        
-        # Register context change handlers
-        self.context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
-        self.context_manager.subscribe_to_changes("/conflicts", self.handle_conflict_change)
-    
-    async def initialize_context_components(self):
-        """Initialize context components that require async initialization"""
-        self.context_service = await get_context_service(self.user_id, self.conversation_id)
-        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-        self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
     
     async def handle_narrative_stage_change(self, changes: List[ContextDiff]):
         """React to changes in narrative stage"""
@@ -287,12 +293,12 @@ class StoryDirectorContext:
             if not self.context_service:
                 await self.initialize_context_components()
                 
-            context = await self.context_service.get_context(
+            context_data = await self.context_service.get_context(
                 input_text=input_text,
                 use_vector_search=use_vector
             )
             
-            return {"result": "context_retrieved", "data": context}
+            return {"result": "context_retrieved", "data": context_data}
         
         return {"result": "action_not_recognized"}
     
@@ -345,7 +351,7 @@ class StoryDirectorContext:
         
         # If we have a previous version, try delta updates
         if self.last_context_version is not None:
-            context = await self.context_service.get_context(
+            context_data = await self.context_service.get_context(
                 input_text=input_text,
                 context_budget=context_budget,
                 use_vector_search=use_vector,
@@ -353,7 +359,7 @@ class StoryDirectorContext:
                 source_version=self.last_context_version
             )
         else:
-            context = await self.context_service.get_context(
+            context_data = await self.context_service.get_context(
                 input_text=input_text,
                 context_budget=context_budget,
                 use_vector_search=use_vector,
@@ -361,10 +367,10 @@ class StoryDirectorContext:
             )
         
         # Store version for future delta updates
-        if "version" in context:
-            self.last_context_version = context["version"]
+        if "version" in context_data:
+            self.last_context_version = context_data["version"]
         
-        return context
+        return context_data
     
     async def get_relevant_memories(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Get relevant memories using vector search"""
@@ -481,7 +487,7 @@ async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple
     context = StoryDirectorContext(user_id=user_id, conversation_id=conversation_id)
     agent = create_story_director_agent()
     
-    # Initialize context components
+    # Initialize context components (async)
     await context.initialize_context_components()
     
     # Start background processing of directives
@@ -766,8 +772,8 @@ async def reset_story_director(context: StoryDirectorContext) -> None:
     context_cache.invalidate(f"story_state:{context.user_id}:{context.conversation_id}")
     
     # Optional: Reload managers
-    context.__post_init__()
-    await context.initialize_context_components()
+    context.__post_init__()  # re-run sync init to wipe references
+    await context.initialize_context_components()  # re-initialize async dependencies
 
 # ----- Integration with Nyx Governance -----
 
@@ -783,8 +789,11 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         # Get the governance system
         governance = await get_central_governance(user_id, conversation_id)
         
-        # Create the agent and context
-        agent, context = await initialize_story_director(user_id, conversation_id)
+        # Create the agent/context and re-initialize if needed
+        # Note: Often you'd just pass an existing context around. 
+        #       Keep consistent with your design pattern.
+        # For demonstration:
+        agent, _ = await initialize_story_director(user_id, conversation_id)
         
         # Register with governance
         await governance.register_agent(
