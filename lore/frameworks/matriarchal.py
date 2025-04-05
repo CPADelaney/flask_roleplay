@@ -1,34 +1,80 @@
 # lore/frameworks/matriarchal.py
 
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+from pydantic import BaseModel, Field
 
 # Agents SDK imports
 from agents import (
     Agent,
     ModelSettings,
     Runner,
-    function_tool
+    function_tool,
+    handoff,
+    StreamingResponse,
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    OutputGuardrail
 )
 from agents.run_context import RunContextWrapper
-from agents.run import RunConfig
+from agents.run import RunConfig, StreamingRunConfig
 
 # Project-specific import
 from lore.core.base_manager import BaseLoreManager
 
+# Define Pydantic models for structured outputs
+class PowerHierarchy(BaseModel):
+    """Power structure within a matriarchal society."""
+    dominant_gender: str = "female"
+    power_expressions: List[str]
+    leadership_positions: List[Dict[str, Any]]
+    submissive_roles: List[Dict[str, Any]]
+
+class CorePrinciples(BaseModel):
+    """Core principles of a matriarchal power structure."""
+    power_dynamics: Dict[str, Any]
+    societal_norms: Dict[str, Any]
+    symbolic_representations: Dict[str, Any]
+
+class HierarchicalConstraint(BaseModel):
+    """Hierarchical constraints in a matriarchal setting."""
+    dominant_hierarchy_type: str
+    description: str
+    power_expressions: List[str]
+    masculine_roles: List[str]
+    leadership_domains: List[str]
+    property_rights: Any
+    status_markers: Any
+    relationship_structure: str
+    enforcement_mechanisms: List[str]
+
+class PowerExpression(BaseModel):
+    """Expression of power in a matriarchal society."""
+    domain: str
+    title: str
+    description: str
+    male_role: str
+
+# Self-evaluation feedback model
+class NarrativeEvaluation(BaseModel):
+    """Evaluation of a narrative transformation."""
+    matriarchal_strength: int = Field(..., ge=1, le=10)
+    narrative_quality: int = Field(..., ge=1, le=10)
+    consistency: int = Field(..., ge=1, le=10)
+    engagement: int = Field(..., ge=1, le=10)
+    improvements: List[str]
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
     Defines core principles for power dynamics in femdom/matriarchal settings,
-    ensuring consistency across generated lore. 
-    This version is fully agent-ified so everything is dynamic and narrative-heavy.
+    ensuring consistency across generated lore.
+    Enhanced with structured outputs, handoffs, and self-evaluation.
     """
 
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
 
-        # We now rely on an Agent to generate or transform everything, 
-        # instead of using a fixed dictionary or random sampling.
+        # Initialize the transformation agent with structured outputs
         self.transformation_agent = Agent(
             name="MatriarchalTransformationAgent",
             instructions=(
@@ -37,8 +83,82 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
                 "Your output should be immersive, cohesive, and consistent with the premise that "
                 "women hold most or all power, and men occupy subordinate or service-based roles."
             ),
-            model="o3-mini",  # You can change this to a more capable model if desired
+            model="o3-mini",
             model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Initialize specialized narrative transformation agents
+        self._init_specialized_agents()
+        
+        # Initialize the evaluation agent for feedback loops
+        self.evaluation_agent = Agent(
+            name="NarrativeEvaluationAgent",
+            instructions=(
+                "You evaluate narratives for strength of matriarchal themes, narrative quality, "
+                "consistency, and engagement. Provide constructive feedback for improvements."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.5),
+            output_type=NarrativeEvaluation
+        )
+
+    def _init_specialized_agents(self):
+        """Initialize specialized agents for different narrative domains."""
+        # Political narrative specialist
+        self.political_specialist = Agent(
+            name="PoliticalMatriarchyAgent",
+            instructions=(
+                "You specialize in transforming political narratives to reflect matriarchal power structures. "
+                "Focus on governance, authority, and policy formation led by women, with men in advisory "
+                "or supportive roles only."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Religious narrative specialist
+        self.religious_specialist = Agent(
+            name="ReligiousMatriarchyAgent",
+            instructions=(
+                "You specialize in transforming religious narratives to center feminine divinity. "
+                "Create matriarchal religious structures with goddesses as primary deities and "
+                "priestesses as the dominant religious authorities."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Social/cultural narrative specialist
+        self.cultural_specialist = Agent(
+            name="CulturalMatriarchyAgent",
+            instructions=(
+                "You specialize in transforming social and cultural narratives to reflect matriarchal norms. "
+                "Create customs, traditions, and social interactions that reinforce feminine authority "
+                "and masculine deference."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Configure agent handoffs
+        self.transformation_agent = self.transformation_agent.clone(
+            handoffs=[
+                handoff(
+                    self.political_specialist,
+                    tool_name_override="transform_political_narrative",
+                    tool_description_override="Transform political narratives to reflect matriarchal structures"
+                ),
+                handoff(
+                    self.religious_specialist,
+                    tool_name_override="transform_religious_narrative",
+                    tool_description_override="Transform religious narratives to center feminine divinity"
+                ),
+                handoff(
+                    self.cultural_specialist,
+                    tool_name_override="transform_cultural_narrative",
+                    tool_description_override="Transform social and cultural narratives to reflect matriarchal norms"
+                )
+            ]
         )
 
     # ------------------------------------------------------------------
@@ -73,7 +193,49 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             context=run_ctx.context,
             run_config=run_cfg
         )
-        return result.final_output
+        
+        # Get feedback on the transformation
+        transformed_text = result.final_output
+        await self._evaluate_transformation(original_text, transformed_text, context_desc)
+        
+        return transformed_text
+
+    async def _evaluate_transformation(self, original: str, transformed: str, context: str) -> NarrativeEvaluation:
+        """
+        Evaluate the quality of a narrative transformation using the evaluation agent.
+        This implements a feedback loop for continuous improvement.
+        """
+        prompt = (
+            f"ORIGINAL TEXT:\n{original}\n\n"
+            f"TRANSFORMED TEXT:\n{transformed}\n\n"
+            f"CONTEXT:\n{context}\n\n"
+            "Evaluate this transformation for matriarchal strength, narrative quality, "
+            "consistency, and engagement. Provide specific suggestions for improvement."
+        )
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "transformation evaluation"
+        })
+        
+        result = await Runner.run(
+            self.evaluation_agent,
+            prompt,
+            context=run_ctx.context
+        )
+        
+        evaluation = result.final_output
+        
+        # Log the evaluation for future improvements
+        logging.info(f"Transformation evaluation: {evaluation}")
+        
+        # If evaluation shows room for improvement, we could retry the transformation
+        if evaluation.matriarchal_strength < 7 or evaluation.narrative_quality < 7:
+            logging.info("Transformation quality below threshold, improvements needed")
+            # In a real implementation, you might retry with more specific guidance
+        
+        return evaluation
 
     async def _call_transformation_agent_for_json(self, prompt_text: str, workflow_name: str) -> Any:
         """
@@ -103,23 +265,16 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             return None  # or return an empty dict/list if you prefer
 
     # ------------------------------------------------------------------
-    # 1) Generating Core Principles
+    # 1) Generating Core Principles with Pydantic Model
     # ------------------------------------------------------------------
     @function_tool
-    async def generate_core_principles(self) -> Dict[str, Any]:
+    async def generate_core_principles(self) -> CorePrinciples:
         """
         Dynamically generate a set of 'core principles' for a femdom/matriarchal world,
-        returning a JSON structure with sections like power_dynamics, societal_norms,
-        symbolic_representations, etc.
+        returning a structured CorePrinciples object.
 
         Returns:
-            A dictionary representing the newly generated principles. 
-            Example shape:
-                {
-                    "power_dynamics": {...},
-                    "societal_norms": {...},
-                    "symbolic_representations": {...}
-                }
+            A CorePrinciples object representing the newly generated principles.
         """
         prompt = (
             "Generate a JSON object describing the core principles of a strongly matriarchal (femdom) world. "
@@ -141,27 +296,41 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "}"
         )
 
-        data = await self._call_transformation_agent_for_json(
-            prompt_text=prompt, 
-            workflow_name="GenerateCorePrinciples"
+        principles_agent = self.transformation_agent.clone(
+            output_type=CorePrinciples
         )
-        if not data:
-            return {}
-        return data
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "generating core principles"
+        })
+        
+        run_cfg = RunConfig(
+            workflow_name="GenerateCorePrinciples",
+            trace_metadata=self.trace_metadata
+        )
+        
+        result = await Runner.run(
+            principles_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=run_cfg
+        )
+        
+        return result.final_output
 
     # ------------------------------------------------------------------
-    # 2) Generating Hierarchical Constraints
+    # 2) Generating Hierarchical Constraints with Pydantic Model
     # ------------------------------------------------------------------
     @function_tool
-    async def generate_hierarchical_constraints(self) -> Dict[str, Any]:
+    async def generate_hierarchical_constraints(self) -> HierarchicalConstraint:
         """
-        Use the LLM to produce an immersive, narrative-heavy JSON object that 
-        describes the hierarchical constraints in a matriarchal setting. 
-        This replaces the old random-sampling approach with agent-driven creativity.
+        Use the LLM to produce an immersive, narrative-heavy HierarchicalConstraint object that 
+        describes the hierarchical constraints in a matriarchal setting.
 
         Returns:
-            A dict describing hierarchy_type, power_expressions, roles, etc., 
-            but in a dynamic, story-driven format.
+            A HierarchicalConstraint object describing hierarchy_type, power_expressions, roles, etc.
         """
         prompt = (
             "Produce a JSON object describing hierarchical constraints in a femdom/matriarchal world. "
@@ -178,66 +347,119 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "Make it interesting, unique, and fully valid JSON with no wrapping text."
         )
 
-        data = await self._call_transformation_agent_for_json(
-            prompt_text=prompt, 
-            workflow_name="GenerateHierarchicalConstraints"
+        constraints_agent = self.transformation_agent.clone(
+            output_type=HierarchicalConstraint
         )
-        if not data:
-            return {}
-        return data
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "generating hierarchical constraints"
+        })
+        
+        run_cfg = RunConfig(
+            workflow_name="GenerateHierarchicalConstraints",
+            trace_metadata=self.trace_metadata
+        )
+        
+        result = await Runner.run(
+            constraints_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=run_cfg
+        )
+        
+        return result.final_output
 
     # ------------------------------------------------------------------
-    # 3) LENS APPLICATION (foundation_data transformation)
+    # 3) LENS APPLICATION WITH SPECIALIZED HANDOFFS
     # ------------------------------------------------------------------
     @function_tool
     async def apply_power_lens(self, foundation_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Apply a matriarchal lens to the foundation lore, rewriting each 
-        relevant field via the transformation agent for an engaging, 
-        narrative-rich output.
+        Apply a matriarchal lens to the foundation lore, using specialized narrative
+        transformation agents based on content type.
         """
+        result = foundation_data.copy()
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "applying power lens"
+        })
+        
         if "social_structure" in foundation_data:
-            foundation_data["social_structure"] = await self._transform_text(
-                foundation_data["social_structure"],
-                context_desc="Rewrite the social structure in a strongly matriarchal style."
+            # Use the cultural specialist for social structures
+            prompt = (
+                f"ORIGINAL SOCIAL STRUCTURE:\n{foundation_data['social_structure']}\n\n"
+                "Transform this social structure description to reflect a strongly "
+                "matriarchal society. Focus on feminine authority, masculine deference, "
+                "and gendered power dynamics."
             )
+            
+            social_result = await Runner.run(
+                self.cultural_specialist,
+                prompt,
+                context=run_ctx.context
+            )
+            result["social_structure"] = social_result.final_output
         
         if "cosmology" in foundation_data:
-            foundation_data["cosmology"] = await self._transform_text(
-                foundation_data["cosmology"],
-                context_desc="Emphasize feminine primacy, goddess-centered beliefs, or gendered myth."
+            # Use the religious specialist for cosmology
+            prompt = (
+                f"ORIGINAL COSMOLOGY:\n{foundation_data['cosmology']}\n\n"
+                "Transform this cosmology to center feminine divine power. Emphasize "
+                "goddess figures, feminine creation principles, and matriarchal "
+                "religious structures."
             )
+            
+            cosmology_result = await Runner.run(
+                self.religious_specialist,
+                prompt,
+                context=run_ctx.context
+            )
+            result["cosmology"] = cosmology_result.final_output
         
         if "magic_system" in foundation_data:
-            foundation_data["magic_system"] = await self._transform_text(
+            # General transformation for magic systems
+            result["magic_system"] = await self._transform_text(
                 foundation_data["magic_system"],
                 context_desc="Highlight how women wield greater or central magical authority."
             )
         
         if "world_history" in foundation_data:
-            foundation_data["world_history"] = await self._transform_text(
-                foundation_data["world_history"],
-                context_desc="Reflect matriarchal development, female-led conquests, or shifts in power."
+            # Use the political specialist for world history
+            prompt = (
+                f"ORIGINAL WORLD HISTORY:\n{foundation_data['world_history']}\n\n"
+                "Transform this world history to center women as the primary historical "
+                "actors, leaders, conquerors, and decision-makers. Men should appear in "
+                "supportive roles or as subjects/conquered peoples."
             )
             
+            history_result = await Runner.run(
+                self.political_specialist,
+                prompt,
+                context=run_ctx.context
+            )
+            result["world_history"] = history_result.final_output
+            
         if "calendar_system" in foundation_data:
-            foundation_data["calendar_system"] = await self._transform_text(
+            # General transformation for calendar systems
+            result["calendar_system"] = await self._transform_text(
                 foundation_data["calendar_system"],
                 context_desc="Show feminine significance in months, lunar cycles, and symbolic rituals."
             )
             
-        return foundation_data
+        return result
 
     # ------------------------------------------------------------------
-    # 4) Generating Power Expressions
+    # 4) Generating Power Expressions with Pydantic Models
     # ------------------------------------------------------------------
     @function_tool
-    async def generate_power_expressions(self) -> List[Dict[str, Any]]:
+    async def generate_power_expressions(self) -> List[PowerExpression]:
         """
         Generate a list of power expressions describing ways in which 
-        female authority and male submission manifest in the world, 
-        each accompanied by narrative detail. 
-        Returns a parsed list from a JSON response.
+        female authority and male submission manifest in the world.
+        Returns a list of PowerExpression objects.
         """
         prompt = (
             "Generate a JSON array, each item describing a unique 'power expression' in a "
@@ -249,10 +471,135 @@ class MatriarchalPowerStructureFramework(BaseLoreManager):
             "Output strictly valid JSON with no additional formatting."
         )
 
-        data = await self._call_transformation_agent_for_json(
-            prompt_text=prompt,
-            workflow_name="GeneratePowerExpressions"
+        expressions_agent = self.transformation_agent.clone(
+            output_type=List[PowerExpression]
         )
-        if not data or not isinstance(data, list):
-            return []
-        return data
+        
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "generating power expressions"
+        })
+        
+        run_cfg = RunConfig(
+            workflow_name="GeneratePowerExpressions",
+            trace_metadata=self.trace_metadata
+        )
+        
+        result = await Runner.run(
+            expressions_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=run_cfg
+        )
+        
+        return result.final_output
+    
+    # ------------------------------------------------------------------
+    # 5) Dialogue-based narrative development
+    # ------------------------------------------------------------------
+    @function_tool
+    async def develop_narrative_through_dialogue(
+        self, 
+        narrative_theme: str, 
+        initial_scene: str
+    ) -> AsyncGenerator[str, None]:
+        """
+        Develop a narrative through iterative dialogue between specialized agents,
+        streaming the results as they're generated.
+        
+        Args:
+            narrative_theme: The theme of the narrative (e.g., "coming of age")
+            initial_scene: Starting point for the narrative
+            
+        Yields:
+            Narrative segments as they are developed
+        """
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "purpose": "narrative development"
+        })
+        
+        # Create a streaming response
+        stream = StreamingResponse()
+        
+        # Initialize the narrative
+        narrative = f"THEME: {narrative_theme}\n\n"
+        narrative += f"INITIAL SCENE:\n{initial_scene}\n\n"
+        
+        yield narrative  # Send initial setup
+        
+        # Create agents for dialogue-based development
+        plot_agent = Agent(
+            name="PlotDevelopmentAgent",
+            instructions=(
+                "You develop plot elements in a matriarchal narrative. "
+                "Continue from the existing narrative, adding new developments, "
+                "conflicts, or revelations."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        character_agent = Agent(
+            name="CharacterDevelopmentAgent",
+            instructions=(
+                "You develop characters in a matriarchal narrative. "
+                "Focus on character growth, relationships, and internal struggles, "
+                "while maintaining matriarchal power dynamics."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        setting_agent = Agent(
+            name="SettingDevelopmentAgent",
+            instructions=(
+                "You develop settings and world elements in a matriarchal narrative. "
+                "Enrich the existing narrative with vivid locations, cultural details, "
+                "and environmental features that reinforce matriarchal themes."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Dialogue-based development (alternating between agents)
+        for step in range(5):  # 5 development steps
+            # Plot development
+            plot_prompt = f"Continue developing the plot for this narrative:\n\n{narrative}"
+            plot_result = await Runner.run(plot_agent, plot_prompt, context=run_ctx.context)
+            plot_development = plot_result.final_output
+            
+            narrative += f"\nPLOT DEVELOPMENT:\n{plot_development}\n"
+            yield f"PLOT DEVELOPMENT:\n{plot_development}\n"  # Stream update
+            
+            # Character development
+            char_prompt = f"Develop the characters in this narrative:\n\n{narrative}"
+            char_result = await Runner.run(character_agent, char_prompt, context=run_ctx.context)
+            char_development = char_result.final_output
+            
+            narrative += f"\nCHARACTER DEVELOPMENT:\n{char_development}\n"
+            yield f"CHARACTER DEVELOPMENT:\n{char_development}\n"  # Stream update
+            
+            # Setting development
+            setting_prompt = f"Enrich the setting in this narrative:\n\n{narrative}"
+            setting_result = await Runner.run(setting_agent, setting_prompt, context=run_ctx.context)
+            setting_development = setting_result.final_output
+            
+            narrative += f"\nSETTING DEVELOPMENT:\n{setting_development}\n"
+            yield f"SETTING DEVELOPMENT:\n{setting_development}\n"  # Stream update
+        
+        # Final evaluation
+        evaluation = await self._evaluate_transformation(
+            initial_scene,
+            narrative,
+            f"Narrative development for theme: {narrative_theme}"
+        )
+        
+        yield f"\nFINAL EVALUATION:\n"
+        yield f"Matriarchal Strength: {evaluation.matriarchal_strength}/10\n"
+        yield f"Narrative Quality: {evaluation.narrative_quality}/10\n"
+        yield f"Consistency: {evaluation.consistency}/10\n"
+        yield f"Engagement: {evaluation.engagement}/10\n"
+        yield f"Improvement Suggestions: {', '.join(evaluation.improvements)}\n"
