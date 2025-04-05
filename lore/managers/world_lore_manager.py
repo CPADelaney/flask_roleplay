@@ -32,8 +32,8 @@ RESOURCE_OPS_AGENT = Agent(
 
 logger = logging.getLogger(__name__)
 
-from .base_manager import BaseManager
-from .resource_manager import resource_manager
+from lore.managers.base_manager import BaseManager
+from lore.resource_manager import resource_manager
 
 class WorldLoreManager(BaseManager):
     """
