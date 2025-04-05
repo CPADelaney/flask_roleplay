@@ -10,9 +10,9 @@ across all context-related components. Refactored to integrate with the OpenAI A
 import time
 import logging
 import json
+import asyncio
 import hashlib
 from typing import Dict, Any, Optional, Callable, List, Union
-import asyncio
 
 # Agent SDK imports
 from agents import Agent, function_tool, RunContextWrapper, trace, custom_span
@@ -20,9 +20,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+
 # --- Pydantic Models ---
-
-
 class CacheItemModel(BaseModel):
     """Model for a cache item"""
     key: str
@@ -153,17 +152,17 @@ class UnifiedCache:
         
         # Cleanup task
         self._cleanup_task = None
-        
-        # Start background cleanup
-        self._start_cleanup_task()
     
-    def _start_cleanup_task(self):
-        """Start the background cleanup task"""
+    async def start_background_cleanup(self):
+        """Explicitly start the background cleanup task once an event loop is running."""
         if self._cleanup_task is None or self._cleanup_task.done():
+            logger.debug("Starting background cleanup task for UnifiedCache.")
             self._cleanup_task = asyncio.create_task(self._background_cleanup())
+        else:
+            logger.debug("Background cleanup task is already running.")
     
     async def _background_cleanup(self):
-        """Run cleanup periodically in the background"""
+        """Run cleanup periodically in the background."""
         try:
             while True:
                 await asyncio.sleep(self.cleanup_interval)
@@ -202,16 +201,16 @@ class UnifiedCache:
             logger.debug(f"Cache cleanup completed in {duration:.3f}s: removed {removed} items")
 
     async def _maybe_cleanup(self) -> None:
-        """Periodically run cleanup operations"""
+        """Periodically run cleanup operations."""
         now = time.time()
         if now - self.last_cleanup < self.cleanup_interval:
             return
-        # Run cleanup asynchronously
+        # Manually trigger cleanup
         self.last_cleanup = now
         asyncio.create_task(self._cleanup())
 
-    def _get_cache_by_level(self, level: int) -> Dict[str, CacheItem]:
-        """Get cache dictionary by level"""
+    def _get_cache_by_level(self, level: int) -> Dict[str, "CacheItem"]:
+        """Get cache dictionary by level."""
         if level == 1:
             return self.l1_cache
         elif level == 2:
@@ -220,7 +219,7 @@ class UnifiedCache:
             return self.l3_cache
     
     def _get_ttl_by_level(self, level: int) -> float:
-        """Get TTL by level"""
+        """Get TTL by level."""
         if level == 1:
             return self.l1_ttl
         elif level == 2:
@@ -229,7 +228,7 @@ class UnifiedCache:
             return self.l3_ttl
     
     def _get_max_size_by_level(self, level: int) -> int:
-        """Get max size by level"""
+        """Get max size by level."""
         if level == 1:
             return self.l1_max_size
         elif level == 2:
@@ -237,8 +236,8 @@ class UnifiedCache:
         else:
             return self.l3_max_size
     
-    def _promote_item(self, item: CacheItem, current_level: int, max_level: int) -> None:
-        """Promote an item to higher cache levels if it has enough accesses"""
+    def _promote_item(self, item: "CacheItem", current_level: int, max_level: int) -> None:
+        """Promote an item to higher cache levels if it has enough accesses."""
         # Only promote items with multiple accesses
         if item.access_count < 2:
             return
@@ -256,7 +255,7 @@ class UnifiedCache:
         self._check_size_limit(higher_level)
     
     def _check_size_limit(self, level: int) -> None:
-        """Check if a cache level exceeds its size limit and evict if necessary"""
+        """Check if a cache level exceeds its size limit and evict if necessary."""
         cache = self._get_cache_by_level(level)
         max_size = self._get_max_size_by_level(level)
         
@@ -266,7 +265,7 @@ class UnifiedCache:
             self._evict_items(level, evict_count)
     
     def _evict_items(self, level: int, count: int) -> None:
-        """Evict items from a cache level based on eviction scores"""
+        """Evict items from a cache level based on eviction scores."""
         cache = self._get_cache_by_level(level)
         
         # Calculate eviction scores
@@ -283,7 +282,7 @@ class UnifiedCache:
     # ---------------------------------------------------------------------
     #           INTERNAL METHODS (no @function_tool, have `self`)
     # ---------------------------------------------------------------------
-
+    
     async def _get_item(
         self,
         request: CacheOperationRequest,
@@ -404,6 +403,7 @@ class UnifiedCache:
                 total_items=len(self.l1_cache) + len(self.l2_cache) + len(self.l3_cache)
             )
 
+
 # ---------------------------------------------------------------------
 #         STANDALONE TOOL FUNCTIONS (run_context is first param)
 # ---------------------------------------------------------------------
@@ -417,7 +417,6 @@ async def get_item_tool(
 ) -> Any:
     """
     Tool: get or fetch an item from the cache.
-    (Expects a run_context as first param, per agents library requirements)
     """
     return await context_cache._get_item(request)
 
@@ -457,7 +456,6 @@ async def get_stats_tool(
 
 def create_cache_agent() -> Agent:
     """Create a cache agent using the OpenAI Agents SDK."""
-    # We define the agent with the new standalone tool functions:
     agent = Agent(
         name="Cache Manager",
         instructions="""
