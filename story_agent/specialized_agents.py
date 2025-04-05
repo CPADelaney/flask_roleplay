@@ -15,7 +15,6 @@ from agents.exceptions import AgentsException, ModelBehaviorError
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from nyx.integrate import get_central_governance
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +58,8 @@ class AgentContext:
         Asynchronous method that can legally use 'await'.
         Must be called from an async function after creating this context.
         """
-        governance = await get_central_governance(self.user_id, self.conversation_id)
+        from nyx.integrate import get_central_governance
+        governance = await (self.user_id, self.conversation_id)
         self.directive_handler = DirectiveHandler(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -203,7 +203,8 @@ async def run_with_governance_oversight(
     }
     
     # Get the governance system
-    governance = await get_central_governance(context.user_id, context.conversation_id)
+    from nyx.integrate import get_central_governance
+    governance = await (context.user_id, context.conversation_id)
     
     # Check permission
     permission = await governance.check_action_permission(
@@ -611,7 +612,8 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
     """
     try:
         # Get governance system
-        governance = await get_central_governance(user_id, conversation_id)
+        from nyx.integrate import get_central_governance
+        governance = await (user_id, conversation_id)
         
         # Create contexts for specialized agents
         conflict_context = ConflictAnalystContext(user_id, conversation_id)
@@ -707,6 +709,7 @@ async def analyze_conflict(
     """
     
     # Run the conflict agent with governance oversight
+    from nyx.integrate import get_central_governance
     result, metrics = await run_with_governance_oversight(
         agent=conflict_agent,
         prompt=prompt,
@@ -762,6 +765,7 @@ async def generate_narrative_element(
     """
     
     # Run the narrative agent with governance oversight
+    from nyx.integrate import get_central_governance
     result, metrics = await run_with_governance_oversight(
         agent=narrative_agent,
         prompt=prompt,
