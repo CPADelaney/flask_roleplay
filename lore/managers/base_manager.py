@@ -1,3 +1,5 @@
+# lore/managers/base_manager.py
+
 from typing import Dict, List, Any, Optional, Type, Set
 import logging
 from datetime import datetime
