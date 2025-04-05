@@ -3,11 +3,11 @@
 from typing import Dict, List, Any, Optional, Type, Set
 import logging
 from datetime import datetime
-from ..database_access import DatabaseAccess
-from ..utils.caching import LoreCache
-from ..error_handler import ErrorHandler
-from ..monitoring import metrics
-from ..lore_cache_manager import LoreCacheManager
+from lore.database_access import DatabaseAccess
+from lore.utils.caching import LoreCache
+from lore.error_handler import ErrorHandler
+from lore.monitoring import metrics
+from lore.lore_cache_manager import LoreCacheManager
 import asyncio
 
 logger = logging.getLogger(__name__)
