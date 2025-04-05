@@ -5,28 +5,47 @@ import json
 import random
 from typing import Dict, List, Any, Optional
 
-from agents import Agent, Runner
+# Agents SDK imports
+from agents import Agent, function_tool, Runner
 from agents.run_context import RunContextWrapper
+from agents.run import RunConfig
+from agents.models import ModelSettings
 
+# Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
+# Project imports
 from embedding.vector_store import generate_embedding
-
 from lore.core.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
+
+logger = logging.getLogger(__name__)
+
+# We optionally create an agent to decide how many "nations" or "regions" to create, 
+# if you want to move that logic from random to agent-based. 
+# (You can skip if you prefer.)
+distribution_agent = Agent(
+    name="GeopoliticalDistributionAgent",
+    instructions=(
+        "Given context about the world, you decide how many geopolitical items to generate, or how to distribute them. "
+        "Return JSON like: { \"count\": 5 }, or something relevant. "
+    ),
+    model="o3-mini",
+    model_settings=ModelSettings(temperature=0.0)  # Generally straightforward logic
+)
 
 class GeopoliticalSystemManager(BaseLoreManager):
     """
     Manager for geopolitical content, including regions, nations, and political entities.
     """
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.cache_namespace = "geopolitical"
-    
+
     async def _initialize_tables(self):
-        """Initialize necessary tables"""
+        """Initialize necessary tables."""
         table_definitions = {
             "GeographicRegions": """
                 CREATE TABLE GeographicRegions (
@@ -47,7 +66,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_geographicregions_embedding 
                 ON GeographicRegions USING ivfflat (embedding vector_cosine_ops);
             """,
-            
             "PoliticalEntities": """
                 CREATE TABLE PoliticalEntities (
                     id SERIAL PRIMARY KEY,
@@ -71,15 +89,24 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON PoliticalEntities USING ivfflat (embedding vector_cosine_ops);
             """
         }
-        
         await self.initialize_tables_for_class(table_definitions)
-    
+
+    async def ensure_initialized(self):
+        """Ensure system is fully initialized with necessary tables."""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self._initialize_tables()
+
+    # ------------------------------------------------------------------------
+    # 1) Add geographic region
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_geographic_region",
         action_description="Adding geographic region: {name}",
         id_from_context=lambda ctx: "geopolitical_manager"
     )
+    @function_tool
     async def add_geographic_region(
         self, 
         ctx,
@@ -95,40 +122,23 @@ class GeopoliticalSystemManager(BaseLoreManager):
         dangers: Optional[List[str]] = None
     ) -> int:
         """
-        Add a geographic region to the database
-        
-        Args:
-            name: Name of the region
-            region_type: Type of region (mountain range, forest, etc.)
-            description: Detailed description
-            climate: Climate description
-            resources: Available resources
-            governing_faction: Who controls the region
-            population_density: How populated the region is
-            major_settlements: Significant settlements in the region
-            cultural_traits: Cultural characteristics of the region
-            dangers: Hazards in the region
-            
-        Returns:
-            ID of the created region
+        Add a geographic region to the database (as a function tool).
         """
-        # Ensure tables exist
+
         await self.ensure_initialized()
-        
-        # Set defaults
+
         resources = resources or []
         major_settlements = major_settlements or []
         cultural_traits = cultural_traits or []
         dangers = dangers or []
-        
-        # Apply matriarchal theming 
+
+        # Apply matriarchal theming
         description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
-        
+
         # Generate embedding
         embedding_text = f"{name} {region_type} {description} {climate or ''}"
         embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
+
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 region_id = await conn.fetchval("""
@@ -139,12 +149,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
-                """, name, region_type, description, climate, resources,
-                     governing_faction, population_density, major_settlements,
-                     cultural_traits, dangers, embedding)
+                """,
+                name, region_type, description, climate, resources,
+                governing_faction, population_density, major_settlements,
+                cultural_traits, dangers, embedding)
                 
                 return region_id
-    
+
+    # ------------------------------------------------------------------------
+    # 2) Generate world nations
+    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_world_nations",
@@ -153,140 +167,137 @@ class GeopoliticalSystemManager(BaseLoreManager):
     )
     async def generate_world_nations(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
         """
-        Generate a set of nations for the world
-        
-        Args:
-            count: Number of nations to generate
-            
-        Returns:
-            List of generated nations
+        Generate a set of nations for the world (with LLM-based approach).
+        By default, we accept a 'count', but we can also let the LLM override it if we want.
         """
-        # Create run context
-        run_ctx = self.create_run_context(ctx)
-        
-        # Get context data
+        run_ctx = RunContextWrapper(context=ctx.context)
+
+        # (Optional) Let an agent decide how many nations to generate
+        dist_prompt = (
+            "We want to create some matriarchal nations. We proposed a default of {count}, but you can override. "
+            "Return JSON with a 'count' field. e.g. {\"count\": 5}"
+        ).format(count=count)
+
+        dist_config = RunConfig(workflow_name="NationDistribution")
+        dist_result = await Runner.run(distribution_agent, dist_prompt, context=run_ctx.context, run_config=dist_config)
+
+        try:
+            dist_data = json.loads(dist_result.final_output)
+            count = dist_data.get("count", count)
+        except json.JSONDecodeError:
+            pass  # fallback to the existing 'count'
+
+        # Gather context from DB
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                # Get geographic regions for context
                 regions = await conn.fetch("""
                     SELECT id, name, region_type, climate, resources
                     FROM GeographicRegions
                     LIMIT 10
                 """)
-                
-                region_data = [dict(region) for region in regions]
-                
-                # Get cultural elements for context
+                region_data = [dict(r) for r in regions]
+
+                # Some cultural elements
                 cultures = await conn.fetch("""
                     SELECT name, element_type, description
                     FROM CulturalElements
                     LIMIT 8
                 """)
-                
-                culture_data = [dict(culture) for culture in cultures]
-        
+                culture_data = [dict(c) for c in cultures]
+
         # Create agent for nation generation
         nation_agent = Agent(
             name="NationGenerationAgent",
             instructions="You create detailed nations for matriarchal fantasy worlds.",
-            model="o3-mini"
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
         )
-        
+
         generated_nations = []
         for i in range(count):
-            # Determine matriarchy level - ensure spectrum of levels but bias toward high
-            if i < count // 3:  # First third - very high matriarchy
+            # We'll keep your partial random logic for matriarchy range
+            if i < count // 3:
                 matriarchy_range = (8, 10)
-            elif i < 2 * count // 3:  # Middle third - high matriarchy
+            elif i < 2 * count // 3:
                 matriarchy_range = (6, 8)
-            else:  # Final third - moderate to high matriarchy
+            else:
                 matriarchy_range = (4, 7)
-                
             matriarchy_level = random.randint(*matriarchy_range)
-            
-            # Create prompt for the agent
+
+            # Build prompt
             prompt = f"""
             Generate a detailed nation for a fantasy world with predominantly matriarchal societies.
-            
-            GEOGRAPHIC CONTEXT:
+
+            GEOGRAPHIC CONTEXT (sample):
             {json.dumps(random.sample(region_data, min(3, len(region_data))), indent=2)}
-            
-            CULTURAL CONTEXT:
+
+            CULTURAL CONTEXT (sample):
             {json.dumps(random.sample(culture_data, min(2, len(culture_data))), indent=2)}
-            
-            This nation should have a matriarchy level of {matriarchy_level}/10, where 10 is complete female dominance
-            and 1 would be equal gender roles (no nation is below 4).
-            
-            Create a nation that:
-            1. Has a unique identity and government structure
-            2. Reflects its matriarchy level in its social systems
-            3. Has distinctive resources and cultural traits
-            4. Could realistically exist in the world context
-            
-            Return a JSON object with:
-            - name: Name of the nation
-            - government_type: Type of government system
-            - description: Detailed description emphasizing feminine power structures
-            - relative_power: Military/economic power (1-10)
-            - matriarchy_level: {matriarchy_level}
-            - population_scale: Rough population size
-            - major_resources: Array of key resources
-            - major_cities: Array of important settlements
-            - cultural_traits: Array of defining cultural elements
-            - notable_features: Any other distinctive elements
+
+            This nation has a matriarchy level of {matriarchy_level}/10.
+
+            Provide:
+            - name
+            - government_type
+            - description (emphasizing feminine power)
+            - relative_power (1-10)
+            - matriarchy_level = {matriarchy_level}
+            - population_scale
+            - major_resources
+            - major_cities
+            - cultural_traits
+            - notable_features
             """
-            
-            # Get response from agent
-            result = await Runner.run(nation_agent, prompt, context=run_ctx.context)
-            
+
+            run_config = RunConfig(workflow_name="NationGen")
+            result = await Runner.run(nation_agent, prompt, context=run_ctx.context, run_config=run_config)
             try:
-                # Parse the JSON response
                 nation_data = json.loads(result.final_output)
-                
-                # Set matriarchy level explicitly
                 nation_data["matriarchy_level"] = matriarchy_level
-                
-                # Apply matriarchal theming
+
+                # Thematic
                 if "description" in nation_data:
+                    emphasis = matriarchy_level // 3
                     nation_data["description"] = MatriarchalThemingUtils.apply_matriarchal_theme(
-                        "nation", nation_data["description"], emphasis_level=matriarchy_level // 3
+                        "nation", nation_data["description"], emphasis_level=emphasis
                     )
-                
-                # Add to world_politics manager
+
+                # Integrate with your politics manager
                 from lore.managers.politics import WorldPoliticsManager
                 politics_manager = WorldPoliticsManager(self.user_id, self.conversation_id)
                 await politics_manager.ensure_initialized()
-                
+
                 # Add the nation
                 nation_id = await politics_manager.add_nation(
                     run_ctx,
-                    name=nation_data.get("name", f"Nation {i+1}"),
+                    name=nation_data.get("name", f"Nation_{i+1}"),
                     government_type=nation_data.get("government_type", "matriarchy"),
-                    description=nation_data.get("description", ""),
-                    relative_power=nation_data.get("relative_power", random.randint(3, 8)),
-                    matriarchy_level=nation_data.get("matriarchy_level", matriarchy_level),
+                    description=nation_data.get("description",""),
+                    relative_power=nation_data.get("relative_power", random.randint(3,8)),
+                    matriarchy_level=nation_data["matriarchy_level"],
                     population_scale=nation_data.get("population_scale"),
-                    major_resources=nation_data.get("major_resources"),
-                    major_cities=nation_data.get("major_cities"),
-                    cultural_traits=nation_data.get("cultural_traits"),
-                    notable_features=nation_data.get("notable_features")
+                    major_resources=nation_data.get("major_resources", []),
+                    major_cities=nation_data.get("major_cities", []),
+                    cultural_traits=nation_data.get("cultural_traits", []),
+                    notable_features=nation_data.get("notable_features", [])
                 )
-                
-                # Add ID to data and add to results
                 nation_data["id"] = nation_id
                 generated_nations.append(nation_data)
-                
+
             except Exception as e:
-                logging.error(f"Error generating nation: {e}")
-        
+                logger.error(f"Error generating nation: {e}")
+
         return generated_nations
-        
+
     async def register_with_governance(self):
         """Register with Nyx governance system."""
         await super().register_with_governance(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="geopolitical_manager",
-            directive_text="Create and manage geographic regions and political entities for the matriarchal world.",
+            directive_text=(
+                "Create and manage geographic regions and political entities "
+                "for the matriarchal world."
+            ),
             scope="world_building",
             priority=DirectivePriority.MEDIUM
         )
