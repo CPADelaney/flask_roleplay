@@ -3,7 +3,7 @@
 from typing import Dict, List, Any, Optional, Type, Set
 import logging
 from datetime import datetime
-from lore.database_access import DatabaseAccess
+from lore.data_access import BaseDataAccess
 from lore.utils.caching import LoreCache
 from lore.error_handler import ErrorHandler
 from lore.monitoring import metrics
