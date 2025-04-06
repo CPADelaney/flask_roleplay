@@ -34,7 +34,7 @@ from context.context_service import get_context_service, get_comprehensive_conte
 from context.memory_manager import get_memory_manager, Memory
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
-from context.performance import PerformanceMonitor, track_performance
+from context.context_performance import PerformanceMonitor, track_performance
 from context.unified_cache import context_cache
 
 # Progressive summarization integration
