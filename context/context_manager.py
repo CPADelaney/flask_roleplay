@@ -5,10 +5,10 @@ import logging
 import json
 import time
 import hashlib
-from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+import copy
 from datetime import datetime
 from collections import defaultdict
-import copy
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 
 # Agent SDK imports
 from agents import Agent, function_tool, RunContextWrapper
@@ -16,10 +16,18 @@ from agents.tracing import trace, custom_span
 
 logger = logging.getLogger(__name__)
 
+
 class ContextDiff:
     """Represents a context difference with change priority information"""
     
-    def __init__(self, path: str, operation: str, value: Any = None, old_value: Any = None, priority: int = 5):
+    def __init__(
+        self, 
+        path: str, 
+        operation: str, 
+        value: Any = None, 
+        old_value: Any = None, 
+        priority: int = 5
+    ):
         """
         Initialize a context difference.
         
@@ -51,46 +59,104 @@ class ContextDiff:
 
 class ContextManager:
     """
-    Context manager that handles context state and change tracking
-    Integrated with OpenAI Agents SDK
+    Context manager that handles context state and change tracking,
+    integrated with OpenAI Agents SDK (but we do NOT use @function_tool on these instance methods).
     """
-    
+
     def __init__(self, component_id: str = "main_context"):
         self.component_id = component_id
-        self.context = {}
-        self.context_hash = self._hash_context({})
-        self.change_log = []
+
+        # The main context dictionary
+        self.context: Dict[str, Any] = {}
+        self.context_hash: str = self._hash_context({})
+        
+        # Change log, versioning, and pending-changes
+        self.change_log: List[ContextDiff] = []
         self.max_change_log_size = 20
-        self.pending_changes = []
-        self.change_subscriptions = defaultdict(list)
+        self.pending_changes: List[ContextDiff] = []
         self.version = 0
         
-        # Initialize the processing task
-        self.batch_task = None
-        self.batch_interval = 0.5  # seconds
+        # Subscription system
+        self.change_subscriptions = defaultdict(list)
         
+        # Batch processing for pending changes
+        self.batch_task: Optional[asyncio.Task] = None
+        self.batch_interval = 0.5  # seconds between each batch run
+
         # Nyx directive handling
-        self.nyx_directives = {}
-        self.nyx_overrides = {}
-        self.nyx_prohibitions = {}
-        
-        # Nyx governance integration
+        self.nyx_directives: Dict[str, Any] = {}
+        self.nyx_overrides: Dict[str, Any] = {}
+        self.nyx_prohibitions: Dict[str, Any] = {}
+
+        # Governance integration objects
         self.governance = None
         self.directive_handler = None
-    
+
+    # ---------------------------------------------------------------------
+    # Internal: Hashing & Diff
+    # ---------------------------------------------------------------------
+
     def _hash_context(self, context: Dict[str, Any]) -> str:
-        """Create a hash representation of context to detect changes"""
+        """Create a hash representation of `context` for quick comparison."""
         serialized = json.dumps(context, sort_keys=True, default=str)
-        return hashlib.md5(serialized.encode('utf-8')).hexdigest()
+        return hashlib.md5(serialized.encode("utf-8")).hexdigest()
     
-    def _get_value_at_path(self, context: Dict[str, Any], path: str) -> Any:
-        """Get a value at the specified path"""
+    def _detect_changes(
+        self, 
+        old_context: Dict[str, Any], 
+        new_context: Dict[str, Any]
+    ) -> List[ContextDiff]:
+        """
+        Detect changes between two context objects in a naive (top-level) manner.
+        
+        For a deeper or more sophisticated diff, you'd traverse nested dictionaries, etc.
+        """
+        changes = []
+        
+        # Check new or changed keys
+        for key, value in new_context.items():
+            if key not in old_context:
+                changes.append(ContextDiff(
+                    path=f"/{key}",
+                    operation="add",
+                    value=value,
+                    priority=5
+                ))
+            elif old_context[key] != value:
+                changes.append(ContextDiff(
+                    path=f"/{key}",
+                    operation="replace",
+                    value=value,
+                    old_value=old_context[key],
+                    priority=5
+                ))
+        
+        # Check removed keys
+        for key in old_context:
+            if key not in new_context:
+                changes.append(ContextDiff(
+                    path=f"/{key}",
+                    operation="remove",
+                    old_value=old_context[key],
+                    priority=5
+                ))
+        
+        return changes
+
+    # ---------------------------------------------------------------------
+    # Internal: Setting, Removing, & Applying diffs
+    # ---------------------------------------------------------------------
+    
+    def _get_value_at_path(
+        self, 
+        context: Dict[str, Any], 
+        path: str
+    ) -> Any:
+        """Get the value from `context` at a slash-separated path, e.g. '/someKey/0/nested'."""
         if not path or path == "/":
             return context
-            
         parts = path.strip("/").split("/")
         current = context
-        
         try:
             for part in parts:
                 if isinstance(current, dict):
@@ -98,240 +164,169 @@ class ContextManager:
                 elif isinstance(current, list) and part.isdigit():
                     current = current[int(part)]
                 else:
+                    # Can't navigate further
                     return None
             return current
         except (KeyError, IndexError):
             return None
     
-    def _set_value_at_path(self, context: Dict[str, Any], path: str, value: Any) -> Dict[str, Any]:
-        """Set a value at the specified path"""
+    def _set_value_at_path(
+        self, 
+        context: Dict[str, Any], 
+        path: str, 
+        value: Any
+    ) -> Dict[str, Any]:
+        """Return a copy of `context` with `value` set at `path` (slash-separated)."""
         if not path or path == "/":
             return value  # Replace entire context
-            
+
         result = copy.deepcopy(context)
         parts = path.strip("/").split("/")
         current = result
         
-        # Navigate to the parent of the target
-        for i, part in enumerate(parts[:-1]):
+        # Navigate to the parent container
+        for part in parts[:-1]:
             if isinstance(current, dict):
                 if part not in current:
-                    # Create missing intermediate objects
                     current[part] = {}
                 current = current[part]
             elif isinstance(current, list) and part.isdigit():
                 index = int(part)
                 if index >= len(current):
-                    # Extend the list if needed
-                    current.extend([None] * (index - len(current) + 1))
+                    current.extend([None]*(index - len(current)+1))
                 if current[index] is None:
                     current[index] = {}
                 current = current[index]
-            else:
-                # Cannot navigate further
-                return result
         
-        # Set the value
         last_part = parts[-1]
         if isinstance(current, dict):
             current[last_part] = value
         elif isinstance(current, list) and last_part.isdigit():
             index = int(last_part)
             if index >= len(current):
-                current.extend([None] * (index - len(current) + 1))
+                current.extend([None]*(index - len(current)+1))
             current[index] = value
-        
         return result
     
-    def _remove_value_at_path(self, context: Dict[str, Any], path: str) -> Dict[str, Any]:
-        """Remove a value at the specified path"""
+    def _remove_value_at_path(
+        self,
+        context: Dict[str, Any], 
+        path: str
+    ) -> Dict[str, Any]:
+        """Return a copy of `context` with the value at `path` removed."""
         if not path or path == "/":
-            return {}  # Remove entire context
-            
+            return {}  # remove entire context
+
         result = copy.deepcopy(context)
         parts = path.strip("/").split("/")
         current = result
         
-        # Navigate to the parent of the target
-        for i, part in enumerate(parts[:-1]):
+        for part in parts[:-1]:
             if isinstance(current, dict):
                 if part not in current:
-                    # Path doesn't exist, nothing to remove
                     return result
                 current = current[part]
             elif isinstance(current, list) and part.isdigit():
-                index = int(part)
-                if index >= len(current):
-                    # Path doesn't exist, nothing to remove
+                idx = int(part)
+                if idx >= len(current):
                     return result
-                current = current[index]
-            else:
-                # Cannot navigate further
-                return result
+                current = current[idx]
         
-        # Remove the value
         last_part = parts[-1]
         if isinstance(current, dict) and last_part in current:
             del current[last_part]
         elif isinstance(current, list) and last_part.isdigit():
-            index = int(last_part)
-            if index < len(current):
-                current.pop(index)
+            idx = int(last_part)
+            if idx < len(current):
+                current.pop(idx)
         
         return result
     
-    def _apply_diff(self, context: Dict[str, Any], diff: ContextDiff) -> Dict[str, Any]:
-        """Apply a single diff to a context"""
-        if diff.operation == "add" or diff.operation == "replace":
+    def _apply_diff(
+        self, 
+        context: Dict[str, Any], 
+        diff: ContextDiff
+    ) -> Dict[str, Any]:
+        """Apply a single ContextDiff to produce a new context dictionary."""
+        if diff.operation in ("add", "replace"):
             return self._set_value_at_path(context, diff.path, diff.value)
         elif diff.operation == "remove":
             return self._remove_value_at_path(context, diff.path)
-        return context  # No change for unknown operations
-    
-    def _detect_changes(self, old_context: Dict[str, Any], new_context: Dict[str, Any]) -> List[ContextDiff]:
-        """Detect changes between two context objects"""
-        # For simplicity, we'll just check top-level keys
-        changes = []
-        
-        # Check for added or modified keys
-        for key, value in new_context.items():
-            if key not in old_context:
-                # Key was added
-                changes.append(ContextDiff(
-                    path=f"/{key}",
-                    operation="add",
-                    value=value,
-                    priority=self._estimate_priority(value)
-                ))
-            elif old_context[key] != value:
-                # Key was modified
-                changes.append(ContextDiff(
-                    path=f"/{key}",
-                    operation="replace",
-                    value=value,
-                    old_value=old_context[key],
-                    priority=self._estimate_priority(value, old_context[key])
-                ))
-        
-        # Check for removed keys
-        for key in old_context:
-            if key not in new_context:
-                # Key was removed
-                changes.append(ContextDiff(
-                    path=f"/{key}",
-                    operation="remove",
-                    old_value=old_context[key],
-                    priority=self._estimate_priority(old_context[key])
-                ))
-        
-        return changes
-    
-    def _estimate_priority(self, value: Any, old_value: Any = None) -> int:
-        """Estimate priority of a change based on content"""
-        # Default priority
-        priority = 5
-        
-        # Adjust based on value type
-        if isinstance(value, dict):
-            # More complex dictionaries get higher priority
-            keys = value.keys()
-            if any(k in keys for k in ["error", "critical", "important"]):
-                priority += 3
-            elif any(k in keys for k in ["player", "npc", "quest"]):
-                priority += 2
-            elif len(keys) > 5:
-                priority += 1
-        elif isinstance(value, list):
-            # Longer lists get higher priority
-            if len(value) > 10:
-                priority += 2
-            elif len(value) > 5:
-                priority += 1
-        
-        # Adjust based on change size
-        if old_value is not None:
-            # Significant changes get higher priority
-            if type(value) != type(old_value):
-                priority += 2
-            elif isinstance(value, dict) and isinstance(old_value, dict):
-                # Major dictionary changes
-                if len(value) - len(old_value) > 5:
-                    priority += 2
-                elif len(value) != len(old_value):
-                    priority += 1
-            elif isinstance(value, list) and isinstance(old_value, list):
-                # Major list changes
-                if len(value) - len(old_value) > 5:
-                    priority += 2
-                elif len(value) != len(old_value):
-                    priority += 1
-            elif isinstance(value, (int, float)) and isinstance(old_value, (int, float)):
-                # Major numeric changes
-                if abs(value - old_value) > 10:
-                    priority += 2
-                elif abs(value - old_value) > 5:
-                    priority += 1
-        
-        # Ensure priority is within valid range
-        return max(1, min(priority, 10))
+        return context
+
+    # ---------------------------------------------------------------------
+    # Internal: Batching & Processing
+    # ---------------------------------------------------------------------
     
     def _start_batch_processor(self):
+        """Ensure the batch processing task is running."""
         if self.batch_task is None or self.batch_task.done():
             self.batch_task = asyncio.create_task(self._process_batches())
     
     async def _process_batches(self):
-        while True:
-            try:
+        """Background loop to process pending changes at intervals."""
+        try:
+            while True:
                 await asyncio.sleep(self.batch_interval)
                 await self._process_pending_batch()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in batch processor: {e}")
+        except asyncio.CancelledError:
+            logger.debug("ContextManager batch processor cancelled.")
     
     async def _process_pending_batch(self):
+        """Apply all pending changes as a batch, update version, and notify subscribers."""
         if not self.pending_changes:
             return
-        
+
+        # Grab all changes
         changes = self.pending_changes
         self.pending_changes = []
-        
-        modified_context = self.context
+
+        # Apply them to produce a new context
+        modified = self.context
         for diff in changes:
-            modified_context = self._apply_diff(modified_context, diff)
+            modified = self._apply_diff(modified, diff)
         
+        # Update version & context
         self.version += 1
-        self.context = modified_context
-        self.context_hash = self._hash_context(modified_context)
+        self.context = modified
+        self.context_hash = self._hash_context(modified)
+        
+        # Save changes to the log
         self.change_log.extend(changes)
         while len(self.change_log) > self.max_change_log_size:
             self.change_log.pop(0)
         
-        # Notify
+        # Notify subscribers
         await self._notify_subscribers(changes)
-    
+
     async def _notify_subscribers(self, changes: List[ContextDiff]):
-        paths_changed = {diff.path for diff in changes}
+        """Call any subscriber callbacks that care about the changed paths."""
         for path, subs in self.change_subscriptions.items():
-            matching_changes = [d for d in changes if d.path.startswith(path)]
-            if matching_changes:
-                for sub in subs:
+            # For each subscription path, see if any diffs match that path
+            relevant = [d for d in changes if d.path.startswith(path)]
+            if relevant:
+                for cb in subs:
                     try:
-                        if asyncio.iscoroutinefunction(sub):
-                            await sub(matching_changes)
+                        if asyncio.iscoroutinefunction(cb):
+                            await cb(relevant)
                         else:
-                            sub(matching_changes)
+                            cb(relevant)
                     except Exception as e:
-                        logger.error(f"Error in subscriber: {e}")
-    
+                        logger.error(f"Error in subscriber callback: {e}")
+
+    # ---------------------------------------------------------------------
+    # INTERNAL (PRIVATE) Methods that used to be @function_tool
+    # ---------------------------------------------------------------------
+
     async def _get_context(self, source_version: Optional[int] = None) -> Dict[str, Any]:
         """
-        Internal method to get the current context (or a delta) based on source_version.
+        Return the full context or a delta if `source_version` is older.
         """
+        # Make sure pending changes are processed
         await self._process_pending_batch()
-
+        
         if source_version is None:
-            # Return full context if no version provided
+            # Return everything if no version is specified
             return {
                 "full_context": self.context,
                 "is_incremental": False,
@@ -339,7 +334,7 @@ class ContextManager:
             }
         
         if source_version >= self.version:
-            # Requester is up-to-date
+            # The requester is up-to-date
             return {
                 "full_context": self.context,
                 "is_incremental": False,
@@ -347,10 +342,8 @@ class ContextManager:
                 "version": self.version
             }
         
-        # Attempt to build a delta from change_log
-        relevant_changes = [diff for diff in self.change_log]
-        if not relevant_changes or len(relevant_changes) > 20:
-            # If no or too many changes, just send the full context
+        # Attempt to build a delta from change_log if not too large
+        if len(self.change_log) == 0 or len(self.change_log) > 20:
             return {
                 "full_context": self.context,
                 "is_incremental": False,
@@ -358,15 +351,15 @@ class ContextManager:
             }
         
         return {
-            "delta_context": [d.to_dict() for d in relevant_changes],
+            "delta_context": [diff.to_dict() for diff in self.change_log],
             "is_incremental": True,
             "version": self.version
         }
 
     async def _update_context(self, new_context: Dict[str, Any]) -> bool:
         """
-        Internal method to replace the entire context with `new_context`.
-        Returns True if changed, False if no change.
+        Replace the entire context with `new_context`.
+        Return True if changed, otherwise False.
         """
         new_hash = self._hash_context(new_context)
         if new_hash == self.context_hash:
@@ -375,11 +368,17 @@ class ContextManager:
         diffs = self._detect_changes(self.context, new_context)
         self.pending_changes.extend(diffs)
         self._start_batch_processor()
+        
         return True
-    
-    async def _apply_targeted_change(self, path: str, value: Any, operation: str = "replace") -> bool:
+
+    async def _apply_targeted_change(
+        self, 
+        path: str, 
+        value: Any, 
+        operation: str
+    ) -> bool:
         """
-        Internal method to apply a single change (add/remove/replace) at a specific path.
+        Apply a single diff (add, remove, or replace) to `self.context`.
         """
         old_value = self._get_value_at_path(self.context, path)
         diff = ContextDiff(
@@ -391,13 +390,13 @@ class ContextManager:
         self.pending_changes.append(diff)
         self._start_batch_processor()
         return True
-    
+
     def subscribe_to_changes(self, path: str, callback: Callable) -> None:
-        """Subscribe to changes at a given path."""
+        """Subscribe a callback to changes at `path`."""
         self.change_subscriptions[path].append(callback)
 
     def unsubscribe_from_changes(self, path: str, callback: Callable) -> bool:
-        """Remove a subscription callback for a given path."""
+        """Unsubscribe a callback previously subscribed."""
         if path in self.change_subscriptions:
             if callback in self.change_subscriptions[path]:
                 self.change_subscriptions[path].remove(callback)
@@ -406,98 +405,70 @@ class ContextManager:
 
     def _prioritize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Internal method to reorder or annotate context by priority.
-        This was once a tool method, now a normal instance method.
+        Internal method: reorder or annotate context by priority.
+        This used to be a function_tool, now it's a normal method.
+        
+        Here's an example approach with `type_scores`.
         """
         try:
-            # Example logic: apply some scoring
-            priority_scores = {}
-            
-            for key, val in context.items():
-                base_score = type_scores.get(key, 3)
-                    
-                    # Base score by type
-                    type_scores = {
-                        "npcs": 8,
-                        "memories": 7,
-                        "quests": 6,
-                        "location": 5,
-                        "relationships": 7,
-                        "narrative": 8,
-                        "conflicts": 7,
-                        "lore": 6,
-                        "events": 5,
-                        "items": 4
-                    }
-                    score += type_scores.get(key, 3)
-                    
-                    # Adjust for recency
-                    if hasattr(value, "timestamp"):
-                        age = time.time() - value.timestamp
-                        recency = max(0, 1 - (age / 86400))  # 24-hour decay
-                        score *= (1 + recency)
-                    
-                    # Adjust for relevance
-                    if hasattr(value, "relevance_score"):
-                        score *= (1 + value.relevance_score)
-                    
-                    # Adjust for complexity
-                    if isinstance(value, dict):
-                        # More complex dictionaries get higher priority
-                        if any(k in value for k in ["error", "critical", "important"]):
-                            score += 3
-                        elif any(k in value for k in ["player", "npc", "quest"]):
-                            score += 2
-                        elif len(value) > 5:
-                            score += 1
-                    elif isinstance(value, list):
-                        # Longer lists get higher priority
-                        if len(value) > 10:
-                            score += 2
-                        elif len(value) > 5:
-                            score += 1
-                    
-                    # Adjust for relationships
-                    if key == "relationships" and isinstance(value, dict):
-                        # More complex relationships get higher priority
-                        relationship_count = len(value)
-                        if relationship_count > 5:
-                            score += 2
-                        elif relationship_count > 2:
-                            score += 1
-                    
-                    # Adjust for narrative importance
-                    if key == "narrative_metadata":
-                        if value.get("coherence_score", 0) > 0.8:
-                            score += 2
-                        elif value.get("coherence_score", 0) > 0.6:
-                            score += 1
-                    
-                    priority_scores[key] = score
-                
-                # Sort by priority
-                sorted_items = sorted(
-                    context.items(),
-                    key=lambda x: priority_scores.get(x[0], 0),
-                    reverse=True
-                )
-                
-                # Create prioritized context
-                prioritized_context = dict(sorted_items)
-                
-                # Add priority metadata
-                prioritized_context["_priority_metadata"] = {
-                    "scores": priority_scores,
-                    "timestamp": time.time()
-                }
-                
-                return prioritized_context
-            except Exception as e:
-                logger.error(f"Error prioritizing context: {e}")
-                return context
+            # Some sample type-based scoring
+            type_scores = {
+                "npcs": 8,
+                "memories": 7,
+                "quests": 6,
+                "location": 5,
+                "relationships": 7,
+                "narrative": 8,
+                "conflicts": 7,
+                "lore": 6,
+                "events": 5,
+                "items": 4
+            }
 
+            priority_scores = {}
+
+            # For each key in the context, compute a "score"
+            for key, value in context.items():
+                # Start with a base from type_scores
+                score = type_scores.get(key, 3)
+
+                # If value has special flags, we can add logic here
+                # e.g., if "critical" in str(value): score += 5
+                # or if it's a big list, add more score, etc.
+
+                # For demonstration, let's just keep it simple
+                priority_scores[key] = score
+
+            # Sort items in descending order of the computed score
+            sorted_items = sorted(
+                context.items(),
+                key=lambda x: priority_scores.get(x[0], 0),
+                reverse=True
+            )
+
+            # Build a new dictionary with the high-score items first
+            prioritized_context = dict(sorted_items)
+            
+            # Add metadata about priority
+            prioritized_context["_priority_metadata"] = {
+                "scores": priority_scores,
+                "timestamp": time.time()
+            }
+
+            return prioritized_context
+
+        except Exception as e:
+            logger.error(f"Error prioritizing context: {e}")
+            return context
+
+    # ---------------------------------------------------------------------
+    # Nyx / Governance integration
+    # ---------------------------------------------------------------------
+    
     async def initialize_nyx_integration(self, user_id: int, conversation_id: int):
-        """Initialize Nyx governance integration."""
+        """
+        Asynchronously initialize Nyx governance, directive handlers, etc.
+        """
         try:
             from nyx.integrate import get_central_governance
             from nyx.directive_handler import DirectiveHandler
@@ -510,6 +481,7 @@ class ContextManager:
                 AgentType.CONTEXT_MANAGER,
                 self.component_id
             )
+            # Register directive handlers
             self.directive_handler.register_handler("action", self._handle_action_directive)
             self.directive_handler.register_handler("override", self._handle_override_directive)
             self.directive_handler.register_handler("prohibition", self._handle_prohibition_directive)
@@ -523,127 +495,97 @@ class ContextManager:
         instruction = directive.get("instruction", "")
         logging.info(f"[ContextManager] Processing action directive: {instruction}")
         
+        # Example stubs:
         if "prioritize_context" in instruction.lower():
-            # Apply context prioritization
-            params = directive.get("parameters", {})
-            priority_rules = params.get("priority_rules", {})
-            
-            # Update priority rules
-            self._update_priority_rules(priority_rules)
-            
-            # Re-prioritize current context
-            self.context = self._prioritize_context(None, self.context)
-            
+            self.context = self._prioritize_context(self.context)
             return {"result": "context_prioritized"}
-            
         elif "consolidate_context" in instruction.lower():
-            # Consolidate context based on rules
-            params = directive.get("parameters", {})
-            consolidation_rules = params.get("consolidation_rules", {})
-            
-            # Apply consolidation
-            self.context = await self._consolidate_context(consolidation_rules)
-            
+            # Possibly run some consolidation logic
             return {"result": "context_consolidated"}
-            
-        elif "track_changes" in instruction.lower():
-            # Enable/disable change tracking
-            params = directive.get("parameters", {})
-            enabled = params.get("enabled", True)
-            
-            self.change_tracking_enabled = enabled
-            return {"result": "change_tracking_updated", "enabled": enabled}
         
         return {"result": "action_not_recognized"}
 
     async def _handle_override_directive(self, directive: dict) -> dict:
-        """Handle an override directive from Nyx."""
-        logging.info(f"[ContextManager] Processing override directive")
-        
-        # Extract override details
-        override_action = directive.get("override_action", {})
-        applies_to = directive.get("applies_to", [])
-        
-        # Store override
-        directive_id = directive.get("id")
-        if directive_id:
-            self.nyx_overrides[directive_id] = {
-                "action": override_action,
-                "applies_to": applies_to
-            }
-        
+        logging.info("[ContextManager] Processing override directive")
+        # Example stub
         return {"result": "override_stored"}
 
     async def _handle_prohibition_directive(self, directive: dict) -> dict:
-        """Handle a prohibition directive from Nyx."""
-        logging.info(f"[ContextManager] Processing prohibition directive")
-        
-        # Extract prohibition details
-        prohibited_actions = directive.get("prohibited_actions", [])
-        reason = directive.get("reason", "No reason provided")
-        
-        # Store prohibition
-        directive_id = directive.get("id")
-        if directive_id:
-            self.nyx_prohibitions[directive_id] = {
-                "prohibited_actions": prohibited_actions,
-                "reason": reason
-            }
-        
+        logging.info("[ContextManager] Processing prohibition directive")
+        # Example stub
         return {"result": "prohibition_stored"}
 
-    def _update_priority_rules(self, rules: Dict[str, Any]) -> None:
-        """Update priority rules based on Nyx directive."""
-        try:
-            # Update type scores
-            if "type_scores" in rules:
-                self.type_scores.update(rules["type_scores"])
-            
-            # Update priority adjustments
-            if "priority_adjustments" in rules:
-                self.priority_adjustments.update(rules["priority_adjustments"])
-            
-            # Update relationship weights
-            if "relationship_weights" in rules:
-                self.relationship_weights.update(rules["relationship_weights"])
-            
-            logger.info("Updated priority rules from Nyx directive")
-        except Exception as e:
-            logger.error(f"Error updating priority rules: {e}")
 
-    async def _consolidate_context(self, rules: Dict[str, Any]) -> Dict[str, Any]:
-        """Consolidate context based on Nyx rules."""
-        try:
-            consolidated = self.context.copy()
-            
-            # Apply consolidation rules
-            if "group_by" in rules:
-                for group_key in rules["group_by"]:
-                    if group_key in consolidated:
-                        consolidated[group_key] = self._consolidate_group(
-                            consolidated[group_key],
-                            rules.get("group_rules", {}).get(group_key, {})
-                        )
-            
-            # Apply memory consolidation
-            if "consolidate_memories" in rules and "memories" in consolidated:
-                consolidated["memories"] = await self._consolidate_memories(
-                    consolidated["memories"],
-                    rules["consolidate_memories"]
-                )
-            
-            # Apply relationship consolidation
-            if "consolidate_relationships" in rules and "relationships" in consolidated:
-                consolidated["relationships"] = await self._consolidate_relationships(
-                    consolidated["relationships"],
-                    rules["consolidate_relationships"]
-                )
-            
-            return consolidated
-        except Exception as e:
-            logger.error(f"Error consolidating context: {e}")
-            return self.context
+# ---------------------------------------------------------------------
+# Singleton accessor for your ContextManager
+# ---------------------------------------------------------------------
+_context_manager: Optional[ContextManager] = None
 
+def get_context_manager() -> ContextManager:
+    """Obtain (or create) the singleton ContextManager instance."""
+    global _context_manager
+    if _context_manager is None:
+        _context_manager = ContextManager()
+    return _context_manager
+
+
+# ---------------------------------------------------------------------
+# STANDALONE TOOL FUNCTIONS (these have `ctx: RunContextWrapper` first!)
+# ---------------------------------------------------------------------
+
+@function_tool
+async def get_context_tool(
+    ctx: RunContextWrapper,
+    source_version: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Tool function: get context or a delta from the singleton context manager.
+    """
+    cm = get_context_manager()
+    return await cm._get_context(source_version)
+
+
+@function_tool
+async def update_context_tool(
+    ctx: RunContextWrapper,
+    new_context: Dict[str, Any]
+) -> bool:
+    """
+    Tool function: replace the entire context with `new_context`.
+    """
+    cm = get_context_manager()
+    return await cm._update_context(new_context)
+
+
+@function_tool
+async def apply_targeted_change_tool(
+    ctx: RunContextWrapper,
+    path: str,
+    value: Any,
+    operation: str = "replace"
+) -> bool:
+    """
+    Tool function: apply a single add/remove/replace diff on the context.
+    """
+    cm = get_context_manager()
+    return await cm._apply_targeted_change(path, value, operation)
+
+
+@function_tool
+def prioritize_context_tool(
+    ctx: RunContextWrapper,
+    user_context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Tool function: reorder/annotate a context dictionary by priority.
+    """
+    cm = get_context_manager()
+    return cm._prioritize_context(user_context)
+
+
+# ---------------------------------------------------------------------
+# Agent creation referencing the *standalone* tool functions
+# ---------------------------------------------------------------------
 
 def create_context_manager_agent() -> Agent:
     """Create an agent for the context manager"""
