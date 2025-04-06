@@ -6,8 +6,8 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 
-from story_agents.creative_task_agent import CreativeTaskGenerator, CreativeTask
-from story_agents.activity_recommender import ActivityRecommender, ActivityRecommendation
+from story_agent.creative_task_agent import CreativeTaskGenerator, CreativeTask
+from story_agent.activity_recommender import ActivityRecommender, ActivityRecommendation
 from agents import function_tool
 from nyx.nyx_agent_sdk import NarrativeResponse
 
