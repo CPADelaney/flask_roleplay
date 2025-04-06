@@ -1,16 +1,23 @@
+# story_agent/activity_recommender.py
+
 """
 Activity Recommendation Agent - Analyzes current scene context and NPCs to suggest
 appropriate activities from the available options.
 """
 
 import random
-from typing import List, Dict, Optional, Tuple
+import json
 import logging
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-from utils.npc_utils import get_npc_personality_traits
-from utils.story_context import get_current_scenario_context
-from utils.memory_utils import get_relevant_memories
+
+# Database connection
 from db.connection import get_db_connection_context
+
+# Context retrieval
+from context.context_service import get_context_service
+from context.memory_manager import get_memory_manager
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +77,263 @@ class ActivityRecommender:
             }
         }
     
-    async def _get_activity_context(self, scenario_id: str, npc_ids: List[str]) -> ActivityContext:
+    async def _get_npc_personality_traits(self, user_id: int, conversation_id: int, npc_id: int) -> Dict:
+        """Get NPC personality traits directly from database"""
+        async with get_db_connection_context() as conn:
+            # Query the NPCStats table to get personality traits
+            query = """
+                SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect, intensity,
+                       personality_traits, hobbies, likes, dislikes, current_location
+                FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+            """
+            row = await conn.fetchrow(query, user_id, conversation_id, npc_id)
+            
+            if not row:
+                return {
+                    "id": npc_id,
+                    "name": "Unknown",
+                    "traits": [],
+                    "relationship_level": 0,
+                    "current_mood": "neutral",
+                    "role": "unknown"
+                }
+            
+            # Parse JSON fields
+            try:
+                personality_traits = json.loads(row["personality_traits"]) if isinstance(row["personality_traits"], str) else row["personality_traits"] or []
+            except (json.JSONDecodeError, TypeError):
+                personality_traits = []
+                
+            try:
+                hobbies = json.loads(row["hobbies"]) if isinstance(row["hobbies"], str) else row["hobbies"] or []
+            except (json.JSONDecodeError, TypeError):
+                hobbies = []
+                
+            try:
+                likes = json.loads(row["likes"]) if isinstance(row["likes"], str) else row["likes"] or []
+            except (json.JSONDecodeError, TypeError):
+                likes = []
+                
+            try:
+                dislikes = json.loads(row["dislikes"]) if isinstance(row["dislikes"], str) else row["dislikes"] or []
+            except (json.JSONDecodeError, TypeError):
+                dislikes = []
+            
+            # Estimate mood based on stats
+            mood = "neutral"
+            if row["intensity"] > 75:
+                mood = "focused"
+            elif row["dominance"] > 75:
+                mood = "strict"
+            elif row["cruelty"] > 75:
+                mood = "stressed"
+            elif row["trust"] > 75 and row["respect"] > 75:
+                mood = "happy"
+            
+            # Determine role based on stats
+            role = "neutral"
+            if row["dominance"] > 70:
+                role = "dominant"
+            elif row["closeness"] > 70:
+                role = "close"
+            
+            # Get relationship level (average of closeness, trust, respect)
+            relationship_level = int((row["closeness"] + row["trust"] + row["respect"]) / 3)
+            
+            return {
+                "id": row["npc_id"],
+                "name": row["npc_name"],
+                "traits": personality_traits,
+                "hobbies": hobbies,
+                "likes": likes,
+                "dislikes": dislikes,
+                "stats": {
+                    "dominance": row["dominance"],
+                    "cruelty": row["cruelty"],
+                    "closeness": row["closeness"],
+                    "trust": row["trust"],
+                    "respect": row["respect"],
+                    "intensity": row["intensity"]
+                },
+                "relationship_level": relationship_level,
+                "current_mood": mood,
+                "role": role,
+                "current_location": row["current_location"]
+            }
+    
+    async def _get_current_scenario_context(self, user_id: int, conversation_id: int) -> Dict:
+        """Get current scenario context using aggregator"""
+        try:
+            # Try using the context service if available
+            context_service = await get_context_service(user_id, conversation_id)
+            context_data = await context_service.get_context()
+            
+            scenario_type = "default"
+            if "current_conflict" in context_data and context_data["current_conflict"]:
+                scenario_type = "conflict"
+            elif "current_event" in context_data and context_data["current_event"]:
+                scenario_type = "event"
+            
+            # Extract recent activities from messages
+            recent_activities = []
+            async with get_db_connection_context() as conn:
+                # Get last 5 user messages
+                rows = await conn.fetch("""
+                    SELECT content FROM messages
+                    WHERE conversation_id = $1 AND sender = 'user'
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                """, conversation_id)
+                
+                for row in rows:
+                    recent_activities.append(row["content"])
+            
+            return {
+                "type": scenario_type,
+                "location": context_data.get("current_location", "Unknown"),
+                "time_of_day": context_data.get("time_of_day", "Morning"),
+                "mood": "neutral",  # Default mood
+                "player_status": context_data.get("player_stats", {}),
+                "recent_activities": recent_activities
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error getting context from context service: {e}, falling back to aggregator")
+            
+            # Fallback to using the aggregator
+            aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id)
+            
+            # Determine scenario type
+            scenario_type = "default"
+            current_roleplay = aggregator_data.get("current_roleplay", {})
+            if "CurrentConflict" in current_roleplay and current_roleplay["CurrentConflict"]:
+                scenario_type = "conflict"
+            elif "CurrentEvent" in current_roleplay and current_roleplay["CurrentEvent"]:
+                scenario_type = "event"
+            
+            # Get recent activities
+            recent_activities = []
+            async with get_db_connection_context() as conn:
+                # Get last 5 user messages
+                rows = await conn.fetch("""
+                    SELECT content FROM messages
+                    WHERE conversation_id = $1 AND sender = 'user'
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                """, conversation_id)
+                
+                for row in rows:
+                    recent_activities.append(row["content"])
+            
+            return {
+                "type": scenario_type,
+                "location": aggregator_data.get("current_location", "Unknown"),
+                "time_of_day": aggregator_data.get("time_of_day", "Morning"),
+                "mood": "neutral",  # Default mood
+                "player_status": aggregator_data.get("player_stats", {}),
+                "recent_activities": recent_activities
+            }
+    
+    async def _get_relevant_memories(self, user_id: int, conversation_id: int, npc_id: int, limit: int = 5) -> List[Dict]:
+        """Get relevant memories using the memory manager"""
+        try:
+            # Try to use memory manager from context system
+            memory_manager = await get_memory_manager(user_id, conversation_id)
+            
+            # Get memories for this NPC
+            async with get_db_connection_context() as conn:
+                # Get NPC name
+                row = await conn.fetchrow("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                """, user_id, conversation_id, npc_id)
+                
+                npc_name = row["npc_name"] if row else f"NPC-{npc_id}"
+            
+            # Search memories with vector search if available
+            memories = await memory_manager.search_memories(
+                query_text=f"activities with {npc_name}",
+                limit=limit,
+                tags=[npc_name.lower().replace(" ", "_")],
+                use_vector=True
+            )
+            
+            # Format memories
+            memory_dicts = []
+            for memory in memories:
+                if hasattr(memory, 'to_dict'):
+                    memory_dicts.append(memory.to_dict())
+                else:
+                    # If it's already a dict or another format
+                    memory_dicts.append(memory)
+            
+            return memory_dicts
+            
+        except Exception as e:
+            logger.warning(f"Error getting memories from memory manager: {e}, falling back to database")
+            
+            # Fallback to direct database query
+            memories = []
+            async with get_db_connection_context() as conn:
+                # Try unified memories table first
+                try:
+                    rows = await conn.fetch("""
+                        SELECT memory_text, memory_type, timestamp
+                        FROM unified_memories
+                        WHERE user_id = $1 AND conversation_id = $2 
+                        AND entity_type = 'npc' AND entity_id = $3
+                        ORDER BY timestamp DESC
+                        LIMIT $4
+                    """, user_id, conversation_id, npc_id, limit)
+                    
+                    for row in rows:
+                        memories.append({
+                            "content": row["memory_text"],
+                            "type": row["memory_type"],
+                            "timestamp": row["timestamp"].isoformat()
+                        })
+                        
+                except Exception as e2:
+                    logger.warning(f"Error querying unified_memories: {e2}, trying NPCMemories")
+                    
+                    # Try legacy NPCMemories table
+                    try:
+                        rows = await conn.fetch("""
+                            SELECT memory_text, memory_type, timestamp
+                            FROM NPCMemories
+                            WHERE npc_id = $1
+                            ORDER BY timestamp DESC
+                            LIMIT $2
+                        """, npc_id, limit)
+                        
+                        for row in rows:
+                            memories.append({
+                                "content": row["memory_text"],
+                                "type": row["memory_type"],
+                                "timestamp": row["timestamp"].isoformat()
+                            })
+                    except Exception as e3:
+                        logger.error(f"Error querying NPCMemories: {e3}")
+            
+            return memories
+    
+    async def _get_activity_context(self, user_id: int, conversation_id: int, scenario_id: str, npc_ids: List[int]) -> ActivityContext:
         """Gather context for activity recommendation"""
-        scenario = await get_current_scenario_context(scenario_id)
-        npcs = [await get_npc_personality_traits(npc_id) for npc_id in npc_ids]
+        # Get scenario context
+        scenario = await self._get_current_scenario_context(user_id, conversation_id)
         
-        # This would be more detailed in actual implementation
+        # Get NPC data
+        npcs = []
+        for npc_id in npc_ids:
+            npc_data = await self._get_npc_personality_traits(user_id, conversation_id, npc_id)
+            npcs.append(npc_data)
+        
+        # Build relationship levels dict
+        relationship_levels = {
+            str(npc["id"]): npc["relationship_level"] for npc in npcs
+        }
+        
         return ActivityContext(
             present_npcs=npcs,
             location=scenario["location"],
@@ -83,7 +341,7 @@ class ActivityRecommender:
             current_mood=scenario["mood"],
             recent_activities=scenario["recent_activities"],
             scenario_type=scenario["type"],
-            relationship_levels={npc["id"]: npc["relationship_level"] for npc in npcs}
+            relationship_levels=relationship_levels
         )
     
     def _calculate_activity_weights(self, context: ActivityContext) -> Dict[str, float]:
@@ -99,13 +357,14 @@ class ActivityRecommender:
                     weights[category] *= modifier
         
         # Apply time of day influences
-        if context.time_of_day in self.influence_factors["time_of_day"]:
-            modifiers = self.influence_factors["time_of_day"][context.time_of_day]
+        time_of_day = context.time_of_day.lower()
+        if time_of_day in self.influence_factors["time_of_day"]:
+            modifiers = self.influence_factors["time_of_day"][time_of_day]
             for category, modifier in modifiers.items():
                 weights[category] *= modifier
         
         # Apply relationship level influences
-        avg_relationship = sum(context.relationship_levels.values()) / len(context.relationship_levels)
+        avg_relationship = sum(context.relationship_levels.values()) / len(context.relationship_levels) if context.relationship_levels else 50
         rel_level = "low" if avg_relationship < 30 else "medium" if avg_relationship < 70 else "high"
         modifiers = self.influence_factors["relationship_level"][rel_level]
         for category, modifier in modifiers.items():
@@ -175,7 +434,7 @@ class ActivityRecommender:
             
             compatibility_scores.append(score)
         
-        return sum(compatibility_scores) / len(compatibility_scores)
+        return sum(compatibility_scores) / len(compatibility_scores) if compatibility_scores else 1.0
     
     def _calculate_variety_factor(self, activity: Dict, recent_activities: List[str]) -> float:
         """Calculate variety factor to encourage diverse activities"""
@@ -188,7 +447,7 @@ class ActivityRecommender:
     def _calculate_time_factor(self, activity: Dict, time_of_day: str) -> float:
         """Calculate how appropriate the activity is for the time of day"""
         preferred_times = activity.get("preferred_times", [])
-        if not preferred_times or time_of_day in preferred_times:
+        if not preferred_times or time_of_day.lower() in [t.lower() for t in preferred_times]:
             return 1.0
         return 0.8
     
@@ -209,7 +468,7 @@ class ActivityRecommender:
             reasons.append(f"Well-suited for {', '.join(compatible_npcs)}")
         
         # Add timing-based reason
-        if context.time_of_day in activity.get("preferred_times", []):
+        if context.time_of_day.lower() in [t.lower() for t in activity.get("preferred_times", [])]:
             reasons.append(f"Ideal for {context.time_of_day} activities")
         
         # Add variety-based reason
@@ -218,16 +477,139 @@ class ActivityRecommender:
         
         return " | ".join(reasons)
     
+    async def _get_available_activities(self, user_id: int, conversation_id: int) -> List[Dict]:
+        """Get available activities from the Activities table"""
+        async with get_db_connection_context() as conn:
+            try:
+                rows = await conn.fetch("""
+                    SELECT name, purpose, stat_integration, intensity_tiers, setting_variants, fantasy_level
+                    FROM Activities
+                """)
+                
+                activities = []
+                for row in rows:
+                    # Parse JSON fields
+                    try:
+                        purpose = json.loads(row["purpose"]) if isinstance(row["purpose"], str) else row["purpose"] or {}
+                    except (json.JSONDecodeError, TypeError):
+                        purpose = {}
+                        
+                    try:
+                        stat_integration = json.loads(row["stat_integration"]) if isinstance(row["stat_integration"], str) else row["stat_integration"] or {}
+                    except (json.JSONDecodeError, TypeError):
+                        stat_integration = {}
+                        
+                    try:
+                        intensity_tiers = json.loads(row["intensity_tiers"]) if isinstance(row["intensity_tiers"], str) else row["intensity_tiers"] or {}
+                    except (json.JSONDecodeError, TypeError):
+                        intensity_tiers = {}
+                        
+                    try:
+                        setting_variants = json.loads(row["setting_variants"]) if isinstance(row["setting_variants"], str) else row["setting_variants"] or {}
+                    except (json.JSONDecodeError, TypeError):
+                        setting_variants = {}
+                    
+                    # Determine category based on purpose or name
+                    category = "social"
+                    if "training" in purpose or "skill" in purpose:
+                        category = "training"
+                    elif "service" in purpose or "help" in purpose:
+                        category = "service"
+                    elif "relaxation" in purpose or "leisure" in purpose:
+                        category = "relaxation"
+                    elif "challenge" in purpose or "test" in purpose:
+                        category = "challenge"
+                    
+                    # Extract preferred traits from purpose data
+                    preferred_traits = []
+                    avoided_traits = []
+                    
+                    if purpose.get("compatibility"):
+                        preferred_traits = purpose["compatibility"].get("preferred", [])
+                        avoided_traits = purpose["compatibility"].get("avoided", [])
+                    
+                    # Extract preferred times
+                    preferred_times = []
+                    
+                    if purpose.get("timing"):
+                        preferred_times = purpose["timing"].get("preferred_times", [])
+                    
+                    activities.append({
+                        "name": row["name"],
+                        "category": category,
+                        "purpose": purpose,
+                        "stat_integration": stat_integration,
+                        "intensity_tiers": intensity_tiers,
+                        "setting_variants": setting_variants,
+                        "fantasy_level": row["fantasy_level"],
+                        "preferred_traits": preferred_traits,
+                        "avoided_traits": avoided_traits,
+                        "preferred_times": preferred_times,
+                        "prerequisites": purpose.get("prerequisites", []),
+                        "outcomes": stat_integration.get("outcomes", [])
+                    })
+                
+                return activities
+                
+            except Exception as e:
+                logger.error(f"Error fetching activities: {e}")
+                
+                # Return a small set of default activities
+                return [
+                    {
+                        "name": "Training Session",
+                        "category": "training",
+                        "preferred_traits": ["disciplined", "focused"],
+                        "avoided_traits": ["lazy"],
+                        "preferred_times": ["morning", "afternoon"],
+                        "prerequisites": ["training equipment"],
+                        "outcomes": ["skill improvement", "increased discipline"]
+                    },
+                    {
+                        "name": "Relaxation Time",
+                        "category": "relaxation",
+                        "preferred_traits": ["calm", "patient"],
+                        "avoided_traits": ["anxious"],
+                        "preferred_times": ["evening", "night"],
+                        "prerequisites": [],
+                        "outcomes": ["reduced stress", "improved mood"]
+                    },
+                    {
+                        "name": "Social Gathering",
+                        "category": "social",
+                        "preferred_traits": ["outgoing", "friendly"],
+                        "avoided_traits": ["antisocial"],
+                        "preferred_times": ["afternoon", "evening"],
+                        "prerequisites": [],
+                        "outcomes": ["improved relationships", "social information"]
+                    }
+                ]
+    
     async def recommend_activities(
         self,
+        user_id: int,
+        conversation_id: int,
         scenario_id: str,
-        npc_ids: List[str],
-        available_activities: List[Dict],
+        npc_ids: List[int],
         num_recommendations: int = 2
     ) -> List[ActivityRecommendation]:
         """Generate activity recommendations"""
+        if not npc_ids:
+            # Get some available NPCs to recommend activities with
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND introduced = TRUE
+                    LIMIT 3
+                """, user_id, conversation_id)
+                
+                npc_ids = [row["npc_id"] for row in rows]
+        
         # Get context
-        context = await self._get_activity_context(scenario_id, npc_ids)
+        context = await self._get_activity_context(user_id, conversation_id, scenario_id, npc_ids)
+        
+        # Get available activities
+        available_activities = await self._get_available_activities(user_id, conversation_id)
         
         # Calculate category weights
         category_weights = self._calculate_activity_weights(context)
@@ -276,29 +658,17 @@ class ActivityRecommender:
 # Example usage:
 """
 recommender = ActivityRecommender()
-activities = [
-    {
-        "name": "Training Session",
-        "category": "training",
-        "preferred_traits": ["disciplined", "focused"],
-        "avoided_traits": ["lazy"],
-        "preferred_times": ["morning", "afternoon"],
-        "prerequisites": ["training equipment"],
-        "outcomes": ["skill improvement", "increased discipline"]
-    },
-    # More activities...
-]
-
-recommendations = recommender.recommend_activities(
-    "scenario123",
-    ["npc456", "npc789"],
-    activities
+activities = await recommender.recommend_activities(
+    user_id=123,
+    conversation_id=456,
+    scenario_id="scenario123",
+    npc_ids=[789, 790]
 )
 
-for rec in recommendations:
+for rec in activities:
     print(f"\nActivity: {rec.activity_name}")
     print(f"Confidence: {rec.confidence_score:.2f}")
     print(f"Reasoning: {rec.reasoning}")
     print(f"Duration: {rec.estimated_duration}")
     print(f"Participants: {', '.join(rec.participating_npcs)}")
-""" 
+"""
