@@ -1,3 +1,5 @@
+# utils/embedding_service.py
+
 """
 Embedding service for semantic similarity calculations.
 """
