@@ -27,8 +27,6 @@ CACHE_TTL: int = 3600  # Example: Default TTL of 1 hour (in seconds)
 NPC_DIRECTIVE_CACHE: str = "npc_directive:{npc_id}" # Example cache key template for NPC directives
 AGENT_DIRECTIVE_CACHE: str = "agent_directive:{agent_id}" # Example cache key template for agent directives
 
-USER_MODEL_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
-
 # Configure logging
 name = __name__  # Define name for logger
 logger = logging.getLogger(name)
@@ -921,6 +919,7 @@ async def delete_cache(key: str):
     return await delete(key)
 
 logger.info("Added wrapper functions: get_cache, set_cache, delete_cache")
+USER_MODEL_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
 
 
 # --- Remove redundant/example code ---
