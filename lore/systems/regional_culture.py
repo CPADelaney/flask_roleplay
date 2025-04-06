@@ -886,3 +886,311 @@ class RegionalCultureSystem(BaseLoreManager):
                     "analysis": result.final_output,
                     "parsing_error": "Could not parse response as JSON"
                 }
+                
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_cultural_diffusion",
+        action_description="Simulating cultural diffusion between nations",
+        id_from_context=lambda ctx: "regional_culture_system"
+    )
+    async def simulate_cultural_diffusion(self, ctx, nation1_id: int, nation2_id: int, years: int = 50) -> Dict[str, Any]:
+        """
+        Simulate how culture diffuses between two nations over time, including
+        language influence, customs, fashion, food, and other cultural elements.
+        """
+        with trace(
+            "CulturalDiffusionSimulation", 
+            group_id=self.trace_group_id,
+            metadata={"nation1_id": nation1_id, "nation2_id": nation2_id, "years": years}
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Validate both nations
+            for nation_id in [nation1_id, nation2_id]:
+                validation = await self._validate_nation_id(ctx, None, nation_id)
+                if not validation.output_info["is_valid"]:
+                    return {"error": f"Nation with ID {nation_id} not found"}
+            
+            # Get both nations' cultural data
+            nation1_culture = await self.get_nation_culture(run_ctx, nation1_id)
+            nation2_culture = await self.get_nation_culture(run_ctx, nation2_id)
+            
+            # Create a diffusion simulation agent
+            diffusion_agent = Agent(
+                name="CulturalDiffusionAgent",
+                instructions="""
+                You simulate cultural diffusion between two nations over time.
+                Model how language, customs, fashion, cuisine, arts, and other cultural elements
+                flow between societies based on proximity, relations, and power dynamics.
+                Maintain matriarchal power structures as the dominant framework.
+                """,
+                model="o3-mini",
+                model_settings=ModelSettings(temperature=0.9)
+            )
+            
+            # Get geopolitical data about the two nations' relationship
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    relation = await conn.fetchrow("""
+                        SELECT * FROM InternationalRelations
+                        WHERE (nation1_id = $1 AND nation2_id = $2)
+                        OR (nation1_id = $2 AND nation2_id = $1)
+                    """, nation1_id, nation2_id)
+                    
+                    # If no relation exists, create a minimal one
+                    relation_data = dict(relation) if relation else {
+                        "relationship_type": "neutral",
+                        "relationship_quality": 5,
+                        "description": "No formal relations"
+                    }
+            
+            # Build the prompt
+            prompt = f"""
+            Simulate cultural diffusion between these two nations over {years} years:
+            
+            NATION 1 CULTURE:
+            {json.dumps(nation1_culture, indent=2)}
+            
+            NATION 2 CULTURE:
+            {json.dumps(nation2_culture, indent=2)}
+            
+            RELATIONSHIP:
+            {json.dumps(relation_data, indent=2)}
+            
+            Simulate the following cultural exchanges:
+            1. Language influence (vocabulary, idioms, accent)
+            2. Artistic and literary exchanges
+            3. Religious practices and beliefs
+            4. Fashion and clothing
+            5. Cuisine and food
+            6. Social customs and etiquette
+            
+            For each category, specify:
+            - What elements transfer from each nation to the other
+            - How they are modified in the process
+            - Social groups that adopt or resist the changes
+            - Timeline of adoption over {years} years
+            
+            Return detailed JSON with these diffusion patterns, maintaining matriarchal frameworks.
+            """
+            
+            # Run the simulation
+            result = await Runner.run(diffusion_agent, prompt, context=run_ctx.context)
+            
+            try:
+                diffusion_data = json.loads(result.final_output)
+                
+                # Apply the diffusion effects to the database
+                await self._apply_diffusion_effects(nation1_id, nation2_id, diffusion_data)
+                
+                return {
+                    "nations": [nation1_id, nation2_id],
+                    "years_simulated": years,
+                    "diffusion_results": diffusion_data
+                }
+            except json.JSONDecodeError:
+                return {"error": "Failed to parse diffusion data", "raw_output": result.final_output}
+        
+        async def _apply_diffusion_effects(self, nation1_id: int, nation2_id: int, diffusion_data: Dict[str, Any]) -> None:
+            """Apply cultural diffusion effects to both nations."""
+            # This implementation depends on your database structure
+            # Here's a simplified approach
+            
+            # For each diffusion category
+            for category, effects in diffusion_data.items():
+                if category in ["language_influence", "vocabulary", "idioms"]:
+                    await self._apply_language_diffusion(nation1_id, nation2_id, effects)
+                
+                elif category in ["artistic", "literary", "art"]:
+                    await self._apply_artistic_diffusion(nation1_id, nation2_id, effects)
+                
+                elif category in ["religious", "beliefs", "practices"]:
+                    await self._apply_religious_diffusion(nation1_id, nation2_id, effects)
+                
+                elif category in ["fashion", "clothing", "appearance"]:
+                    await self._apply_fashion_diffusion(nation1_id, nation2_id, effects)
+                
+                elif category in ["cuisine", "food", "culinary"]:
+                    await self._apply_cuisine_diffusion(nation1_id, nation2_id, effects)
+                
+                elif category in ["social", "customs", "etiquette"]:
+                    await self._apply_customs_diffusion(nation1_id, nation2_id, effects)
+        
+        async def _apply_language_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+            """Apply language diffusion effects."""
+            # Implementation would depend on your database structure
+            pass
+
+class DialectEvolutionModel(BaseModel):
+    """Model for dialect evolution information."""
+    dialect_name: str
+    parent_language: str
+    vocabulary_changes: Dict[str, str]
+    grammatical_changes: List[str]
+    pronunciation_shifts: List[str]
+    social_context: str
+    prestige_level: int = Field(..., ge=1, le=10)
+    example_phrases: Dict[str, str]
+    regional_distribution: List[str]
+
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="evolve_dialect",
+    action_description="Evolving regional dialect through language agents",
+    id_from_context=lambda ctx: "regional_culture_system"
+)
+async def evolve_dialect(self, ctx, language_id: int, region_id: int, years: int = 100) -> Dict[str, Any]:
+    """
+    Evolve a regional dialect using language agents that simulate linguistic evolution.
+    """
+    with trace(
+        "DialectEvolution", 
+        group_id=self.trace_group_id,
+        metadata={"language_id": language_id, "region_id": region_id, "years": years}
+    ):
+        run_ctx = self.create_run_context(ctx)
+        
+        # Get language and region data
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                language = await conn.fetchrow("""
+                    SELECT * FROM Languages WHERE id = $1
+                """, language_id)
+                
+                region = await conn.fetchrow("""
+                    SELECT * FROM Nations WHERE id = $1
+                """, region_id)
+                
+                if not language or not region:
+                    return {"error": "Language or region not found"}
+                
+                language_data = dict(language)
+                region_data = dict(region)
+                
+                # Get existing dialects in this language
+                dialects = await conn.fetch("""
+                    SELECT key, value
+                    FROM jsonb_each_text($1)
+                """, language_data.get("dialects", {}))
+                
+                dialect_data = {k: v for k, v in [(d["key"], d["value"]) for d in dialects]}
+                
+                # Get cultural elements for context
+                cultural_elements = await conn.fetch("""
+                    SELECT * FROM CulturalElements 
+                    WHERE $1 = ANY(practiced_by)
+                """, region_data["name"])
+                
+                cultural_data = [dict(c) for c in cultural_elements]
+        
+        # Create language evolution agent
+        language_agent = Agent(
+            name="DialectEvolutionAgent",
+            instructions="""
+            You simulate linguistic evolution of dialects in fantasy languages.
+            Model vocabulary changes, grammatical shifts, pronunciation differences,
+            and social contexts. Pay special attention to how language reflects
+            matriarchal power structures and feminine-dominated society.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9),
+            output_type=DialectEvolutionModel
+        )
+        
+        # Build the prompt
+        prompt = f"""
+        Evolve a regional dialect for this language and region over {years} years:
+        
+        LANGUAGE:
+        {json.dumps(language_data, indent=2)}
+        
+        REGION:
+        {json.dumps(region_data, indent=2)}
+        
+        EXISTING DIALECTS:
+        {json.dumps(dialect_data, indent=2)}
+        
+        CULTURAL CONTEXT:
+        {json.dumps(cultural_data, indent=2)}
+        
+        Create a DialectEvolutionModel for a new or evolved dialect that:
+        1. Reflects the region's culture and social structure
+        2. Shows matriarchal power in feminine-dominant language forms
+        3. Includes specific vocabulary and grammatical changes
+        4. Has example phrases showing the dialect in use
+        5. Explains its social context and prestige level
+        """
+        
+        # Run the simulation
+        result = await Runner.run(language_agent, prompt, context=run_ctx.context)
+        dialect_model = result.final_output
+        
+        # Store the dialect in the database
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Update the language's dialects
+                current_dialects = language_data.get("dialects", {})
+                if not current_dialects:
+                    current_dialects = {}
+                
+                # Add or update the dialect for this region
+                region_name = region_data["name"]
+                current_dialects[region_name] = dialect_model.dialect_name
+                
+                # Update the dialect details in a dedicated table or as part of the language
+                await conn.execute("""
+                    UPDATE Languages
+                    SET dialects = $1
+                    WHERE id = $2
+                """, json.dumps(current_dialects), language_id)
+                
+                # Store detailed dialect information in a new table if available
+                try:
+                    await conn.execute("""
+                        INSERT INTO LanguageDialects
+                        (language_id, region_id, name, parent_language, vocabulary_changes,
+                         grammatical_changes, pronunciation_shifts, social_context,
+                         prestige_level, example_phrases, regional_distribution)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (language_id, region_id) DO UPDATE
+                        SET name = EXCLUDED.name,
+                            vocabulary_changes = EXCLUDED.vocabulary_changes,
+                            grammatical_changes = EXCLUDED.grammatical_changes,
+                            pronunciation_shifts = EXCLUDED.pronunciation_shifts,
+                            social_context = EXCLUDED.social_context,
+                            prestige_level = EXCLUDED.prestige_level,
+                            example_phrases = EXCLUDED.example_phrases,
+                            regional_distribution = EXCLUDED.regional_distribution
+                    """,
+                    language_id, 
+                    region_id,
+                    dialect_model.dialect_name,
+                    dialect_model.parent_language,
+                    json.dumps(dialect_model.vocabulary_changes),
+                    dialect_model.grammatical_changes,
+                    dialect_model.pronunciation_shifts,
+                    dialect_model.social_context,
+                    dialect_model.prestige_level,
+                    json.dumps(dialect_model.example_phrases),
+                    dialect_model.regional_distribution)
+                except Exception as e:
+                    logging.error(f"Error storing dialect data: {e}")
+                    # Continue anyway since we've already updated the main language record
+        
+        # Return the dialect evolution results
+        return {
+            "language_id": language_id,
+            "region_id": region_id,
+            "years_simulated": years,
+            "dialect": {
+                "name": dialect_model.dialect_name,
+                "parent_language": dialect_model.parent_language,
+                "vocabulary_changes": dialect_model.vocabulary_changes,
+                "grammatical_changes": dialect_model.grammatical_changes,
+                "pronunciation_shifts": dialect_model.pronunciation_shifts,
+                "social_context": dialect_model.social_context,
+                "prestige_level": dialect_model.prestige_level,
+                "example_phrases": dialect_model.example_phrases,
+                "regional_distribution": dialect_model.regional_distribution
+            }
+        }
