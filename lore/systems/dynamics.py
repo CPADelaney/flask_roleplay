@@ -2166,3 +2166,862 @@ class LoreDynamicsSystem(BaseLoreManager):
         )
         
         logging.info(f"LoreDynamicsSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+
+class MultiStepPlanner:
+    """
+    Handles multi-step planning for complex lore evolution with dependent agent execution.
+    """
+    
+    def __init__(self, dynamics_system):
+        self.dynamics_system = dynamics_system
+        self.planning_agent = Agent(
+            name="NarrativePlanningAgent",
+            instructions="""
+            You create multi-step narrative plans for fantasy world evolution.
+            Break complex narratives into interdependent steps, identifying prerequisites,
+            expected outcomes, and potential narrative branches.
+            Maintain matriarchal themes throughout the planning process.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+    
+    async def create_evolution_plan(self, initial_prompt: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a multi-step plan for evolving the world based on an initial prompt."""
+        run_ctx = RunContextWrapper(context=context)
+        
+        # Get world state
+        world_state = await self.dynamics_system._fetch_world_state()
+        
+        # Create planning prompt
+        prompt = f"""
+        Create a multi-step plan for evolving this world based on the following prompt:
+        
+        PROMPT: {initial_prompt}
+        
+        CURRENT WORLD STATE:
+        {json.dumps(world_state, indent=2)}
+        
+        Break this down into 3-5 sequential steps, each with:
+        1. A goal/outcome
+        2. Required actions
+        3. Dependencies on previous steps
+        4. Potential narrative branches
+        5. Expected impact on world state
+        
+        Return a JSON plan with these steps, ensuring matriarchal themes remain central.
+        """
+        
+        result = await Runner.run(self.planning_agent, prompt, context=run_ctx.context)
+        
+        try:
+            plan = json.loads(result.final_output)
+            # Store the plan
+            plan_id = await self._store_plan(plan, initial_prompt)
+            plan["id"] = plan_id
+            return plan
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse plan", "raw_output": result.final_output}
+    
+    async def execute_plan_step(self, plan_id: str, step_index: int, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a specific step in a multi-step plan."""
+        # Get the plan
+        plan = await self._get_plan(plan_id)
+        if not plan:
+            return {"error": "Plan not found"}
+        
+        # Check step dependencies
+        if not self._check_dependencies(plan, step_index):
+            return {"error": "Dependencies for this step have not been completed"}
+        
+        # Get the step
+        steps = plan.get("steps", [])
+        if step_index >= len(steps):
+            return {"error": f"Step index {step_index} out of range"}
+        
+        step = steps[step_index]
+        
+        # Determine the appropriate agent for this step
+        agent_type = self._determine_agent_type(step)
+        executor_agent = self._get_executor_agent(agent_type)
+        
+        # Create execution prompt
+        prompt = f"""
+        Execute this narrative step:
+        
+        STEP:
+        {json.dumps(step, indent=2)}
+        
+        PLAN CONTEXT:
+        {json.dumps({"prompt": plan.get("prompt"), "overview": plan.get("overview")}, indent=2)}
+        
+        PREVIOUS OUTCOMES:
+        {json.dumps(self._get_previous_outcomes(plan, step_index), indent=2)}
+        
+        Produce the specific lore changes, events, or developments that accomplish this step.
+        Return JSON with detailed outcomes that can be applied to the world state.
+        """
+        
+        run_ctx = RunContextWrapper(context=context)
+        result = await Runner.run(executor_agent, prompt, context=run_ctx.context)
+        
+        try:
+            outcome = json.loads(result.final_output)
+            
+            # Apply the outcome to the world
+            applied_outcome = await self._apply_step_outcome(step, outcome)
+            
+            # Update the plan with the outcome
+            await self._update_plan_step(plan_id, step_index, applied_outcome)
+            
+            return applied_outcome
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse step outcome", "raw_output": result.final_output}
+    
+    async def _store_plan(self, plan: Dict[str, Any], prompt: str) -> str:
+        """Store a narrative plan."""
+        # Implementation would depend on database structure
+        plan_id = f"plan_{uuid.uuid4()}"
+        plan["id"] = plan_id
+        plan["prompt"] = prompt
+        plan["created_at"] = datetime.now().isoformat()
+        plan["status"] = "created"
+        
+        # Mark all steps as pending
+        for step in plan.get("steps", []):
+            step["status"] = "pending"
+            step["outcome"] = None
+        
+        # TODO: Store in database
+        
+        return plan_id
+    
+    async def _get_plan(self, plan_id: str) -> Optional[Dict[str, Any]]:
+        """Get a stored narrative plan."""
+        # Implementation would depend on database structure
+        # This is a placeholder
+        return None
+    
+    def _check_dependencies(self, plan: Dict[str, Any], step_index: int) -> bool:
+        """Check if dependencies for a step have been completed."""
+        steps = plan.get("steps", [])
+        current_step = steps[step_index] if step_index < len(steps) else None
+        
+        if not current_step:
+            return False
+        
+        dependencies = current_step.get("dependencies", [])
+        
+        for dep_index in dependencies:
+            if dep_index >= len(steps):
+                return False
+            
+            dep_step = steps[dep_index]
+            if dep_step.get("status") != "completed":
+                return False
+        
+        return True
+    
+    def _determine_agent_type(self, step: Dict[str, Any]) -> str:
+        """Determine the appropriate agent type for a step."""
+        step_type = step.get("type", "").lower()
+        
+        if "political" in step_type or "diplomatic" in step_type:
+            return "political"
+        elif "military" in step_type or "conflict" in step_type:
+            return "military"
+        elif "cultural" in step_type or "social" in step_type:
+            return "cultural"
+        else:
+            return "general"
+    
+    def _get_executor_agent(self, agent_type: str) -> Agent:
+        """Get the appropriate executor agent for a step type."""
+        if agent_type == "political":
+            return self.dynamics_system.political_event_agent
+        elif agent_type == "military":
+            return self.dynamics_system.military_event_agent
+        elif agent_type == "cultural":
+            return self.dynamics_system.cultural_event_agent
+        else:
+            return self.dynamics_system.event_generation_agent
+    
+    def _get_previous_outcomes(self, plan: Dict[str, Any], current_index: int) -> List[Dict[str, Any]]:
+        """Get outcomes of previous steps that this step depends on."""
+        steps = plan.get("steps", [])
+        current_step = steps[current_index] if current_index < len(steps) else None
+        
+        if not current_step:
+            return []
+        
+        dependencies = current_step.get("dependencies", [])
+        outcomes = []
+        
+        for dep_index in dependencies:
+            if dep_index < len(steps):
+                dep_step = steps[dep_index]
+                if dep_step.get("status") == "completed" and dep_step.get("outcome"):
+                    outcomes.append({
+                        "step_index": dep_index,
+                        "step_title": dep_step.get("title"),
+                        "outcome": dep_step.get("outcome")
+                    })
+        
+        return outcomes
+    
+    async def _apply_step_outcome(self, step: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply the outcome of a step to the world state."""
+        # Implementation would depend on what changes need to be applied
+        # This could involve calling various methods on the dynamics_system
+        
+        if "event" in outcome:
+            # Apply an event
+            event_result = await self.dynamics_system.evolve_lore_with_event(outcome["event"])
+            outcome["applied_changes"] = event_result
+        
+        if "cultural_changes" in outcome:
+            # Apply cultural changes
+            cultural_results = await self._apply_cultural_changes(outcome["cultural_changes"])
+            outcome["applied_cultural_changes"] = cultural_results
+        
+        if "political_changes" in outcome:
+            # Apply political changes
+            political_results = await self._apply_political_changes(outcome["political_changes"])
+            outcome["applied_political_changes"] = political_results
+        
+        return outcome
+    
+    async def _update_plan_step(self, plan_id: str, step_index: int, outcome: Dict[str, Any]) -> None:
+        """Update a plan step with its outcome."""
+        # Implementation would depend on database structure
+        pass
+    
+    async def _apply_cultural_changes(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply cultural changes to the world."""
+        # Placeholder implementation
+        return {"status": "applied", "count": len(changes)}
+    
+    async def _apply_political_changes(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply political changes to the world."""
+        # Placeholder implementation
+        return {"status": "applied", "count": len(changes)}
+
+class NarrativeEvaluator:
+    """
+    Evaluates the quality of generated narrative elements and provides feedback
+    to improve future generations.
+    """
+    
+    def __init__(self, dynamics_system):
+        self.dynamics_system = dynamics_system
+        self.evaluation_agent = Agent(
+            name="NarrativeQualityAgent",
+            instructions="""
+            You evaluate fantasy world narrative elements for quality, coherence, and interest.
+            Provide specific, constructive feedback on how to improve future generations.
+            Consider themes, character motivations, plot development, and matriarchal elements.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+        self.feedback_history = []
+    
+    async def evaluate_narrative(self, narrative_element: Dict[str, Any], element_type: str) -> Dict[str, Any]:
+        """Evaluate a narrative element's quality and provide feedback."""
+        with trace(
+            "NarrativeEvaluation", 
+            group_id=self.dynamics_system.trace_group_id,
+            metadata={"element_type": element_type}
+        ):
+            # Get criteria based on element type
+            criteria = self._get_evaluation_criteria(element_type)
+            
+            prompt = f"""
+            Evaluate this {element_type} narrative element for quality:
+            
+            NARRATIVE ELEMENT:
+            {json.dumps(narrative_element, indent=2)}
+            
+            EVALUATION CRITERIA:
+            {json.dumps(criteria, indent=2)}
+            
+            Provide detailed evaluation and feedback on each criterion.
+            Score each criterion 1-10 and provide an overall score.
+            Include specific suggestions for improvement.
+            """
+            
+            result = await Runner.run(self.evaluation_agent, prompt, context={})
+            
+            try:
+                evaluation = json.loads(result.final_output)
+                
+                # Store the feedback for learning
+                self.feedback_history.append({
+                    "element_type": element_type,
+                    "evaluation": evaluation,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # If we have collected enough feedback, update generation parameters
+                if len(self.feedback_history) >= 5:
+                    await self._update_generation_parameters()
+                
+                return evaluation
+            except json.JSONDecodeError:
+                return {"error": "Failed to parse evaluation", "raw_output": result.final_output}
+    
+    def _get_evaluation_criteria(self, element_type: str) -> Dict[str, Any]:
+        """Get evaluation criteria based on element type."""
+        base_criteria = {
+            "coherence": "How logically consistent is this element?",
+            "interest": "How engaging and interesting is this element?",
+            "matriarchal_themes": "How well does it incorporate matriarchal power structures?",
+            "originality": "How original and creative is this element?"
+        }
+        
+        type_specific = {
+            "event": {
+                "plausibility": "Does this event seem plausible given the world context?",
+                "impact": "Does this event have meaningful impact on the world?",
+                "character_motivations": "Are character motivations clear and believable?"
+            },
+            "cultural_development": {
+                "anthropological_realism": "Does this cultural element follow realistic development patterns?",
+                "cultural_specificity": "Is this element specific and unique to the culture?",
+                "internal_consistency": "Is this element consistent with the culture's other aspects?"
+            },
+            "political_shift": {
+                "power_dynamics": "Does this shift reflect realistic power dynamics?",
+                "faction_consistency": "Is it consistent with established faction motivations?",
+                "consequences": "Are the consequences meaningful and far-reaching?"
+            }
+        }
+        
+        criteria = base_criteria.copy()
+        criteria.update(type_specific.get(element_type, {}))
+        
+        return criteria
+    
+    async def _update_generation_parameters(self) -> None:
+        """Update generation parameters based on feedback history."""
+        # Average scores by criteria
+        criteria_scores = {}
+        criteria_counts = {}
+        
+        for feedback in self.feedback_history:
+            evaluation = feedback.get("evaluation", {})
+            scores = evaluation.get("scores", {})
+            
+            for criterion, score in scores.items():
+                if criterion not in criteria_scores:
+                    criteria_scores[criterion] = 0
+                    criteria_counts[criterion] = 0
+                
+                criteria_scores[criterion] += score
+                criteria_counts[criterion] += 1
+        
+        avg_scores = {c: criteria_scores[c] / criteria_counts[c] for c in criteria_scores}
+        
+        # Find lowest scoring criteria
+        sorted_scores = sorted(avg_scores.items(), key=lambda x: x[1])
+        lowest_criteria = [c for c, s in sorted_scores[:2]]
+        
+        # Get improvement suggestions for lowest criteria
+        improvement_suggestions = await self._generate_improvement_suggestions(lowest_criteria)
+        
+        # Apply suggestions to generation parameters
+        await self._apply_improvement_suggestions(improvement_suggestions)
+        
+        # Clear history after update
+        self.feedback_history = []
+    
+    async def _generate_improvement_suggestions(self, criteria: List[str]) -> Dict[str, Any]:
+        """Generate suggestions for improving specific criteria."""
+        history_samples = random.sample(self.feedback_history, min(3, len(self.feedback_history)))
+        
+        prompt = f"""
+        Generate improvement suggestions for these narrative criteria:
+        {criteria}
+        
+        Based on these evaluation samples:
+        {json.dumps(history_samples, indent=2)}
+        
+        For each criterion, provide:
+        1. Specific changes to generation parameters
+        2. Thematic elements to emphasize
+        3. Patterns to avoid
+        
+        Return JSON with actionable suggestions.
+        """
+        
+        result = await Runner.run(self.evaluation_agent, prompt, context={})
+        
+        try:
+            return json.loads(result.final_output)
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse suggestions"}
+    
+    async def _apply_improvement_suggestions(self, suggestions: Dict[str, Any]) -> None:
+        """Apply improvement suggestions to generation parameters."""
+        # Implementation would depend on how generation parameters are stored
+        # This is a placeholder
+        pass
+
+class NarrativeEvolutionSystem:
+    """
+    Implements evolutionary selection for compelling narrative elements.
+    """
+    
+    def __init__(self, dynamics_system):
+        self.dynamics_system = dynamics_system
+        self.selection_agent = Agent(
+            name="NarrativeSelectionAgent",
+            instructions="""
+            You evaluate and select the most compelling narrative elements from a pool of candidates.
+            Select elements that enhance the overall narrative, maintain consistency, and advance matriarchal themes.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+        self.mutation_agent = Agent(
+            name="NarrativeMutationAgent",
+            instructions="""
+            You modify narrative elements to improve their quality, interest, and consistency.
+            Enhance matriarchal themes and ensure coherent integration with the world.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+    
+    async def generate_candidate_pool(self, element_type: str, context: Dict[str, Any], pool_size: int = 3) -> List[Dict[str, Any]]:
+        """Generate a pool of candidate narrative elements."""
+        candidates = []
+        
+        # Select appropriate agent based on element type
+        if element_type == "political_event":
+            generator_agent = self.dynamics_system.political_event_agent
+        elif element_type == "military_event":
+            generator_agent = self.dynamics_system.military_event_agent
+        elif element_type == "cultural_event":
+            generator_agent = self.dynamics_system.cultural_event_agent
+        else:
+            generator_agent = self.dynamics_system.event_generation_agent
+        
+        # Build base prompt
+        base_prompt = f"""
+        Generate a {element_type} for a matriarchal fantasy world.
+        
+        CONTEXT:
+        {json.dumps(context, indent=2)}
+        
+        Ensure it has:
+        1. Clear causes and consequences
+        2. Connections to existing elements
+        3. Strong feminine leadership and agency
+        4. Realistic motivations and actions
+        
+        Return a detailed JSON description.
+        """
+        
+        # Generate multiple candidates with variations
+        run_ctx = RunContextWrapper(context={})
+        for i in range(pool_size):
+            # Add variation directive to make candidates distinct
+            variation_prompt = f"""
+            {base_prompt}
+            
+            VARIATION DIRECTIVE:
+            For this variation, emphasize {self._get_variation_emphasis(element_type, i)}.
+            """
+            
+            result = await Runner.run(generator_agent, variation_prompt, context=run_ctx.context)
+            
+            try:
+                candidate = json.loads(result.final_output)
+                candidate["generation_index"] = i
+                candidates.append(candidate)
+            except json.JSONDecodeError:
+                candidates.append({
+                    "error": "Failed to parse candidate",
+                    "raw_output": result.final_output,
+                    "generation_index": i
+                })
+        
+        return candidates
+    
+    async def select_best_candidate(self, candidates: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Select the best candidate from the pool based on quality criteria."""
+        if not candidates:
+            return {"error": "Empty candidate pool"}
+        
+        # If there's only one candidate, no need to select
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        # Filter out candidates with errors
+        valid_candidates = [c for c in candidates if "error" not in c]
+        
+        if not valid_candidates:
+            return {"error": "No valid candidates in pool"}
+        
+        prompt = f"""
+        Select the best narrative element from these candidates:
+        
+        CANDIDATES:
+        {json.dumps(valid_candidates, indent=2)}
+        
+        CONTEXT:
+        {json.dumps(context, indent=2)}
+        
+        For each candidate, evaluate:
+        1. Narrative quality and interest
+        2. Consistency with existing lore
+        3. Strength of matriarchal elements
+        4. Potential for future development
+        
+        Return JSON with:
+        - selected_index: the index of the best candidate
+        - evaluation: your assessment of each candidate
+        - reasoning: why you selected this one
+        """
+        
+        result = await Runner.run(self.selection_agent, prompt, context={})
+        
+        try:
+            selection = json.loads(result.final_output)
+            selected_index = selection.get("selected_index")
+            
+            if selected_index is not None and 0 <= selected_index < len(candidates):
+                selected = candidates[selected_index]
+                selected["selection_reasoning"] = selection.get("reasoning")
+                selected["evaluation"] = selection.get("evaluation")
+                return selected
+            else:
+                # Default to first valid candidate if selection fails
+                return valid_candidates[0]
+        except json.JSONDecodeError:
+            # Default to first valid candidate if parsing fails
+            return valid_candidates[0]
+    
+    async def mutate_element(self, element: Dict[str, Any], mutation_directives: Dict[str, Any]) -> Dict[str, Any]:
+        """Mutate a narrative element to improve it based on directives."""
+        prompt = f"""
+        Improve this narrative element by applying these mutation directives:
+        
+        ELEMENT:
+        {json.dumps(element, indent=2)}
+        
+        MUTATION DIRECTIVES:
+        {json.dumps(mutation_directives, indent=2)}
+        
+        Enhance the element while preserving its core identity.
+        Return the improved JSON with all original fields plus any enhancements.
+        """
+        
+        result = await Runner.run(self.mutation_agent, prompt, context={})
+        
+        try:
+            mutated = json.loads(result.final_output)
+            mutated["mutation_applied"] = True
+            mutated["original_id"] = element.get("id")
+            return mutated
+        except json.JSONDecodeError:
+            return {
+                "error": "Failed to parse mutated element",
+                "original": element,
+                "raw_output": result.final_output
+            }
+    
+    async def evolve_narrative_element(self, element_type: str, context: Dict[str, Any], initial_element: Optional[Dict[str, Any]] = None, generations: int = 3) -> Dict[str, Any]:
+        """Evolve a narrative element through multiple generations of selection and mutation."""
+        current_element = initial_element
+        
+        for generation in range(generations):
+            # Generate candidate pool
+            if current_element:
+                # Use the current element as a seed
+                context["seed_element"] = current_element
+            
+            candidates = await self.generate_candidate_pool(element_type, context)
+            
+            # Select the best candidate
+            best_candidate = await self.select_best_candidate(candidates, context)
+            
+            if "error" in best_candidate:
+                return best_candidate
+            
+            # For the final generation, return as is
+            if generation == generations - 1:
+                best_candidate["final_generation"] = True
+                best_candidate["evolution_history"] = {
+                    "generations": generation + 1,
+                    "initial_element": initial_element is not None
+                }
+                return best_candidate
+            
+            # Otherwise, generate mutation directives
+            mutation_directives = await self._generate_mutation_directives(best_candidate, context)
+            
+            # Apply mutation
+            current_element = await self.mutate_element(best_candidate, mutation_directives)
+            
+            if "error" in current_element:
+                # If mutation fails, return the unmutated best candidate
+                best_candidate["mutation_failed"] = True
+                return best_candidate
+        
+        # This should not be reached, but just in case
+        return current_element
+    
+    def _get_variation_emphasis(self, element_type: str, index: int) -> str:
+        """Get emphasis for variations to ensure diversity in the candidate pool."""
+        political_emphases = [
+            "power struggles and ambition",
+            "diplomatic negotiations and alliances",
+            "resource conflicts and economic factors"
+        ]
+        
+        military_emphases = [
+            "strategic brilliance and planning",
+            "individual heroism and valor",
+            "technological advantages and innovations"
+        ]
+        
+        cultural_emphases = [
+            "religious and spiritual dimensions",
+            "artistic and intellectual developments",
+            "social customs and everyday life"
+        ]
+        
+        general_emphases = [
+            "character relationships and motivations",
+            "historical significance and legacy",
+            "unexpected consequences and dramatic twists"
+        ]
+        
+        if element_type == "political_event":
+            emphases = political_emphases
+        elif element_type == "military_event":
+            emphases = military_emphases
+        elif element_type == "cultural_event":
+            emphases = cultural_emphases
+        else:
+            emphases = general_emphases
+        
+        # Cycle through emphases based on index
+        return emphases[index % len(emphases)]
+    
+    async def _generate_mutation_directives(self, element: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate directives for mutating a narrative element."""
+        prompt = f"""
+        Generate mutation directives to improve this narrative element:
+        
+        ELEMENT:
+        {json.dumps(element, indent=2)}
+        
+        CONTEXT:
+        {json.dumps(context, indent=2)}
+        
+        Identify 2-3 specific aspects that could be improved, such as:
+        - Character motivations
+        - Narrative tension and stakes
+        - Integration with world lore
+        - Matriarchal thematic elements
+        
+        For each aspect, provide a clear directive for improvement.
+        Return JSON with mutation directives.
+        """
+        
+        result = await Runner.run(self.selection_agent, prompt, context={})
+        
+        try:
+            return json.loads(result.final_output)
+        except json.JSONDecodeError:
+            # Default directives if parsing fails
+            return {
+                "directives": [
+                    {
+                        "aspect": "general_quality",
+                        "directive": "Enhance overall narrative quality and detail"
+                    },
+                    {
+                        "aspect": "matriarchal_themes",
+                        "directive": "Strengthen matriarchal thematic elements"
+                    }
+                ]
+            }
+
+class WorldStateStreamer:
+    """
+    Implements progressive streaming of world state changes.
+    """
+    
+    def __init__(self, dynamics_system):
+        self.dynamics_system = dynamics_system
+        self.streamer_agent = Agent(
+            name="WorldStateStreamingAgent",
+            instructions="""
+            You generate detailed progressive updates about world state changes.
+            Narrate how the world evolves, highlighting key developments, reactions,
+            and emerging patterns. Focus on matriarchal power dynamics.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+    
+    async def stream_world_changes(self, event_data: Dict[str, Any], affected_elements: List[Dict[str, Any]]) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream progressive updates about world changes resulting from an event."""
+        with trace(
+            "WorldChangeStreaming", 
+            group_id=self.dynamics_system.trace_group_id,
+            metadata={"event": event_data.get("name", "Unknown Event")}
+        ):
+            # Sort affected elements by impact level
+            affected_elements.sort(key=lambda x: x.get("impact_level", 0), reverse=True)
+            
+            # Prepare the prompt
+            prompt = f"""
+            Stream detailed updates about how this event changes the world over time:
+            
+            EVENT:
+            {json.dumps(event_data, indent=2)}
+            
+            AFFECTED ELEMENTS:
+            {json.dumps(affected_elements[:5], indent=2)}
+            
+            Provide a progressive narrative of the changes, divided into:
+            1. Immediate aftermath (hours/days)
+            2. Short-term developments (weeks)
+            3. Medium-term consequences (months)
+            4. Long-term transformations (years)
+            
+            Focus on how matriarchal power structures respond and evolve.
+            """
+            
+            # Set up the streaming result
+            result = await self.streamer_agent.stream(prompt, context={})
+            
+            # Process the stream
+            current_phase = None
+            current_content = ""
+            
+            async for chunk in result:
+                content = chunk.content
+                
+                # Check for phase indicators
+                phase_indicators = {
+                    "Immediate aftermath": "immediate",
+                    "Short-term developments": "short_term",
+                    "Medium-term consequences": "medium_term",
+                    "Long-term transformations": "long_term"
+                }
+                
+                # Check if this chunk starts a new phase
+                new_phase = None
+                for indicator, phase in phase_indicators.items():
+                    if indicator in content and (not current_phase or current_phase != phase):
+                        new_phase = phase
+                        break
+                
+                if new_phase:
+                    # If we had accumulated content, yield it before switching
+                    if current_content:
+                        yield {
+                            "phase": current_phase,
+                            "content": current_content.strip()
+                        }
+                    
+                    current_phase = new_phase
+                    current_content = content
+                else:
+                    # Continue accumulating content
+                    current_content += content
+                
+                # Periodically yield content even within the same phase
+                if len(current_content) > 300:
+                    yield {
+                        "phase": current_phase or "unknown",
+                        "content": current_content.strip()
+                    }
+                    current_content = ""
+            
+            # Yield any remaining content
+            if current_content:
+                yield {
+                    "phase": current_phase or "unknown",
+                    "content": current_content.strip()
+                }
+    
+    async def stream_evolution_scenario(self, initial_state: Dict[str, Any], years: int = 10) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream a progressive evolution scenario over multiple years."""
+        with trace(
+            "EvolutionScenarioStreaming", 
+            group_id=self.dynamics_system.trace_group_id,
+            metadata={"years": years}
+        ):
+            # Get the current world state
+            if not initial_state:
+                initial_state = await self.dynamics_system._fetch_world_state()
+            
+            # Prepare the prompt
+            prompt = f"""
+            Stream a progressive evolution scenario of this world over {years} years:
+            
+            INITIAL STATE:
+            {json.dumps(initial_state, indent=2)}
+            
+            Describe how the world evolves year by year, focusing on:
+            - Political developments
+            - Cultural evolution
+            - Power shifts and conflicts
+            - Religious changes
+            - Technological developments
+            
+            Maintain matriarchal power structures throughout but show complexity and change.
+            """
+            
+            # Set up the streaming result
+            result = await self.streamer_agent.stream(prompt, context={})
+            
+            # Process the stream
+            current_year = 1
+            current_content = ""
+            
+            async for chunk in result:
+                content = chunk.content
+                
+                # Check for year indicators
+                year_match = re.search(r"Year (\d+)", content)
+                if year_match:
+                    potential_year = int(year_match.group(1))
+                    if potential_year != current_year and potential_year <= years:
+                        # If we had accumulated content, yield it before switching
+                        if current_content:
+                            yield {
+                                "year": current_year,
+                                "content": current_content.strip()
+                            }
+                        
+                        current_year = potential_year
+                        current_content = content
+                    else:
+                        # Continue accumulating content
+                        current_content += content
+                else:
+                    # Continue accumulating content
+                    current_content += content
+                
+                # Periodically yield content even within the same year
+                if len(current_content) > 300:
+                    yield {
+                        "year": current_year,
+                        "content": current_content.strip()
+                    }
+                    current_content = ""
+            
+            # Yield any remaining content
+            if current_content:
+                yield {
+                    "year": current_year,
+                    "content": current_content.strip()
+                }
