@@ -1,3 +1,5 @@
+# lore/managers/politics.py
+
 import logging
 import json
 import random
