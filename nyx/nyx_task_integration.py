@@ -18,7 +18,6 @@ from pydantic import BaseModel
 # Import the task agent and recommendation agent
 from story_agent.creative_task_agent import femdom_task_agent, CreativeTask
 from story_agent.activity_recommender import activity_recommender_agent, ActivityRecommendations, ActivityRecommendation
-from nyx.nyx_agent_sdk import NarrativeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +177,7 @@ class NyxTaskIntegration:
             narrative_response: Original narrative response
             task: Generated creative task data
         """
+        from nyx.nyx_agent_sdk import NarrativeResponse   
         # Add task information to narrative
         task_narrative = (
             f"\n\n{task['npc_involvement']}\n"
@@ -212,6 +212,7 @@ class NyxTaskIntegration:
             narrative_response: Original narrative response
             recommendations: List of activity recommendations
         """
+        from nyx.nyx_agent_sdk import NarrativeResponse
         # Add activity recommendations to narrative
         activities_narrative = "\n\nSuggested activities:"
         
