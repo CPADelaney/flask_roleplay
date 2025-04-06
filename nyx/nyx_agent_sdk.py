@@ -16,11 +16,10 @@ from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge
-from nyx.nyx_model_manager import UserModelManager
+from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis
 from nyx.nyx_task_integration import NyxTaskIntegration
-from nyx.nyx_belief_system import BeliefSystem
-from nyx.nyx_emotional_system import EmotionalSystem
-from nyx.nyx_performance_monitor import PerformanceMonitor
+from nyx.core.emotions.emotional_core import EmotionalCore
+from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
 from .nyx_enhanced_system import NyxEnhancedSystem, NyxGoal
 from nyx.core.sync.strategy_controller import get_active_strategies
