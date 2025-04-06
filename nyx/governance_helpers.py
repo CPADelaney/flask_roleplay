@@ -203,17 +203,21 @@ def with_action_reporting(
     
     Args:
         agent_type: Type of agent (use AgentType constants)
-        action_description: Description of the action
+        action_type: Additional label or classification for the reported action
+        action_description: Description of the action (may contain placeholders 
+                            that are formatted by kwargs)
         id_from_context: Optional function to extract agent_id from context
-        extract_result: Optional function to extract result details
+        extract_result: Optional function to extract result details for reporting
         
     Returns:
-        Decorator function
+        A decorator function.
     """
     def decorator(func):
         @wraps(func)
         async def wrapper(self, ctx, *args, **kwargs):
-            # Extract user_id and conversation_id from context
+            from nyx.governance_helpers import report_action  # Ensure available here
+            
+            # Extract user_id and conversation_id from the context (depends on your usage)
             user_id = ctx.context.get("user_id") if hasattr(ctx, "context") else getattr(ctx, "user_id", None)
             conversation_id = ctx.context.get("conversation_id") if hasattr(ctx, "context") else getattr(ctx, "conversation_id", None)
             
@@ -221,44 +225,46 @@ def with_action_reporting(
                 logger.warning(f"Missing user_id or conversation_id in context for {func.__name__}")
                 return await func(self, ctx, *args, **kwargs)
             
-            # Determine agent_id
+            # Determine agent_id (if not provided by a helper function)
             if id_from_context:
                 agent_id = id_from_context(ctx)
             else:
                 agent_id = getattr(self, "agent_id", f"{agent_type}_{conversation_id}")
             
-            # Execute function
+            # Call the original function
             result = await func(self, ctx, *args, **kwargs)
             
-            # Create action details
+            # Build the action dictionary for reporting
+            # We merge keyword arguments (truncated to 100 chars each) into the 
+            # top-level dictionary so governance sees them.
+            truncated_kwargs = {k: str(v)[:100] for k, v in kwargs.items()}
             action = {
                 "type": action_type,
                 "description": action_description,
-                    **{k: str(v)[:100] for k, v in kwargs.items()}
-                )
+                **truncated_kwargs
             }
             
-            # Extract result details for reporting
+            # Optionally extract extra details from the function result
             result_details = {}
             if extract_result:
                 result_details = extract_result(result)
             elif isinstance(result, dict):
-                # Extract basic details from result
+                # Common keys to extract
                 for key in ["success", "message", "count", "length"]:
                     if key in result:
                         result_details[key] = result[key]
             
-            # Report action
+            # Report this action to governance
             report_result = await report_action(
-                user_id,
-                conversation_id,
-                agent_type,
-                agent_id,
-                action,
-                result_details
+                user_id=user_id,
+                conversation_id=conversation_id,
+                agent_type=agent_type,
+                agent_id=agent_id,
+                action=action,
+                result=result_details
             )
             
-            # If result is a dict, attach reporting info
+            # If the function returned a dict, optionally attach the reporting info
             if isinstance(result, dict):
                 result["governance_reported"] = report_result.get("reported", False)
             
@@ -267,6 +273,7 @@ def with_action_reporting(
         return wrapper
     
     return decorator
+
 
 def with_governance(
     agent_type: str,
