@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
-from agents import Agent, function_tool, Runner, trace
+from agents import Agent, function_tool, Runner, trace, handoff
 from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
