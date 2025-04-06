@@ -506,3 +506,521 @@ class WorldLoreManager(BaseManager):
 
 # Create a singleton instance if desired
 world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
+
+class MasterCoordinationAgent:
+    """
+    Master agent for coordinating lore subsystems, ensuring consistency and coherence.
+    """
+    
+    def __init__(self, world_lore_manager):
+        self.world_lore_manager = world_lore_manager
+        self.agent = Agent(
+            name="LoreMasterAgent",
+            instructions="""
+            You are the master coordinator for a fantasy world lore system.
+            Your responsibilities:
+            1. Ensure narrative consistency across subsystems
+            2. Manage dependencies between world elements
+            3. Prioritize and schedule generation tasks
+            4. Resolve conflicts between generated content
+            5. Maintain matriarchal theming throughout
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+        self.trace_id = None
+    
+    async def initialize(self, user_id: int, conversation_id: int):
+        """Initialize the master coordination agent."""
+        self.trace_id = f"master_coord_{user_id}_{conversation_id}"
+        with trace("MasterCoordinationInit", group_id=self.trace_id):
+            # Load existing world state
+            world_data = await self.world_lore_manager.get_world_data("main")
+            # Initialize coordination memory
+            self.coordination_memory = {
+                "subsystems": {
+                    "politics": {"status": "ready", "last_update": datetime.now().isoformat()},
+                    "religion": {"status": "ready", "last_update": datetime.now().isoformat()},
+                    "culture": {"status": "ready", "last_update": datetime.now().isoformat()},
+                    "dynamics": {"status": "ready", "last_update": datetime.now().isoformat()}
+                },
+                "pending_tasks": [],
+                "dependency_graph": {},
+                "consistency_issues": []
+            }
+            return {"status": "initialized", "world_data": world_data is not None}
+    
+    async def coordinate_task(self, task_description: str, subsystems: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Coordinate a task across multiple subsystems."""
+        with trace("TaskCoordination", group_id=self.trace_id, metadata={"task": task_description, "subsystems": subsystems}):
+            run_ctx = context or {}
+            
+            # Ask the agent how to coordinate this task
+            prompt = f"""
+            I need to coordinate this task across multiple subsystems:
+            
+            TASK: {task_description}
+            
+            SUBSYSTEMS: {subsystems}
+            
+            CURRENT WORLD STATE:
+            {json.dumps(await self.world_lore_manager.get_world_metadata("main"), indent=2)}
+            
+            For each subsystem, determine:
+            1. What action it should take
+            2. In what order the subsystems should execute
+            3. How data should flow between them
+            4. How to ensure consistency
+            
+            Return a detailed JSON execution plan.
+            """
+            
+            result = await Runner.run(self.agent, prompt, context=run_ctx)
+            
+            try:
+                execution_plan = json.loads(result.final_output)
+                # Update the coordination memory
+                self.coordination_memory["pending_tasks"].append({
+                    "task": task_description,
+                    "plan": execution_plan,
+                    "status": "pending",
+                    "created_at": datetime.now().isoformat()
+                })
+                return execution_plan
+            except json.JSONDecodeError:
+                return {"error": "Failed to parse execution plan", "raw_output": result.final_output}
+    
+    async def validate_consistency(self, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
+        """Validate the consistency of newly generated content."""
+        with trace("ConsistencyValidation", group_id=self.trace_id, metadata={"content_type": content_type}):
+            # Get relevant existing content for comparison
+            existing_data = await self._get_related_content(content, content_type)
+            
+            prompt = f"""
+            Validate the consistency of this newly generated {content_type}:
+            
+            NEW CONTENT:
+            {json.dumps(content, indent=2)}
+            
+            EXISTING RELATED CONTENT:
+            {json.dumps(existing_data, indent=2)}
+            
+            Check for:
+            1. Timeline inconsistencies
+            2. Character/faction motivation contradictions
+            3. World rule violations
+            4. Thematic inconsistencies with matriarchal setting
+            
+            Return JSON with validation results and any issues found.
+            """
+            
+            result = await Runner.run(self.agent, prompt, context={})
+            
+            try:
+                validation = json.loads(result.final_output)
+                # Update consistency issues if any found
+                if not validation.get("is_consistent", True):
+                    self.coordination_memory["consistency_issues"].append({
+                        "content_type": content_type,
+                        "content_id": content.get("id", "unknown"),
+                        "issues": validation.get("issues", []),
+                        "detected_at": datetime.now().isoformat()
+                    })
+                return validation
+            except json.JSONDecodeError:
+                return {"is_consistent": False, "error": "Failed to parse validation", "raw_output": result.final_output}
+    
+    async def get_status(self) -> Dict[str, Any]:
+        """Get the current status of the coordination system."""
+        return {
+            "subsystems": self.coordination_memory["subsystems"],
+            "pending_tasks": len(self.coordination_memory["pending_tasks"]),
+            "consistency_issues": len(self.coordination_memory["consistency_issues"])
+        }
+    
+    async def _get_related_content(self, content: Dict[str, Any], content_type: str) -> List[Dict[str, Any]]:
+        """Get existing content related to the new content for consistency checking."""
+        # Implementation would depend on specific content relationships
+        # This is a placeholder
+        return []
+
+class UnifiedTraceSystem:
+    """
+    System for unified tracing across all lore subsystems.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.trace_id = f"lore_{user_id}_{conversation_id}"
+        self.traces = {}
+    
+    def start_trace(self, operation: str, metadata: Dict[str, Any] = None) -> str:
+        """Start a new trace for an operation."""
+        metadata = metadata or {}
+        metadata.update({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        trace_id = f"{operation}_{uuid.uuid4()}"
+        with trace(operation, group_id=self.trace_id, metadata=metadata) as current_trace:
+            self.traces[trace_id] = {
+                "id": trace_id,
+                "operation": operation,
+                "metadata": metadata,
+                "started_at": datetime.now().isoformat(),
+                "status": "running",
+                "steps": [],
+                "trace_obj": current_trace
+            }
+            return trace_id
+    
+    def add_trace_step(self, trace_id: str, step_name: str, data: Dict[str, Any] = None):
+        """Add a step to an existing trace."""
+        if trace_id not in self.traces:
+            return
+        
+        with trace(
+            step_name, 
+            group_id=self.traces[trace_id]["trace_obj"].id, 
+            metadata=data
+        ):
+            self.traces[trace_id]["steps"].append({
+                "name": step_name,
+                "timestamp": datetime.now().isoformat(),
+                "data": data or {}
+            })
+    
+    def end_trace(self, trace_id: str, status: str = "completed", result: Dict[str, Any] = None):
+        """End a trace with a status and result."""
+        if trace_id not in self.traces:
+            return
+        
+        self.traces[trace_id]["status"] = status
+        self.traces[trace_id]["ended_at"] = datetime.now().isoformat()
+        self.traces[trace_id]["result"] = result or {}
+    
+    def get_trace(self, trace_id: str) -> Dict[str, Any]:
+        """Get the details of a specific trace."""
+        return self.traces.get(trace_id)
+    
+    def get_active_traces(self) -> List[Dict[str, Any]]:
+        """Get all currently active traces."""
+        return [t for t in self.traces.values() if t["status"] == "running"]
+    
+    def export_trace(self, trace_id: str, format_type: str = "json") -> Dict[str, Any]:
+        """Export a trace in the specified format."""
+        if trace_id not in self.traces:
+            return {"error": "Trace not found"}
+        
+        trace_data = self.traces[trace_id]
+        
+        if format_type == "json":
+            return trace_data
+        elif format_type == "timeline":
+            # Format for timeline visualization
+            events = []
+            events.append({
+                "time": trace_data["started_at"],
+                "event": f"Started {trace_data['operation']}",
+                "type": "start"
+            })
+            
+            for step in trace_data["steps"]:
+                events.append({
+                    "time": step["timestamp"],
+                    "event": step["name"],
+                    "data": step["data"],
+                    "type": "step"
+                })
+            
+            if trace_data["status"] != "running":
+                events.append({
+                    "time": trace_data["ended_at"],
+                    "event": f"Ended {trace_data['operation']} with status {trace_data['status']}",
+                    "type": "end"
+                })
+            
+            return {"timeline": events}
+        else:
+            return {"error": f"Unsupported format: {format_type}"}
+
+class ContentValidationTool:
+    """
+    Tool for validating and ensuring consistency of lore content.
+    """
+    
+    def __init__(self, world_lore_manager):
+        self.world_lore_manager = world_lore_manager
+        self.validator_agent = Agent(
+            name="ContentValidatorAgent",
+            instructions="""
+            You validate fantasy world lore for consistency, completeness, and thematic coherence.
+            Check for contradictions with existing lore, missing required elements,
+            and alignment with the matriarchal theme.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+    
+    async def validate_content(self, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
+        """Validate the provided content against consistency rules."""
+        # Get validation schema for this content type
+        schema = self._get_validation_schema(content_type)
+        
+        # Basic structural validation
+        schema_validation = self._validate_against_schema(content, schema)
+        if not schema_validation["valid"]:
+            return schema_validation
+        
+        # Get related content for contextual validation
+        related_content = await self._fetch_related_content(content, content_type)
+        
+        # Prompt the validator agent
+        prompt = f"""
+        Validate this {content_type} content for consistency and quality:
+        
+        CONTENT:
+        {json.dumps(content, indent=2)}
+        
+        RELATED EXISTING CONTENT:
+        {json.dumps(related_content, indent=2)}
+        
+        Check for:
+        1. Internal consistency
+        2. Consistency with existing lore
+        3. Completeness of required elements
+        4. Proper matriarchal theming
+        5. Narrative quality and interest
+        
+        Return JSON with:
+        - valid: boolean
+        - issues: list of specific issues
+        - improvement_suggestions: list of suggestions
+        - matriarchal_score: 1-10 rating of how well it upholds matriarchal themes
+        """
+        
+        result = await Runner.run(self.validator_agent, prompt, context={})
+        
+        try:
+            validation_result = json.loads(result.final_output)
+            return validation_result
+        except json.JSONDecodeError:
+            return {
+                "valid": False,
+                "issues": ["Failed to parse validation result"],
+                "raw_output": result.final_output
+            }
+    
+    def _get_validation_schema(self, content_type: str) -> Dict[str, Any]:
+        """Get the validation schema for a content type."""
+        schemas = {
+            "nation": {
+                "required_fields": ["name", "government_type", "description"],
+                "optional_fields": ["matriarchy_level", "population_scale", "major_resources"],
+                "types": {
+                    "name": str,
+                    "government_type": str,
+                    "description": str,
+                    "matriarchy_level": int
+                }
+            },
+            "deity": {
+                "required_fields": ["name", "gender", "domain", "description"],
+                "optional_fields": ["iconography", "holy_symbol", "sacred_animals"],
+                "types": {
+                    "name": str,
+                    "gender": str,
+                    "domain": list,
+                    "description": str
+                }
+            }
+            # Add schemas for other content types
+        }
+        
+        return schemas.get(content_type, {
+            "required_fields": [],
+            "optional_fields": [],
+            "types": {}
+        })
+    
+    def _validate_against_schema(self, content: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate content against a structural schema."""
+        issues = []
+        
+        # Check required fields
+        for field in schema.get("required_fields", []):
+            if field not in content:
+                issues.append(f"Missing required field: {field}")
+        
+        # Check types
+        for field, expected_type in schema.get("types", {}).items():
+            if field in content and not isinstance(content[field], expected_type):
+                issues.append(f"Field {field} should be of type {expected_type.__name__}")
+        
+        return {
+            "valid": len(issues) == 0,
+            "issues": issues
+        }
+    
+    async def _fetch_related_content(self, content: Dict[str, Any], content_type: str) -> Dict[str, List[Dict[str, Any]]]:
+        """Fetch content related to the provided content for contextual validation."""
+        # Implementation would vary based on content relationships
+        # Placeholder example:
+        related = {}
+        
+        if content_type == "nation":
+            # Get neighboring nations
+            if "neighboring_nations" in content:
+                nations = []
+                for neighbor in content["neighboring_nations"]:
+                    # This is a simplified example; actual implementation would query the database
+                    nation_data = await self.world_lore_manager.get_world_data(f"nation_{neighbor}")
+                    if nation_data:
+                        nations.append(nation_data)
+                related["neighboring_nations"] = nations
+        
+        return related
+
+class LoreRelationshipMapper:
+    """
+    Tool for creating and managing relationships between lore elements.
+    """
+    
+    def __init__(self, world_lore_manager):
+        self.world_lore_manager = world_lore_manager
+        self.relationship_agent = Agent(
+            name="RelationshipMapperAgent",
+            instructions="""
+            You analyze fantasy world lore elements and identify meaningful relationships between them.
+            These could be causal relationships, thematic connections, contradictions, or influences.
+            Create a network of relationships that shows how lore elements interact.
+            """,
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+    
+    async def create_relationship_graph(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create a relationship graph from a set of lore elements."""
+        if not elements:
+            return {"nodes": [], "edges": []}
+        
+        prompt = f"""
+        Analyze these lore elements and create a relationship graph that shows how they connect:
+        
+        ELEMENTS:
+        {json.dumps(elements, indent=2)}
+        
+        For each possible pair of elements, determine if a meaningful relationship exists.
+        Consider:
+        - Causal relationships (one created/influenced the other)
+        - Thematic connections
+        - Contradictions or conflicts
+        - Geographical proximity
+        - Hierarchical relationships
+        
+        Return a JSON graph with:
+        - nodes: list of element IDs
+        - edges: list of connections with source, target, and relationship type
+        """
+        
+        result = await Runner.run(self.relationship_agent, prompt, context={})
+        
+        try:
+            graph = json.loads(result.final_output)
+            # Store the relationship graph
+            await self._store_relationship_graph(graph)
+            return graph
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse relationship graph", "raw_output": result.final_output}
+    
+    async def find_related_elements(self, element_id: str, element_type: str, depth: int = 1) -> Dict[str, Any]:
+        """Find lore elements related to the specified element."""
+        # Get the element
+        element = await self.world_lore_manager.get_world_data(f"{element_type}_{element_id}")
+        if not element:
+            return {"error": "Element not found"}
+        
+        # Get previously mapped relationships
+        relationships = await self._get_element_relationships(element_id)
+        
+        # If we need to go deeper or no relationships exist, use the agent
+        if depth > 1 or not relationships:
+            # Get potential related elements based on type
+            potential_related = await self._get_potential_related(element_type, element)
+            
+            prompt = f"""
+            Find relationships between this element and potentially related elements:
+            
+            PRIMARY ELEMENT:
+            {json.dumps(element, indent=2)}
+            
+            POTENTIAL RELATED ELEMENTS:
+            {json.dumps(potential_related, indent=2)}
+            
+            For each potential related element, determine:
+            1. If a meaningful relationship exists
+            2. What type of relationship it is
+            3. The strength of the relationship (1-10)
+            
+            Return JSON with an array of related elements and their relationship details.
+            """
+            
+            result = await Runner.run(self.relationship_agent, prompt, context={})
+            
+            try:
+                new_relationships = json.loads(result.final_output)
+                # Store these new relationships
+                await self._store_element_relationships(element_id, new_relationships)
+                
+                # Merge with existing relationships
+                relationships = self._merge_relationships(relationships, new_relationships)
+                
+                # If depth > 1, recursively get related elements of related elements
+                if depth > 1:
+                    for related in relationships.get("related_elements", []):
+                        related_id = related.get("id")
+                        related_type = related.get("type")
+                        if related_id and related_type:
+                            second_level = await self.find_related_elements(related_id, related_type, depth=depth-1)
+                            related["connections"] = second_level.get("related_elements", [])
+            except json.JSONDecodeError:
+                relationships = {"error": "Failed to parse relationships", "raw_output": result.final_output}
+        
+        return relationships
+    
+    async def _store_relationship_graph(self, graph: Dict[str, Any]) -> None:
+        """Store a relationship graph in the database."""
+        # Implementation would depend on database structure
+        pass
+    
+    async def _get_element_relationships(self, element_id: str) -> Dict[str, Any]:
+        """Get previously mapped relationships for an element."""
+        # Implementation would depend on database structure
+        return {"related_elements": []}
+    
+    async def _store_element_relationships(self, element_id: str, relationships: Dict[str, Any]) -> None:
+        """Store relationships for an element."""
+        # Implementation would depend on database structure
+        pass
+    
+    async def _get_potential_related(self, element_type: str, element: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get potential related elements based on element type and content."""
+        # Implementation would depend on specific lore relationships
+        # This is a placeholder
+        return []
+    
+    def _merge_relationships(self, existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge existing and new relationship data."""
+        if "related_elements" not in existing:
+            existing["related_elements"] = []
+        
+        existing_ids = {r.get("id") for r in existing["related_elements"]}
+        
+        for related in new.get("related_elements", []):
+            if related.get("id") not in existing_ids:
+                existing["related_elements"].append(related)
+        
+        return existing
