@@ -194,7 +194,7 @@ async def report_action(
 def with_action_reporting(
     agent_type: str,
     action_type: str,
-    action_description: str,
+    action_description: str = "", 
     id_from_context: Optional[Callable] = None,
     extract_result: Optional[Callable] = None
 ):
