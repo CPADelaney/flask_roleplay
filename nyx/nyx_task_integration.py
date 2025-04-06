@@ -1,44 +1,79 @@
+# nyx/nyx_task_integration.py
+
 """
 Integration of creative task and activity recommendation agents into the Nyx workflow.
+
+This module integrates the OpenAI Agents-based task generation and activity recommendation
+systems with Nyx's narrative workflow.
 """
 
 import logging
 from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import dataclass
+import json
 
-from story_agent.creative_task_agent import CreativeTaskGenerator, CreativeTask
-from story_agent.activity_recommender import ActivityRecommender, ActivityRecommendation
-from agents import function_tool
+# Updated imports for Agents SDK
+from agents import Agent, Runner, function_tool
+from pydantic import BaseModel
+
+# Import the task agent and recommendation agent
+from story_agent.creative_task_agent import femdom_task_agent, CreativeTask
+from story_agent.activity_recommender import activity_recommender_agent, ActivityRecommendations, ActivityRecommendation
 from nyx.nyx_agent_sdk import NarrativeResponse
 
 logger = logging.getLogger(__name__)
 
 class NyxTaskIntegration:
-    """Integrates task and activity agents with Nyx's workflow"""
+    """Integrates task and activity agents with Nyx's workflow using the OpenAI Agents SDK"""
     
     def __init__(self):
-        self.task_generator = CreativeTaskGenerator()
-        self.activity_recommender = ActivityRecommender()
+        # No need to instantiate the agents - we'll use the pre-defined ones from the modules
+        pass
     
     @function_tool
     async def generate_creative_task(
         self,
         ctx,
-        npc_id: str,
+        npc_id: int,
         scenario_id: str,
-        intensity_level: Optional[int] = None
+        intensity_level: Optional[int] = None,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Generate a creative task for the current scenario.
+        Generate a creative task for the current scenario using the agent-based approach.
         
         Args:
             npc_id: ID of the NPC giving the task
             scenario_id: Current scenario ID
             intensity_level: Optional override for task intensity (1-5)
+            user_id: User ID (extracted from context if not provided)
+            conversation_id: Conversation ID (extracted from context if not provided)
         """
         try:
-            # Generate task
-            task = self.task_generator.generate_task(npc_id, scenario_id)
+            # Extract context if not provided
+            if user_id is None:
+                user_id = ctx.context.user_id
+            if conversation_id is None:
+                conversation_id = ctx.context.conversation_id
+            
+            # Create the prompt for the task agent
+            user_prompt = (
+                f"Generate a creative task for NPC ID {npc_id} in scenario {scenario_id}.\n"
+                f"user_id={user_id}, conversation_id={conversation_id}"
+            )
+            
+            # If intensity level is specified, add it to the prompt
+            if intensity_level is not None:
+                user_prompt += f", intensity_level={intensity_level}"
+            
+            # Run the agent to generate a task
+            result = await Runner.run(
+                starting_agent=femdom_task_agent,
+                input=user_prompt
+            )
+            
+            # The result.final_output will be a CreativeTask object
+            task = result.final_output
             
             # Override intensity if specified
             if intensity_level is not None:
@@ -61,7 +96,7 @@ class NyxTaskIntegration:
             }
             
         except Exception as e:
-            logger.error(f"Error generating creative task: {e}")
+            logger.error(f"Error generating creative task: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
@@ -72,31 +107,41 @@ class NyxTaskIntegration:
         self,
         ctx,
         scenario_id: str,
-        npc_ids: List[str],
-        available_activities: List[Dict],
-        num_recommendations: int = 2
+        npc_ids: List[int],
+        num_recommendations: int = 2,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Get activity recommendations for the current scene.
+        Get activity recommendations for the current scene using the agent-based approach.
         
         Args:
             scenario_id: Current scenario ID
             npc_ids: List of present NPC IDs
-            available_activities: List of available activities
             num_recommendations: Number of recommendations to return (default 2)
+            user_id: User ID (extracted from context if not provided)
+            conversation_id: Conversation ID (extracted from context if not provided)
         """
         try:
-            # Get recommendations
-            recommendations = self.activity_recommender.recommend_activities(
-                scenario_id,
-                npc_ids,
-                available_activities,
-                num_recommendations
+            # Extract context if not provided
+            if user_id is None:
+                user_id = ctx.context.user_id
+            if conversation_id is None:
+                conversation_id = ctx.context.conversation_id
+            
+            # Call the activity recommender function from the module
+            # This already handles the Agent interaction
+            recommendations = await recommend_activities(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                scenario_id=scenario_id,
+                npc_ids=npc_ids,
+                num_recommendations=num_recommendations
             )
             
-            # Format for return
+            # Extract the recommendations list from the returned object
             formatted_recommendations = []
-            for rec in recommendations:
+            for rec in recommendations.recommendations:
                 formatted_recommendations.append({
                     "activity_name": rec.activity_name,
                     "confidence_score": rec.confidence_score,
@@ -113,7 +158,7 @@ class NyxTaskIntegration:
             }
             
         except Exception as e:
-            logger.error(f"Error getting activity recommendations: {e}")
+            logger.error(f"Error getting activity recommendations: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
@@ -124,23 +169,23 @@ class NyxTaskIntegration:
         self,
         ctx,
         narrative_response: NarrativeResponse,
-        task: CreativeTask
+        task: Dict[str, Any]
     ) -> NarrativeResponse:
         """
         Enhance Nyx's narrative response with task information.
         
         Args:
             narrative_response: Original narrative response
-            task: Generated creative task
+            task: Generated creative task data
         """
         # Add task information to narrative
         task_narrative = (
-            f"\n\n{task.npc_involvement}\n"
-            f"Task: {task.title}\n"
-            f"{task.description}\n"
-            f"Duration: {task.duration}\n"
-            f"Success Criteria: {task.success_criteria}\n"
-            f"Reward: {task.reward_type}"
+            f"\n\n{task['npc_involvement']}\n"
+            f"Task: {task['title']}\n"
+            f"{task['description']}\n"
+            f"Duration: {task['duration']}\n"
+            f"Success Criteria: {task['success_criteria']}\n"
+            f"Reward: {task['reward_type']}"
         )
         
         narrative_response.narrative += task_narrative
@@ -148,7 +193,7 @@ class NyxTaskIntegration:
         # Adjust tension level based on task difficulty
         narrative_response.tension_level = max(
             narrative_response.tension_level,
-            task.difficulty * 2  # Scale 1-5 to 1-10
+            task['difficulty'] * 2  # Scale 1-5 to 1-10
         )
         
         return narrative_response
@@ -158,7 +203,7 @@ class NyxTaskIntegration:
         self,
         ctx,
         narrative_response: NarrativeResponse,
-        recommendations: List[ActivityRecommendation]
+        recommendations: List[Dict[str, Any]]
     ) -> NarrativeResponse:
         """
         Enhance Nyx's narrative response with activity recommendations.
@@ -171,55 +216,108 @@ class NyxTaskIntegration:
         activities_narrative = "\n\nSuggested activities:"
         
         for i, rec in enumerate(recommendations, 1):
-            if rec.activity_name.lower() == "none":
+            if rec["activity_name"].lower() == "none":
                 activities_narrative += f"\n{i}. Continue with current activity"
             else:
                 activities_narrative += (
-                    f"\n{i}. {rec.activity_name}"
-                    f"\n   Duration: {rec.estimated_duration}"
-                    f"\n   Participants: {', '.join(rec.participating_npcs)}"
-                    f"\n   Reasoning: {rec.reasoning}"
+                    f"\n{i}. {rec['activity_name']}"
+                    f"\n   Duration: {rec['estimated_duration']}"
+                    f"\n   Participants: {', '.join(rec['participating_npcs'])}"
+                    f"\n   Reasoning: {rec['reasoning']}"
                 )
         
         narrative_response.narrative += activities_narrative
         
         return narrative_response
 
-# Example usage in Nyx's workflow:
-"""
-# In nyx_agent.py or similar:
+    @function_tool
+    async def run_activity_agent_directly(
+        self,
+        ctx,
+        user_prompt: str,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Run the activity recommendation agent directly with a custom prompt.
+        Useful for debugging or custom scenarios.
+        
+        Args:
+            user_prompt: The prompt to send to the agent
+            user_id: User ID (extracted from context if not provided)
+            conversation_id: Conversation ID (extracted from context if not provided)
+        """
+        try:
+            # Extract context if not provided
+            if user_id is None:
+                user_id = ctx.context.user_id
+            if conversation_id is None:
+                conversation_id = ctx.context.conversation_id
+                
+            # Add user and conversation IDs to the prompt
+            full_prompt = f"{user_prompt}\nuser_id={user_id}, conversation_id={conversation_id}"
+            
+            # Run the agent
+            result = await Runner.run(
+                starting_agent=activity_recommender_agent,
+                input=full_prompt
+            )
+            
+            # Return the formatted recommendations
+            recommendations = result.final_output
+            return {
+                "success": True,
+                "recommendations": [rec.dict() for rec in recommendations.recommendations]
+            }
+        except Exception as e:
+            logger.error(f"Error running activity agent directly: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
-async def process_user_input(user_id: int, conversation_id: int, user_input: str) -> Dict[str, Any]:
-    # Initialize integration
-    task_integration = NyxTaskIntegration()
-    
-    # Generate base narrative response
-    narrative_response = await generate_base_response(user_input)
-    
-    # If appropriate, generate task
-    if should_generate_task(context):
-        task_result = await task_integration.generate_creative_task(
-            npc_id=active_npc_id,
-            scenario_id=current_scenario_id
-        )
-        if task_result["success"]:
-            narrative_response = await task_integration.enhance_narrative_with_task(
-                narrative_response,
-                task_result["task"]
+    @function_tool
+    async def run_task_agent_directly(
+        self,
+        ctx,
+        user_prompt: str,
+        user_id: Optional[int] = None,
+        conversation_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Run the task generation agent directly with a custom prompt.
+        Useful for debugging or custom scenarios.
+        
+        Args:
+            user_prompt: The prompt to send to the agent
+            user_id: User ID (extracted from context if not provided)
+            conversation_id: Conversation ID (extracted from context if not provided)
+        """
+        try:
+            # Extract context if not provided
+            if user_id is None:
+                user_id = ctx.context.user_id
+            if conversation_id is None:
+                conversation_id = ctx.context.conversation_id
+                
+            # Add user and conversation IDs to the prompt
+            full_prompt = f"{user_prompt}\nuser_id={user_id}, conversation_id={conversation_id}"
+            
+            # Run the agent
+            result = await Runner.run(
+                starting_agent=femdom_task_agent,
+                input=full_prompt
             )
-    
-    # If appropriate, recommend activities
-    if should_recommend_activities(context):
-        activity_result = await task_integration.recommend_activities(
-            scenario_id=current_scenario_id,
-            npc_ids=present_npc_ids,
-            available_activities=get_available_activities()
-        )
-        if activity_result["success"]:
-            narrative_response = await task_integration.enhance_narrative_with_activities(
-                narrative_response,
-                activity_result["recommendations"]
-            )
-    
-    return narrative_response
-""" 
+            
+            # Return the task data
+            task = result.final_output
+            return {
+                "success": True,
+                "task": task.dict()
+            }
+        except Exception as e:
+            logger.error(f"Error running task agent directly: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e)
+            }
