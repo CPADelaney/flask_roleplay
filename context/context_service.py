@@ -875,6 +875,59 @@ async def get_context_service(user_id: int, conversation_id: int) -> ContextServ
         _context_services[key] = service
     return _context_services[key]
 
+async def get_comprehensive_context(
+    user_id: int,
+    conversation_id: int,
+    input_text: str = "",
+    location: Optional[str] = None,
+    context_budget: int = 4000,
+    use_vector_search: Optional[bool] = None,
+    use_delta: bool = True,
+    source_version: Optional[int] = None,
+    summary_level: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Get comprehensive context optimized for token efficiency and relevance
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        input_text: Current user input
+        location: Optional current location
+        context_budget: Token budget
+        use_vector_search: Whether to use vector search
+        use_delta: Whether to include delta changes
+        source_version: Optional source version for delta tracking 
+        summary_level: Optional summary level (0-3)
+        
+    Returns:
+        Optimized context dictionary
+    """
+    # Get context service
+    service = await get_context_service(user_id, conversation_id)
+    
+    # If summarization requested, use that method
+    if summary_level is not None:
+        context = await service.get_summarized_context(
+            input_text=input_text,
+            summary_level=summary_level,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search if use_vector_search is not None else True
+        )
+    else:
+        # Get regular context
+        context = await service.get_context(
+            input_text=input_text,
+            location=location,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search,
+            use_delta=use_delta,
+            source_version=source_version
+        )
+    
+    return context
+
+
 async def cleanup_context_services():
     """Close all context services"""
     global _context_services
