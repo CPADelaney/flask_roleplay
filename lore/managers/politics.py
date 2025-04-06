@@ -17,7 +17,10 @@ from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
 # Project imports
-from embedding.vector_store import generate_embedding
+# REPLACED: from embedding.vector_store import generate_embedding
+# Instead, we import your real embedding function:
+from utils.embedding_service import get_embedding
+
 from lore.core.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
 
@@ -572,9 +575,12 @@ class WorldPoliticsManager(BaseLoreManager):
 
             try:
                 conflict_data = json.loads(result.final_output)
-                # Build embedding
+                # Build embedding by calling your real embedding function:
                 embed_text = f"{conflict_data.get('name','Unnamed Conflict')} {conflict_data.get('description','')} {conflict_data.get('conflict_type','')}"
-                embedding = await generate_embedding(embed_text)
+                emb = await get_embedding(embed_text)
+                # If needed, ensure it's a list for Postgres vector usage:
+                if not isinstance(emb, list):
+                    emb = emb.tolist()
 
                 # Insert DB
                 async with await self.get_connection_pool() as pool:
@@ -604,7 +610,7 @@ class WorldPoliticsManager(BaseLoreManager):
                             json.dumps(conflict_data.get("public_opinion",{})),
                             conflict_data.get("recent_developments",[]),
                             conflict_data.get("potential_resolution","TBD"),
-                            embedding
+                            emb
                         )
 
                         conflict_data["id"] = conflict_id
@@ -660,9 +666,10 @@ class WorldPoliticsManager(BaseLoreManager):
                 if "content" in news_data:
                     news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], emphasis_level=1)
 
-                # Insert DB
                 embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
-                embedding = await generate_embedding(embed_text)
+                emb = await get_embedding(embed_text)
+                if not isinstance(emb, list):
+                    emb = emb.tolist()
 
                 async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -677,7 +684,7 @@ class WorldPoliticsManager(BaseLoreManager):
                             news_data.get("content",""),
                             nation["id"],
                             bias,
-                            embedding
+                            emb
                         )
 
             except Exception as e:
@@ -964,9 +971,11 @@ class WorldPoliticsManager(BaseLoreManager):
                 if not all(k in issue_data for k in ["name","description","issue_type"]):
                     continue
 
-                # Insert DB
+                # Insert DB (embedding using get_embedding)
                 embed_text = f"{issue_data['name']} {issue_data['description']} {issue_data['issue_type']}"
-                embedding = await generate_embedding(embed_text)
+                emb = await get_embedding(embed_text)
+                if not isinstance(emb, list):
+                    emb = emb.tolist()
 
                 async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -999,7 +1008,7 @@ class WorldPoliticsManager(BaseLoreManager):
                             issue_data.get("social_impact",""),
                             issue_data.get("economic_impact",""),
                             issue_data.get("potential_resolution",""),
-                            embedding
+                            emb
                         )
 
                         issue_data["id"] = issue_id
@@ -1058,7 +1067,9 @@ class WorldPoliticsManager(BaseLoreManager):
                 news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], emphasis_level=1)
 
                 embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
-                embedding = await generate_embedding(embed_text)
+                emb = await get_embedding(embed_text)
+                if not isinstance(emb, list):
+                    emb = emb.tolist()
 
                 async with await self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
@@ -1074,7 +1085,7 @@ class WorldPoliticsManager(BaseLoreManager):
                             news_data.get("content",""),
                             news_data.get("source_faction","Unknown Source"),
                             bias,
-                            embedding
+                            emb
                         )
 
             except Exception as e:
@@ -1414,7 +1425,9 @@ class WorldPoliticsManager(BaseLoreManager):
             news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], 1)
 
             embed_text = f"{news_data.get('headline','No Headline')} {news_data.get('content','')[:200]}"
-            embedding = await generate_embedding(embed_text)
+            emb = await get_embedding(embed_text)
+            if not isinstance(emb, list):
+                emb = emb.tolist()
 
             bias = "pro_aggressor" if nation["id"] == conflict.get("primary_aggressor") else "pro_defender"
 
@@ -1431,7 +1444,7 @@ class WorldPoliticsManager(BaseLoreManager):
                         news_data.get("content",""),
                         nation["id"],
                         bias,
-                        embedding
+                        emb
                     )
 
         except Exception as e:
@@ -1440,7 +1453,6 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  POLITICAL REFORM ENGINE
     # ------------------------------------------------------------------------
-    ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_political_reforms",
@@ -1515,7 +1527,6 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  DYNASTY TRACKING SYSTEM
     # ------------------------------------------------------------------------
-    ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="track_dynasty_lineage",
@@ -1612,7 +1623,6 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #  FACTION PROXIES INITIALIZATION
     # ------------------------------------------------------------------------
-    ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="initialize_faction_proxies",
@@ -1685,11 +1695,14 @@ class WorldPoliticsManager(BaseLoreManager):
     async def generate_and_store_embedding(self, text: str, conn, table_name: str, key_name: str, key_value: int):
         """
         Helper to generate an embedding and store it in the specified table/column.
+        Uses your real embedding service from utils.embedding_service.
         """
-        embedding = await generate_embedding(text)
+        emb = await get_embedding(text)
+        if not isinstance(emb, list):
+            emb = emb.tolist()
         await conn.execute(
             f"UPDATE {table_name} SET embedding=$1 WHERE {key_name}=$2",
-            embedding, key_value
+            emb, key_value
         )
 
     # ------------------------------------------------------------------------
@@ -1706,4 +1719,3 @@ class WorldPoliticsManager(BaseLoreManager):
             scope="world_building",
             priority=DirectivePriority.MEDIUM
         )
-
