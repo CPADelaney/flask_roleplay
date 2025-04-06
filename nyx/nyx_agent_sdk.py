@@ -15,7 +15,7 @@ from agents import ModelSettings, GuardrailFunctionOutput, InputGuardrail, Outpu
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
-from nyx.nyx_memory_system import NyxMemorySystem
+from memory.memory_nyx_integration import MemoryNyxBridge
 from nyx.nyx_model_manager import UserModelManager
 from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.nyx_belief_system import BeliefSystem
