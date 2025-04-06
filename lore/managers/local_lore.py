@@ -145,6 +145,51 @@ class MythTransmissionSimulation(BaseModel):
     final_spread_rate: int
     variants_created: int
 
+### NEW ###
+class LegendVariantAgent(Agent):
+    """Agent that creates contradictory variants of a single myth."""
+    def __init__(self):
+        super().__init__(
+            name="LegendVariantAgent",
+            instructions=(
+                "You create multiple contradictory versions of the same myth, "
+                "each with at least one intentional inconsistency."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+
+### NEW ###
+class TouristAttractionAgent(Agent):
+    """Agent that models how a myth becomes a tourist attraction/commercial enterprise."""
+    def __init__(self):
+        super().__init__(
+            name="TouristAttractionAgent",
+            instructions=(
+                "You transform local myths into commercial tourist attractions, "
+                "including marketing angles, attractions, merchandise, etc. "
+                "Focus on how matriarchal elements can draw in visitors."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+
+### NEW ###
+class OralWrittenTraditionAgent(Agent):
+    """Agent that simulates differences in myth evolution between oral and written traditions."""
+    def __init__(self):
+        super().__init__(
+            name="OralWrittenTraditionAgent",
+            instructions=(
+                "You simulate how a myth changes when recorded in writing vs. shared orally. "
+                "Highlight differences in detail, consistency, and local variations. "
+                "Always emphasize matriarchal elements in both mediums."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+
+
 class LocalLoreManager(BaseLoreManager):
     """
     Enhanced manager for local lore elements with myth evolution agents,
@@ -243,7 +288,12 @@ class LocalLoreManager(BaseLoreManager):
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.8)
         )
-    
+
+        ### NEW ###
+        self.variant_agent = LegendVariantAgent()
+        self.tourism_agent = TouristAttractionAgent()
+        self.oral_written_agent = OralWrittenTraditionAgent()
+
     def _register_tools(self):
         """Register function tools with the central registry."""
         tool_registry.register_tool(self.add_urban_myth, "local_lore")
@@ -254,6 +304,11 @@ class LocalLoreManager(BaseLoreManager):
         tool_registry.register_tool(self.connect_history_landmark, "narrative_connection")
         tool_registry.register_tool(self.ensure_narrative_consistency, "narrative_consistency")
         tool_registry.register_tool(self.simulate_myth_transmission, "myth_transmission")
+
+        ### NEW ###
+        tool_registry.register_tool(self.generate_legend_variants, "myth_variants")
+        tool_registry.register_tool(self.develop_tourist_attraction, "tourism_development")
+        tool_registry.register_tool(self.simulate_tradition_dynamics, "oral_vs_written")
 
     async def initialize_tables(self):
         """Ensure all local lore tables exist with enhanced fields."""
@@ -2093,6 +2148,237 @@ class LocalLoreManager(BaseLoreManager):
             "updated_landmark": updated_landmark,
             "new_myth": new_myth
         }
+
+    ### NEW ###
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_legend_variants",
+        action_description="Creating contradictory legend variants for myth {myth_id}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="myth_variants")
+    async def generate_legend_variants(
+        self,
+        ctx,
+        myth_id: int,
+        variant_count: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Create multiple contradictory versions of the same myth, storing them in versions_json.
+        Each variant has at least one intentional inconsistency.
+        """
+        run_ctx = self.create_run_context(ctx)
+
+        # Fetch the myth record
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow("SELECT * FROM UrbanMyths WHERE id=$1", myth_id)
+                if not myth:
+                    return {"error": "Myth not found"}
+
+                versions_json = myth["versions_json"] or {}
+                if "contradictory_variants" not in versions_json:
+                    versions_json["contradictory_variants"] = []
+
+        myth_data = dict(myth)
+        prompt = f"""
+        Create {variant_count} contradictory legend variants of the following myth. 
+        Each variant must have at least one deliberate inconsistency or twist.
+        MYTH:
+        {json.dumps(myth_data, indent=2)}
+
+        Return a JSON array of contradictory variants, each with fields:
+        - 'title'
+        - 'variant_description'
+        - 'inconsistency_explanation'
+        """
+
+        result = await Runner.run(
+            self.variant_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=RunConfig(workflow_name="ContradictoryLegendVariants")
+        )
+
+        try:
+            variants = json.loads(result.final_output)
+            if not isinstance(variants, list):
+                variants = [variants]
+
+            # Save them to versions_json->contradictory_variants
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Append the new variants to existing ones if any
+                    all_variants = versions_json["contradictory_variants"]
+                    all_variants.extend(variants)
+
+                    versions_json["contradictory_variants"] = all_variants
+                    await conn.execute("""
+                        UPDATE UrbanMyths
+                        SET versions_json = $1
+                        WHERE id = $2
+                    """, json.dumps(versions_json), myth_id)
+
+            return {
+                "myth_id": myth_id,
+                "myth_name": myth_data["name"],
+                "new_variants": variants
+            }
+
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse contradictory variants"}
+
+    ### NEW ###
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="develop_tourist_attraction",
+        action_description="Developing tourism for myth {myth_id}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="tourism_development")
+    async def develop_tourist_attraction(
+        self,
+        ctx,
+        myth_id: int
+    ) -> Dict[str, Any]:
+        """
+        Model how a local myth is turned into a commercial tourist attraction.
+        Store the results in the myth's versions_json under 'tourist_development'.
+        """
+        run_ctx = self.create_run_context(ctx)
+
+        # Load the myth
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow("SELECT * FROM UrbanMyths WHERE id=$1", myth_id)
+                if not myth:
+                    return {"error": "Myth not found"}
+
+                versions_json = myth["versions_json"] or {}
+
+        myth_data = dict(myth)
+        prompt = f"""
+        Transform this myth into a tourist attraction. Provide details on:
+        - Marketing angle & branding
+        - Proposed tours or events for visitors
+        - Possible merchandise or souvenirs
+        - How to highlight matriarchal themes to attract visitors
+        - Potential economic impact on the local region
+
+        MYTH:
+        {json.dumps(myth_data, indent=2)}
+
+        Return JSON with fields:
+        {{
+          "marketing_angle": "...",
+          "proposed_activities": ["...", "..."],
+          "merchandise_ideas": ["...", "..."],
+          "matriarchal_highlights": "...",
+          "economic_impact_estimate": "..."
+        }}
+        """
+
+        result = await Runner.run(
+            self.tourism_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=RunConfig(workflow_name="TouristAttractionDev")
+        )
+
+        try:
+            dev_data = json.loads(result.final_output)
+            # Save into versions_json["tourist_development"]
+            versions_json["tourist_development"] = dev_data
+
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    await conn.execute("""
+                        UPDATE UrbanMyths
+                        SET versions_json = $1
+                        WHERE id = $2
+                    """, json.dumps(versions_json), myth_id)
+
+            return {
+                "myth_id": myth_id,
+                "myth_name": myth_data["name"],
+                "tourist_development": dev_data
+            }
+
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse tourist attraction data"}
+
+    ### NEW ###
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_tradition_dynamics",
+        action_description="Simulating oral vs. written tradition for myth {myth_id}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="oral_vs_written")
+    async def simulate_tradition_dynamics(
+        self,
+        ctx,
+        myth_id: int
+    ) -> Dict[str, Any]:
+        """
+        Simulate how a myth changes when recorded in writing vs. shared orally.
+        Store results in UrbanMyths.versions_json["tradition_dynamics"].
+        """
+        run_ctx = self.create_run_context(ctx)
+
+        # Load the myth
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                myth = await conn.fetchrow("SELECT * FROM UrbanMyths WHERE id=$1", myth_id)
+                if not myth:
+                    return {"error": "Myth not found"}
+
+                versions_json = myth["versions_json"] or {}
+
+        myth_data = dict(myth)
+        prompt = f"""
+        Compare how this myth evolves when transmitted orally vs. written form.
+        Show changes in detail, consistency, local variations, and matriarchal elements.
+
+        MYTH:
+        {json.dumps(myth_data, indent=2)}
+
+        Return JSON with keys:
+        {{
+          "oral_version": "...",
+          "written_version": "...",
+          "key_differences": ["...", "..."],
+          "matriarchal_comparison": "..."
+        }}
+        """
+
+        result = await Runner.run(
+            self.oral_written_agent,
+            prompt,
+            context=run_ctx.context,
+            run_config=RunConfig(workflow_name="OralVsWritten")
+        )
+
+        try:
+            tradition_data = json.loads(result.final_output)
+            versions_json["tradition_dynamics"] = tradition_data
+
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    await conn.execute("""
+                        UPDATE UrbanMyths
+                        SET versions_json = $1
+                        WHERE id = $2
+                    """, json.dumps(versions_json), myth_id)
+
+            return {
+                "myth_id": myth_id,
+                "myth_name": myth_data["name"],
+                "tradition_dynamics": tradition_data
+            }
+
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse oral vs. written tradition dynamics"}
 
     async def register_with_governance(self):
         """Register with Nyx governance system."""
