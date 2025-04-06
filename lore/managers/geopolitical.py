@@ -226,6 +226,29 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 )
             ]
         )
+        self.trade_modeling_agent = Agent(
+            name="EconomicTradeModelingAgent",
+            instructions="Simulate trade relations between two nations, considering trade routes, goods, and economic impact.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=EconomicTradeModelingAgent
+        )
+        
+        self.geography_effect_agent = Agent(
+            name="ClimateGeographyEffectAgent",
+            instructions="Simulate the effects of climate and geography on political development.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=ClimateGeographyEffectAgent
+        )
+        
+        self.covert_operations_agent = Agent(
+            name="CovertOperationsSimulator",
+            instructions="Simulate espionage and covert operations between nations.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8),
+            output_type=CovertOperationsSimulator
+        )
 
     def _register_tools(self):
         """Register function tools with the central registry."""
@@ -234,6 +257,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
         tool_registry.register_tool(self.simulate_conflict, "geopolitical_conflict")
         tool_registry.register_tool(self.resolve_border_dispute, "geopolitical_conflict")
         tool_registry.register_tool(self.predict_geopolitical_evolution, "geopolitical_prediction")
+        tool_registry.register_tool(self.simulate_trade, "economic_trade")
+        tool_registry.register_tool(self.simulate_geography_impact, "climate_geography_effect")
+        tool_registry.register_tool(self.simulate_espionage, "covert_operations")
 
     async def _initialize_tables(self):
         """Initialize necessary tables with enhanced fields."""
@@ -1268,3 +1294,62 @@ class GeopoliticalSystemManager(BaseLoreManager):
             scope="world_building",
             priority=DirectivePriority.MEDIUM
         )
+class EconomicTradeModelingAgent(BaseModel):
+    """Model for economic trade simulation between nations."""
+    nation1: str
+    nation2: str
+    trade_goods: List[str]
+    trade_value: float
+    trade_route: str
+    impact_on_economy: float  # Positive/negative impact on the economy
+
+    @function_tool
+    async def simulate_trade(self, ctx: RunContextWrapper) -> str:
+        """Simulate the economic impact of trade between two nations."""
+        trade_info = {
+            "nation1": self.nation1,
+            "nation2": self.nation2,
+            "trade_goods": self.trade_goods,
+            "trade_value": self.trade_value,
+            "trade_route": self.trade_route,
+            "impact_on_economy": self.impact_on_economy
+        }
+        return json.dumps(trade_info)
+class ClimateGeographyEffectAgent(BaseModel):
+    """Simulate the political impact of terrain features and climate."""
+    region_name: str
+    terrain_features: List[str]
+    climate_type: str
+    resource_availability: List[str]
+    political_stability: float
+
+    @function_tool
+    async def simulate_geography_impact(self, ctx: RunContextWrapper) -> str:
+        """Simulate how terrain features and climate affect political stability."""
+        climate_effects = {
+            "mountainous": 2,
+            "coastal": 1,
+            "desert": -1
+        }
+        terrain_effects = {feature: climate_effects.get(feature, 0) for feature in self.terrain_features}
+        stability_impact = sum(terrain_effects.values()) + (1 if self.climate_type == "temperate" else 0)
+        return f"Political stability in {self.region_name} is influenced by: {stability_impact}"
+class CovertOperationsSimulator(BaseModel):
+    """Model covert operations between political entities."""
+    agent_name: str
+    target_nation: str
+    operation_type: str
+    mission_outcome: str
+    secrecy_level: int
+
+    @function_tool
+    async def simulate_espionage(self, ctx: RunContextWrapper) -> str:
+        """Simulate covert operations between nations."""
+        espionage_details = {
+            "agent_name": self.agent_name,
+            "target_nation": self.target_nation,
+            "operation_type": self.operation_type,
+            "mission_outcome": self.mission_outcome,
+            "secrecy_level": self.secrecy_level
+        }
+        return json.dumps(espionage_details)
