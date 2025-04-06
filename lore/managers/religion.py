@@ -1553,6 +1553,318 @@ class ReligionManager(BaseLoreManager):
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_theological_dispute",
+        action_description="Simulating theological disputes between religious factions",
+        id_from_context=lambda ctx: "religion_manager"
+    )
+    async def simulate_theological_dispute(self, ctx, pantheon_id: int, dispute_topic: str) -> Dict[str, Any]:
+        """Simulate a theological dispute with competing religious interpretations."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon data
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheon = await conn.fetchrow("""
+                    SELECT * FROM Pantheons WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return {"error": "Pantheon not found"}
+                
+                deities = await conn.fetch("""
+                    SELECT id, name, gender, domain, description 
+                    FROM Deities
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+                
+                religious_orders = await conn.fetch("""
+                    SELECT id, name, order_type, description, gender_composition
+                    FROM ReligiousOrders
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+        
+        pantheon_data = dict(pantheon)
+        deity_data = [dict(d) for d in deities]
+        order_data = [dict(o) for o in religious_orders]
+        
+        if not order_data or len(order_data) < 2:
+            # Create theological schools of thought if none exist
+            theological_positions = await self._generate_theological_positions(
+                run_ctx, pantheon_data, deity_data, dispute_topic
+            )
+        else:
+            # Use existing religious orders as dispute participants
+            theological_positions = await self._assign_theological_positions(
+                run_ctx, order_data, dispute_topic
+            )
+        
+        # Create theological debate agents
+        debate_agents = []
+        for position in theological_positions:
+            agent = Agent(
+                name=f"{position['name']}Agent",
+                instructions=f"You represent {position['name']}, holding this theological position: {position['core_belief']}. Defend your interpretation using scripture and tradition.",
+                model="o3-mini",
+                model_settings=ModelSettings(temperature=0.9)
+            )
+            debate_agents.append({"agent": agent, "position": position})
+        
+        # Create a theological arbiter agent
+        arbiter_agent = Agent(
+            name="TheologicalArbiterAgent",
+            instructions=f"You are a senior religious authority in the pantheon of {pantheon_data['name']}. Your role is to evaluate theological arguments and determine their validity within tradition.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+        
+        # Simulate the dispute
+        dispute_simulation = TheologicalDispute(
+            debate_agents,
+            arbiter_agent,
+            pantheon_data,
+            dispute_topic,
+            max_rounds=3
+        )
+        
+        dispute_results = await dispute_simulation.run(run_ctx.context)
+        
+        # Record the dispute outcome
+        dispute_id = await self._record_theological_dispute(
+            pantheon_id, dispute_topic, theological_positions, dispute_results
+        )
+        
+        return {
+            "dispute_id": dispute_id,
+            "topic": dispute_topic,
+            "positions": theological_positions,
+            "rounds": dispute_results["rounds"],
+            "conclusion": dispute_results["conclusion"],
+            "religious_implications": dispute_results["implications"]
+        }
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_religion_from_culture",
+        action_description="Evolving religion based on cultural interactions",
+        id_from_context=lambda ctx: "religion_manager"
+    )
+    async def evolve_religion_from_culture(self, ctx, pantheon_id: int, nation_id: int, years: int = 50) -> Dict[str, Any]:
+        """Evolve a religion based on its interaction with a culture over time."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon and nation data
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheon = await conn.fetchrow("""
+                    SELECT * FROM Pantheons WHERE id = $1
+                """, pantheon_id)
+                
+                nation = await conn.fetchrow("""
+                    SELECT * FROM Nations WHERE id = $1
+                """, nation_id)
+                
+                if not pantheon or not nation:
+                    return {"error": "Pantheon or nation not found"}
+                
+                # Get cultural elements
+                culture_elements = await conn.fetch("""
+                    SELECT * FROM CulturalElements 
+                    WHERE $1 = ANY(practiced_by)
+                """, nation["name"])
+        
+        pantheon_data = dict(pantheon)
+        nation_data = dict(nation)
+        cultural_data = [dict(c) for c in culture_elements]
+        
+        # Create religious evolution agent
+        evolution_agent = Agent(
+            name="ReligiousEvolutionAgent",
+            instructions="You simulate how religion evolves through cultural influence over decades or centuries. Maintain matriarchal themes.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        prompt = f"""
+        Simulate how the religion of {pantheon_data['name']} evolves over {years} years
+        through interaction with the culture of {nation_data['name']}.
+        
+        PANTHEON:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        NATION:
+        {json.dumps(nation_data, indent=2)}
+        
+        CULTURAL ELEMENTS:
+        {json.dumps(cultural_data, indent=2)}
+        
+        Determine:
+        1. How rituals change
+        2. New interpretations of deities
+        3. Modified cultural practices
+        4. Syncretic elements that emerge
+        5. New religious roles or hierarchies
+        
+        Return detailed JSON with these changes, ensuring a matriarchal framework remains.
+        """
+        
+        result = await Runner.run(evolution_agent, prompt, context=run_ctx.context)
+        try:
+            evolution_data = json.loads(result.final_output)
+            
+            # Apply the religious evolution
+            await self._apply_religious_evolution(
+                pantheon_id, nation_id, evolution_data
+            )
+            
+            return {
+                "pantheon_id": pantheon_id,
+                "nation_id": nation_id,
+                "years_simulated": years,
+                "evolution_results": evolution_data
+            }
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse evolution data", "raw_output": result.final_output}    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_sectarian_development",
+        action_description="Creating sectarian development with divergent beliefs",
+        id_from_context=lambda ctx: "religion_manager"
+    )
+    async def generate_sectarian_development(self, ctx, pantheon_id: int, trigger_event: str) -> Dict[str, Any]:
+        """Generate a sectarian split within a religion based on a triggering event."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon data and religious orders
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheon = await conn.fetchrow("""
+                    SELECT * FROM Pantheons WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return {"error": "Pantheon not found"}
+                
+                religious_orders = await conn.fetch("""
+                    SELECT * FROM ReligiousOrders
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+                
+                religious_texts = await conn.fetch("""
+                    SELECT * FROM ReligiousTexts
+                    WHERE pantheon_id = $1
+                """, pantheon_id)
+        
+        pantheon_data = dict(pantheon)
+        order_data = [dict(o) for o in religious_orders]
+        text_data = [dict(t) for t in religious_texts]
+        
+        # Create sectarian development agents with divergent instructions
+        orthodox_agent = Agent(
+            name="OrthodoxSectAgent",
+            instructions=f"You represent the orthodox tradition of {pantheon_data['name']}. You value tradition, established hierarchy, and literal interpretation of sacred texts. Strongly matriarchal.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        reformist_agent = Agent(
+            name="ReformistSectAgent",
+            instructions=f"You represent a reformist movement within {pantheon_data['name']}. You seek to adapt traditions while maintaining core beliefs. Still matriarchal but more flexible.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        mystic_agent = Agent(
+            name="MysticSectAgent",
+            instructions=f"You represent a mystic tradition within {pantheon_data['name']}. You focus on direct divine experience over dogma. Strongly feminine-focused spirituality.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Generate sectarian responses to the trigger event
+        orthodox_prompt = f"""
+        As the orthodox tradition of {pantheon_data['name']}, respond to this event:
+        {trigger_event}
+        
+        PANTHEON DETAILS:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        RELIGIOUS TEXTS:
+        {json.dumps(text_data, indent=2)}
+        
+        Explain your interpretation of this event, what it means for the faith,
+        and how believers should respond. Return JSON with:
+        - sect_name
+        - interpretation
+        - doctrinal_position
+        - prescribed_practices
+        - view_of_other_sects
+        """
+        
+        reformist_prompt = f"""
+        As a reformist movement within {pantheon_data['name']}, respond to this event:
+        {trigger_event}
+        
+        PANTHEON DETAILS:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        RELIGIOUS TEXTS:
+        {json.dumps(text_data, indent=2)}
+        
+        Explain your interpretation of this event, what it means for the faith,
+        and how believers should respond. Return JSON with:
+        - sect_name
+        - interpretation
+        - doctrinal_position
+        - prescribed_practices
+        - view_of_other_sects
+        """
+        
+        mystic_prompt = f"""
+        As a mystic tradition within {pantheon_data['name']}, respond to this event:
+        {trigger_event}
+        
+        PANTHEON DETAILS:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        RELIGIOUS TEXTS:
+        {json.dumps(text_data, indent=2)}
+        
+        Explain your interpretation of this event, what it means for the faith,
+        and how believers should respond. Return JSON with:
+        - sect_name
+        - interpretation
+        - doctrinal_position
+        - prescribed_practices
+        - view_of_other_sects
+        """
+        
+        orthodox_result = await Runner.run(orthodox_agent, orthodox_prompt, context=run_ctx.context)
+        reformist_result = await Runner.run(reformist_agent, reformist_prompt, context=run_ctx.context)
+        mystic_result = await Runner.run(mystic_agent, mystic_prompt, context=run_ctx.context)
+        
+        try:
+            orthodox_data = json.loads(orthodox_result.final_output)
+            reformist_data = json.loads(reformist_result.final_output)
+            mystic_data = json.loads(mystic_result.final_output)
+            
+            sects = [orthodox_data, reformist_data, mystic_data]
+            
+            # Record the sectarian development
+            for sect in sects:
+                await self._create_religious_sect(pantheon_id, sect, trigger_event)
+            
+            return {
+                "pantheon_id": pantheon_id,
+                "trigger_event": trigger_event,
+                "sects": sects
+            }
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse sectarian data"}
+
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_nation_religion",
         action_description="Getting religious info for nation {nation_id}",
         id_from_context=lambda ctx: "religion_manager"
@@ -1640,3 +1952,105 @@ class ReligionManager(BaseLoreManager):
             priority=DirectivePriority.MEDIUM
         )
         logger.info(f"ReligionManager registered with governance for user {self.user_id}, conversation {self.conversation_id}")
+
+class RitualComponent(BaseModel):
+    """Model for a component of a religious ritual."""
+    name: str
+    description: str
+    purpose: str
+    participants: List[str]
+    required_items: List[str]
+    symbolic_meaning: str
+
+class CompleteRitual(BaseModel):
+    """Model for a complete religious ritual."""
+    name: str
+    purpose: str
+    occasion: str
+    duration: str
+    preparation: str
+    components: List[RitualComponent]
+    variations: Dict[str, str]
+    restrictions: List[str]
+    theological_significance: str
+
+@with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_ritual",
+    action_description="Generating detailed religious ritual with structured outputs",
+    id_from_context=lambda ctx: "religion_manager"
+)
+async def generate_ritual(
+    self, 
+    ctx, 
+    pantheon_id: int, 
+    deity_id: Optional[int] = None,
+    purpose: str = "blessing",
+    formality_level: int = 5
+) -> Dict[str, Any]:
+    """Generate a detailed religious ritual with structured outputs."""
+    run_ctx = RunContextWrapper(context=ctx.context)
+    
+    # Get pantheon and deity data
+    async with self.get_connection_pool() as pool:
+        async with pool.acquire() as conn:
+            pantheon = await conn.fetchrow("""
+                SELECT * FROM Pantheons WHERE id = $1
+            """, pantheon_id)
+            
+            if not pantheon:
+                return {"error": "Pantheon not found"}
+            
+            deity = None
+            if deity_id:
+                deity = await conn.fetchrow("""
+                    SELECT * FROM Deities WHERE id = $1 AND pantheon_id = $2
+                """, deity_id, pantheon_id)
+            
+            # Get existing practices for context
+            practices = await conn.fetch("""
+                SELECT * FROM ReligiousPractices
+                WHERE pantheon_id = $1
+                LIMIT 5
+            """, pantheon_id)
+    
+    pantheon_data = dict(pantheon)
+    deity_data = dict(deity) if deity else None
+    practice_data = [dict(p) for p in practices]
+    
+    # Create ritual generation agent
+    ritual_agent = Agent(
+        name="RitualGenerationAgent",
+        instructions="You create detailed religious rituals for matriarchal fantasy religions. Focus on symbolism, required components, and theological significance.",
+        model="o3-mini",
+        model_settings=ModelSettings(temperature=0.9),
+        output_type=CompleteRitual
+    )
+    
+    prompt = f"""
+    Generate a detailed {purpose} ritual for the religion of {pantheon_data['name']}.
+    
+    PANTHEON:
+    {json.dumps(pantheon_data, indent=2)}
+    
+    {f'DEITY:\n{json.dumps(deity_data, indent=2)}' if deity_data else ''}
+    
+    FORMALITY LEVEL: {formality_level}/10
+    
+    EXISTING PRACTICES:
+    {json.dumps(practice_data, indent=2)}
+    
+    Create a CompleteRitual object with detailed components, ensuring it reflects
+    matriarchal power structures and feminine divine authority.
+    """
+    
+    result = await Runner.run(ritual_agent, prompt, context=run_ctx.context)
+    ritual_data = result.final_output
+    
+    # Store the ritual in the database
+    ritual_id = await self._store_ritual(pantheon_id, deity_id, ritual_data)
+    
+    ritual_dict = ritual_data.dict()
+    ritual_dict["id"] = ritual_id
+    
+    return ritual_dict
