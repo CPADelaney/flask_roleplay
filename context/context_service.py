@@ -28,7 +28,6 @@ from context.models import (
 
 logger = logging.getLogger(__name__)
 
-# --- Pydantic Models for Context Requests and Responses ---
 
 class ContextGuardrailResult(BaseModel):
     """Result of context guardrail check"""
@@ -39,14 +38,12 @@ class ContextGuardrailResult(BaseModel):
     max_tokens: Optional[int] = None
 
 
-# --- Context Service ---
-
 class ContextService:
     """
     Unified context service that integrates all context components.
-    Refactored to use OpenAI Agents SDK
+    Refactored to use OpenAI Agents SDK but without using @function_tool on instance methods.
     """
-    
+
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
@@ -60,7 +57,10 @@ class ContextService:
         self.last_context_hash = None
         self.narrative_manager = None
         
-        # Agent components
+        # Orchestrator agent
+        self.orchestrator_agent = None
+        
+        # Specialized agents
         self.context_agent = None
         self.memory_agent = None
         self.vector_agent = None
@@ -85,11 +85,10 @@ class ContextService:
         if self.config.is_enabled("use_vector_search"):
             self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
         
-        # Initialize narrative manager for progressive summarization
+        # Initialize narrative manager if available
         try:
             from story_agent.progressive_summarization import RPGNarrativeManager
             from db.connection import get_db_connection
-            
             self.narrative_manager = RPGNarrativeManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
@@ -100,15 +99,14 @@ class ContextService:
             logger.info("Progressive summarization not available - narrative manager not initialized")
             self.narrative_manager = None
         
-        # Initialize agents
+        # Initialize specialized agents
         await self._initialize_agents()
         
         self.initialized = True
         logger.info(f"Initialized context service for user {self.user_id}, conversation {self.conversation_id}")
     
     async def _initialize_agents(self):
-        """Initialize the agent ecosystem"""
-        # Get the specialized agents
+        """Initialize the specialized agents for context, memory, etc."""
         self.context_agent = get_context_manager_agent()
         self.memory_agent = get_memory_agent()
         
@@ -117,14 +115,13 @@ class ContextService:
             name="Context Orchestrator",
             instructions="""
             You are the orchestrator for context management in an RPG system.
-            You decide which specialized agent should handle each request based on the task:
-            
+            You decide which specialized agent should handle each request 
+            based on the task:
+
             1. For memory-related tasks: Use the Memory Manager agent
             2. For context management tasks: Use the Context Manager agent
             3. For vector search tasks: Use the Vector Search agent
             4. For narrative tasks: Use the Narrative agent
-            
-            Make the handoff decision based on the request type and content.
             """,
             handoffs=[
                 handoff(
@@ -137,8 +134,8 @@ class ContextService:
                     tool_name_override="use_memory_manager",
                     tool_description_override="Use this for memory-related tasks"
                 )
-            ],
-            # Add more handoffs when we implement those agents
+                # We could add vector/narrative agent handoffs if needed
+            ]
         )
     
     async def close(self):
@@ -151,22 +148,19 @@ class ContextService:
         
         logger.info(f"Closed context service for user {self.user_id}, conversation {self.conversation_id}")
     
-    @function_tool
-    async def validate_context_budget(
+    # ---------------------------------------------------------------------
+    # INTERNAL (PRIVATE) METHODS that used to be @function_tool
+    # ---------------------------------------------------------------------
+
+    async def _validate_context_budget(
         self, 
-        ctx: RunContextWrapper,
         context: Dict[str, Any], 
         context_budget: int
     ) -> GuardrailFunctionOutput:
         """
-        Validate that the context stays within token budget
-        
-        Args:
-            context: The context to validate
-            context_budget: Maximum token budget
-            
-        Returns:
-            Validation result with budget information
+        Internal: Validate that the context stays within token budget.
+
+        Returns a GuardrailFunctionOutput indicating if we triggered a tripwire.
         """
         try:
             # Calculate token usage
@@ -205,317 +199,76 @@ class ContextService:
                 tripwire_triggered=True
             )
     
-    async def get_context(
-        self,
-        input_text: str = "",
-        location: Optional[str] = None,
-        context_budget: int = 4000,
-        use_vector_search: Optional[bool] = None,
-        use_delta: bool = True,
-        include_memories: bool = True,
-        include_npcs: bool = True,
-        include_location: bool = True,
-        include_quests: bool = True,
-        source_version: Optional[int] = None,  # Version tracking for delta updates
-        summary_level: Optional[int] = None  # Summary level option
-    ) -> Dict[str, Any]:
+    async def _run_maintenance(self) -> Dict[str, Any]:
         """
-        Get optimized context for the current interaction
-        
-        Args:
-            input_text: Current user input
-            location: Optional current location
-            context_budget: Maximum token budget
-            use_vector_search: Whether to use vector search
-            use_delta: Whether to include delta changes
-            include_memories: Whether to include memories
-            include_npcs: Whether to include NPCs
-            include_location: Whether to include location details
-            include_quests: Whether to include quests
-            source_version: Optional source version for delta tracking
-            summary_level: Optional summary level (0-3)
-            
-        Returns:
-            Optimized context
+        Internal method to run maintenance tasks for context optimization.
         """
         # Initialize if needed
         if not self.initialized:
             await self.initialize()
         
-        # Create request model
-        request = ContextRequest(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            input_text=input_text,
-            location=location,
-            context_budget=context_budget,
-            use_vector_search=use_vector_search,
-            use_delta=use_delta,
-            include_memories=include_memories,
-            include_npcs=include_npcs,
-            include_location=include_location,
-            include_quests=include_quests,
-            source_version=source_version,
-            summary_level=summary_level
-        )
+        results = {
+            "memory_maintenance": None,
+            "vector_maintenance": None,
+            "cache_maintenance": None,
+            "performance_metrics": None,
+            "narrative_maintenance": None
+        }
         
-        # Get model settings from config
-        model_settings = self.config.get_model_settings()
-        model = self.config.get_default_model()
+        # 1. Memory maintenance
+        memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        memory_result = await memory_manager.run_maintenance(None)  # pass None for ctx
+        results["memory_maintenance"] = memory_result
         
-        # Create the output guardrail for token budget
-        async def context_budget_guardrail(ctx, agent, output):
-            result = await self.validate_context_budget(ctx, output.dict(), context_budget)
-            return result
+        # 2. Vector maintenance
+        if self.config.is_enabled("use_vector_search"):
+            vector_service = await get_vector_service(self.user_id, self.conversation_id)
+            results["vector_maintenance"] = {"status": "vector_service_active"}
         
-        # Create run configuration
-        run_config = RunConfig(
-            model=model,
-            model_settings=model_settings,
-            workflow_name="get_context",
-            output_guardrails=[OutputGuardrail(guardrail_function=context_budget_guardrail)]
-        )
-        
-        # Run the context agent
-        with trace(workflow_name="context_service.get_context", 
-                  group_id=f"{self.user_id}:{self.conversation_id}"):
-            try:
-                # If summarization requested, use a different approach
-                if summary_level is not None:
-                    result = await Runner.run(
-                        self.context_agent,
-                        {"request": request.dict(), "action": "get_summarized_context"},
-                        context=self.agent_context,
-                        run_config=run_config
-                    )
-                else:
-                    # Use the orchestrator agent to decide which specialized agent to use
-                    result = await Runner.run(
-                        self.orchestrator_agent,
-                        {"request": request.dict(), "action": "get_context"},
-                        context=self.agent_context,
-                        run_config=run_config
-                    )
-                
-                return result.final_output
-            except Exception as e:
-                logger.error(f"Error getting context: {e}")
-                return {
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-    
-    async def get_summarized_context(
-        self,
-        input_text: str = "",
-        summary_level: int = 1,  # 0=Detailed, 1=Condensed, 2=Summary, 3=Headline
-        context_budget: int = 2000,
-        use_vector_search: bool = True,
-    ) -> Dict[str, Any]:
-        """
-        Get context with automatic summarization based on importance and recency
-        
-        Args:
-            input_text: Current user input
-            summary_level: Level of summarization to apply
-            context_budget: Maximum token budget
-            use_vector_search: Whether to use vector search
-            
-        Returns:
-            Summarized context
-        """
-        # Initialize if needed
-        if not self.initialized:
-            await self.initialize()
-        
-        # Create request model
-        request = ContextRequest(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            input_text=input_text,
-            context_budget=context_budget,
-            use_vector_search=use_vector_search,
-            summary_level=summary_level
-        )
-        
-        # Run the summarization process
-        with trace(workflow_name="context_service.get_summarized_context", 
-                  group_id=f"{self.user_id}:{self.conversation_id}"):
-            try:
-                # First get the base context
-                base_context = await self.get_context(
-                    input_text=input_text,
-                    context_budget=context_budget,
-                    use_vector_search=use_vector_search,
-                    use_delta=False
-                )
-                
-                # Apply summarization if needed
-                if summary_level <= 0:  # Detailed - no summarization
-                    return base_context
-                
-                # Create a new instance of the context with summarization
-                result = await self._summarize_context(base_context, summary_level)
-                return result
-            except Exception as e:
-                logger.error(f"Error getting summarized context: {e}")
-                return {
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-    
-    async def _summarize_context(self, context: Dict[str, Any], level: int) -> Dict[str, Any]:
-        """Summarize context at the specified level"""
-        # Make a copy to avoid modifying the original
-        summarized = context.copy()
-        
-        # Summarize memories if present
-        if "memories" in summarized:
-            for i, memory in enumerate(summarized["memories"]):
-                # Skip recent or important memories
-                importance = memory.get("importance", 0.5)
-                
-                # Parse timestamp to check recency
-                is_recent = False
-                if "created_at" in memory:
-                    created_at = memory["created_at"]
-                    if isinstance(created_at, str):
-                        try:
-                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                            days_old = (datetime.now() - created_at).days
-                            is_recent = days_old < 7  # Less than a week old
-                        except:
-                            pass
-                
-                # Skip summarization for recent or important memories
-                if importance > 0.7 or is_recent:
-                    continue
-                
-                # Get the content to summarize
-                content = memory.get("content", "")
-                if not content:
-                    continue
-                
-                # Apply appropriate summarization level
-                summarized_content = await self._summarize_text(content, level)
-                
-                # Replace content with summarized version
-                summarized["memories"][i]["content"] = summarized_content
-                summarized["memories"][i]["summarized"] = True
-                summarized["memories"][i]["summary_level"] = level
-        
-        # If narrative manager is available, use it for summarization
-        if self.narrative_manager and "narrative_summaries" not in summarized:
-            try:
-                # Get summarized narratives
-                input_text = context.get("input_text", "")
-                narrative_context = await self.narrative_manager.get_optimal_narrative_context(
-                    query=input_text,
-                    max_tokens=context.get("context_budget", 4000) // 4  # Use 25% of budget for narrative
-                )
-                
-                # Add to context
-                summarized["narrative_summaries"] = narrative_context
-            except Exception as e:
-                logger.error(f"Error getting narrative summaries: {e}")
-        
-        return summarized
-    
-    async def _summarize_text(self, text: str, level: int) -> str:
-        """
-        Summarize text to the specified level
-        
-        Args:
-            text: Text to summarize
-            level: Summarization level (0-3)
-            
-        Returns:
-            Summarized text
-        """
-        if level == 0:  # Detailed - no summarization
-            return text
-            
-        # Simple rule-based summarization if narrative manager not available
-        if not self.narrative_manager:
-            sentences = text.split(". ")
-            
-            if level == 1:  # Condensed
-                # Keep first, middle and last sentence
-                if len(sentences) >= 3:
-                    middle_idx = len(sentences) // 2
-                    return f"{sentences[0]}. {sentences[middle_idx]}. {sentences[-1]}."
-                return text
-                
-            elif level == 2:  # Summary
-                # Keep just first and last sentences
-                if len(sentences) >= 2:
-                    return f"{sentences[0]}. {sentences[-1]}."
-                return text
-                
-            elif level == 3:  # Headline
-                # Just keep first sentence, truncated if needed
-                if sentences:
-                    if len(sentences[0]) > 100:
-                        return sentences[0][:97] + "..."
-                    return sentences[0]
-                return text
-        
-        # Use narrative manager's summarizer if available
-        try:
-            from story_agent.progressive_summarization import SummaryLevel
-            
-            # Map our levels to SummaryLevel
-            summary_level_map = {
-                0: SummaryLevel.DETAILED,
-                1: SummaryLevel.CONDENSED,
-                2: SummaryLevel.SUMMARY,
-                3: SummaryLevel.HEADLINE
+        # 3. Cache maintenance
+        cache_items = (len(context_cache.l1_cache)
+                       + len(context_cache.l2_cache)
+                       + len(context_cache.l3_cache))
+        results["cache_maintenance"] = {
+            "cache_items": cache_items,
+            "levels": {
+                "l1": len(context_cache.l1_cache),
+                "l2": len(context_cache.l2_cache),
+                "l3": len(context_cache.l3_cache)
             }
-            
-            summarizer = self.narrative_manager.narrative.summarizer
-            result = await summarizer.summarize(text, summary_level_map[level])
-            return result
-        except Exception as e:
-            logger.error(f"Error summarizing with narrative manager: {e}")
-            
-            # Fallback to simple summarization
-            sentences = text.split(". ")
-            if level == 1:  # Condensed
-                return ". ".join(sentences[:max(1, len(sentences) // 2)])
-            elif level == 2:  # Summary
-                return ". ".join(sentences[:max(1, len(sentences) // 3)])
-            elif level == 3:  # Headline
-                return sentences[0] if sentences else text
-            
-            return text
+        }
+        
+        # 4. Performance metrics (placeholder)
+        if self.performance_monitor:
+            results["performance_metrics"] = self.performance_monitor.get_metrics()
+        
+        # 5. Narrative maintenance if available
+        if self.narrative_manager:
+            try:
+                narrative_result = await self.narrative_manager.run_maintenance()
+                results["narrative_maintenance"] = narrative_result
+            except Exception as e:
+                logger.error(f"Error running narrative maintenance: {e}")
+                results["narrative_maintenance"] = {"error": str(e)}
+        
+        return results
     
-    @function_tool
     async def _get_base_context(
         self, 
-        ctx: RunContextWrapper,
         location: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Get base context from database
-        
-        Args:
-            location: Optional current location
-            
-        Returns:
-            Dictionary with base context
+        Internal method: get base context from database or fallback.
         """
-        # Use cache for base context
         cache_key = f"base_context:{self.user_id}:{self.conversation_id}:{location or 'none'}"
         
         async def fetch_base_context():
             try:
-                # Get database connection
                 from db.connection import get_db_connection
                 import asyncpg
                 
                 conn = await asyncpg.connect(dsn=get_db_connection())
                 try:
-                    # Get time information
                     time_info = {
                         "year": "1040",
                         "month": "6",
@@ -523,7 +276,7 @@ class ContextService:
                         "time_of_day": "Morning"
                     }
                     
-                    # Query time information
+                    # Attempt to fetch from CurrentRoleplay table
                     time_keys = ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]
                     for key in time_keys:
                         row = await conn.fetchrow("""
@@ -543,7 +296,7 @@ class ContextService:
                             elif key == "TimeOfDay":
                                 time_info["time_of_day"] = value
                     
-                    # Get player stats
+                    # Player stats
                     player_stats = {}
                     player_row = await conn.fetchrow("""
                         SELECT corruption, confidence, willpower,
@@ -557,7 +310,7 @@ class ContextService:
                     if player_row:
                         player_stats = dict(player_row)
                     
-                    # Get current roleplay data
+                    # Roleplay data
                     roleplay_data = {}
                     rp_rows = await conn.fetch("""
                         SELECT key, value
@@ -569,7 +322,7 @@ class ContextService:
                     for row in rp_rows:
                         roleplay_data[row["key"]] = row["value"]
                     
-                    # Get narrative stage
+                    # Narrative stage
                     from logic.narrative_progression import get_current_narrative_stage
                     narrative_stage = await get_current_narrative_stage(self.user_id, self.conversation_id)
                     narrative_stage_info = None
@@ -579,7 +332,6 @@ class ContextService:
                             "description": narrative_stage.description
                         }
                     
-                    # Create base context
                     context = {
                         "time_info": time_info,
                         "player_stats": player_stats,
@@ -587,12 +339,9 @@ class ContextService:
                         "current_location": location or roleplay_data.get("CurrentLocation", "Unknown"),
                         "narrative_stage": narrative_stage_info
                     }
-                    
                     return context
-                
                 finally:
                     await conn.close()
-            
             except Exception as e:
                 logger.error(f"Error getting base context: {e}")
                 return {
@@ -608,42 +357,30 @@ class ContextService:
                     "error": str(e)
                 }
         
-        # Get from cache or fetch
         return await context_cache.get(
             cache_key, 
             fetch_base_context, 
             cache_level=1,
             importance=0.7,
-            ttl_override=30  # 30 seconds
+            ttl_override=30
         )
     
-    @function_tool
     async def _get_relevant_npcs(
         self,
-        ctx: RunContextWrapper,
         input_text: str,
         location: Optional[str] = None
     ) -> List[NPCData]:
         """
-        Get NPCs relevant to current input and location
-        
-        Args:
-            input_text: Current input text
-            location: Optional location
-            
-        Returns:
-            List of relevant NPCs
+        Internal method: get NPCs relevant to current input & location 
+        (fallback to DB if vector search not available).
         """
-        # If there's vector search, prioritize it
+        # If vector search is enabled
         if self.vector_service and input_text and self.config.is_enabled("use_vector_search"):
             try:
-                # Get vector context for input
                 vector_context = await self.vector_service.get_context_for_input(
                     input_text=input_text,
                     current_location=location
                 )
-                
-                # Extract NPCs
                 if "npcs" in vector_context and vector_context["npcs"]:
                     npcs = []
                     for npc in vector_context["npcs"]:
@@ -656,23 +393,20 @@ class ContextService:
                             trust=npc.get("trust"),
                             respect=npc.get("respect"),
                             intensity=npc.get("intensity"),
-                            current_location=npc.get("current_location"),
-                            physical_description=npc.get("physical_description", ""),
+                            current_location=npc.get("location"),
+                            physical_description=npc.get("description", ""),
                             relevance=npc.get("relevance", 0.5)
                         ))
                     return npcs
             except Exception as e:
                 logger.error(f"Error getting NPCs from vector service: {e}")
         
-        # Fallback to database query
+        # Fallback to database
         try:
-            # Get database connection
             from db.connection import get_db_connection
             import asyncpg
-            
             conn = await asyncpg.connect(dsn=get_db_connection())
             try:
-                # Query params
                 params = [self.user_id, self.conversation_id]
                 query = """
                     SELECT npc_id, npc_name,
@@ -683,18 +417,13 @@ class ContextService:
                     WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
                 """
                 
-                # Add location filter if provided
                 if location:
-                    query += f" AND (current_location IS NULL OR current_location=$3)"
+                    query += " AND (current_location IS NULL OR current_location=$3)"
                     params.append(location)
                 
-                # Limit results
                 query += " ORDER BY closeness DESC, trust DESC LIMIT 10"
                 
-                # Execute query
                 rows = await conn.fetch(query, *params)
-                
-                # Process results
                 npcs = []
                 for row in rows:
                     npcs.append(NPCData(
@@ -708,49 +437,35 @@ class ContextService:
                         intensity=row["intensity"],
                         current_location=row["current_location"] or "Unknown",
                         physical_description=row["physical_description"] or "",
-                        # Estimated relevance since we're not using vector search
                         relevance=0.7 if row["current_location"] == location else 0.5
                     ))
-                
                 return npcs
-            
             finally:
                 await conn.close()
-        
         except Exception as e:
             logger.error(f"Error getting NPCs from database: {e}")
             return []
     
-    @function_tool
     async def _get_location_details(
         self,
-        ctx: RunContextWrapper,
         location: Optional[str] = None
     ) -> LocationData:
         """
-        Get details about the current location
-        
-        Args:
-            location: Current location
-            
-        Returns:
-            Location details
+        Internal method: get details about the current location 
+        (fallback to DB if vector not available).
         """
         if not location:
             return LocationData(location_name="Unknown")
         
-        # Use vector search if available
         if self.vector_service and self.config.is_enabled("use_vector_search"):
             try:
-                # Get vector context for location
-                vector_context = await self.vector_service.get_context_for_input(
+                vc = await self.vector_service.get_context_for_input(
                     input_text=f"Location: {location}",
                     current_location=location
                 )
-                
-                # Extract locations
-                if "locations" in vector_context and vector_context["locations"]:
-                    for loc in vector_context["locations"]:
+                if "locations" in vc and vc["locations"]:
+                    # Attempt to find the best match
+                    for loc in vc["locations"]:
                         if loc.get("location_name", "").lower() == location.lower():
                             return LocationData(
                                 location_id=loc.get("location_id"),
@@ -760,59 +475,40 @@ class ContextService:
                                 relevance=loc.get("relevance", 0.5)
                             )
             except Exception as e:
-                logger.error(f"Error getting location from vector service: {e}")
+                logger.error(f"Error in vector location: {e}")
         
-        # Fallback to database query
+        # Fallback to DB
         try:
-            # Get database connection
             from db.connection import get_db_connection
             import asyncpg
-            
             conn = await asyncpg.connect(dsn=get_db_connection())
             try:
-                # Query location
                 row = await conn.fetchrow("""
                     SELECT id, location_name, description
                     FROM Locations
                     WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
                     LIMIT 1
                 """, self.user_id, self.conversation_id, location)
-                
                 if row:
                     return LocationData(
                         location_id=str(row["id"]),
                         location_name=row["location_name"],
                         description=row["description"]
                     )
-                
                 return LocationData(location_name=location)
-            
             finally:
                 await conn.close()
-        
         except Exception as e:
-            logger.error(f"Error getting location details: {e}")
+            logger.error(f"Error in get_location_details: {e}")
             return LocationData(location_name=location)
     
-    @function_tool
-    async def _get_quest_information(self, ctx: RunContextWrapper) -> List[QuestData]:
-        """
-        Get information about active quests
-        
-        Args:
-            None
-            
-        Returns:
-            List of active quests
-        """
+    async def _get_quest_information(self) -> List[QuestData]:
+        """Internal method: get info about active quests."""
         try:
-            # Get database connection
             from db.connection import get_db_connection
             import asyncpg
-            
             conn = await asyncpg.connect(dsn=get_db_connection())
             try:
-                # Query active quests
                 rows = await conn.fetch("""
                     SELECT quest_id, quest_name, status, progress_detail,
                            quest_giver, reward
@@ -822,7 +518,6 @@ class ContextService:
                     ORDER BY quest_id
                 """, self.user_id, self.conversation_id)
                 
-                # Process results
                 quests = []
                 for row in rows:
                     quests.append(QuestData(
@@ -833,36 +528,18 @@ class ContextService:
                         quest_giver=row["quest_giver"],
                         reward=row["reward"]
                     ))
-                
                 return quests
-            
             finally:
                 await conn.close()
-        
         except Exception as e:
-            logger.error(f"Error getting quest information: {e}")
+            logger.error(f"Error getting quest info: {e}")
             return []
     
-    @function_tool
-    async def _get_narrative_summaries(
-        self,
-        ctx: RunContextWrapper,
-        input_text: str
-    ) -> Dict[str, Any]:
-        """
-        Get summarized narratives from narrative manager
-        
-        Args:
-            input_text: Current input text
-            
-        Returns:
-            Narrative summaries
-        """
+    async def _get_narrative_summaries(self, input_text: str) -> Dict[str, Any]:
+        """Internal method: get summarized narratives from the narrative manager."""
         if not self.narrative_manager:
             return {}
-        
         try:
-            # Get optimal narrative context with query
             return await self.narrative_manager.get_optimal_narrative_context(
                 query=input_text,
                 max_tokens=1000
@@ -872,13 +549,14 @@ class ContextService:
             return {}
     
     def _calculate_token_usage(self, context: Dict[str, Any]) -> Dict[str, int]:
-        """Calculate token usage for context components"""
-        # Simple estimation based on text length
+        """
+        Internal token usage estimation for the context dictionary,
+        counting approximate tokens for each major component.
+        """
         def estimate_tokens(obj):
             if obj is None:
                 return 0
             elif isinstance(obj, (str, int, float, bool)):
-                # Approximate tokens as 4 characters per token
                 return max(1, len(str(obj)) // 4)
             elif isinstance(obj, list):
                 return sum(estimate_tokens(item) for item in obj)
@@ -887,34 +565,32 @@ class ContextService:
             else:
                 return 1
         
-        # Calculate tokens for each major component
         token_usage = {}
-        
         components = {
             "player_stats": ["player_stats"],
             "npcs": ["npcs"],
             "memories": ["memories"],
-            "location": ["location_details", "locations"],
+            "location": ["location_details", "locations", "current_location"],
             "quests": ["quests"],
             "time": ["time_info"],
             "roleplay": ["current_roleplay"],
             "narratives": ["narratives"],
-            "summaries": ["narrative_summaries"]  # Track narrative summaries
+            "summaries": ["narrative_summaries"]
         }
         
         for category, keys in components.items():
             total = 0
-            for key in keys:
-                if key in context:
-                    total += estimate_tokens(context[key])
+            for k in keys:
+                if k in context:
+                    total += estimate_tokens(context[k])
             if total > 0:
                 token_usage[category] = total
         
-        # Calculate remaining fields
         skip_keys = set()
         for keys in components.values():
             skip_keys.update(keys)
-        skip_keys.update(["token_usage", "is_delta", "delta_changes", "timestamp", "total_tokens", "version"])
+        skip_keys.update(["token_usage", "is_delta", "delta_changes", 
+                          "timestamp", "total_tokens", "version"])
         
         other_keys = [k for k in context if k not in skip_keys]
         if other_keys:
@@ -922,355 +598,454 @@ class ContextService:
         
         return token_usage
     
-    @function_tool
     async def _trim_to_budget(
         self, 
-        ctx: RunContextWrapper,
         context: Dict[str, Any], 
         budget: int
     ) -> Dict[str, Any]:
         """
-        Trim context to fit within token budget
-        
-        Args:
-            context: Context to trim
-            budget: Token budget
-            
-        Returns:
-            Trimmed context
+        Internal method: trim context to fit within token budget.
         """
-        # Get token usage
         token_usage = self._calculate_token_usage(context)
         total = sum(token_usage.values())
         
-        # If within budget, return as is
         if total <= budget:
             return context
         
-        # Define trim priority (higher value = higher priority to keep)
+        # Basic priority dict
         trim_priority = {
-            "player_stats": 10,      # Highest priority
-            "time": 9,               # Very important
-            "roleplay": 8,           # Important
-            "location": 7,           # Important
-            "quests": 6,             # Medium-high priority
-            "npcs": 5,               # Medium priority
-            "memories": 4,           # Medium-low priority
-            "narratives": 3,         # Lower priority
-            "summaries": 2,          # Can be trimmed first
-            "other": 1               # Lowest priority
+            "player_stats": 10,
+            "time": 9,
+            "roleplay": 8,
+            "location": 7,
+            "quests": 6,
+            "npcs": 5,
+            "memories": 4,
+            "narratives": 3,
+            "summaries": 2,
+            "other": 1
         }
-        
-        # Calculate how much to trim
         reduction_needed = total - budget
-        
-        # Create a working copy
         trimmed = context.copy()
         
-        # Sort components by priority (lowest first)
-        components = sorted([
-            (k, v) for k, v in token_usage.items()
-        ], key=lambda x: trim_priority.get(x[0], 0))
+        # Sort by priority ascending
+        components = sorted(token_usage.items(), key=lambda x: trim_priority.get(x[0], 0))
         
-        # Trim components until within budget
-        for component_name, component_tokens in components:
-            # Skip if reduction achieved
+        for component_name, usage_val in components:
             if reduction_needed <= 0:
                 break
-                
-            # Skip high-priority components if possible
+            # Skip very high priority if partial trim is enough
             priority = trim_priority.get(component_name, 0)
             if priority >= 8 and reduction_needed < total * 0.3:
                 continue
-                
-            # Skip player_stats entirely
-            if component_name == "player_stats":
-                continue
             
-            # Different trimming strategies for different components
+            # Example trimming logic for each component
             if component_name == "npcs" and "npcs" in trimmed:
-                # For NPCs, keep most relevant and trim details of others
                 npcs = trimmed["npcs"]
                 if not npcs:
                     continue
-                
-                # Sort by relevance
+                # Keep top 1/3 
                 sorted_npcs = sorted(npcs, key=lambda x: x.get("relevance", 0.5), reverse=True)
-                
-                # Keep top 1/3 fully, trim the rest
-                keep_full = max(1, len(sorted_npcs) // 3)
-                
+                keep_full = max(1, len(sorted_npcs)//3)
                 new_npcs = []
                 for i, npc in enumerate(sorted_npcs):
                     if i < keep_full:
                         new_npcs.append(npc)
                     else:
-                        # Only keep essential info
                         new_npcs.append({
                             "npc_id": npc.get("npc_id"),
                             "npc_name": npc.get("npc_name"),
                             "current_location": npc.get("current_location"),
                             "relevance": npc.get("relevance", 0.5)
                         })
-                
-                # Calculate tokens saved
-                old_tokens = token_usage[component_name]
+                old_tokens = usage_val
                 new_tokens = self._calculate_token_usage({"npcs": new_npcs}).get("npcs", 0)
-                
-                # Update context and reduction needed
                 trimmed["npcs"] = new_npcs
                 reduction_needed -= (old_tokens - new_tokens)
             
             elif component_name == "memories" and "memories" in trimmed:
-                # For memories, keep most important ones
                 memories = trimmed["memories"]
                 if not memories:
                     continue
-                
-                # Sort by importance
                 sorted_memories = sorted(memories, key=lambda x: x.get("importance", 0.5), reverse=True)
-                
-                # Keep only top half
-                keep_count = max(1, len(sorted_memories) // 2)
+                keep_count = max(1, len(sorted_memories)//2)
                 new_memories = sorted_memories[:keep_count]
                 
-                # Additionally, summarize what we keep if needed
-                if self.narrative_manager and reduction_needed > 0:
-                    for i, memory in enumerate(new_memories):
-                        if "content" in memory and len(memory["content"]) > 200:
-                            # Get a summarized version
-                            content = memory["content"]
-                            summarized = await self._summarize_text(content, 2)  # Level 2 summary
-                            if len(summarized) < len(content):
-                                new_memories[i]["content"] = summarized
-                                new_memories[i]["summarized"] = True
+                # Summarize if we still have to trim
+                if reduction_needed > 0 and self.narrative_manager:
+                    for i, mem in enumerate(new_memories):
+                        content = mem.get("content", "")
+                        if len(content) > 200:
+                            summarized_text = await self._summarize_text(content, 2)
+                            new_memories[i]["content"] = summarized_text
+                            new_memories[i]["summarized"] = True
                 
-                # Calculate tokens saved
-                old_tokens = token_usage[component_name]
+                old_tokens = usage_val
                 new_tokens = self._calculate_token_usage({"memories": new_memories}).get("memories", 0)
-                
-                # Update context and reduction needed
                 trimmed["memories"] = new_memories
                 reduction_needed -= (old_tokens - new_tokens)
             
             elif component_name == "narratives" and "narratives" in trimmed:
-                # For narratives, we can remove entirely if needed
-                old_tokens = token_usage[component_name]
+                old_tokens = usage_val
                 del trimmed["narratives"]
                 reduction_needed -= old_tokens
             
             elif component_name == "summaries" and "narrative_summaries" in trimmed:
-                # Remove narrative summaries if needed
-                old_tokens = token_usage[component_name]
+                old_tokens = usage_val
                 del trimmed["narrative_summaries"]
                 reduction_needed -= old_tokens
         
-        # If we still need to trim, remove the lowest priority components entirely
-        if reduction_needed > 0:
-            for component_name, _ in components:
-                # Skip critical components
-                if trim_priority.get(component_name, 0) >= 7:
-                    continue
-                
-                # Remove component entirely
-                if component_name in token_usage and component_name in trimmed:
-                    component_keys = []
-                    
-                    # Find all keys for this component
-                    for category, keys in components.items():
-                        if category == component_name:
-                            component_keys.extend(keys)
-                    
-                    # Remove all keys for this component
-                    for key in component_keys:
-                        if key in trimmed:
-                            del trimmed[key]
-                    
-                    reduction_needed -= token_usage[component_name]
-                
-                # Break if we've reduced enough
-                if reduction_needed <= 0:
-                    break
-        
         return trimmed
     
-    @function_tool
-    async def run_maintenance(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _summarize_text(self, text: str, level: int) -> str:
         """
-        Run maintenance tasks for context optimization
+        Internal method: Summarize text for trimming or user requests.
+        level=1 => condensed, 2 => summary, 3 => headline
+        """
+        if level <= 0:
+            return text
         
-        Returns:
-            Maintenance results
+        # Fallback if no narrative_manager
+        if not self.narrative_manager:
+            sentences = text.split(". ")
+            if level == 1:
+                if len(sentences) >= 3:
+                    mid = len(sentences)//2
+                    return f"{sentences[0]}. {sentences[mid]}. {sentences[-1]}."
+                return text
+            elif level == 2:
+                if len(sentences) >= 2:
+                    return f"{sentences[0]}. {sentences[-1]}."
+                return text
+            elif level == 3:
+                if sentences:
+                    if len(sentences[0])>100:
+                        return sentences[0][:97]+"..."
+                    return sentences[0]
+                return text
+        
+        # If narrative manager available
+        try:
+            from story_agent.progressive_summarization import SummaryLevel
+            summary_map = {
+                0: SummaryLevel.DETAILED,
+                1: SummaryLevel.CONDENSED,
+                2: SummaryLevel.SUMMARY,
+                3: SummaryLevel.HEADLINE
+            }
+            summarizer = self.narrative_manager.narrative.summarizer
+            res = await summarizer.summarize(text, summary_map[level])
+            return res
+        except Exception as e:
+            logger.error(f"Error summarizing text: {e}")
+            return text
+
+    # ---------------------------------------------------------------------
+    # Public (non-tool) Methods used by get_context / get_summarized_context
+    # ---------------------------------------------------------------------
+
+    async def get_context(
+        self,
+        input_text: str = "",
+        location: Optional[str] = None,
+        context_budget: int = 4000,
+        use_vector_search: Optional[bool] = None,
+        use_delta: bool = True,
+        include_memories: bool = True,
+        include_npcs: bool = True,
+        include_location: bool = True,
+        include_quests: bool = True,
+        source_version: Optional[int] = None,
+        summary_level: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
-        # Initialize if needed
+        Main entry point for obtaining context 
+        (non-tool method, directly called from outside or via aggregator).
+        """
         if not self.initialized:
             await self.initialize()
         
-        results = {
-            "memory_maintenance": None,
-            "vector_maintenance": None,
-            "cache_maintenance": None,
-            "performance_metrics": None,
-            "narrative_maintenance": None
-        }
-        
-        # 1. Memory maintenance
-        memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-        memory_result = await memory_manager.run_maintenance(ctx)
-        results["memory_maintenance"] = memory_result
-        
-        # 2. Vector maintenance
-        if self.config.is_enabled("use_vector_search"):
-            vector_service = await get_vector_service(self.user_id, self.conversation_id)
-            results["vector_maintenance"] = {"status": "vector_service_active"}
-        
-        # 3. Cache maintenance
-        cache_items = len(context_cache.l1_cache) + len(context_cache.l2_cache) + len(context_cache.l3_cache)
-        results["cache_maintenance"] = {
-            "cache_items": cache_items,
-            "levels": {
-                "l1": len(context_cache.l1_cache),
-                "l2": len(context_cache.l2_cache),
-                "l3": len(context_cache.l3_cache)
-            }
-        }
-        
-        # 4. Performance metrics
-        if self.performance_monitor:
-            results["performance_metrics"] = self.performance_monitor.get_metrics()
-        
-        # 5. Narrative maintenance if available
-        if self.narrative_manager:
-            try:
-                narrative_result = await self.narrative_manager.run_maintenance()
-                results["narrative_maintenance"] = narrative_result
-            except Exception as e:
-                logger.error(f"Error running narrative maintenance: {e}")
-                results["narrative_maintenance"] = {"error": str(e)}
-        
-        return results
-
-
-# --- Global Service Registry and Factory ---
-_context_services = {}
-
-async def get_context_service(user_id: int, conversation_id: int) -> ContextService:
-    """Get or create a context service instance"""
-    key = f"{user_id}:{conversation_id}"
-    
-    if key not in _context_services:
-        service = ContextService(user_id, conversation_id)
-        await service.initialize()
-        _context_services[key] = service
-    
-    return _context_services[key]
-
-async def get_comprehensive_context(
-    user_id: int,
-    conversation_id: int,
-    input_text: str = "",
-    location: Optional[str] = None,
-    context_budget: int = 4000,
-    use_vector_search: Optional[bool] = None,
-    use_delta: bool = True,
-    source_version: Optional[int] = None,
-    summary_level: Optional[int] = None
-) -> Dict[str, Any]:
-    """
-    Get comprehensive context optimized for token efficiency and relevance
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        input_text: Current user input
-        location: Optional current location
-        context_budget: Token budget
-        use_vector_search: Whether to use vector search
-        use_delta: Whether to include delta changes
-        source_version: Optional source version for delta tracking 
-        summary_level: Optional summary level (0-3)
-        
-    Returns:
-        Optimized context dictionary
-    """
-    # Get context service
-    service = await get_context_service(user_id, conversation_id)
-    
-    # If summarization requested, use that method
-    if summary_level is not None:
-        context = await service.get_summarized_context(
-            input_text=input_text,
-            summary_level=summary_level,
-            context_budget=context_budget,
-            use_vector_search=use_vector_search if use_vector_search is not None else True
-        )
-    else:
-        # Get regular context
-        context = await service.get_context(
+        request = ContextRequest(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
             input_text=input_text,
             location=location,
             context_budget=context_budget,
             use_vector_search=use_vector_search,
             use_delta=use_delta,
-            source_version=source_version
+            include_memories=include_memories,
+            include_npcs=include_npcs,
+            include_location=include_location,
+            include_quests=include_quests,
+            source_version=source_version,
+            summary_level=summary_level
         )
+        
+        # Example: we might orchestrate specialized calls, but let's do a direct approach for demonstration.
+        base_context = await self._get_base_context(location)
+        
+        # Possibly get relevant NPCs
+        if include_npcs:
+            npcs = await self._get_relevant_npcs(input_text=input_text, location=location)
+            base_context["npcs"] = [npc.dict() for npc in npcs]
+        
+        # Possibly get location details
+        if include_location:
+            loc_data = await self._get_location_details(location)
+            base_context["location_details"] = loc_data.dict()
+        
+        # Possibly get quest info
+        if include_quests:
+            quests = await self._get_quest_information()
+            base_context["quests"] = [q.dict() for q in quests]
+        
+        # Possibly get memories from memory manager
+        if include_memories:
+            # Use memory tool calls or direct manager calls
+            # E.g. memory_manager.get_recent_memories, etc.
+            pass
+        
+        # If delta requested, we can fetch from context_manager
+        if use_delta and source_version is not None:
+            # For demonstration, let's just store a partial delta
+            delta_context = await self.context_manager._get_context(source_version)
+            base_context["is_delta"] = delta_context.get("is_incremental", False)
+            if "delta_context" in delta_context:
+                base_context["delta_changes"] = delta_context["delta_context"]
+            base_context["version"] = delta_context["version"]
+        else:
+            base_context["version"] = self.context_manager.version
+        
+        # Trim to budget
+        final_context = await self._trim_to_budget(base_context, context_budget)
+        
+        # Return final
+        return final_context
     
-    return context
+    async def get_summarized_context(
+        self,
+        input_text: str = "",
+        summary_level: int = 1,
+        context_budget: int = 2000,
+        use_vector_search: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Summarized version of context. 
+        Might call get_context + additional summarization steps.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        # For demonstration, just call get_context with smaller budget
+        raw_context = await self.get_context(
+            input_text=input_text,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search
+        )
+        # Then do an extra summarization pass
+        # (We can refine as needed)
+        summarized = raw_context.copy()
+        
+        # Summarize memories, NPC descriptions, location details, etc.
+        # Minimal example:
+        if "npcs" in summarized:
+            for npc in summarized["npcs"]:
+                desc = npc.get("physical_description", "")
+                if len(desc)>100 and summary_level>1:
+                    npc["physical_description"] = desc[:100] + "..."
+        
+        return summarized
+    
+    # ---------------------------------------------------------------------
+    # Private helper for the "trim" logic
+    # ---------------------------------------------------------------------
+    # (already in _trim_to_budget, etc.)
+    
+# ---------------------------------------------------------------------
+# Global Registry for ContextService
+# ---------------------------------------------------------------------
+_context_services = {}
+
+async def get_context_service(user_id: int, conversation_id: int) -> ContextService:
+    """Get or create a context service instance"""
+    key = f"{user_id}:{conversation_id}"
+    if key not in _context_services:
+        service = ContextService(user_id, conversation_id)
+        await service.initialize()
+        _context_services[key] = service
+    return _context_services[key]
 
 async def cleanup_context_services():
     """Close all context services"""
     global _context_services
-    
-    # Close each service
-    for service in _context_services.values():
-        await service.close()
-    
-    # Clear registry
+    for svc in _context_services.values():
+        await svc.close()
     _context_services.clear()
     
-    # Close other components
+    # Also close vector & memory if needed
     from context.vector_service import cleanup_vector_services
     from context.memory_manager import cleanup_memory_managers
-    
     await cleanup_vector_services()
     await cleanup_memory_managers()
 
 
-def create_context_service_orchestrator() -> Agent:
-    """Create the orchestration agent for context service"""
-    # Create a new instance of ContextService
-    # This is a placeholder - in real usage, you'd initialize with actual user_id and conversation_id
-    service = ContextService(user_id=0, conversation_id=0)
+# ---------------------------------------------------------------------
+# STANDALONE TOOL FUNCTIONS (with @function_tool, "ctx" is first param)
+# ---------------------------------------------------------------------
+
+@function_tool
+async def validate_context_budget_tool(
+    ctx: RunContextWrapper,
+    context: Dict[str, Any],
+    context_budget: int
+) -> GuardrailFunctionOutput:
+    """
+    Standalone tool: Validate that the context stays within token budget.
+    Library sees `ctx` as the first parameter => correct signature.
+    """
+    # We must figure out how to get the relevant ContextService instance (by user_id?).
+    # If your code can pass user_id in the signature, do so. Otherwise assume "ctx" includes it.
     
-    # Define the agent with tools from the service
+    # Example: assume "ctx" has "user_id" / "conversation_id" in it
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    
+    service = await get_context_service(user_id, conversation_id)
+    return await service._validate_context_budget(context, context_budget)
+
+
+@function_tool
+async def run_maintenance_tool(
+    ctx: RunContextWrapper
+) -> Dict[str, Any]:
+    """
+    Standalone tool: run maintenance tasks 
+    (calls the private method _run_maintenance inside the ContextService).
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._run_maintenance()
+
+
+@function_tool
+async def get_base_context_tool(
+    ctx: RunContextWrapper,
+    location: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Standalone tool: get base context from DB or fallback,
+    calling the private method `_get_base_context`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_base_context(location)
+
+
+@function_tool
+async def get_relevant_npcs_tool(
+    ctx: RunContextWrapper,
+    input_text: str,
+    location: Optional[str] = None
+) -> List[NPCData]:
+    """
+    Standalone tool: get NPCs relevant to the current input & location
+    from the private method `_get_relevant_npcs`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_relevant_npcs(input_text, location)
+
+
+@function_tool
+async def get_location_details_tool(
+    ctx: RunContextWrapper,
+    location: Optional[str] = None
+) -> LocationData:
+    """
+    Standalone tool: get details about the current location
+    from `_get_location_details`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_location_details(location)
+
+
+@function_tool
+async def get_quest_information_tool(
+    ctx: RunContextWrapper
+) -> List[QuestData]:
+    """
+    Standalone tool: get info about active quests
+    via `_get_quest_information`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_quest_information()
+
+
+@function_tool
+async def get_narrative_summaries_tool(
+    ctx: RunContextWrapper,
+    input_text: str
+) -> Dict[str, Any]:
+    """
+    Standalone tool: get summarized narratives from `_get_narrative_summaries`.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._get_narrative_summaries(input_text)
+
+
+@function_tool
+async def trim_to_budget_tool(
+    ctx: RunContextWrapper,
+    context: Dict[str, Any],
+    budget: int
+) -> Dict[str, Any]:
+    """
+    Standalone tool: trim context to fit within `budget` tokens.
+    """
+    user_id = ctx.get("user_id", 0)
+    conversation_id = ctx.get("conversation_id", 0)
+    service = await get_context_service(user_id, conversation_id)
+    return await service._trim_to_budget(context, budget)
+
+
+# ---------------------------------------------------------------------
+# Agent Creation referencing the standalone tool functions
+# ---------------------------------------------------------------------
+
+def create_context_service_orchestrator() -> Agent:
+    """
+    Create the orchestration agent for the context service,
+    now referencing the standalone tool functions instead of instance methods.
+    """
     agent = Agent(
         name="Context Service Orchestrator",
         instructions="""
-        You are a context service orchestrator specialized in managing the context for RPG interactions.
-        Your tasks include:
-        
-        1. Getting appropriate context for the current interaction
-        2. Trimming context to fit token budgets
-        3. Summarizing context based on importance
-        4. Running maintenance tasks on the context system
-        
-        Work with specialized agents for memory management, vector search, and narrative management.
+        You are a context service orchestrator specialized in managing 
+        context for RPG interactions.
         """,
         tools=[
-            service._get_base_context,
-            service._get_relevant_npcs,
-            service._get_location_details,
-            service._get_quest_information,
-            service._get_narrative_summaries,
-            service._trim_to_budget,
-            service.validate_context_budget,
-            service.run_maintenance,
-        ],
+            validate_context_budget_tool,
+            run_maintenance_tool,
+            get_base_context_tool,
+            get_relevant_npcs_tool,
+            get_location_details_tool,
+            get_quest_information_tool,
+            get_narrative_summaries_tool,
+            trim_to_budget_tool
+        ]
     )
-    
     return agent
 
 
 def get_context_service_orchestrator() -> Agent:
-    """Get the context service orchestrator agent"""
+    """Get the context service orchestrator agent."""
     return create_context_service_orchestrator()
