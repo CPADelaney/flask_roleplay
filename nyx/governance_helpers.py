@@ -193,6 +193,7 @@ async def report_action(
 
 def with_action_reporting(
     agent_type: str,
+    action_type: str,
     action_description: str,
     id_from_context: Optional[Callable] = None,
     extract_result: Optional[Callable] = None
@@ -231,8 +232,8 @@ def with_action_reporting(
             
             # Create action details
             action = {
-                "type": func.__name__,
-                "description": action_description.format(
+                "type": action_type,
+                "description": action_description,
                     **{k: str(v)[:100] for k, v in kwargs.items()}
                 )
             }
