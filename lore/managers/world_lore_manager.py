@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
 
 # Agents SDK (import what you need)
-from agents import Agent, function_tool
+from agents import Agent, function_tool, Runner, trace, ModelSettings, handoff
 # Or: from agents import Agent, function_tool, Runner, ...
 # (depending on your usage patterns)
 
@@ -55,6 +55,56 @@ class WorldLoreManager(BaseManager):
         
         # Optional: store your agent if you want direct usage
         self.resource_ops_agent = RESOURCE_OPS_AGENT
+
+        self.inconsistency_resolution_agent = Agent(
+            name="InconsistencyResolutionAgent",
+            instructions="Analyze and resolve any inconsistencies in world lore elements.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=InconsistencyResolutionAgent
+        )
+
+        self.world_documentation_agent = Agent(
+            name="WorldDocumentationAgent",
+            instructions="Generate readable summaries of world history and current state.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=WorldDocumentationAgent
+        )    
+
+        self.world_query_agent = Agent(
+            name="WorldQueryAgent",
+            instructions="Process queries related to the world state and provide relevant information.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7),
+            output_type=WorldQueryAgent
+        )
+
+    @function_tool
+    async def query_world_state(self, query: str) -> str:
+        """Handle a natural language query about the world state."""
+        query_agent = self.world_query_agent.clone()
+        query_agent.query = query
+        result = await Runner.run(query_agent, query)
+        return result.final_output    
+
+    @function_tool
+    async def resolve_world_inconsistencies(self, world_id: str) -> str:
+        """Identify and resolve any inconsistencies in the world lore."""
+        resolution_agent = self.inconsistency_resolution_agent.clone()
+        resolution_agent.world_id = world_id
+        result = await Runner.run(resolution_agent, f"Resolve inconsistencies for world {world_id}")
+        return result.final_output
+
+    @function_tool
+    async def generate_world_summary(self, world_id: str, include_history: bool = True, include_current_state: bool = True) -> str:
+        """Generate world documentation for history and current state."""
+        doc_agent = self.world_documentation_agent.clone()
+        doc_agent.world_id = world_id
+        doc_agent.include_history = include_history
+        doc_agent.include_current_state = include_current_state
+        result = await Runner.run(doc_agent, f"Generate summary for world {world_id}")
+        return result.final_output
 
     @function_tool
     async def start(self):
@@ -1024,3 +1074,52 @@ class LoreRelationshipMapper:
                 existing["related_elements"].append(related)
         
         return existing
+        
+class WorldQueryAgent(BaseModel):
+    """Simulate world query processing."""
+    query: str
+
+    @function_tool
+    async def process_query(self, ctx: RunContextWrapper) -> str:
+        """Process the procedural query and return relevant world data."""
+        # Example: Simply return a mock response for the query for demonstration purposes
+        return f"Processing query: {self.query}"
+
+class WorldDocumentationAgent(BaseModel):
+    """Generate readable summaries of world history and current state."""
+    world_id: str
+    include_history: bool = True
+    include_current_state: bool = True
+
+    @function_tool
+    async def generate_documentation(self, ctx: RunContextWrapper) -> str:
+        """Generate documentation for the world state and history."""
+        documentation = f"World {self.world_id} Summary:\n"
+        if self.include_history:
+            history = await self.get_world_history(self.world_id)
+            documentation += f"\nWorld History:\n{history}"
+
+        if self.include_current_state:
+            current_state = await self.get_world_data(self.world_id)
+            documentation += f"\nCurrent State:\n{current_state}"
+
+        return documentation
+
+    async def get_world_history(self, world_id: str) -> str:
+        """Fetch world history."""
+        # In a real implementation, this would query the database or cache
+        return f"History of world {world_id}"
+
+    async def get_world_data(self, world_id: str) -> str:
+        """Fetch current world state."""
+        return f"Current state of world {world_id}"
+
+class InconsistencyResolutionAgent(BaseModel):
+    """Resolve inconsistencies between world lore elements."""
+    world_id: str
+
+    @function_tool
+    async def resolve_inconsistencies(self, ctx: RunContextWrapper) -> str:
+        """Analyze world lore and resolve any inconsistencies."""
+        # For demonstration, return a mock resolution.
+        return f"Analyzed inconsistencies in world {self.world_id} and proposed fixes."
