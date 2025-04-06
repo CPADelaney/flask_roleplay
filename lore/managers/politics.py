@@ -245,6 +245,182 @@ class WorldPoliticsManager(BaseLoreManager):
                 await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
                 return nation_id
 
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="stream_crisis_events",
+        action_description="Streaming crisis events in real-time",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    async def stream_crisis_events(self, ctx, conflict_id: int) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream real-time updates about an evolving crisis, yielding events as they occur.
+        """
+        conflict = await self._get_conflict_details(conflict_id)
+        if not conflict:
+            yield {"error": "Conflict not found"}
+            return
+            
+        crisis_streaming_agent = Agent(
+            name="CrisisStreamingAgent",
+            instructions="Generate a stream of real-time developments in an ongoing crisis.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        prompt = f"""
+        Generate a series of real-time updates for this ongoing conflict:
+        {json.dumps(conflict, indent=2)}
+        
+        Each update should include:
+        - timestamp
+        - location
+        - event description
+        - severity level (1-10)
+        - parties involved
+        - immediate consequences
+        
+        Provide updates as they might occur over a day of conflict.
+        """
+        
+        run_ctx = RunContextWrapper(context=ctx.context)
+        result = await crisis_streaming_agent.stream(prompt, context=run_ctx.context)
+        
+        async for chunk in result:
+            try:
+                # Process the streaming content
+                event_data = self._parse_crisis_event(chunk.content)
+                if event_data:
+                    yield event_data
+            except Exception as e:
+                logging.error(f"Error processing crisis event: {e}")
+                yield {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_diplomatic_negotiation",
+        action_description="Simulating diplomatic negotiations between nations",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    async def simulate_diplomatic_negotiation(self, ctx, nation1_id: int, nation2_id: int, issue: str) -> Dict[str, Any]:
+        """
+        Simulate diplomatic negotiations between two nations over a specific issue.
+        """
+        # Load the nation data
+        nations = await self._load_negotiating_nations(nation1_id, nation2_id)
+        if "error" in nations:
+            return nations
+        
+        # Create agents for each nation with competing goals
+        nation1_agent = Agent(
+            name=f"{nations['nation1']['name']}Agent",
+            instructions=f"You represent {nations['nation1']['name']}. Your goal is to maximize your nation's interests while finding a workable resolution. You have these traits: {nations['nation1'].get('cultural_traits', [])}",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        nation2_agent = Agent(
+            name=f"{nations['nation2']['name']}Agent",
+            instructions=f"You represent {nations['nation2']['name']}. Your goal is to maximize your nation's interests while finding a workable resolution. You have these traits: {nations['nation2'].get('cultural_traits', [])}",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        # Create a mediator agent
+        mediator_agent = Agent(
+            name="DiplomaticMediatorAgent",
+            instructions="You are a neutral diplomatic mediator. Your goal is to facilitate productive negotiations and help reach a resolution that both parties can accept.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+        
+        # Set up the negotiation simulation
+        negotiation = DiplomaticNegotiation(
+            nation1_agent, 
+            nation2_agent, 
+            mediator_agent,
+            nations,
+            issue,
+            max_rounds=5
+        )
+        
+        # Run the simulation
+        run_ctx = RunContextWrapper(context=ctx.context)
+        results = await negotiation.run(run_ctx)
+        
+        # Update relations based on outcome
+        await self._update_international_relations(nations, results)
+        
+        return results
+
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="simulate_media_coverage",
+        action_description="Simulating media coverage of political events",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    async def simulate_media_coverage(self, ctx, event_id: int) -> Dict[str, Any]:
+        """Simulate media coverage of a political event from different perspectives."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Load event details
+        event = await self._load_event_details(event_id)
+        if "error" in event:
+            return event
+        
+        # Create media outlet agents with different biases
+        media_types = [
+            {"name": "State Official", "bias": "pro_government", "reliability": 0.7},
+            {"name": "Popular Tribune", "bias": "populist", "reliability": 0.6},
+            {"name": "Noble Herald", "bias": "aristocratic", "reliability": 0.8},
+            {"name": "Foreign Observer", "bias": "neutral", "reliability": 0.9}
+        ]
+        
+        coverage = []
+        for media in media_types:
+            media_agent = Agent(
+                name=f"{media['name']}Agent",
+                instructions=f"You are {media['name']}, a news outlet with a {media['bias']} bias. Cover political events with your unique perspective. Maintain matriarchal themes.",
+                model="o3-mini",
+                model_settings=ModelSettings(temperature=0.8)
+            )
+            
+            prompt = f"""
+            Write a news article covering this event:
+            {json.dumps(event, indent=2)}
+            
+            Your outlet has a {media['bias']} bias.
+            
+            Return JSON with:
+            - headline
+            - content (article body)
+            - emphasis (aspect of the event you highlight)
+            - bias_indicators (how your bias shows)
+            """
+            
+            result = await Runner.run(media_agent, prompt, context=run_ctx.context)
+            try:
+                article = json.loads(result.final_output)
+                article["media_name"] = media["name"]
+                article["bias"] = media["bias"]
+                
+                # Add matriarchal theming to the content
+                if "content" in article:
+                    article["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", article["content"])
+                
+                coverage.append(article)
+                
+                # Store in database
+                await self._store_media_coverage(event_id, article)
+                
+            except json.JSONDecodeError:
+                coverage.append({
+                    "media_name": media["name"],
+                    "error": "Failed to parse media coverage",
+                    "raw_output": result.final_output
+                })
+        
+        return {"event": event, "coverage": coverage}
     # ------------------------------------------------------------------------
     # 2) Add an international relation
     # ------------------------------------------------------------------------
@@ -1023,6 +1199,93 @@ class WorldPoliticsManager(BaseLoreManager):
                     })
                 else:
                     evolution_results["evolved_conflicts"].append(updated_conflict)
+class FactionAgentProxy:
+    """
+    Proxy class representing a faction in the world with competing goals and agency.
+    """
+    def __init__(self, faction_data: Dict[str, Any]):
+        self.faction_data = faction_data
+        self.agent = Agent(
+            name=f"{faction_data['name']}Agent",
+            instructions=self._build_instructions(),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        self.actions_history = []
+        self.goals = self._determine_faction_goals()
+        
+    def _build_instructions(self) -> str:
+        """Build agent instructions based on faction data."""
+        return f"""
+        You represent {self.faction_data['name']}, a {self.faction_data.get('type', 'faction')} in a matriarchal world.
+        Traits: {self.faction_data.get('cultural_traits', [])}
+        Values: {self.faction_data.get('values', [])}
+        
+        Your purpose is to pursue your faction's goals while reacting realistically to world events.
+        Always consider how your actions will affect your standing in the matriarchal power structure.
+        """
+        
+    def _determine_faction_goals(self) -> List[str]:
+        """Determine the faction's goals based on its data."""
+        # This could be expanded to use an agent to generate goals
+        return self.faction_data.get('goals', ['Increase influence', 'Protect interests'])
+    
+    async def react_to_event(self, event: Dict[str, Any], context) -> Dict[str, Any]:
+        """Have the faction react to a world event."""
+        prompt = f"""
+        Your faction ({self.faction_data['name']}) is reacting to this event:
+        {json.dumps(event, indent=2)}
+        
+        Your faction's goals are: {self.goals}
+        Your recent actions: {self.actions_history[-3:] if self.actions_history else 'None'}
+        
+        How do you react? Consider:
+        1. Public statements
+        2. Private actions
+        3. Resource allocation
+        4. Diplomatic initiatives
+        5. Internal policy changes
+        
+        Return JSON with these fields.
+        """
+        
+        result = await Runner.run(self.agent, prompt, context=context)
+        try:
+            reaction = json.loads(result.final_output)
+            self.actions_history.append({
+                "event": event.get("name", "Unnamed event"),
+                "reaction": reaction
+            })
+            return reaction
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse faction reaction", "raw_output": result.final_output}
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="initialize_faction_proxies",
+        action_description="Creating faction agent proxies with competing goals",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    async def initialize_faction_proxies(self, ctx) -> Dict[str, Any]:
+        """Initialize agent proxies for all factions in the world."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Load all factions
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                factions = await conn.fetch("""
+                    SELECT id, name, type, description, values, goals, cultural_traits
+                    FROM Factions
+                """)
+        
+        # Create a proxy for each faction
+        self.faction_proxies = {}
+        for faction in factions:
+            faction_data = dict(faction)
+            proxy = FactionAgentProxy(faction_data)
+            self.faction_proxies[faction_data['id']] = proxy
+        
+        return {"status": "success", "factions_initialized": len(self.faction_proxies)}
 
             except Exception as e:
                 logging.error(f"Error evolving conflict {conflict_id}: {e}")
@@ -1107,3 +1370,4 @@ class WorldPoliticsManager(BaseLoreManager):
             scope="world_building",
             priority=DirectivePriority.MEDIUM
         )
+
