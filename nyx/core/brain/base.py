@@ -516,7 +516,7 @@ async def initialize(self):
         # Find or create the agentic action generator
         if not hasattr(self, "agentic_action_generator") or not self.agentic_action_generator:
             # Create a new action generator with references to brain systems
-            from nyx.core.agentic_action_generator import AgenticActionGenerator
+            from nyx.core.agentic_action_generator import EnhancedAgenticActionGenerator as AgenticActionGenerator
             self.agentic_action_generator = AgenticActionGenerator(
                 emotional_core=self.emotional_core,
                 hormone_system=self.hormone_system,
