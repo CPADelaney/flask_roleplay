@@ -30,7 +30,7 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
     temp_data: Dict[str, Any] = Field(default_factory=dict, exclude=True, 
                                     description="Temporary runtime data that won't be serialized")
     # Using a more efficient circular buffer for history tracking
-    _circular_history: Dict[str, Deque] = Field(default_factory=lambda: defaultdict(lambda: deque(maxlen=20)), 
+    circular_history: Dict[str, Deque] = Field(default_factory=lambda: defaultdict(lambda: deque(maxlen=20)), 
                                               exclude=True, description="Circular buffers for various history types")
     
     # Enhanced fields for improved SDK integration
