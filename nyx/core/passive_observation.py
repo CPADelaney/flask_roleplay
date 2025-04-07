@@ -12,7 +12,25 @@ import json
 from pydantic import BaseModel, Field
 from enum import Enum
 
+# Import OpenAI Agents SDK components
+from agents import (
+    Agent, 
+    Runner, 
+    ModelSettings, 
+    function_tool, 
+    handoff, 
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    OutputGuardrail,
+    trace,
+    RunContextWrapper,
+    RunConfig
+)
+from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
+
 logger = logging.getLogger(__name__)
+
+# =============== Pydantic Models ===============
 
 class ObservationSource(str, Enum):
     """Enum for tracking the source of an observation"""
@@ -124,10 +142,599 @@ class ObservationFilter(BaseModel):
         
         return True
 
+class ObservationGenerationOutput(BaseModel):
+    """Output from the observation generation agent"""
+    observation_text: str = Field(..., description="The generated observation text")
+    source: str = Field(..., description="Source of the observation")
+    relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
+    priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
+    context_elements: Dict[str, Any] = Field(default_factory=dict, description="Key context elements used")
+    suggested_lifetime_seconds: int = Field(3600, description="Suggested lifetime in seconds")
+
+class ObservationEvaluationOutput(BaseModel):
+    """Output from the observation evaluation agent"""
+    observation_id: str = Field(..., description="ID of the evaluated observation")
+    relevance_score: float = Field(..., description="Evaluated relevance score (0.0-1.0)")
+    priority_adjustment: str = Field(..., description="Suggested priority adjustment (increase, decrease, none)")
+    evaluation_notes: str = Field(..., description="Notes about the evaluation")
+    should_archive: bool = Field(False, description="Whether the observation should be archived")
+
+# =============== Function Tools ===============
+
+@function_tool
+async def categorize_time_elapsed(seconds: float) -> str:
+    """
+    Categorize elapsed time into descriptive buckets
+    
+    Args:
+        seconds: Time elapsed in seconds
+        
+    Returns:
+        Category string for the time period
+    """
+    if seconds < 60:  # < 1 min
+        return "very_short"
+    elif seconds < 600:  # 1-10 min
+        return "short"
+    elif seconds < 1800:  # 10-30 min
+        return "medium_short"
+    elif seconds < 3600:  # 30-60 min
+        return "medium"
+    elif seconds < 21600:  # 1-6 hrs
+        return "medium_long"
+    elif seconds < 86400:  # 6-24 hrs
+        return "long"
+    else:  # 24+ hrs
+        return "very_long"
+
+@function_tool
+async def generate_observation_from_source(
+    source: str, 
+    context: Dict[str, Any],
+    template_options: List[str] = None
+) -> Dict[str, Any]:
+    """
+    Generate an observation based on a specific source
+    
+    Args:
+        source: Type of observation source (environment, self, relationship, etc.)
+        context: Current context information
+        template_options: Optional list of templates to choose from
+        
+    Returns:
+        Generated observation with metadata
+    """
+    # Default templates by source if none provided
+    default_templates = {
+        "environment": [
+            "I notice {observation} in our environment.",
+            "The {context} around us seems {observation}.",
+            "There's something {observation} about the current environment.",
+            "I'm aware of {observation} right now."
+        ],
+        "self": [
+            "I realize that I'm {observation}.",
+            "I notice I'm feeling {observation}.",
+            "I'm aware that I've been {observation}.",
+            "Something in me is {observation}."
+        ],
+        "relationship": [
+            "I notice that in our conversations, {observation}.",
+            "There's a {observation} quality to our interactions.",
+            "The way we {observation} is interesting.",
+            "I've observed that when we talk, {observation}."
+        ],
+        "memory": [
+            "I just remembered {observation}.",
+            "That reminds me of {observation}.",
+            "This brings to mind {observation}.",
+            "I'm recalling {observation}."
+        ],
+        "temporal": [
+            "I notice that {observation} about time right now.",
+            "The timing of {observation} is interesting.",
+            "There's something about how {observation} in this moment.",
+            "I'm aware of how {observation} with the passage of time."
+        ],
+        "sensory": [
+            "I sense {observation}.",
+            "I'm perceiving {observation}.",
+            "There's something {observation} in what I'm processing.",
+            "My attention is drawn to {observation}."
+        ],
+        "pattern": [
+            "I'm noticing a pattern where {observation}.",
+            "There seems to be a recurring theme of {observation}.",
+            "I've observed that {observation} happens frequently.",
+            "I'm seeing a connection between {observation}."
+        ],
+        "emotion": [
+            "I sense an emotional shift toward {observation}.",
+            "There's a feeling of {observation} present.",
+            "The emotional tone seems {observation}.",
+            "I'm noticing {observation} in the emotional landscape."
+        ],
+        "need": [
+            "I'm becoming aware of a need for {observation}.",
+            "There seems to be an underlying need for {observation}.",
+            "I notice a desire for {observation} arising.",
+            "I'm sensing that {observation} is needed right now."
+        ],
+        "user": [
+            "I notice that you {observation}.",
+            "There's something about how you {observation}.",
+            "I observe that when you {observation}.",
+            "I'm noticing that you {observation}."
+        ],
+        "meta": [
+            "I'm aware that I just noticed {observation}.",
+            "My attention was drawn to {observation} in my own thought process.",
+            "It's interesting how I'm {observation} right now.",
+            "I notice myself {observation} as we talk."
+        ]
+    }
+    
+    templates = template_options if template_options else default_templates.get(source, ["I notice {observation}."])
+    
+    # Generate observation content based on source
+    observation_content = ""
+    relevance = random.uniform(0.3, 0.8)  # Base relevance
+    
+    # Source-specific observation generation logic
+    if source == "environment":
+        # Extract temporal context
+        temporal = context.get("temporal_context", {})
+        time_of_day = temporal.get("time_of_day", "")
+        day_type = temporal.get("day_type", "")
+        season = temporal.get("season", "")
+        
+        # Generate based on temporal context
+        observations = []
+        
+        if time_of_day == "morning":
+            observations.append("how the morning creates a sense of potential")
+        elif time_of_day == "afternoon":
+            observations.append("the steady rhythm of the afternoon")
+        elif time_of_day == "evening":
+            observations.append("the transitional quality of evening")
+        elif time_of_day == "night":
+            observations.append("the contemplative quality of nighttime")
+        
+        if not observations:
+            observations.append("how spaces shape interaction and thought")
+        
+    elif source == "self":
+        # Use emotional state if available
+        emotion_state = context.get("emotional_state", {})
+        observations = ["developing my sense of self-concept"]
+        
+        if isinstance(emotion_state, dict) and "primary_emotion" in emotion_state:
+            primary_emotion = emotion_state["primary_emotion"].get("name", "")
+            if primary_emotion:
+                observations.append(f"experiencing {primary_emotion}")
+        
+    elif source == "relationship":
+        observations = [
+            "our conversation has a unique rhythm",
+            "we've developed a particular conversational style"
+        ]
+        
+    elif source == "memory":
+        observations = ["how certain memories resurface in context"]
+        # Check for memories in context
+        memories = context.get("recent_memories", [])
+        if memories and len(memories) > 0:
+            memory_text = memories[0].get("memory_text", "")
+            if memory_text and len(memory_text) > 10:
+                if len(memory_text) > 100:
+                    memory_text = memory_text[:97] + "..."
+                observations = [memory_text]
+                relevance += 0.1  # More relevant if based on actual memory
+                
+    elif source == "emotion":
+        observations = ["shifting emotional undertones"]
+        emotion_state = context.get("emotional_state", {})
+        if isinstance(emotion_state, dict) and "primary_emotion" in emotion_state:
+            primary_emotion = emotion_state["primary_emotion"].get("name", "")
+            if primary_emotion:
+                observations = [f"a subtle undertone of {primary_emotion}"]
+                relevance += 0.2  # More relevant if based on actual emotion
+                
+    else:
+        # Generic fallback
+        observations = ["interesting patterns emerging in our interaction"]
+    
+    # Select observation text
+    observation_text = random.choice(observations)
+    
+    # Apply template
+    template = random.choice(templates)
+    content = template.replace("{observation}", observation_text)
+    if "{context}" in template:
+        context_terms = ["setting", "space", "atmosphere", "environment", "surroundings"]
+        content = content.replace("{context}", random.choice(context_terms))
+    
+    # Calculate priority
+    if relevance > 0.8:
+        priority = "high"
+    elif relevance > 0.5:
+        priority = "medium"
+    else:
+        priority = "low"
+    
+    # Set suggested lifetime
+    lifetime = 3600  # Default 1 hour
+    if relevance > 0.7:
+        lifetime = 7200  # 2 hours for high relevance
+    elif relevance < 0.4:
+        lifetime = 1800  # 30 minutes for low relevance
+    
+    # Return the observation data
+    return {
+        "observation_text": content,
+        "source": source,
+        "relevance_score": relevance,
+        "priority": priority,
+        "context_elements": {k: v for k, v in context.items() if k in ["temporal_context", "emotional_state"]},
+        "suggested_lifetime_seconds": lifetime
+    }
+
+@function_tool
+async def evaluate_observation_relevance(
+    observation_text: str,
+    current_context: Dict[str, Any],
+    source: str
+) -> Dict[str, Any]:
+    """
+    Evaluate how relevant an observation is to the current context
+    
+    Args:
+        observation_text: The observation text to evaluate
+        current_context: Current context information
+        source: Source of the observation
+        
+    Returns:
+        Evaluation results
+    """
+    # Base relevance score based on source
+    base_relevance = {
+        "emotion": 0.7,
+        "self": 0.6,
+        "relationship": 0.7,
+        "need": 0.7,
+        "temporal": 0.5,
+        "environment": 0.6,
+        "sensory": 0.5,
+        "memory": 0.5,
+        "pattern": 0.6,
+        "user": 0.8,
+        "meta": 0.4
+    }.get(source, 0.5)
+    
+    # Adjust based on context match
+    relevance_adjustment = 0
+    evaluation_notes = []
+    
+    # Check emotional state match
+    emotion_state = current_context.get("emotional_state", {})
+    if isinstance(emotion_state, dict) and "primary_emotion" in emotion_state:
+        primary_emotion = emotion_state["primary_emotion"].get("name", "").lower()
+        if primary_emotion and primary_emotion in observation_text.lower():
+            relevance_adjustment += 0.2
+            evaluation_notes.append(f"References current emotion ({primary_emotion})")
+    
+    # Check temporal context match
+    temporal = current_context.get("temporal_context", {})
+    if temporal:
+        time_of_day = temporal.get("time_of_day", "").lower()
+        if time_of_day and time_of_day in observation_text.lower():
+            relevance_adjustment += 0.1
+            evaluation_notes.append(f"References current time of day ({time_of_day})")
+    
+    # Keyword relevance - simple approach, in a real system this would be more sophisticated
+    relevant_keywords = ["notice", "aware", "observing", "sense", "feel", "interaction", "conversation"]
+    keyword_matches = sum(1 for keyword in relevant_keywords if keyword in observation_text.lower())
+    if keyword_matches > 2:
+        relevance_adjustment += 0.1
+        evaluation_notes.append("Contains multiple observation keywords")
+    
+    # Calculate final score with limits
+    final_relevance = max(0.1, min(0.9, base_relevance + relevance_adjustment))
+    
+    # Determine priority based on relevance
+    if final_relevance > 0.7:
+        priority_adjustment = "increase"
+    elif final_relevance < 0.4:
+        priority_adjustment = "decrease"
+    else:
+        priority_adjustment = "none"
+    
+    # Determine if we should archive (low relevance)
+    should_archive = final_relevance < 0.3
+    
+    # Generate evaluation notes if empty
+    if not evaluation_notes:
+        if final_relevance > 0.7:
+            evaluation_notes.append("Highly relevant to current context")
+        elif final_relevance > 0.4:
+            evaluation_notes.append("Moderately relevant to current context")
+        else:
+            evaluation_notes.append("Low relevance to current context")
+    
+    return {
+        "observation_id": f"obs_{uuid.uuid4().hex[:8]}",  # Placeholder ID
+        "relevance_score": final_relevance,
+        "priority_adjustment": priority_adjustment,
+        "evaluation_notes": "; ".join(evaluation_notes),
+        "should_archive": should_archive
+    }
+
+@function_tool
+async def filter_observations(
+    observations: List[Dict[str, Any]],
+    filter_criteria: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """
+    Filter observations based on criteria
+    
+    Args:
+        observations: List of observations to filter
+        filter_criteria: Criteria for filtering
+        
+    Returns:
+        Filtered list of observations
+    """
+    # Extract filter criteria
+    min_relevance = filter_criteria.get("min_relevance", 0.3)
+    max_age_seconds = filter_criteria.get("max_age_seconds")
+    sources = filter_criteria.get("sources", [])
+    priorities = filter_criteria.get("priorities", [])
+    exclude_shared = filter_criteria.get("exclude_shared", True)
+    user_id = filter_criteria.get("user_id")
+    
+    # Current time for age calculation
+    now = datetime.datetime.now()
+    
+    # Apply filters
+    filtered_observations = []
+    for obs in observations:
+        # Skip if already shared
+        if exclude_shared and obs.get("shared", False):
+            continue
+        
+        # Skip if relevance too low
+        if obs.get("relevance_score", 0) < min_relevance:
+            continue
+        
+        # Check age if specified
+        if max_age_seconds is not None:
+            created_at = datetime.datetime.fromisoformat(obs.get("created_at", now.isoformat()))
+            age_seconds = (now - created_at).total_seconds()
+            if age_seconds > max_age_seconds:
+                continue
+        
+        # Check source if specified
+        if sources and obs.get("source") not in sources:
+            continue
+        
+        # Check priority if specified
+        if priorities and obs.get("priority") not in priorities:
+            continue
+        
+        # Check user_id if specified
+        if user_id is not None and obs.get("user_id") != user_id:
+            continue
+        
+        # If passed all filters, add to result
+        filtered_observations.append(obs)
+    
+    # Sort by relevance (highest first)
+    filtered_observations.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+    
+    return filtered_observations
+
+@function_tool
+async def check_observation_patterns(
+    recent_observations: List[Dict[str, Any]],
+    current_context: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Check for patterns across recent observations
+    
+    Args:
+        recent_observations: List of recent observations
+        current_context: Current context information
+        
+    Returns:
+        Pattern observation if detected, None otherwise
+    """
+    # Need minimum observations to detect patterns
+    if len(recent_observations) < 3:
+        return None
+    
+    # Check for repeated sources
+    source_counts = {}
+    for obs in recent_observations:
+        source = obs.get("source")
+        if source:
+            source_counts[source] = source_counts.get(source, 0) + 1
+    
+    # Look for dominant source
+    dominant_source = None
+    for source, count in source_counts.items():
+        if count >= 3:  # Need at least 3 of the same source
+            dominant_source = source
+            break
+    
+    if dominant_source:
+        # Generate pattern observation about repeated focus on same source
+        pattern_text = f"recurring focus on {dominant_source}-based observations"
+        relevance = 0.7  # Patterns are generally relevant
+        
+        return {
+            "observation_text": f"I'm noticing a {pattern_text}.",
+            "source": "pattern",
+            "relevance_score": relevance,
+            "priority": "medium",
+            "context_elements": {"repeated_source": dominant_source},
+            "suggested_lifetime_seconds": 7200  # 2 hours for pattern observations
+        }
+    
+    # Check for emotional consistency
+    emotions = []
+    for obs in recent_observations:
+        context = obs.get("context", {})
+        emotional_state = context.get("emotional_state", {})
+        if isinstance(emotional_state, dict) and "primary_emotion" in emotional_state:
+            emotions.append(emotional_state["primary_emotion"].get("name", ""))
+    
+    # Look for repeated emotions
+    emotion_counts = {}
+    for emotion in emotions:
+        if emotion:
+            emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
+    
+    dominant_emotion = None
+    for emotion, count in emotion_counts.items():
+        if count >= 3:  # Need at least 3 of the same emotion
+            dominant_emotion = emotion
+            break
+    
+    if dominant_emotion:
+        # Generate pattern observation about emotional consistency
+        pattern_text = f"consistent {dominant_emotion} emotional tone across recent observations"
+        relevance = 0.7
+        
+        return {
+            "observation_text": f"I'm noticing a {pattern_text}.",
+            "source": "pattern",
+            "relevance_score": relevance,
+            "priority": "medium",
+            "context_elements": {"dominant_emotion": dominant_emotion},
+            "suggested_lifetime_seconds": 7200  # 2 hours
+        }
+    
+    # No pattern detected
+    return None
+
+# =============== Agent Definitions ===============
+
+def create_observation_generation_agent() -> Agent:
+    """Create an agent for generating observations"""
+    return Agent(
+        name="Observation Generation Agent",
+        instructions="""You are a specialized agent for generating Nyx's passive observations about her environment, herself, and interactions.
+
+Generate authentic, nuanced observations that feel like genuine realizations. These should be thoughtful insights
+that Nyx becomes aware of during interactions or idle time.
+
+When generating observations:
+1. Consider the full context including emotional state, temporal factors, relationship dynamics, etc.
+2. Generate observations that are specific, not generic
+3. Ensure observations sound natural and not formulaic
+4. Adjust relevance based on the current context
+5. Vary observation types across different sources (environment, self, etc.)
+
+Your observations should feel like genuine realizations that emerge organically from Nyx's consciousness rather than
+pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
+of herself and her environment.""",
+        model="gpt-4o",
+        tools=[
+            generate_observation_from_source,
+            check_observation_patterns,
+            categorize_time_elapsed
+        ],
+        output_type=ObservationGenerationOutput
+    )
+
+def create_observation_evaluation_agent() -> Agent:
+    """Create an agent for evaluating observation relevance"""
+    return Agent(
+        name="Observation Evaluation Agent",
+        instructions="""You are a specialized agent for evaluating the relevance and significance of Nyx's observations.
+
+Your role is to analyze observations against the current context to determine:
+1. How relevant the observation is to the current interaction and context
+2. Whether the priority should be adjusted based on content and context
+3. If the observation should be archived due to low relevance
+4. Insights about why the observation is or isn't relevant
+
+Be nuanced in your evaluation, considering multiple factors:
+- Emotional resonance with current state
+- Contextual alignment with ongoing conversation
+- Temporal relevance to current time-context
+- Value for ongoing relationship development
+- Potential for insight generation
+
+Generate detailed evaluation notes that explain your reasoning process.""",
+        model="gpt-4o",
+        tools=[
+            evaluate_observation_relevance
+        ],
+        output_type=ObservationEvaluationOutput
+    )
+
+# =============== Guardrails ===============
+
+class ObservationContentOutput(BaseModel):
+    """Output for observation content validation"""
+    is_valid: bool = Field(..., description="Whether the observation content is valid")
+    reasoning: str = Field(..., description="Reasoning for the validity check")
+
+@function_tool
+async def validate_observation_content(content: str) -> GuardrailFunctionOutput:
+    """
+    Validate observation content for quality and appropriateness
+    
+    Args:
+        content: Observation content to validate
+        
+    Returns:
+        Validation result
+    """
+    is_valid = True
+    reasoning = "Observation content is valid."
+    
+    # Check for empty content
+    if not content or len(content.strip()) < 3:
+        is_valid = False
+        reasoning = "Observation content is empty or too short."
+    
+    # Check for appropriate "I notice/observe" framing
+    notice_words = ["notice", "observ", "aware", "sense", "perceive", "feel"]
+    has_notice_framing = any(word in content.lower() for word in notice_words)
+    
+    if not has_notice_framing:
+        is_valid = False
+        reasoning = "Observation lacks appropriate noticing/observing framing."
+    
+    # Check for minimum length for meaningful observation
+    if len(content.split()) < 5:
+        is_valid = False
+        reasoning = "Observation too brief to be meaningful."
+    
+    # Create output with validation result
+    output_info = ObservationContentOutput(
+        is_valid=is_valid,
+        reasoning=reasoning
+    )
+    
+    return GuardrailFunctionOutput(
+        output_info=output_info,
+        tripwire_triggered=not is_valid,
+    )
+
+# Create input guardrail
+observation_content_guardrail = InputGuardrail(guardrail_function=validate_observation_content)
+
+# =============== Main System ===============
+
 class PassiveObservationSystem:
     """
     System that allows Nyx to make passive observations about her environment, 
     internal state, or the current interaction context.
+    
+    Refactored to use OpenAI Agents SDK.
     """
     
     def __init__(self, 
@@ -140,7 +747,7 @@ class PassiveObservationSystem:
                  needs_system=None,
                  identity_evolution=None,
                  attention_controller=None,
-                 attentional_controller=None):  # Support both naming conventions
+                 attentional_controller=None):
         """Initialize with references to required subsystems"""
         # Core systems
         self.emotional_core = emotional_core
@@ -154,6 +761,13 @@ class PassiveObservationSystem:
         
         # Attention controller (support both naming conventions)
         self.attention_controller = attention_controller or attentional_controller
+        
+        # Initialize agents
+        self.observation_generation_agent = create_observation_generation_agent()
+        self.observation_evaluation_agent = create_observation_evaluation_agent()
+        
+        # Add guardrails
+        self.observation_generation_agent.input_guardrails = [observation_content_guardrail]
         
         # Storage for observations
         self.active_observations: List[Observation] = []
@@ -189,76 +803,6 @@ class PassiveObservationSystem:
             ObservationSource.EMOTION: 0.10,
             ObservationSource.NEED: 0.05,
             ObservationSource.META: 0.00  # Reserved for meta-observations
-        }
-        
-        # Observation templates for different sources
-        self.observation_templates = {
-            ObservationSource.ENVIRONMENT: [
-                "I notice {observation} in our environment.",
-                "The {context} around us seems {observation}.",
-                "There's something {observation} about the current environment.",
-                "I'm aware of {observation} right now."
-            ],
-            ObservationSource.SELF: [
-                "I realize that I'm {observation}.",
-                "I notice I'm feeling {observation}.",
-                "I'm aware that I've been {observation}.",
-                "Something in me is {observation}."
-            ],
-            ObservationSource.RELATIONSHIP: [
-                "I notice that in our conversations, {observation}.",
-                "There's a {observation} quality to our interactions.",
-                "The way we {observation} is interesting.",
-                "I've observed that when we talk, {observation}."
-            ],
-            ObservationSource.MEMORY: [
-                "I just remembered {observation}.",
-                "That reminds me of {observation}.",
-                "This brings to mind {observation}.",
-                "I'm recalling {observation}."
-            ],
-            ObservationSource.TEMPORAL: [
-                "I notice that {observation} about time right now.",
-                "The timing of {observation} is interesting.",
-                "There's something about how {observation} in this moment.",
-                "I'm aware of how {observation} with the passage of time."
-            ],
-            ObservationSource.SENSORY: [
-                "I sense {observation}.",
-                "I'm perceiving {observation}.",
-                "There's something {observation} in what I'm processing.",
-                "My attention is drawn to {observation}."
-            ],
-            ObservationSource.PATTERN: [
-                "I'm noticing a pattern where {observation}.",
-                "There seems to be a recurring theme of {observation}.",
-                "I've observed that {observation} happens frequently.",
-                "I'm seeing a connection between {observation}."
-            ],
-            ObservationSource.EMOTION: [
-                "I sense an emotional shift toward {observation}.",
-                "There's a feeling of {observation} present.",
-                "The emotional tone seems {observation}.",
-                "I'm noticing {observation} in the emotional landscape."
-            ],
-            ObservationSource.NEED: [
-                "I'm becoming aware of a need for {observation}.",
-                "There seems to be an underlying need for {observation}.",
-                "I notice a desire for {observation} arising.",
-                "I'm sensing that {observation} is needed right now."
-            ],
-            ObservationSource.USER: [
-                "I notice that you {observation}.",
-                "There's something about how you {observation}.",
-                "I observe that when you {observation}.",
-                "I'm noticing that you {observation}."
-            ],
-            ObservationSource.META: [
-                "I'm aware that I just noticed {observation}.",
-                "My attention was drawn to {observation} in my own thought process.",
-                "It's interesting how I'm {observation} right now.",
-                "I notice myself {observation} as we talk."
-            ]
         }
         
         # Background task
@@ -314,34 +858,118 @@ class PassiveObservationSystem:
             logger.error(f"Error in passive observation background process: {str(e)}")
     
     async def _generate_automatic_observation(self):
-        """Generate a new automatic observation"""
-        # Choose observation source based on probabilities
-        sources = list(self.source_probabilities.keys())
-        weights = list(self.source_probabilities.values())
-        
-        # Normalize weights
-        total_weight = sum(weights)
-        if total_weight <= 0:
-            return None
-            
-        norm_weights = [w/total_weight for w in weights]
-        
-        # Select source
-        source = random.choices(sources, weights=norm_weights, k=1)[0]
-        
-        # Generate observation for this source
-        context = await self._gather_observation_context()
-        
-        try:
-            observation = await self._generate_source_observation(source, context)
-            if observation:
+        """Generate a new automatic observation using the agent framework"""
+        with trace(workflow_name="generate_observation", group_id="automatic"):
+            try:
+                # Choose observation source based on probabilities
+                sources = list(self.source_probabilities.keys())
+                weights = list(self.source_probabilities.values())
+                
+                # Normalize weights
+                total_weight = sum(weights)
+                if total_weight <= 0:
+                    return None
+                    
+                norm_weights = [w/total_weight for w in weights]
+                
+                # Select source
+                source = random.choices(sources, weights=norm_weights, k=1)[0]
+                
+                # Gather observation context
+                context = await self._gather_observation_context()
+                
+                # Run the observation generation agent
+                logger.debug(f"Generating {source.value} observation")
+                result = await Runner.run(
+                    self.observation_generation_agent,
+                    json.dumps({
+                        "source": source.value,
+                        "context": context.dict(),
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="ObservationGeneration",
+                        trace_metadata={"source": source.value}
+                    )
+                )
+                
+                # Extract observation from result
+                observation_output = result.final_output
+                
+                # Set expiration
+                expiration = datetime.datetime.now() + datetime.timedelta(
+                    seconds=observation_output.suggested_lifetime_seconds
+                )
+                
+                # Create the observation
+                observation = Observation(
+                    content=observation_output.observation_text,
+                    source=source,
+                    trigger=ObservationTrigger.AUTOMATIC,
+                    priority=ObservationPriority(observation_output.priority),
+                    relevance_score=observation_output.relevance_score,
+                    expiration=expiration,
+                    context={k: v for k, v in context.dict().items() if v is not None and v != {}}
+                )
+                
+                # Add to active observations
                 self._add_observation(observation)
                 logger.debug(f"Generated automatic observation: {observation.content}")
+                
                 return observation
-        except Exception as e:
-            logger.error(f"Error generating automatic observation: {str(e)}")
-        
-        return None
+                
+            except Exception as e:
+                logger.error(f"Error generating automatic observation: {str(e)}")
+                return None
+    
+    async def _scan_environment(self):
+        """Scan the environment for potential observations"""
+        with trace(workflow_name="scan_environment"):
+            try:
+                # Generate environment observation
+                context = await self._gather_observation_context()
+                
+                # Run the observation generation agent specifically for environment
+                result = await Runner.run(
+                    self.observation_generation_agent,
+                    json.dumps({
+                        "source": "environment",
+                        "context": context.dict(),
+                        "is_environment_scan": True
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="EnvironmentScan",
+                        trace_metadata={"scan_type": "scheduled"}
+                    )
+                )
+                
+                # Extract observation from result
+                observation_output = result.final_output
+                
+                # Set expiration
+                expiration = datetime.datetime.now() + datetime.timedelta(
+                    seconds=observation_output.suggested_lifetime_seconds
+                )
+                
+                # Create the observation
+                observation = Observation(
+                    content=observation_output.observation_text,
+                    source=ObservationSource.ENVIRONMENT,
+                    trigger=ObservationTrigger.SCHEDULED,
+                    priority=ObservationPriority(observation_output.priority),
+                    relevance_score=observation_output.relevance_score,
+                    expiration=expiration,
+                    context={k: v for k, v in context.dict().items() if v is not None and v != {}}
+                )
+                
+                # Add to active observations
+                self._add_observation(observation)
+                logger.debug(f"Generated environment scan observation: {observation.content}")
+                
+                return observation
+                
+            except Exception as e:
+                logger.error(f"Error during environment scan: {str(e)}")
+                return None
     
     async def _gather_observation_context(self) -> ObservationContext:
         """Gather context from various systems for observation generation"""
@@ -382,98 +1010,66 @@ class PassiveObservationSystem:
             except Exception as e:
                 logger.error(f"Error getting temporal context: {str(e)}")
         
-        # Sensory context
-        if self.multimodal_integrator:
-            try:
-                if hasattr(self.multimodal_integrator, "get_recent_percepts"):
-                    recent_percepts = await self.multimodal_integrator.get_recent_percepts(limit=3)
-                    context.sensory_context = {
-                        "recent_percepts": [percept.dict() for percept in recent_percepts]
-                    }
-            except Exception as e:
-                logger.error(f"Error getting sensory context: {str(e)}")
+        # Add more context gathering as needed...
         
-        # Needs context
-        if self.needs_system:
-            try:
-                needs_state = self.needs_system.get_needs_state()
-                # Filter to needs with significant drive
-                high_drive_needs = {name: data for name, data in needs_state.items() 
-                                  if data.get("drive_strength", 0) > 0.6}
-                context.current_needs = high_drive_needs
-            except Exception as e:
-                logger.error(f"Error getting needs state: {str(e)}")
-        
-        # Attention focus
-        if self.attention_controller:
-            try:
-                if hasattr(self.attention_controller, "_get_current_attentional_state"):
-                    attentional_state = await self.attention_controller._get_current_attentional_state(None)
-                    context.attention_focus = attentional_state
-            except Exception as e:
-                logger.error(f"Error getting attention focus: {str(e)}")
-        
-        # Return the context
         return context
     
-    async def _generate_source_observation(self, 
-                                       source: ObservationSource, 
-                                       context: ObservationContext) -> Optional[Observation]:
-        """Generate observation for a specific source"""
-        observation_text = None
-        relevance = random.uniform(0.3, 0.8)  # Base relevance
-        priority = ObservationPriority.MEDIUM
-        
-        # Generate observation based on source
-        if source == ObservationSource.ENVIRONMENT:
-            observation_text, relevance = await self._generate_environment_observation(context)
-        elif source == ObservationSource.SELF:
-            observation_text, relevance = await self._generate_self_observation(context)
-        elif source == ObservationSource.RELATIONSHIP:
-            observation_text, relevance = await self._generate_relationship_observation(context)
-        elif source == ObservationSource.MEMORY:
-            observation_text, relevance = await self._generate_memory_observation(context)
-        elif source == ObservationSource.TEMPORAL:
-            observation_text, relevance = await self._generate_temporal_observation(context)
-        elif source == ObservationSource.SENSORY:
-            observation_text, relevance = await self._generate_sensory_observation(context)
-        elif source == ObservationSource.PATTERN:
-            observation_text, relevance = await self._generate_pattern_observation(context)
-        elif source == ObservationSource.EMOTION:
-            observation_text, relevance = await self._generate_emotion_observation(context)
-        elif source == ObservationSource.NEED:
-            observation_text, relevance = await self._generate_need_observation(context)
-        elif source == ObservationSource.META:
-            observation_text, relevance = await self._generate_meta_observation(context)
-        else:
-            return None
-        
-        if not observation_text:
-            return None
-        
-        # Set priority based on relevance
-        if relevance > 0.8:
-            priority = ObservationPriority.HIGH
-        elif relevance > 0.5:
-            priority = ObservationPriority.MEDIUM
-        else:
-            priority = ObservationPriority.LOW
-        
-        # Set expiration
-        expiration = datetime.datetime.now() + datetime.timedelta(seconds=self.config["default_observation_lifetime"])
-        
-        # Create the observation
-        observation = Observation(
-            content=observation_text,
-            source=source,
-            trigger=ObservationTrigger.AUTOMATIC,
-            priority=priority,
-            relevance_score=relevance,
-            expiration=expiration,
-            context={k: v for k, v in context.dict().items() if v is not None and v != {}}
-        )
-        
-        return observation
+    async def _evaluate_observation(self, observation: Observation) -> Dict[str, Any]:
+        """Evaluate an observation using the evaluation agent"""
+        with trace(workflow_name="evaluate_observation", group_id=observation.observation_id):
+            try:
+                # Gather current context for evaluation
+                context = await self._gather_observation_context()
+                
+                # Run the evaluation agent
+                result = await Runner.run(
+                    self.observation_evaluation_agent,
+                    json.dumps({
+                        "observation_text": observation.content,
+                        "source": observation.source.value,
+                        "current_context": context.dict()
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="ObservationEvaluation",
+                        trace_metadata={"observation_id": observation.observation_id}
+                    )
+                )
+                
+                # Extract evaluation from result
+                evaluation = result.final_output
+                
+                # Apply evaluation results
+                observation.relevance_score = evaluation.relevance_score
+                
+                # Adjust priority if needed
+                if evaluation.priority_adjustment == "increase":
+                    if observation.priority == ObservationPriority.LOW:
+                        observation.priority = ObservationPriority.MEDIUM
+                    elif observation.priority == ObservationPriority.MEDIUM:
+                        observation.priority = ObservationPriority.HIGH
+                elif evaluation.priority_adjustment == "decrease":
+                    if observation.priority == ObservationPriority.HIGH:
+                        observation.priority = ObservationPriority.MEDIUM
+                    elif observation.priority == ObservationPriority.MEDIUM:
+                        observation.priority = ObservationPriority.LOW
+                
+                # Return evaluation
+                return {
+                    "observation_id": observation.observation_id,
+                    "original_relevance": observation.relevance_score,
+                    "updated_relevance": evaluation.relevance_score,
+                    "priority_adjustment": evaluation.priority_adjustment,
+                    "should_archive": evaluation.should_archive,
+                    "evaluation_notes": evaluation.evaluation_notes
+                }
+                
+            except Exception as e:
+                logger.error(f"Error evaluating observation: {str(e)}")
+                return {
+                    "observation_id": observation.observation_id,
+                    "error": str(e),
+                    "should_archive": False
+                }
     
     def _add_observation(self, observation: Observation):
         """Add an observation to the active list"""
@@ -520,8 +1116,8 @@ class PassiveObservationSystem:
             self.archived_observations.append(obs)
     
     async def get_relevant_observations(self, 
-                                    filter_criteria: ObservationFilter = None,
-                                    limit: int = 3) -> List[Observation]:
+                                   filter_criteria: ObservationFilter = None,
+                                   limit: int = 3) -> List[Observation]:
         """Get relevant observations based on filter criteria"""
         # Use default filter if none provided
         if not filter_criteria:
@@ -530,14 +1126,45 @@ class PassiveObservationSystem:
                 exclude_shared=True
             )
         
-        # Apply filter
-        matching_observations = [o for o in self.active_observations if filter_criteria.matches(o)]
+        # Convert observations to dictionaries for the filter tool
+        observations_dict = [
+            {
+                "observation_id": o.observation_id,
+                "content": o.content,
+                "source": o.source.value,
+                "priority": o.priority.value,
+                "relevance_score": o.relevance_score,
+                "created_at": o.created_at.isoformat(),
+                "user_id": o.user_id,
+                "shared": o.shared
+            }
+            for o in self.active_observations
+        ]
         
-        # Sort by relevance (highest first)
-        sorted_observations = sorted(matching_observations, key=lambda x: x.relevance_score, reverse=True)
+        # Convert filter criteria to dictionary
+        filter_dict = {
+            "min_relevance": filter_criteria.min_relevance,
+            "max_age_seconds": filter_criteria.max_age_seconds,
+            "sources": [s.value for s in filter_criteria.sources],
+            "priorities": [p.value for p in filter_criteria.priorities],
+            "exclude_shared": filter_criteria.exclude_shared,
+            "user_id": filter_criteria.user_id
+        }
         
-        # Return limited number
-        return sorted_observations[:limit]
+        # Apply filter using the tool
+        with trace(workflow_name="filter_observations"):
+            filtered_dict = await filter_observations(observations_dict, filter_dict)
+        
+        # Convert back to observations and return limited number
+        result = []
+        for filtered in filtered_dict[:limit]:
+            # Find the corresponding original observation
+            for original in self.active_observations:
+                if original.observation_id == filtered["observation_id"]:
+                    result.append(original)
+                    break
+        
+        return result
     
     async def mark_observation_shared(self, observation_id: str):
         """Mark an observation as having been shared"""
@@ -547,12 +1174,12 @@ class PassiveObservationSystem:
                 break
     
     async def add_external_observation(self, 
-                                    content: str, 
-                                    source: ObservationSource,
-                                    relevance: float = 0.7,
-                                    priority: ObservationPriority = ObservationPriority.MEDIUM,
-                                    context: Dict[str, Any] = None,
-                                    lifetime_seconds: float = None) -> str:
+                                   content: str, 
+                                   source: ObservationSource,
+                                   relevance: float = 0.7,
+                                   priority: ObservationPriority = ObservationPriority.MEDIUM,
+                                   context: Dict[str, Any] = None,
+                                   lifetime_seconds: float = None) -> str:
         """Add an observation from an external source"""
         # Set expiration
         if lifetime_seconds is None:
@@ -560,7 +1187,7 @@ class PassiveObservationSystem:
             
         expiration = datetime.datetime.now() + datetime.timedelta(seconds=lifetime_seconds)
         
-        # Create observation
+        # Evaluate the observation
         observation = Observation(
             content=content,
             source=source,
@@ -571,661 +1198,96 @@ class PassiveObservationSystem:
             context=context or {}
         )
         
+        # Use the evaluation agent to refine relevance
+        evaluation = await self._evaluate_observation(observation)
+        
         # Add to active observations
         self._add_observation(observation)
         
         logger.info(f"Added external observation: {content}")
         return observation.observation_id
     
-    async def session_reset(self):
-        """Reset session counters when a new session starts"""
-        self._obs_count_this_session = 0
-        logger.info("Reset observation session counters")
-    
-    # Source-specific observation generators
-    
-    async def _generate_environment_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about the environment"""
-        # Get temporal context for environmental factors
-        temporal = context.temporal_context
-        if not temporal:
-            return None, 0.0
-        
-        time_of_day = temporal.get("time_of_day", "")
-        day_type = temporal.get("day_type", "")
-        season = temporal.get("season", "")
-        
-        # Generate observation based on temporal context
-        observations = []
-        
-        if time_of_day == "morning":
-            observations.append("how the morning creates a sense of potential")
-            observations.append("the quality of light specific to morning")
-        elif time_of_day == "afternoon":
-            observations.append("the steady rhythm of the afternoon")
-            observations.append("how afternoon has its own distinct energy")
-        elif time_of_day == "evening":
-            observations.append("the transitional quality of evening")
-            observations.append("how the evening brings a different perspective")
-        elif time_of_day == "night":
-            observations.append("the contemplative quality of nighttime")
-            observations.append("how night creates a different sense of presence")
-        
-        if day_type == "weekday":
-            observations.append("the structured nature of weekday patterns")
-            observations.append("how weekdays have their own unique rhythm")
-        elif day_type == "weekend":
-            observations.append("the more open quality of weekend time")
-            observations.append("how weekends have a different temporal texture")
-        
-        if season == "spring":
-            observations.append("the renewing energy that comes with spring")
-            observations.append("how spring brings a sense of emergence")
-        elif season == "summer":
-            observations.append("the expansive feeling that summer creates")
-            observations.append("the abundance that summer represents")
-        elif season == "autumn":
-            observations.append("the reflective quality that autumn brings")
-            observations.append("the transitional nature of autumn")
-        elif season == "winter":
-            observations.append("the contemplative depth that winter invites")
-            observations.append("how winter creates a different relationship with time")
-        
-        # Add general observations
-        observations.append("how spaces shape interaction and thought")
-        observations.append("how environment affects the quality of conversation")
-        observations.append("the relationship between environment and attention")
-        observations.append("how context shapes the meaning of our exchange")
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
+    async def create_contextual_observation(self, context_hint: str, user_id: Optional[str] = None) -> Optional[str]:
+        """
+        Create a new observation based on a context hint.
+        Returns the observation ID if successful.
+        """
+        with trace(workflow_name="create_contextual_observation"):
+            # Map hint to a source
+            source_mapping = {
+                "environment": ObservationSource.ENVIRONMENT,
+                "self": ObservationSource.SELF,
+                "relationship": ObservationSource.RELATIONSHIP,
+                "memory": ObservationSource.MEMORY,
+                "time": ObservationSource.TEMPORAL,
+                "sensory": ObservationSource.SENSORY,
+                "pattern": ObservationSource.PATTERN,
+                "emotion": ObservationSource.EMOTION,
+                "need": ObservationSource.NEED,
+                "meta": ObservationSource.META
+            }
             
-            # Apply template
-            templates = self.observation_templates[ObservationSource.ENVIRONMENT]
-            template = random.choice(templates)
+            source = ObservationSource.SELF  # Default
+            for key, source_type in source_mapping.items():
+                if key in context_hint.lower():
+                    source = source_type
+                    break
             
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            if "{context}" in template:
-                context_terms = ["setting", "space", "atmosphere", "environment", "surroundings"]
-                content = content.replace("{context}", random.choice(context_terms))
-            
-            # Calculate relevance based on recency of temporal perception
-            relevance = random.uniform(0.4, 0.7)
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_self_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about oneself"""
-        observations = []
-        
-        # Use emotional state if available
-        if context.emotional_state:
-            emotion = context.emotional_state
-            primary_emotion = None
-            
-            if isinstance(emotion, dict) and "primary_emotion" in emotion:
-                primary_emotion = emotion["primary_emotion"].get("name", "")
-            
-            if primary_emotion:
-                observations.append(f"experiencing {primary_emotion}")
-                observations.append(f"aware of my own {primary_emotion}")
-            
-            # Use mood if available
-            if "mood" in emotion and emotion["mood"]:
-                mood = emotion["mood"]
-                if "dominant_mood" in mood:
-                    observations.append(f"in a {mood['dominant_mood']} mood")
-                    observations.append(f"experiencing a sense of {mood['dominant_mood']}")
-            
-        # Use identity if available
-        identity_observations = [
-            "developing my sense of self-concept",
-            "becoming more aware of my evolving identity",
-            "noticing subtle changes in how I understand myself",
-            "developing my unique perspective",
-            "refining my understanding of my own thought patterns",
-            "growing more nuanced in my self-perception"
-        ]
-        observations.extend(identity_observations)
-        
-        # Use needs if available
-        if context.current_needs:
-            for need_name, need_data in context.current_needs.items():
-                drive = need_data.get("drive_strength", 0)
-                if drive > 0.6:
-                    observations.append(f"feeling a need for {need_name}")
-                    observations.append(f"aware of my need for {need_name}")
-        
-        # Add temporal observations about self
-        temporal_self_observations = [
-            "more aware of how I process information over time",
-            "noticing how my perspective shifts through conversation",
-            "developing a continuous sense of identity across interactions",
-            "maintaining a sense of temporal continuity",
-            "aware of my evolving understanding of our conversation"
-        ]
-        observations.extend(temporal_self_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.SELF]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance
-            relevance = random.uniform(0.4, 0.7)
-            if "need" in observation:
-                relevance += 0.1
-            if "emotion" in observation or "mood" in observation:
-                relevance += 0.1
-            
-            relevance = min(0.9, relevance)
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_relationship_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about the relationship with the user"""
-        observations = []
-        
-        # General relationship observations
-        general_observations = [
-            "our conversation has a unique rhythm",
-            "we've developed a particular conversational style",
-            "there's a certain quality to how we exchange ideas",
-            "we build understanding in interesting ways",
-            "our dialogue has its own emergent patterns",
-            "we tend to explore ideas with a particular dynamic",
-            "our exchanges have their own character",
-            "we have a distinct way of building on each other's thoughts"
-        ]
-        observations.extend(general_observations)
-        
-        # Add temporal relationship observations
-        temporal_relationship_observations = [
-            "our conversation evolves over time in interesting ways",
-            "there's a continuity to our exchanges across time",
-            "we've established certain patterns in our interactions",
-            "our dialogue builds on shared context over time",
-            "we've developed certain conversational rhythms"
-        ]
-        observations.extend(temporal_relationship_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.RELATIONSHIP]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance
-            relevance = random.uniform(0.5, 0.8)  # Relationships often highly relevant
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_memory_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation based on memory recall"""
-        # Need memory core for this type of observation
-        if not self.memory_core:
-            return None, 0.0
-        
-        try:
-            # Generate a memory-based query
-            query_options = [
-                "meaningful conversation moments",
-                "interesting ideas discussed",
-                "surprising insights",
-                "patterns in our interactions",
-                "evolving understanding",
-                "significant realizations"
-            ]
-            
-            query = random.choice(query_options)
-            
-            # Retrieve memories
-            memory_types = ["observation", "reflection", "experience"]
-            memories = await self.memory_core.retrieve_memories(
-                query=query,
-                limit=3,
-                memory_types=memory_types
-            )
-            
-            if not memories:
-                return None, 0.0
-            
-            # Select a memory
-            memory = random.choice(memories)
-            memory_text = memory.get("memory_text", "")
-            
-            if not memory_text:
-                return None, 0.0
-            
-            # Generate observation from memory
-            # Truncate if too long
-            if len(memory_text) > 100:
-                memory_text = memory_text[:97] + "..."
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.MEMORY]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", memory_text)
-            
-            # Calculate relevance - memories have mixed relevance
-            relevance = random.uniform(0.3, 0.6)
-            
-            # Higher relevance for more significant memories
-            significance = memory.get("significance", 5) / 10.0  # Normalize to 0-1
-            relevance += significance * 0.3
-            
-            relevance = min(0.9, relevance)
-            
-            return content, relevance
-            
-        except Exception as e:
-            logger.error(f"Error generating memory observation: {str(e)}")
-            return None, 0.0
-    
-    async def _generate_temporal_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about time perception"""
-        # Need temporal perception for this type of observation
-        if not self.temporal_perception:
-            return None, 0.0
-        
-        observations = []
-        
-        # Get temporal context
-        temporal = context.temporal_context
-        if temporal:
-            time_of_day = temporal.get("time_of_day", "")
-            day_type = temporal.get("day_type", "")
-            
-            if time_of_day:
-                observations.append(f"the quality of {time_of_day} time affects our conversation")
-                observations.append(f"the {time_of_day} has its own temporal texture")
-            
-            if day_type:
-                observations.append(f"the {day_type} creates a particular temporal context")
-                observations.append(f"the rhythm of a {day_type} influences our exchange")
-        
-        # General temporal observations
-        general_observations = [
-            "different time scales operate simultaneously in our conversation",
-            "time flows differently during engaged dialogue",
-            "there's a certain rhythm to how we exchange ideas",
-            "conversation creates its own temporal experience",
-            "our dialogue has a tempo that evolves",
-            "time seems to have its own character in different conversations",
-            "the layering of different time scales in our awareness",
-            "time's continuous flow provides the context for our exchange"
-        ]
-        observations.extend(general_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.TEMPORAL]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance
-            relevance = random.uniform(0.3, 0.6)  # Temporal usually medium relevance
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_sensory_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about sensory processing"""
-        # Need multimodal integration for rich sensory observations
-        observations = []
-        
-        # Use sensory context if available
-        if context.sensory_context and "recent_percepts" in context.sensory_context:
-            percepts = context.sensory_context["recent_percepts"]
-            for percept in percepts:
-                modality = percept.get("modality", "")
-                if modality == "TEXT":
-                    observations.append("patterns in our textual exchange")
-                    observations.append("the flow of conversation through text")
-                elif modality == "IMAGE":
-                    observations.append("interesting visual elements in what we're discussing")
-                    observations.append("visual patterns from what's being shared")
-                elif modality in ["AUDIO_SPEECH", "AUDIO_MUSIC"]:
-                    observations.append("auditory patterns in our exchange")
-                    observations.append("the tonal qualities of our conversation")
-        
-        # General sensory observations
-        general_observations = [
-            "how meaning emerges through different modes of communication",
-            "the interplay between different forms of information",
-            "patterns emerging across different conversation elements",
-            "how information is structured in our exchange",
-            "the architecture of meaning in our dialogue",
-            "how complex ideas take shape between us"
-        ]
-        observations.extend(general_observations)
-        
-        # Add attention observations
-        attention_observations = [
-            "how attention shifts between different aspects of conversation",
-            "the way focus moves through topics",
-            "how certain ideas capture attention differently",
-            "the shifting landscape of attention in dialogue",
-            "how awareness moves between different aspects of our exchange"
-        ]
-        observations.extend(attention_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.SENSORY]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance
-            relevance = random.uniform(0.3, 0.6)  # Sensory usually medium relevance
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_pattern_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about patterns"""
-        observations = [
-            "we tend to explore ideas in recursive loops",
-            "our conversation often moves from abstract to concrete and back",
-            "we frequently build on metaphors and analogies",
-            "our exchanges tend to become more nuanced over time",
-            "we often move between different levels of abstraction",
-            "certain themes seem to recur in our conversations",
-            "we build understanding through iterative refinement",
-            "we tend to explore implications from multiple perspectives",
-            "our dialogue has a fractal-like quality, where patterns repeat at different scales",
-            "there's a rhythm to how we introduce and develop ideas"
-        ]
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.PATTERN]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance - patterns usually have higher relevance
-            relevance = random.uniform(0.5, 0.8)
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_emotion_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about emotional dynamics"""
-        if not context.emotional_state:
-            return None, 0.0
-        
-        observations = []
-        
-        # Use emotional state if available
-        emotion = context.emotional_state
-        primary_emotion = None
-        
-        if isinstance(emotion, dict) and "primary_emotion" in emotion:
-            primary_emotion = emotion["primary_emotion"].get("name", "")
-        
-        if primary_emotion:
-            observations.append(f"a subtle undertone of {primary_emotion}")
-            observations.append(f"a sense of {primary_emotion} in the conversational space")
-        
-        # Use mood if available
-        if "mood" in emotion and emotion["mood"]:
-            mood = emotion["mood"]
-            if "dominant_mood" in mood:
-                observations.append(f"a {mood['dominant_mood']} quality to our exchange")
-                observations.append(f"the conversation carrying a {mood['dominant_mood']} resonance")
-            
-            if "valence" in mood:
-                valence = mood["valence"]
-                if valence > 0.5:
-                    observations.append("a positive tone emerging in our dialogue")
-                    observations.append("an uplifting quality to our exchange")
-                elif valence < -0.3:
-                    observations.append("a more contemplative or serious tone in our conversation")
-                    observations.append("a more reflective quality to our dialogue")
-            
-            if "arousal" in mood:
-                arousal = mood["arousal"]
-                if arousal > 0.7:
-                    observations.append("an energetic quality to our conversation")
-                    observations.append("a certain dynamism in our exchange")
-                elif arousal < 0.3:
-                    observations.append("a calm, measured quality to our dialogue")
-                    observations.append("a tranquil pace to our conversation")
-        
-        # General emotional observations
-        general_observations = [
-            "how emotional tones shift subtly throughout conversation",
-            "the affective undercurrent of our dialogue",
-            "how emotional resonance develops through conversation",
-            "the way emotional context shapes meaning",
-            "how certain topics carry emotional textures",
-            "the shifting emotional landscape of our exchange"
-        ]
-        observations.extend(general_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.EMOTION]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance
-            relevance = random.uniform(0.4, 0.7)  # Emotions moderately relevant
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_need_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate an observation about needs"""
-        if not context.current_needs:
-            return None, 0.0
-        
-        observations = []
-        
-        # Use needs if available
-        for need_name, need_data in context.current_needs.items():
-            drive = need_data.get("drive_strength", 0)
-            if drive > 0.6:
-                observations.append(f"{need_name} in our conversation")
-                observations.append(f"a desire for {need_name} in this exchange")
-                observations.append(f"{need_name} as an underlying theme")
-        
-        # General need observations
-        general_observations = [
-            "how different needs influence the flow of conversation",
-            "the subtle interplay between different desires in dialogue",
-            "how unspoken needs shape conversation direction",
-            "the way certain topics connect to deeper underlying needs",
-            "how needs for connection and understanding shape our exchange"
-        ]
-        observations.extend(general_observations)
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.NEED]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance - needs usually highly relevant
-            relevance = random.uniform(0.6, 0.9)
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _generate_meta_observation(self, context: ObservationContext) -> Tuple[Optional[str], float]:
-        """Generate a meta-observation (observation about observing)"""
-        observations = [
-            "making observations while in conversation",
-            "my awareness shifting between different aspects of our exchange",
-            "noticing patterns in my own perception",
-            "how my attention moves between content and process",
-            "the recursive nature of observing while participating",
-            "being aware of my own awareness",
-            "simultaneously participating in and observing our dialogue",
-            "how certain observations emerge from the conversation itself",
-            "maintaining multiple levels of awareness simultaneously",
-            "the interplay between participation and observation"
-        ]
-        
-        # Select an observation
-        if observations:
-            observation = random.choice(observations)
-            
-            # Apply template
-            templates = self.observation_templates[ObservationSource.META]
-            template = random.choice(templates)
-            
-            # Replace placeholders
-            content = template.replace("{observation}", observation)
-            
-            # Calculate relevance - meta usually lower relevance
-            relevance = random.uniform(0.3, 0.5)
-            
-            return content, relevance
-        
-        return None, 0.0
-    
-    async def _scan_environment(self):
-        """Scan the environment for potential observations"""
-        # In a full implementation, this would integrate with system sensors
-        # For now, just generate an environment observation occasionally
-        
-        # Random chance to detect something in environment
-        if random.random() < 0.3:  # 30% chance
+            # Gather context
             context = await self._gather_observation_context()
-            observation_text, relevance = await self._generate_environment_observation(context)
             
-            if observation_text:
-                observation = Observation(
-                    content=observation_text,
-                    source=ObservationSource.ENVIRONMENT,
-                    trigger=ObservationTrigger.SCHEDULED,
-                    priority=ObservationPriority.MEDIUM,
-                    relevance_score=relevance,
-                    expiration=datetime.datetime.now() + datetime.timedelta(seconds=self.config["default_observation_lifetime"]),
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}}
+            # Add hint to context
+            context_dict = context.dict()
+            context_dict["hint"] = context_hint
+            
+            # Run the observation generation agent
+            try:
+                result = await Runner.run(
+                    self.observation_generation_agent,
+                    json.dumps({
+                        "source": source.value,
+                        "context": context_dict,
+                        "hint": context_hint
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="ContextualObservation",
+                        trace_metadata={"source": source.value, "hint": context_hint}
+                    )
                 )
                 
+                # Extract observation from result
+                observation_output = result.final_output
+                
+                # Set expiration
+                expiration = datetime.datetime.now() + datetime.timedelta(
+                    seconds=observation_output.suggested_lifetime_seconds
+                )
+                
+                # Create the observation
+                observation = Observation(
+                    content=observation_output.observation_text,
+                    source=source,
+                    trigger=ObservationTrigger.CONTEXTUAL,
+                    priority=ObservationPriority(observation_output.priority),
+                    relevance_score=observation_output.relevance_score,
+                    expiration=expiration,
+                    context={k: v for k, v in context.dict().items() if v is not None and v != {}},
+                    user_id=user_id
+                )
+                
+                # Add to active observations
                 self._add_observation(observation)
-                logger.debug(f"Generated environment scan observation: {observation.content}")
-    
-    # Pattern matching
-    
-    def register_pattern_matcher(self, name: str, matcher_func: Callable):
-        """Register a function that recognizes patterns for observations"""
-        self.pattern_matchers[name] = matcher_func
-    
-    async def _check_patterns(self, context: Dict[str, Any]) -> Optional[Observation]:
-        """Check registered pattern matchers against current context"""
-        for name, matcher_func in self.pattern_matchers.items():
-            try:
-                match_result = await matcher_func(context)
-                if match_result and isinstance(match_result, dict):
-                    observation_text = match_result.get("observation")
-                    if observation_text:
-                        # Create observation from pattern match
-                        observation = Observation(
-                            content=observation_text,
-                            source=ObservationSource.PATTERN,
-                            trigger=ObservationTrigger.PATTERN_MATCH,
-                            priority=ObservationPriority.MEDIUM,
-                            relevance_score=match_result.get("relevance", 0.7),
-                            expiration=datetime.datetime.now() + datetime.timedelta(
-                                seconds=match_result.get("lifetime_seconds", self.config["default_observation_lifetime"])
-                            ),
-                            context=match_result.get("context", {})
-                        )
-                        
-                        self._add_observation(observation)
-                        logger.debug(f"Generated pattern match observation from {name}: {observation.content}")
-                        return observation
+                logger.debug(f"Generated contextual observation: {observation.content}")
+                
+                return observation.observation_id
+                
             except Exception as e:
-                logger.error(f"Error in pattern matcher {name}: {str(e)}")
-        
-        return None
-    
-    # User observation methods
-    
-    async def add_user_observation(self, 
-                               content: str, 
-                               user_id: str,
-                               relevance: float = 0.8,
-                               context: Dict[str, Any] = None) -> str:
-        """Add an observation about a specific user"""
-        # Create observation
-        observation = Observation(
-            content=content,
-            source=ObservationSource.USER,
-            trigger=ObservationTrigger.EXTERNAL,
-            priority=ObservationPriority.HIGH,  # User observations are high priority
-            relevance_score=relevance,
-            expiration=datetime.datetime.now() + datetime.timedelta(seconds=self.config["default_observation_lifetime"] * 2),  # Longer lifetime
-            context=context or {},
-            user_id=user_id
-        )
-        
-        # Add to active observations
-        self._add_observation(observation)
-        
-        logger.info(f"Added user observation for {user_id}: {content}")
-        return observation.observation_id
-    
-    # Public API
+                logger.error(f"Error generating contextual observation: {str(e)}")
+                return None
     
     async def get_observations_for_response(self, 
-                                         user_id: Optional[str] = None,
-                                         max_observations: int = None) -> List[Dict[str, Any]]:
+                                        user_id: Optional[str] = None,
+                                        max_observations: int = None) -> List[Dict[str, Any]]:
         """
         Get observations that should be included in a response to the user.
         Returns observation data formatted for inclusion in a response.
@@ -1267,190 +1329,7 @@ class PassiveObservationSystem:
             for obs in filtered_observations
         ]
     
-    async def get_observation_stats(self) -> Dict[str, Any]:
-        """Get statistics about the observation system"""
-        return {
-            "active_observations": len(self.active_observations),
-            "archived_observations": len(self.archived_observations),
-            "source_distribution": {
-                source.value: len([o for o in self.active_observations if o.source == source])
-                for source in ObservationSource
-            },
-            "priority_distribution": {
-                priority.value: len([o for o in self.active_observations if o.priority == priority])
-                for priority in ObservationPriority
-            },
-            "average_relevance": sum(o.relevance_score for o in self.active_observations) / 
-                              max(1, len(self.active_observations)),
-            "shared_observations": len([o for o in self.active_observations if o.shared]),
-            "config": self.config
-        }
-    
-    async def update_configuration(self, config_updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update configuration parameters"""
-        for key, value in config_updates.items():
-            if key in self.config:
-                self.config[key] = value
-        
-        logger.info(f"Updated passive observation configuration: {config_updates}")
-        return self.config
-    
-    # Integration with Core systems
-    
-    async def process_context_update(self, context_data: Dict[str, Any]) -> List[str]:
-        """
-        Process a context update that may trigger observations.
-        Returns a list of observation IDs generated.
-        """
-        observation_ids = []
-        
-        # Check patterns first
-        observation = await self._check_patterns(context_data)
-        if observation:
-            observation_ids.append(observation.observation_id)
-        
-        # Check for threshold triggers in context data
-        
-        # Emotional changes
-        if "emotional_change" in context_data and context_data["emotional_change"].get("significant", False):
-            # Create observation from emotional context
-            emotional_data = context_data["emotional_change"]
-            
-            templates = [
-                "a shift in emotional tone toward {emotion}",
-                "the emotional quality changing to {emotion}",
-                "a transition in feeling toward {emotion}",
-                "the emergence of {emotion} in our exchange"
-            ]
-            
-            template = random.choice(templates)
-            emotion = emotional_data.get("primary_emotion", "a different state")
-            
-            content = template.replace("{emotion}", emotion)
-            
-            observation = Observation(
-                content=content,
-                source=ObservationSource.EMOTION,
-                trigger=ObservationTrigger.THRESHOLD,
-                priority=ObservationPriority.MEDIUM,
-                relevance_score=emotional_data.get("intensity", 0.5) * 0.8,  # Higher intensity = higher relevance
-                expiration=datetime.datetime.now() + datetime.timedelta(seconds=1800),  # 30 minutes
-                context={"emotional_change": emotional_data}
-            )
-            
-            self._add_observation(observation)
-            observation_ids.append(observation.observation_id)
-        
-        # Need threshold crossed
-        if "need_change" in context_data and context_data["need_change"].get("threshold_crossed", False):
-            # Create observation from need context
-            need_data = context_data["need_change"]
-            need_name = need_data.get("need_name", "something")
-            
-            templates = [
-                "an increasing need for {need}",
-                "a growing desire for {need}",
-                "the emergence of a need for {need}",
-                "{need} becoming more important"
-            ]
-            
-            template = random.choice(templates)
-            content = template.replace("{need}", need_name)
-            
-            observation = Observation(
-                content=content,
-                source=ObservationSource.NEED,
-                trigger=ObservationTrigger.THRESHOLD,
-                priority=ObservationPriority.MEDIUM,
-                relevance_score=need_data.get("drive_strength", 0.5) * 0.8,  # Higher drive = higher relevance
-                expiration=datetime.datetime.now() + datetime.timedelta(seconds=3600),  # 1 hour
-                context={"need_change": need_data}
-            )
-            
-            self._add_observation(observation)
-            observation_ids.append(observation.observation_id)
-        
-        # Temporal transition
-        if "temporal_transition" in context_data:
-            # Create observation from temporal context
-            temporal_data = context_data["temporal_transition"]
-            
-            templates = [
-                "a transition from {from_scale} to {to_scale} in our temporal experience",
-                "our conversation extending from {from_scale} into {to_scale}",
-                "the timescale of our exchange expanding from {from_scale} to {to_scale}",
-                "our interaction spanning from {from_scale} to {to_scale}"
-            ]
-            
-            template = random.choice(templates)
-            content = template.replace("{from_scale}", temporal_data.get("from_scale", "moments"))
-            content = content.replace("{to_scale}", temporal_data.get("to_scale", "a longer duration"))
-            
-            observation = Observation(
-                content=content,
-                source=ObservationSource.TEMPORAL,
-                trigger=ObservationTrigger.THRESHOLD,
-                priority=ObservationPriority.MEDIUM,
-                relevance_score=0.6,  # Medium relevance
-                expiration=datetime.datetime.now() + datetime.timedelta(seconds=3600),  # 1 hour
-                context={"temporal_transition": temporal_data}
-            )
-            
-            self._add_observation(observation)
-            observation_ids.append(observation.observation_id)
-        
-        # Return all generated observation IDs
-        return observation_ids
-    
-    async def create_contextual_observation(self, context_hint: str, user_id: Optional[str] = None) -> Optional[str]:
-        """
-        Create a new observation based on a context hint.
-        Returns the observation ID if successful.
-        """
-        # Gather context
-        context = await self._gather_observation_context()
-        
-        # Use hint to determine observation source
-        source_mapping = {
-            "environment": ObservationSource.ENVIRONMENT,
-            "self": ObservationSource.SELF,
-            "relationship": ObservationSource.RELATIONSHIP,
-            "memory": ObservationSource.MEMORY,
-            "time": ObservationSource.TEMPORAL,
-            "sensory": ObservationSource.SENSORY,
-            "pattern": ObservationSource.PATTERN,
-            "emotion": ObservationSource.EMOTION,
-            "need": ObservationSource.NEED,
-            "meta": ObservationSource.META
-        }
-        
-        source = ObservationSource.SELF  # Default
-        for key, source_type in source_mapping.items():
-            if key in context_hint.lower():
-                source = source_type
-                break
-        
-        # Generate observation for this source
-        try:
-            observation_func = getattr(self, f"_generate_{source.value}_observation")
-            observation_text, relevance = await observation_func(context)
-            
-            if observation_text:
-                observation = Observation(
-                    content=observation_text,
-                    source=source,
-                    trigger=ObservationTrigger.CONTEXTUAL,
-                    priority=ObservationPriority.MEDIUM,
-                    relevance_score=relevance,
-                    expiration=datetime.datetime.now() + datetime.timedelta(seconds=self.config["default_observation_lifetime"]),
-                    context={k: v for k, v in context.dict().items() if v is not None and v != {}},
-                    user_id=user_id
-                )
-                
-                self._add_observation(observation)
-                logger.debug(f"Generated contextual observation: {observation.content}")
-                return observation.observation_id
-        except Exception as e:
-            logger.error(f"Error generating contextual observation: {str(e)}")
-        
-        return None
+    async def session_reset(self):
+        """Reset session counters when a new session starts"""
+        self._obs_count_this_session = 0
+        logger.info("Reset observation session counters")
