@@ -130,6 +130,95 @@ def get_dynamic_instructions(agent_type: str, context: Optional[Dict[str, Any]] 
     # Apply the recommended handoff instructions prefix
     return prompt_with_handoff_instructions(instructions)
 
+# Add a new class for analysis tools
+class AnalysisTools:
+    """
+    Tools for analyzing emotional patterns and states
+    """
+    
+    def __init__(self, emotional_core):
+        """
+        Initialize with reference to the emotional core
+        
+        Args:
+            emotional_core: Reference to the emotional core system
+        """
+        self.emotional_core = emotional_core
+    
+    @function_tool
+    async def analyze_emotional_patterns(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+        """
+        Analyze patterns in emotional state history
+        
+        Args:
+            ctx: Run context wrapper
+            
+        Returns:
+            Analysis of emotional patterns
+        """
+        with trace(
+            workflow_name="Emotional_Pattern_Analysis", 
+            trace_id=gen_trace_id(),
+            metadata={"cycle": ctx.context.cycle_count}
+        ):
+            if len(self.emotional_core.emotional_state_history) < 2:
+                return {
+                    "message": "Not enough emotional state history for pattern analysis",
+                    "patterns": {}
+                }
+            
+            patterns = {}
+            
+            # Track emotion changes over time using an efficient approach
+            emotion_trends = defaultdict(list)
+            
+            # Use a sliding window for more efficient analysis
+            analysis_window = self.emotional_core.emotional_state_history[-min(20, len(self.emotional_core.emotional_state_history)):]
+            
+            for state in analysis_window:
+                if "primary_emotion" in state:
+                    emotion = state["primary_emotion"].get("name", "Neutral")
+                    intensity = state["primary_emotion"].get("intensity", 0.5)
+                    emotion_trends[emotion].append(intensity)
+            
+            # Analyze trends for each emotion
+            for emotion, intensities in emotion_trends.items():
+                if len(intensities) > 1:
+                    # Calculate trend
+                    start = intensities[0]
+                    end = intensities[-1]
+                    change = end - start
+                    
+                    trend = "stable" if abs(change) < 0.1 else ("increasing" if change > 0 else "decreasing")
+                    
+                    # Calculate volatility
+                    volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
+                    
+                    patterns[emotion] = {
+                        "trend": trend,
+                        "volatility": volatility,
+                        "start_intensity": start,
+                        "current_intensity": end,
+                        "change": change,
+                        "occurrences": len(intensities)
+                    }
+            
+            # Create a custom span for the pattern analysis
+            with custom_span(
+                "emotional_pattern_analysis",
+                data={
+                    "patterns_detected": list(patterns.keys()),
+                    "emotion_sequence": [state.get("primary_emotion", {}).get("name", "Unknown") 
+                                        for state in analysis_window[-5:]],  # Last 5 emotions
+                    "analysis_window_size": len(analysis_window)
+                }
+            ):
+                return {
+                    "patterns": patterns,
+                    "history_size": len(self.emotional_core.emotional_state_history),
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
+
 class EmotionalCore:
     """
     Enhanced agent-based emotion management system for Nyx implementing the Digital Neurochemical Model.
@@ -284,6 +373,7 @@ class EmotionalCore:
         self.emotion_tools = EmotionTools(self)
         self.reflection_tools = ReflectionTools(self)
         self.learning_tools = LearningTools(self)
+        self.analysis_tools = AnalysisTools(self)  # Add new analysis tools class
         
         # Initialize the base model for agent creation
         self.base_model = model
@@ -354,13 +444,13 @@ class EmotionalCore:
             model_settings=ModelSettings(temperature=0.4)
         )
         
-        # Create reflection agent
+        # Create reflection agent - updated to use analysis_tools
         self.agents["reflection"] = base_agent.clone(
             name="Emotional Reflection Agent",
             tools=[
                 function_tool(self.emotion_tools.get_emotional_state_matrix),
                 function_tool(self.reflection_tools.generate_internal_thought),
-                function_tool(self.analyze_emotional_patterns)
+                function_tool(self.analysis_tools.analyze_emotional_patterns)  # Now using the method from analysis_tools
             ],
             model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
             output_type=InternalThoughtOutput
@@ -890,77 +980,6 @@ class EmotionalCore:
             raise ValueError(f"Unknown agent type: {agent_type}")
             
         return self.agents[agent_type]
-    
-    @function_tool
-    async def analyze_emotional_patterns(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
-        """
-        Analyze patterns in emotional state history
-        
-        Returns:
-            Analysis of emotional patterns
-        """
-        with trace(
-            workflow_name="Emotional_Pattern_Analysis", 
-            trace_id=gen_trace_id(),
-            metadata={"cycle": ctx.context.cycle_count}
-        ):
-            if len(self.emotional_state_history) < 2:
-                return {
-                    "message": "Not enough emotional state history for pattern analysis",
-                    "patterns": {}
-                }
-            
-            patterns = {}
-            
-            # Track emotion changes over time using an efficient approach
-            emotion_trends = defaultdict(list)
-            
-            # Use a sliding window for more efficient analysis
-            analysis_window = self.emotional_state_history[-min(20, len(self.emotional_state_history)):]
-            
-            for state in analysis_window:
-                if "primary_emotion" in state:
-                    emotion = state["primary_emotion"].get("name", "Neutral")
-                    intensity = state["primary_emotion"].get("intensity", 0.5)
-                    emotion_trends[emotion].append(intensity)
-            
-            # Analyze trends for each emotion
-            for emotion, intensities in emotion_trends.items():
-                if len(intensities) > 1:
-                    # Calculate trend
-                    start = intensities[0]
-                    end = intensities[-1]
-                    change = end - start
-                    
-                    trend = "stable" if abs(change) < 0.1 else ("increasing" if change > 0 else "decreasing")
-                    
-                    # Calculate volatility
-                    volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
-                    
-                    patterns[emotion] = {
-                        "trend": trend,
-                        "volatility": volatility,
-                        "start_intensity": start,
-                        "current_intensity": end,
-                        "change": change,
-                        "occurrences": len(intensities)
-                    }
-            
-            # Create a custom span for the pattern analysis
-            with custom_span(
-                "emotional_pattern_analysis",
-                data={
-                    "patterns_detected": list(patterns.keys()),
-                    "emotion_sequence": [state.get("primary_emotion", {}).get("name", "Unknown") 
-                                        for state in analysis_window[-5:]],  # Last 5 emotions
-                    "analysis_window_size": len(analysis_window)
-                }
-            ):
-                return {
-                    "patterns": patterns,
-                    "history_size": len(self.emotional_state_history),
-                    "analysis_time": datetime.datetime.now().isoformat()
-                }
     
     def _record_emotional_state(self):
         """Record current emotional state in history using efficient circular buffer"""
@@ -1525,3 +1544,34 @@ class EmotionalCore:
             "emotional_state_history_size": len(self.emotional_state_history),
             "context_cycle_count": self.context.cycle_count
         }
+
+# Define helper function for tracing - adding stub for compatibility
+def create_emotion_trace(workflow_name, ctx, input_text_length, run_id, pattern_analysis):
+    """Stub for create_emotion_trace to maintain compatibility"""
+    return custom_span(
+        workflow_name,
+        data={
+            "input_text_length": input_text_length,
+            "run_id": run_id,
+            "pattern_analysis": pattern_analysis,
+            "cycle_count": ctx.context.cycle_count
+        }
+    )
+
+# Define helper function for run config - adding stub for compatibility
+def create_emotional_run_config(workflow_name, cycle_count, conversation_id, input_text_length, 
+                               pattern_analysis, model, temperature, max_tokens):
+    """Stub for create_emotional_run_config to maintain compatibility"""
+    return RunConfig(
+        workflow_name=workflow_name,
+        trace_id=f"{workflow_name}_{cycle_count}",
+        group_id=conversation_id,
+        metadata={
+            "cycle_count": cycle_count,
+            "input_text_length": input_text_length,
+            "pattern_analysis": pattern_analysis
+        },
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens
+    )
