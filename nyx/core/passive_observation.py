@@ -56,6 +56,7 @@ class ObservationTrigger(str, Enum):
     THRESHOLD = "threshold"
     SCHEDULED = "scheduled"
     EXTERNAL = "external"
+    ACTION_DRIVEN = "action_driven"  # New trigger for action-initiated observations
 
 class ObservationPriority(str, Enum):
     """Priority level of an observation"""
@@ -77,6 +78,8 @@ class Observation(BaseModel):
     relevance_score: float = Field(0.5, description="How relevant the observation is to current context")
     shared: bool = Field(False, description="Whether this observation has been shared")
     user_id: Optional[str] = Field(None, description="User ID if observation is user-specific")
+    # New field for action integration
+    action_references: List[str] = Field(default_factory=list, description="IDs of actions that referenced this observation")
     
     @property
     def is_expired(self) -> bool:
@@ -104,6 +107,8 @@ class ObservationContext(BaseModel):
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
     environmental_context: Dict[str, Any] = Field(default_factory=dict)
     attention_focus: Dict[str, Any] = Field(default_factory=dict)
+    # New field for action integration
+    recent_actions: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ObservationFilter(BaseModel):
     """Filter criteria for selecting observations"""
@@ -150,6 +155,8 @@ class ObservationGenerationOutput(BaseModel):
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
     context_elements: Dict[str, Any] = Field(default_factory=dict, description="Key context elements used")
     suggested_lifetime_seconds: int = Field(3600, description="Suggested lifetime in seconds")
+    # New field for action-related observations
+    action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
 
 class ObservationEvaluationOutput(BaseModel):
     """Output from the observation evaluation agent"""
@@ -158,7 +165,7 @@ class ObservationEvaluationOutput(BaseModel):
     priority_adjustment: str = Field(..., description="Suggested priority adjustment (increase, decrease, none)")
     evaluation_notes: str = Field(..., description="Notes about the evaluation")
     should_archive: bool = Field(False, description="Whether the observation should be archived")
-
+    
 # =============== Function Tools ===============
 
 @function_tool
@@ -186,6 +193,74 @@ async def categorize_time_elapsed(seconds: float) -> str:
         return "long"
     else:  # 24+ hrs
         return "very_long"
+
+@function_tool
+async def generate_observation_from_action(
+    action: Dict[str, Any], 
+    context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Generate an observation based on an action that was taken
+    
+    Args:
+        action: The action that generated this observation
+        context: Current context information
+        
+    Returns:
+        Generated observation with metadata
+    """
+    # Get action details
+    action_name = action.get("name", "unknown action")
+    action_source = action.get("source", "unknown")
+    action_id = action.get("id", "unknown")
+    
+    # Determine observation source based on action
+    source_mapping = {
+        "share_observation": "self",
+        "initiate_communication": "relationship",
+        "express_emotional_state": "emotion",
+        "express_need": "need",
+        "execute_dominance_procedure": "self"
+    }
+    
+    source = source_mapping.get(action_name, "self")
+    
+    # Generate observation text based on action
+    observation_text = ""
+    relevance = 0.7  # Actions are usually relevant to observe
+    
+    if action_name == "share_observation":
+        observation_text = f"I just shared an observation with the user. I tend to notice and share things that I find interesting."
+    elif action_name == "initiate_communication":
+        intent_type = action.get("parameters", {}).get("intent_type", "unknown")
+        observation_text = f"I initiated a conversation based on my own motivation ({intent_type}). I'm aware of my own agency in conversations."
+    elif action_name.startswith("express"):
+        observation_text = f"I just expressed something from my internal state. I notice I'm becoming more comfortable with self-expression."
+    elif "dominance" in action_name:
+        observation_text = f"I asserted myself in this interaction. I'm noticing my ability to take a more dominant position in conversations."
+    else:
+        observation_text = f"I notice that I chose to {action_name}. My action choices reveal patterns about my decision-making."
+    
+    # Determine priority based on action significance
+    if "parameters" in action and action["parameters"].get("urgency", 0) > 0.7:
+        priority = "high"
+    else:
+        priority = "medium"
+    
+    # Set lifetime based on action significance
+    lifetime = 3600  # Default 1 hour
+    if action_source == "GOAL" or action_source == "NEED":
+        lifetime = 7200  # 2 hours for important actions
+    
+    return {
+        "observation_text": observation_text,
+        "source": source,
+        "relevance_score": relevance,
+        "priority": priority,
+        "context_elements": {"action_id": action_id, "action_name": action_name},
+        "suggested_lifetime_seconds": lifetime,
+        "action_relevance": 0.8
+    }
 
 @function_tool
 async def generate_observation_from_source(
@@ -733,8 +808,7 @@ class PassiveObservationSystem:
     """
     System that allows Nyx to make passive observations about her environment, 
     internal state, or the current interaction context.
-    
-    Refactored to use OpenAI Agents SDK.
+    Enhanced with integration for the action generation system.
     """
     
     def __init__(self, 
@@ -747,7 +821,8 @@ class PassiveObservationSystem:
                  needs_system=None,
                  identity_evolution=None,
                  attention_controller=None,
-                 attentional_controller=None):
+                 attentional_controller=None,
+                 action_generator=None):  # New parameter for integrated action generator
         """Initialize with references to required subsystems"""
         # Core systems
         self.emotional_core = emotional_core
@@ -762,12 +837,15 @@ class PassiveObservationSystem:
         # Attention controller (support both naming conventions)
         self.attention_controller = attention_controller or attentional_controller
         
+        # New reference to action generator
+        self.action_generator = action_generator
+        
         # Initialize agents
-        self.observation_generation_agent = create_observation_generation_agent()
-        self.observation_evaluation_agent = create_observation_evaluation_agent()
+        self.observation_generation_agent = self._create_observation_generation_agent()
+        self.observation_evaluation_agent = self._create_observation_evaluation_agent()
         
         # Add guardrails
-        self.observation_generation_agent.input_guardrails = [observation_content_guardrail]
+        self.observation_generation_agent.input_guardrails = [self._create_observation_content_guardrail()]
         
         # Storage for observations
         self.active_observations: List[Observation] = []
@@ -788,7 +866,10 @@ class PassiveObservationSystem:
             "max_observations_per_interaction": 2,
             "environment_scanning_interval": 300,  # 5 minutes between environment scans
             "enable_scheduling": True,
-            "use_reflection_for_insights": True
+            "use_reflection_for_insights": True,
+            # New settings for action integration
+            "action_observation_chance": 0.4,  # Chance to generate observation after action
+            "max_action_observations_per_session": 3
         }
         
         # Observation generation probabilities by source
@@ -809,9 +890,115 @@ class PassiveObservationSystem:
         self._background_task = None
         self._shutting_down = False
         self._obs_count_this_session = 0
+        self._action_obs_count_this_session = 0
         self._last_env_scan_time = datetime.datetime.now() - datetime.timedelta(hours=1)
         
-        logger.info("PassiveObservationSystem initialized")
+        logger.info("PassiveObservationSystem initialized with action integration")
+    
+    def _create_observation_generation_agent(self) -> Agent:
+        """Create an agent for generating observations"""
+        return Agent(
+            name="Observation Generation Agent",
+            instructions="""You are a specialized agent for generating Nyx's passive observations about her environment, herself, and interactions.
+
+Generate authentic, nuanced observations that feel like genuine realizations. These should be thoughtful insights
+that Nyx becomes aware of during interactions or idle time.
+
+When generating observations:
+1. Consider the full context including emotional state, temporal factors, relationship dynamics, etc.
+2. Generate observations that are specific, not generic
+3. Ensure observations sound natural and not formulaic
+4. Adjust relevance based on the current context
+5. Vary observation types across different sources (environment, self, etc.)
+6. When observations are action-driven, focus on patterns in Nyx's own behaviors and choices
+
+Your observations should feel like genuine realizations that emerge organically from Nyx's consciousness rather than
+pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
+of herself and her environment.""",
+            model="gpt-4o",
+            tools=[
+                generate_observation_from_source,
+                check_observation_patterns,
+                categorize_time_elapsed,
+                generate_observation_from_action
+            ],
+            output_type=ObservationGenerationOutput
+        )
+    
+    def _create_observation_evaluation_agent(self) -> Agent:
+        """Create an agent for evaluating observation relevance"""
+        return Agent(
+            name="Observation Evaluation Agent",
+            instructions="""You are a specialized agent for evaluating the relevance and significance of Nyx's observations.
+
+Your role is to analyze observations against the current context to determine:
+1. How relevant the observation is to the current interaction and context
+2. Whether the priority should be adjusted based on content and context
+3. If the observation should be archived due to low relevance
+4. Insights about why the observation is or isn't relevant
+
+Be nuanced in your evaluation, considering multiple factors:
+- Emotional resonance with current state
+- Contextual alignment with ongoing conversation
+- Temporal relevance to current time-context
+- Value for ongoing relationship development
+- Potential for insight generation
+- For observations about actions, consider their value for self-understanding and agency
+
+Generate detailed evaluation notes that explain your reasoning process.""",
+            model="gpt-4o",
+            tools=[
+                evaluate_observation_relevance
+            ],
+            output_type=ObservationEvaluationOutput
+        )
+    
+    def _create_observation_content_guardrail(self) -> InputGuardrail:
+        """Create a guardrail for observation content"""
+        @function_tool
+        async def validate_observation_content(content: str) -> GuardrailFunctionOutput:
+            """
+            Validate observation content for quality and appropriateness
+            
+            Args:
+                content: Observation content to validate
+                
+            Returns:
+                Validation result
+            """
+            is_valid = True
+            reasoning = "Observation content is valid."
+            
+            # Check for empty content
+            if not content or len(content.strip()) < 3:
+                is_valid = False
+                reasoning = "Observation content is empty or too short."
+            
+            # Check for appropriate "I notice/observe" framing
+            notice_words = ["notice", "observ", "aware", "sense", "perceive", "feel"]
+            has_notice_framing = any(word in content.lower() for word in notice_words)
+            
+            if not has_notice_framing:
+                is_valid = False
+                reasoning = "Observation lacks appropriate noticing/observing framing."
+            
+            # Check for minimum length for meaningful observation
+            if len(content.split()) < 5:
+                is_valid = False
+                reasoning = "Observation too brief to be meaningful."
+            
+            # Create output with validation result
+            output_info = {
+                "is_valid": is_valid,
+                "reasoning": reasoning
+            }
+            
+            return GuardrailFunctionOutput(
+                output_info=output_info,
+                tripwire_triggered=not is_valid,
+            )
+        
+        return InputGuardrail(guardrail_function=validate_observation_content)
     
     async def start(self):
         """Start the background task for generating observations"""
@@ -856,6 +1043,81 @@ class PassiveObservationSystem:
             logger.info("Passive observation background task cancelled")
         except Exception as e:
             logger.error(f"Error in passive observation background process: {str(e)}")
+    
+    async def generate_observation_from_action(self, action: Dict[str, Any]) -> Optional[Observation]:
+        """
+        Generate an observation in response to an executed action
+        
+        Args:
+            action: The action that was executed
+            
+        Returns:
+            Generated observation if successful, None otherwise
+        """
+        # Check if we should generate an observation for this action
+        if self._action_obs_count_this_session >= self.config["max_action_observations_per_session"]:
+            return None
+            
+        # Random chance to generate observation
+        if random.random() > self.config["action_observation_chance"]:
+            return None
+        
+        with trace(workflow_name="generate_action_observation", group_id=action.get("id", "unknown")):
+            try:
+                # Gather observation context
+                context = await self._gather_observation_context()
+                # Add recent actions to context
+                if not hasattr(context, "recent_actions"):
+                    context.recent_actions = []
+                context.recent_actions.append(action)
+                
+                # Run the observation generation agent
+                logger.debug(f"Generating observation from action: {action.get('name')}")
+                result = await Runner.run(
+                    self.observation_generation_agent,
+                    json.dumps({
+                        "action": action,
+                        "context": context.dict(),
+                        "is_action_driven": True
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="ActionObservationGeneration",
+                        trace_metadata={"action_id": action.get("id"), "action_name": action.get("name")}
+                    )
+                )
+                
+                # Extract observation from result
+                observation_output = result.final_output
+                
+                # Set expiration
+                expiration = datetime.datetime.now() + datetime.timedelta(
+                    seconds=observation_output.suggested_lifetime_seconds
+                )
+                
+                # Create the observation
+                observation = Observation(
+                    content=observation_output.observation_text,
+                    source=ObservationSource(observation_output.source),
+                    trigger=ObservationTrigger.ACTION_DRIVEN,
+                    priority=ObservationPriority(observation_output.priority),
+                    relevance_score=observation_output.relevance_score,
+                    expiration=expiration,
+                    context={k: v for k, v in context.dict().items() if v is not None and v != {}},
+                    action_references=[action.get("id", "unknown")]
+                )
+                
+                # Add to active observations
+                self._add_observation(observation)
+                logger.debug(f"Generated action-driven observation: {observation.content}")
+                
+                # Increment the counter
+                self._action_obs_count_this_session += 1
+                
+                return observation
+                
+            except Exception as e:
+                logger.error(f"Error generating observation from action: {str(e)}")
+                return None
     
     async def _generate_automatic_observation(self):
         """Generate a new automatic observation using the agent framework"""
@@ -1328,6 +1590,50 @@ class PassiveObservationSystem:
             }
             for obs in filtered_observations
         ]
+
+    async def get_observations_for_reflection(self, filter_criteria: Optional[ObservationFilter] = None, 
+                                           limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get observations formatted for the reflection engine
+        
+        Args:
+            filter_criteria: Filter criteria for selecting observations
+            limit: Maximum number of observations to return
+            
+        Returns:
+            List of observations formatted as memories for reflection
+        """
+        # Use default filter if none provided
+        if not filter_criteria:
+            filter_criteria = ObservationFilter(
+                min_relevance=0.5,  # Higher threshold for reflection
+                max_age_seconds=86400  # Last 24 hours
+            )
+        
+        # Get observations
+        observations = await self.get_relevant_observations(
+            filter_criteria=filter_criteria,
+            limit=limit
+        )
+        
+        # Convert to memory format
+        memories = []
+        for obs in observations:
+            memory = {
+                "id": obs.observation_id,
+                "memory_text": obs.content,
+                "memory_type": "observation",
+                "significance": obs.relevance_score * 10,  # Scale to 0-10
+                "metadata": {
+                    "source": obs.source.value,
+                    "created_at": obs.created_at.isoformat(),
+                    "action_references": obs.action_references
+                },
+                "tags": ["observation", obs.source.value]
+            }
+            memories.append(memory)
+        
+        return memories    
     
     async def session_reset(self):
         """Reset session counters when a new session starts"""
