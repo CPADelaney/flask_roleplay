@@ -415,7 +415,7 @@ class HormoneSystem:
                         new_phase = (old_phase + phase_change) % 1.0
                         
                         # Calculate cycle-based value using a sinusoidal pattern
-                        cycle_amplitude = A.2  # How much the cycle affects the value
+                        cycle_amplitude = 0.2  # How much the cycle affects the value
                         cycle_influence = cycle_amplitude * math.sin(new_phase * 2 * math.pi)
                         
                         # Apply environmental factors
