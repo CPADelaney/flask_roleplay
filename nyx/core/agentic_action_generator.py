@@ -13,7 +13,7 @@ from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
 
-# Core system imports (ensuring all references are maintained)
+# Core system imports
 from nyx.core.reasoning_core import (
     ReasoningCore, CausalModel, CausalNode, CausalRelation,
     ConceptSpace, ConceptualBlend, Intervention
@@ -26,6 +26,12 @@ from nyx.core.mood_manager import MoodManager, MoodState
 from nyx.core.needs_system import NeedsSystem, NeedState
 from nyx.core.mode_integration import ModeIntegrationManager, InteractionMode
 from nyx.core.meta_core import MetaCore, StrategyResult
+from nyx.core.passive_observation import (
+    PassiveObservationSystem, ObservationFilter, ObservationSource, Observation, ObservationPriority
+)
+from nyx.core.proactive_communication import (
+    ProactiveCommunicationEngine, CommunicationIntent, IntentGenerationOutput
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,9 @@ class ActionSource(str, Enum):
     MODE = "mode"  # Interaction mode-driven actions
     META_COGNITIVE = "meta_cognitive"  # Meta-cognitive strategy actions
     SENSORY = "sensory"  # Actions from sensory integration
+    OBSERVATION = "observation"  # Actions driven by passive observations
+    PROACTIVE = "proactive"  # Actions for proactive communication
+
 
 class ActionContext(BaseModel):
     """Context for action selection and generation"""
@@ -67,7 +76,7 @@ class ActionContext(BaseModel):
     causal_models: List[str] = Field(default_factory=list, description="IDs of relevant causal models")
     concept_spaces: List[str] = Field(default_factory=list, description="IDs of relevant concept spaces")
     
-    # New fields for enhanced integrations
+    # Fields for enhanced integrations
     mood_state: Optional[MoodState] = None
     need_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     interaction_mode: Optional[str] = None
@@ -75,6 +84,10 @@ class ActionContext(BaseModel):
     bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
     resource_allocation: Dict[str, float] = Field(default_factory=dict)
     strategy_parameters: Dict[str, Any] = Field(default_factory=dict)
+    
+    # New fields for observation and communication integration
+    relevant_observations: List[Dict[str, Any]] = Field(default_factory=list)
+    active_communication_intents: List[Dict[str, Any]] = Field(default_factory=list)
     
 class ActionOutcome(BaseModel):
     """Outcome of an executed action"""
@@ -258,6 +271,13 @@ class EnhancedAgenticActionGenerator:
         self.needs_system = needs_system
         self.mode_integration = mode_integration
         self.multimodal_integrator = multimodal_integrator
+
+        # New system integrations
+        self.passive_observation_system = passive_observation_system
+        self.proactive_communication_engine = proactive_communication_engine
+        
+        # Social tools
+        self.computer_user = ComputerUseAgent(logger=logger)
         
         # Internal motivation system
         self.motivations = {
@@ -649,6 +669,31 @@ class EnhancedAgenticActionGenerator:
             if outcome_obj.success and outcome_obj.reward_value > 0.6:
                 if any(keyword in action["name"] for keyword in ["reflect", "express", "dominate", "assert", "tease"]):
                     await self._generate_recursive_diary(action, outcome_obj)
+
+            # Action values, habits, and memory structures for learning
+            self.action_values = defaultdict(dict)
+            self.action_memories = []
+            self.max_memories = 1000
+            self.action_success_rates = defaultdict(lambda: {"successes": 0, "attempts": 0, "rate": 0.5})
+            self.habits = defaultdict(dict)
+            self.action_history = []
+            
+            # Learning parameters
+            self.learning_rate = 0.1
+            self.discount_factor = 0.9
+            self.exploration_rate = 0.2
+            self.exploration_decay = 0.995
+            
+            # Tracking for reward and statistics
+            self.total_reward = 0.0
+            self.positive_rewards = 0
+            self.negative_rewards = 0
+            self.reward_by_category = defaultdict(lambda: {"count": 0, "total": 0.0})
+            
+            # Lock for thread safety
+            self._lock = asyncio.Lock()
+            
+            logger.info("Enhanced Agentic Action Generator initialized with observation and communication integration")            
             
             # Return summary of updates
             return {
@@ -1227,6 +1272,81 @@ class EnhancedAgenticActionGenerator:
             logger.info(f"Registered sensory expectation for {expectation.target_modality}")
         else:
             logger.warning("Cannot register sensory expectation: Multimodal integrator not available")
+
+    async def generate_optimal_action_2(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main entry-point for generating an optimal action using all integrated systems
+        
+        Args:
+            context: Current context
+            
+        Returns:
+            Optimal action
+        """
+        async with self._lock:
+            # Update motivations with influence from all systems
+            await self.update_motivations()
+            
+            # Update temporal context
+            await self._update_temporal_context(context)
+            
+            # Gather context from all systems
+            action_context = await self._gather_action_context(context)
+            
+            # Generate candidate actions from all sources
+            candidate_actions = []
+            
+            # Generate motivation-based actions
+            motivation_candidates = await self._generate_candidate_actions(action_context)
+            candidate_actions.extend(motivation_candidates)
+            
+            # Generate observation-driven actions
+            observation_actions = await self._generate_observation_driven_actions(context)
+            if observation_actions:
+                candidate_actions.extend(observation_actions)
+            
+            # Generate proactive communication actions
+            communication_actions = await self._generate_proactive_communication_actions(context)
+            if communication_actions:
+                candidate_actions.extend(communication_actions)
+            
+            # Generate reasoning-based actions if available
+            if self.reasoning_core and action_context.causal_models:
+                reasoning_candidates = await self._generate_reasoning_actions(action_context)
+                candidate_actions.extend(reasoning_candidates)
+            
+            # Generate need-driven actions if needed
+            if self.needs_system:
+                need_action = await self._generate_need_driven_action(action_context)
+                if need_action:
+                    candidate_actions.append(need_action)
+            
+            # Generate mood-driven actions when mood is intense
+            if self.mood_manager and action_context.mood_state and action_context.mood_state.intensity > 0.7:
+                mood_action = await self._generate_mood_driven_action(action_context)
+                if mood_action:
+                    candidate_actions.append(mood_action)
+            
+            # Add available actions to context
+            action_context.available_actions = [a["name"] for a in candidate_actions if "name" in a]
+            
+            # Select the best action using reinforcement learning, prediction, etc.
+            selected_action = await self._select_best_action(candidate_actions, action_context)
+            
+            # Add ID and timestamp
+            if "id" not in selected_action:
+                selected_action["id"] = f"action_{uuid.uuid4().hex[:8]}"
+            selected_action["timestamp"] = datetime.datetime.now().isoformat()
+            
+            # Apply any final processing
+            selected_action = await self._postprocess_action(selected_action)
+            
+            # Add to action history
+            self.action_history.append(selected_action)
+            if len(self.action_history) > 100:
+                self.action_history = self.action_history[-100:]
+            
+            return selected_action
     
     # Main entry-point for external systems
     async def generate_optimal_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -1518,6 +1638,366 @@ class EnhancedAgenticActionGenerator:
         self._lock = asyncio.Lock()
         
         logger.info("Enhanced Agentic Action Generator initialized with comprehensive integrations")
+
+    async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
+        """Gather context from all integrated systems"""
+        user_id = self._get_current_user_id_from_context(context)
+        relationship_data = await self._get_relationship_data(user_id) if user_id else None
+        user_mental_state = await self._get_user_mental_state(user_id) if user_id else None
+        need_states = await self._get_current_need_states() if self.needs_system else {}
+        mood_state = await self._get_current_mood_state() if self.mood_manager else None
+        interaction_mode = await self._get_current_interaction_mode() if self.mode_integration else None
+        sensory_context = await self._get_sensory_context() if self.multimodal_integrator else {}
+        bottlenecks, resource_allocation = await self._get_meta_system_state() if self.meta_core else ([], {})
+        relevant_causal_models = await self._get_relevant_causal_models(context)
+        relevant_concept_spaces = await self._get_relevant_concept_spaces(context)
+        
+        # NEW: Get relevant observations
+        relevant_observations = []
+        if self.passive_observation_system:
+            filter_criteria = ObservationFilter(
+                min_relevance=0.6,
+                max_age_seconds=1800,  # Last 30 minutes
+                exclude_shared=True
+            )
+            observations = await self.passive_observation_system.get_relevant_observations(
+                filter_criteria=filter_criteria,
+                limit=5
+            )
+            relevant_observations = [obs.model_dump() for obs in observations]
+        
+        # NEW: Get active communication intents
+        active_communication_intents = []
+        if self.proactive_communication_engine:
+            active_intents = await self.proactive_communication_engine.get_active_intents()
+            # Filter to current user if user_id is available
+            if user_id:
+                active_intents = [intent for intent in active_intents if intent.get("user_id") == user_id]
+            active_communication_intents = active_intents
+        
+        return ActionContext(
+            state=context,
+            user_id=user_id,
+            relationship_data=relationship_data,
+            user_mental_state=user_mental_state,
+            temporal_context=self.current_temporal_context,
+            motivations=self.motivations,
+            action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)],
+            causal_models=relevant_causal_models,
+            concept_spaces=relevant_concept_spaces,
+            mood_state=mood_state,
+            need_states=need_states,
+            interaction_mode=interaction_mode,
+            sensory_context=sensory_context,
+            bottlenecks=bottlenecks,
+            resource_allocation=resource_allocation,
+            strategy_parameters=self._get_current_strategy_parameters(),
+            relevant_observations=relevant_observations,
+            active_communication_intents=active_communication_intents
+        )
+
+    async def _generate_observation_driven_actions(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate actions driven by interesting passive observations"""
+        if not self.passive_observation_system:
+            return []
+        
+        # Get relevant observations that haven't been shared
+        filter_criteria = ObservationFilter(
+            min_relevance=0.6,  # Only significant observations
+            exclude_shared=True,
+            max_age_seconds=3600  # Recent observations (last hour)
+        )
+        
+        observations = await self.passive_observation_system.get_relevant_observations(
+            filter_criteria=filter_criteria,
+            limit=3
+        )
+        
+        if not observations:
+            return []
+        
+        # Generate actions for the most relevant observations
+        observation_actions = []
+        
+        for obs in observations:
+            action = {
+                "name": "share_observation",
+                "parameters": {
+                    "observation_id": obs.observation_id,
+                    "observation_content": obs.content,
+                    "observation_source": obs.source.value,
+                    "relevance": obs.relevance_score,
+                    "expression_style": "natural"
+                },
+                "description": f"Share observation: {obs.content[:50]}...",
+                "source": ActionSource.OBSERVATION
+            }
+            observation_actions.append(action)
+        
+        return observation_actions
+    
+    async def _generate_proactive_communication_actions(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate actions for proactive communication with users"""
+        if not self.proactive_communication_engine:
+            return []
+        
+        # Get active communication intents
+        active_intents = await self.proactive_communication_engine.get_active_intents()
+        
+        if not active_intents:
+            return []
+        
+        # Convert intents to actions
+        communication_actions = []
+        
+        for intent in active_intents:
+            # Check if the intent is for the current user context
+            user_id = self._get_current_user_id_from_context(context)
+            if user_id and intent.get("user_id") != user_id:
+                continue
+                
+            action = {
+                "name": "initiate_communication",
+                "parameters": {
+                    "intent_id": intent.get("intent_id"),
+                    "intent_type": intent.get("intent_type"),
+                    "user_id": intent.get("user_id"),
+                    "motivation": intent.get("motivation"),
+                    "urgency": intent.get("urgency", 0.5)
+                },
+                "description": f"Initiate proactive communication: {intent.get('intent_type')}",
+                "source": ActionSource.PROACTIVE
+            }
+            communication_actions.append(action)
+        
+        return communication_actions
+    
+    async def _execute_share_observation_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an action to share an observation"""
+        observation_id = action["parameters"].get("observation_id")
+        
+        if not observation_id or not self.passive_observation_system:
+            return {"success": False, "reason": "Missing observation ID or system"}
+        
+        # Mark the observation as shared
+        await self.passive_observation_system.mark_observation_shared(observation_id)
+        
+        # Return the observation content for response generation
+        return {
+            "success": True,
+            "observation_content": action["parameters"].get("observation_content"),
+            "observation_source": action["parameters"].get("observation_source"),
+            "expression_style": action["parameters"].get("expression_style", "natural")
+        }
+    
+    async def _execute_initiate_communication_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an action to initiate proactive communication"""
+        intent_id = action["parameters"].get("intent_id")
+        
+        if not intent_id or not self.proactive_communication_engine:
+            return {"success": False, "reason": "Missing intent ID or system"}
+        
+        # Find the intent in active intents
+        active_intents = await self.proactive_communication_engine.get_active_intents()
+        intent = None
+        
+        for active_intent in active_intents:
+            if active_intent.get("intent_id") == intent_id:
+                intent = active_intent
+                break
+        
+        if not intent:
+            return {"success": False, "reason": "Intent not found"}
+            
+        # Generate message content for the intent
+        try:
+            # This would use the proactive communication engine to generate and send
+            # the message, but here we mock the functionality for simplicity
+            user_id = intent.get("user_id")
+            intent_type = intent.get("intent_type")
+            
+            # Record the intent as sent
+            self.proactive_communication_engine.sent_intents.append(intent)
+            # Remove from active intents
+            await self.proactive_communication_engine.update_configuration({"processed_intent_id": intent_id})
+            
+            return {
+                "success": True,
+                "intent_type": intent_type,
+                "user_id": user_id,
+                "message": "Proactive message generated and sent"
+            }
+        except Exception as e:
+            logger.error(f"Error executing communication action: {e}")
+            return {"success": False, "reason": str(e)}
+    
+    async def create_reflection_from_observation(self, observation_ids: List[str]) -> Optional[str]:
+        """Create a reflection from selected observations"""
+        if not self.reflection_engine or not self.passive_observation_system:
+            return None
+            
+        observations = []
+        for obs_id in observation_ids:
+            # Find observation in both active and archived observations
+            found = False
+            for obs_list in [self.passive_observation_system.active_observations, 
+                           self.passive_observation_system.archived_observations]:
+                for obs in obs_list:
+                    if obs.observation_id == obs_id:
+                        observations.append(obs)
+                        found = True
+                        break
+                if found:
+                    break
+        
+        if not observations:
+            return None
+            
+        # Convert observations to memory format for reflection engine
+        memories = []
+        for obs in observations:
+            memory = {
+                "id": obs.observation_id,
+                "memory_text": obs.content,
+                "memory_type": "observation",
+                "significance": obs.relevance_score * 10,  # Scale to 0-10
+                "metadata": {
+                    "source": obs.source.value,
+                    "created_at": obs.created_at.isoformat()
+                },
+                "tags": ["observation", obs.source.value]
+            }
+            memories.append(memory)
+        
+        # Generate reflection
+        reflection_text, confidence = await self.reflection_engine.generate_reflection(
+            memories=memories,
+            topic="Passive Observations"
+        )
+        
+        # Store reflection in memory if available
+        if self.memory_core:
+            await self.memory_core.add_memory(
+                memory_text=reflection_text,
+                memory_type="reflection",
+                significance=8.0,
+                tags=["observation_reflection"],
+                metadata={
+                    "source": "observation_reflection",
+                    "observation_ids": observation_ids
+                }
+            )
+        
+        return reflection_text
+    
+    async def create_reflection_from_communications(self, user_id: Optional[str] = None) -> Optional[str]:
+        """Create a reflection on proactive communication patterns"""
+        if not self.reflection_engine or not self.proactive_communication_engine:
+            return None
+            
+        # Get recent sent intents
+        sent_intents = await self.proactive_communication_engine.get_recent_sent_intents(limit=10)
+        
+        # Filter to specific user if requested
+        if user_id:
+            sent_intents = [intent for intent in sent_intents if intent.get("user_id") == user_id]
+        
+        if not sent_intents:
+            return None
+            
+        # Convert intents to memory format
+        memories = []
+        for intent in sent_intents:
+            memory = {
+                "id": intent.get("intent_id", "unknown"),
+                "memory_text": f"Sent proactive communication of type '{intent.get('intent_type')}' to user {intent.get('user_id')}",
+                "memory_type": "communication",
+                "significance": intent.get("urgency", 0.5) * 10,  # Scale to 0-10
+                "metadata": {
+                    "intent_type": intent.get("intent_type"),
+                    "user_id": intent.get("user_id"),
+                    "created_at": intent.get("created_at", datetime.datetime.now().isoformat())
+                },
+                "tags": ["communication", intent.get("intent_type")]
+            }
+            memories.append(memory)
+        
+        # Generate reflection
+        reflection_text, confidence = await self.reflection_engine.generate_reflection(
+            memories=memories,
+            topic="Communication Patterns"
+        )
+        
+        # Store reflection in memory if available
+        if self.memory_core:
+            await self.memory_core.add_memory(
+                memory_text=reflection_text,
+                memory_type="reflection",
+                significance=8.0,
+                tags=["communication_reflection"],
+                metadata={
+                    "source": "communication_reflection",
+                    "user_id": user_id
+                }
+            )
+        
+        return reflection_text
+
+    async def perform_system_maintenance(self):
+        """Perform periodic maintenance of all integrated systems"""
+        # 1. Archive old observations
+        if self.passive_observation_system:
+            self.passive_observation_system._archive_expired_observations()
+        
+        # 2. Clean up old intents
+        if self.proactive_communication_engine:
+            active_intents = self.proactive_communication_engine.active_intents
+            # Filter out expired intents
+            active_intents = [i for i in active_intents if not i.is_expired]
+            self.proactive_communication_engine.active_intents = active_intents
+        
+        # 3. Generate system introspection
+        if self.reflection_engine and self.memory_core:
+            # Get memory stats
+            memory_stats = {
+                "total_memories": len(self.memory_core.memories) if hasattr(self.memory_core, "memories") else 0,
+                "observation_count": len(self.passive_observation_system.active_observations) if self.passive_observation_system else 0,
+                "intent_count": len(self.proactive_communication_engine.active_intents) if self.proactive_communication_engine else 0
+            }
+            
+            introspection = await self.reflection_engine.generate_introspection(
+                memory_stats=memory_stats
+            )
+            
+            # Store introspection
+            await self.memory_core.add_memory(
+                memory_text=introspection.get("introspection", ""),
+                memory_type="introspection",
+                significance=9.0,
+                tags=["system_maintenance"],
+                metadata={"source": "system_maintenance"}
+            )
+        
+        # 4. Run action strategy evaluation
+        await self._evaluate_action_strategies()
+        
+        # 5. Generate reflections periodically
+        if self.reflection_engine and self.reflection_engine.should_reflect():
+            if self.passive_observation_system:
+                # Generate reflection on recent observations
+                filter_criteria = ObservationFilter(max_age_seconds=86400)  # Last 24 hours
+                observations = await self.passive_observation_system.get_relevant_observations(
+                    filter_criteria=filter_criteria,
+                    limit=10
+                )
+                
+                if observations:
+                    observation_ids = [obs.observation_id for obs in observations]
+                    await self.create_reflection_from_observation(observation_ids)
+            
+            if self.proactive_communication_engine:
+                # Generate reflection on communication patterns
+                await self.create_reflection_from_communications()
         
     async def update_motivations(self):
         """
@@ -1702,6 +2182,24 @@ class EnhancedAgenticActionGenerator:
                         updated_motivations[motivation] += influence
             except Exception as e:
                 logger.error(f"Error applying meta influences: {e}")
+
+        # NEW: Apply observation influences
+        try:
+            observation_influences = await self._calculate_observation_influences()
+            for motivation, influence in observation_influences.items():
+                if motivation in updated_motivations:
+                    updated_motivations[motivation] += influence
+        except Exception as e:
+            logger.error(f"Error applying observation influences: {e}")
+        
+        # NEW: Apply communication influences
+        try:
+            communication_influences = await self._calculate_communication_influences()
+            for motivation, influence in communication_influences.items():
+                if motivation in updated_motivations:
+                    updated_motivations[motivation] += influence
+        except Exception as e:
+            logger.error(f"Error applying communication influences: {e}") 
         
         # 15. Normalize all motivations to [0.1, 0.9] range
         for motivation in updated_motivations:
@@ -1712,6 +2210,91 @@ class EnhancedAgenticActionGenerator:
         
         logger.debug(f"Updated motivations: {self.motivations}")
         return self.motivations
+
+    async def _calculate_observation_influences(self) -> Dict[str, float]:
+        """Calculate how passive observations influence motivations"""
+        influences = {}
+        
+        if not self.passive_observation_system:
+            return influences
+        
+        # Get recent high-relevance observations
+        filter_criteria = ObservationFilter(
+            min_relevance=0.7,
+            max_age_seconds=1800  # Last 30 minutes
+        )
+        
+        observations = await self.passive_observation_system.get_relevant_observations(
+            filter_criteria=filter_criteria
+        )
+        
+        if not observations:
+            return influences
+        
+        # Map observation sources to motivations they influence
+        source_motivation_map = {
+            ObservationSource.ENVIRONMENT: ["curiosity", "exploration"],
+            ObservationSource.SELF: ["self_improvement", "expression"],
+            ObservationSource.RELATIONSHIP: ["connection", "validation"],
+            ObservationSource.MEMORY: ["connection", "reflection"],
+            ObservationSource.TEMPORAL: ["reflection", "leisure"],
+            ObservationSource.SENSORY: ["curiosity", "exploration"],
+            ObservationSource.PATTERN: ["competence", "self_improvement"],
+            ObservationSource.EMOTION: ["expression", "connection"],
+            ObservationSource.NEED: ["autonomy", "competence"],
+            ObservationSource.USER: ["connection", "validation"],
+            ObservationSource.META: ["self_improvement", "reflection"]
+        }
+        
+        # Calculate influence from each observation
+        for obs in observations:
+            source = obs.source
+            if source in source_motivation_map:
+                for motivation in source_motivation_map[source]:
+                    # Higher relevance = stronger influence
+                    influence = obs.relevance_score * 0.2
+                    influences[motivation] = influences.get(motivation, 0.0) + influence
+        
+        return influences
+    
+    async def _calculate_communication_influences(self) -> Dict[str, float]:
+        """Calculate how proactive communication intents influence motivations"""
+        influences = {}
+        
+        if not self.proactive_communication_engine:
+            return influences
+        
+        # Get active intents
+        active_intents = await self.proactive_communication_engine.get_active_intents()
+        
+        if not active_intents:
+            return influences
+        
+        # Map intent types to motivations they influence
+        intent_motivation_map = {
+            "relationship_maintenance": ["connection", "validation"],
+            "insight_sharing": ["expression", "curiosity"],
+            "milestone_recognition": ["connection", "validation"],
+            "need_expression": ["expression", "autonomy"],
+            "creative_expression": ["expression", "curiosity"],
+            "mood_expression": ["expression", "connection"],
+            "memory_recollection": ["connection", "reflection"],
+            "continuation": ["connection", "curiosity"],
+            "check_in": ["connection", "validation"],
+            "value_alignment": ["expression", "connection"]
+        }
+        
+        # Calculate influence from each intent
+        for intent in active_intents:
+            intent_type = intent.get("intent_type")
+            if intent_type in intent_motivation_map:
+                for motivation in intent_motivation_map[intent_type]:
+                    # Higher urgency = stronger influence
+                    urgency = intent.get("urgency", 0.5)
+                    influence = urgency * 0.3
+                    influences[motivation] = influences.get(motivation, 0.0) + influence
+        
+        return influences
     
     async def _calculate_need_influences(self) -> Dict[str, float]:
         """Calculate how need states influence motivations"""
