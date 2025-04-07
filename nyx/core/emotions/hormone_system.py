@@ -601,12 +601,13 @@ class HormoneSystem:
                                     "temporary_baseline": temporary_baseline,
                                     "timestamp": datetime.datetime.now().isoformat()
                                 })
-
-                     if self.emotional_core and 'testoryx' in self.hormones:
-                         testoryx_level = self.hormones['testoryx']['value']
-                         if testoryx_level > 0.6:
-                             nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
-                             influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence                
+                
+                # This block was indented incorrectly
+                if self.emotional_core and 'testoryx' in self.hormones:
+                    testoryx_level = self.hormones['testoryx']['value']
+                    if testoryx_level > 0.6:
+                        nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
+                        influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence                
                 
                 # Store in context for tracking
                 ctx.context.set_value("hormone_influences", {
