@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from db.connection import get_db_connection_context
 from memory.memory_nyx_integration import MemoryNyxBridge
 from nyx.user_model_sdk import UserModelContext, ResponseGuidance, UserModelAnalysis
-from nyx.nyx_task_integration import NyxTaskIntegration, NarrativeResponse
+from nyx.nyx_task_integration import NyxTaskIntegration
 from nyx.core.emotions.emotional_core import EmotionalCore
 from nyx.performance_monitor import PerformanceMonitor
 from .response_filter import ResponseFilter
@@ -27,7 +27,15 @@ from nyx.core.sync.strategy_controller import get_active_strategies
 logger = logging.getLogger(__name__)
 
 # ===== Pydantic Models for Structured Outputs =====
-
+class NarrativeResponse(BaseModel):
+    """Structured output for Nyx's narrative responses"""
+    narrative: str = Field(..., description="The main narrative response as Nyx")
+    tension_level: int = Field(0, description="Current narrative tension level (0-10)")
+    generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
+    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
+    environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
+    time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
+    
     
 class MemoryReflection(BaseModel):
     """Structured output for memory reflections"""
