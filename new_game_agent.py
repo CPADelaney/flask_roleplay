@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 # Import your existing modules
 from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
-from npcs.new_npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
+from npcs.new_npc_creation import spawn_multiple_npcs
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from lore.dynamic_lore_generator import DynamicLoreGenerator
@@ -405,16 +405,50 @@ class NewGameAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        # Use existing init_chase_schedule function
-        chase_schedule = await init_chase_schedule(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            combined_env=environment_desc,
-            day_names=day_names
-        )
+        # Create a basic schedule structure
+        default_schedule = {}
+        for day in day_names:
+            default_schedule[day] = {
+                "Morning": f"Chase wakes up and prepares for the day",
+                "Afternoon": f"Chase attends to their responsibilities",
+                "Evening": f"Chase spends time on personal activities",
+                "Night": f"Chase returns home and rests"
+            }
         
-        return chase_schedule
-    
+        # Store in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES (%s, %s, 'ChaseSchedule', %s)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, (user_id, conversation_id, json.dumps(default_schedule)))
+        conn.commit()
+        conn.close()
+        
+        # Store as player memory using the new memory system
+        try:
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+            
+            # Create a journal entry for the schedule
+            schedule_summary = "My typical schedule for the week: "
+            for day, activities in default_schedule.items():
+                day_summary = f"\n{day}: "
+                for period, activity in activities.items():
+                    day_summary += f"{period.lower()}: {activity}; "
+                schedule_summary += day_summary
+                
+            await memory_system.add_journal_entry(
+                player_name="Chase",
+                entry_text=schedule_summary,
+                entry_type="schedule"
+            )
+        except Exception as e:
+            logging.error(f"Error storing player schedule in memory system: {e}")
+        
+        return default_schedule
+        
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="create_npcs_and_schedules",
