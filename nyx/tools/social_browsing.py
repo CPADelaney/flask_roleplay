@@ -388,26 +388,181 @@ async def maybe_post_to_social(self):
         )
 
 class SentimentProfiler:
-"""
-Emotion Sentiment Profiler
-Purpose: Analyze emotional waves on pages Nyx visits.
-"""
-    async def analyze_feed(self, url: str, granularity: str = "thread-level") -> dict:
-        # Dummy sentiment spectrum for now. Replace with real NLP pass later.
-        sentiment_zones = {
-            "rage": random.uniform(0.0, 1.0),
-            "despair": random.uniform(0.0, 1.0),
-            "horny": random.uniform(0.0, 1.0),
-            "apathy": random.uniform(0.0, 1.0),
-            "chaos": random.uniform(0.0, 1.0)
+    """
+    Emotion Sentiment Profiler
+    Purpose: Analyze emotional waves on pages Nyx visits using NLP.
+    """
+    def __init__(self):
+        self.emotion_keywords = {
+            "rage": ["angry", "furious", "outraged", "livid", "seething", "hostile", "enraged"],
+            "despair": ["hopeless", "miserable", "depressed", "devastated", "grief", "sorrow", "anguish"],
+            "horny": ["aroused", "lustful", "desire", "passionate", "sensual", "yearning", "craving"],
+            "apathy": ["indifferent", "numb", "uncaring", "detached", "disinterested", "bored", "empty"],
+            "chaos": ["confused", "frenzied", "turbulent", "disorderly", "unpredictable", "wild", "mayhem"]
         }
+        
+        # Store recent analysis results for trending detection
+        self.recent_analyses = []
+        self.max_history = 10
 
-        return {
+    async def analyze_feed(self, url: str, granularity: str = "thread-level") -> dict:
+        """
+        Analyze the emotional content of a social feed using NLP techniques.
+        
+        Args:
+            url: The URL of the feed to analyze
+            granularity: The level of analysis (thread-level, page-level, etc.)
+            
+        Returns:
+            Sentiment analysis results
+        """
+        # Fetch content from URL (using existing computer_use_agent)
+        content = await self._fetch_content(url)
+        
+        # Process content into text blocks based on granularity
+        text_blocks = self._segment_content(content, granularity)
+        
+        # Analyze each block for emotional content
+        sentiment_scores = {emotion: 0.0 for emotion in self.emotion_keywords}
+        emotion_instances = []
+        
+        for block in text_blocks:
+            block_sentiment = self._analyze_text_block(block)
+            
+            # Aggregate scores
+            for emotion, score in block_sentiment["scores"].items():
+                sentiment_scores[emotion] += score
+                
+            # Track specific emotion instances with context
+            if block_sentiment["dominant_emotion"] and block_sentiment["score"] > 0.5:
+                emotion_instances.append({
+                    "emotion": block_sentiment["dominant_emotion"],
+                    "intensity": block_sentiment["score"],
+                    "context": block[:100] + "..." if len(block) > 100 else block
+                })
+        
+        # Normalize scores
+        total_blocks = max(1, len(text_blocks))
+        for emotion in sentiment_scores:
+            sentiment_scores[emotion] /= total_blocks
+            
+        # Determine dominant emotion
+        dominant_emotion = max(sentiment_scores, key=sentiment_scores.get)
+        dominant_score = sentiment_scores[dominant_emotion]
+        
+        # Store analysis for trend detection
+        analysis_result = {
             "url": url,
             "granularity": granularity,
-            "dominant_mood": max(sentiment_zones, key=sentiment_zones.get),
-            "spectrum": sentiment_zones
+            "dominant_mood": dominant_emotion,
+            "dominant_intensity": dominant_score,
+            "spectrum": sentiment_scores,
+            "emotion_instances": emotion_instances[:5],  # Top 5 instances
+            "timestamp": datetime.datetime.now().isoformat()
         }
+        
+        self.recent_analyses.append(analysis_result)
+        if len(self.recent_analyses) > self.max_history:
+            self.recent_analyses.pop(0)
+        
+        return analysis_result
+    
+    async def _fetch_content(self, url: str) -> str:
+        """Fetch content from URL using computer_use_agent"""
+        # This would use the existing computer_use_agent to get content
+        # For now, simulate some content
+        content = f"Simulated content from {url} for sentiment analysis. "
+        content += "Some users seem angry about recent changes. "
+        content += "Others are expressing sadness at community drama. "
+        content += "A few threads contain explicit desire and fantasy discussion. "
+        content += "Many users appear completely disengaged from the moderation controversy."
+        return content
+    
+    def _segment_content(self, content: str, granularity: str) -> List[str]:
+        """Segment content into blocks based on granularity"""
+        if granularity == "thread-level":
+            # Split by potential thread indicators
+            return [block.strip() for block in content.split("\n\n") if block.strip()]
+        elif granularity == "page-level":
+            # Treat entire content as one block
+            return [content]
+        elif granularity == "comment-level":
+            # Try to identify individual comments
+            return [block.strip() for block in content.split("\n") if block.strip()]
+        else:
+            # Default to sentence-level
+            return [sent.strip() for sent in content.split(".") if sent.strip()]
+    
+    def _analyze_text_block(self, text: str) -> dict:
+        """Analyze a block of text for emotional content"""
+        text_lower = text.lower()
+        scores = {}
+        
+        # Calculate scores for each emotion
+        for emotion, keywords in self.emotion_keywords.items():
+            # Count occurrences of keywords
+            count = sum(1 for keyword in keywords if keyword in text_lower)
+            # Calculate weighted score
+            scores[emotion] = min(1.0, count * 0.2)
+        
+        # Get dominant emotion
+        if any(scores.values()):
+            dominant_emotion = max(scores, key=scores.get)
+            dominant_score = scores[dominant_emotion]
+        else:
+            dominant_emotion = None
+            dominant_score = 0.0
+            
+        return {
+            "scores": scores,
+            "dominant_emotion": dominant_emotion,
+            "score": dominant_score,
+        }
+    
+    async def detect_trends(self) -> dict:
+        """Detect trends in emotional content over time"""
+        if len(self.recent_analyses) < 2:
+            return {"trend_detected": False}
+            
+        # Calculate emotional trends
+        trends = {}
+        for emotion in self.emotion_keywords:
+            scores = [analysis["spectrum"][emotion] for analysis in self.recent_analyses]
+            if len(scores) >= 3:
+                # Calculate slope of trend
+                x = list(range(len(scores)))
+                trend = self._calculate_trend(x, scores)
+                if abs(trend) > 0.1:  # Significant trend
+                    trends[emotion] = {
+                        "direction": "increasing" if trend > 0 else "decreasing",
+                        "magnitude": abs(trend),
+                        "current": scores[-1]
+                    }
+        
+        return {
+            "trend_detected": bool(trends),
+            "trends": trends,
+            "timespan": f"{len(self.recent_analyses)} recent analyses"
+        }
+    
+    def _calculate_trend(self, x: List[int], y: List[float]) -> float:
+        """Calculate the slope of the trend line"""
+        n = len(x)
+        if n <= 1:
+            return 0
+            
+        # Simple linear regression to find slope
+        sum_x = sum(x)
+        sum_y = sum(y)
+        sum_xy = sum(x[i] * y[i] for i in range(n))
+        sum_x2 = sum(xi**2 for xi in x)
+        
+        # Calculate slope
+        try:
+            slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x**2)
+            return slope
+        except ZeroDivisionError:
+            return 0
         
 class ThreadTracker:
 """
