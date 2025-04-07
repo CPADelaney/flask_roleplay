@@ -112,104 +112,99 @@ class NeurochemicalTools:
         description_override="Update a specific neurochemical with a delta change",
         failure_error_function=neurochemical_error_handler
     )
-@function_tool(
-    name_override="update_neurochemical",
-    description_override="Update a specific neurochemical with a delta change",
-    failure_error_function=neurochemical_error_handler
-)
-async def update_neurochemical(self, ctx: RunContextWrapper[EmotionalContext], 
-                       chemical: str, value: float, 
-                       source: str = "system") -> Dict[str, Any]:
-    """
-    Update a specific neurochemical with a delta change - restructured for SDK optimization
-    
-    Args:
-        ctx: Run context wrapper with emotional state
-        chemical: Neurochemical to update
-        value: Delta change value
-        source: Source of the change
+    async def update_neurochemical(self, ctx: RunContextWrapper[EmotionalContext], 
+                           chemical: str, value: float, 
+                           source: str = "system") -> Dict[str, Any]:
+        """
+        Update a specific neurochemical with a delta change - restructured for SDK optimization
         
-    Returns:
-        Update result
-    """
-    with function_span("update_neurochemical", input=f"{chemical}:{value}"):
-        # Create a trace for hormone update
-        with trace(
-            workflow_name="Neurochemical_Update",
-            trace_id=gen_trace_id(),
-            group_id=ctx.context.get_value("conversation_id", "default"),
-            metadata={
-                "chemical": chemical,
-                "value": value,
-                "source": source,
-                "cycle": ctx.context.cycle_count
-            }
-        ):
-            if chemical not in self.neurochemicals:
-                # Return list of valid neurochemicals in error
-                valid_chemicals = list(self.neurochemicals.keys())
-                raise UserError(
-                    f"Unknown neurochemical: {chemical}. "
-                    f"Valid options are: {', '.join(valid_chemicals)}"
-                )
+        Args:
+            ctx: Run context wrapper with emotional state
+            chemical: Neurochemical to update
+            value: Delta change value
+            source: Source of the change
             
-            # Get pre-update value
-            old_value = self.neurochemicals[chemical]["value"]
-            
-            # Calculate new value with bounds checking
-            new_value = max(0.0, min(1.0, old_value + value))
-            self.neurochemicals[chemical]["value"] = new_value
-            
-            # Create a custom span for the chemical update with improved data structure
-            with custom_span(
-                "chemical_update",
-                data={
+        Returns:
+            Update result
+        """
+        with function_span("update_neurochemical", input=f"{chemical}:{value}"):
+            # Create a trace for hormone update
+            with trace(
+                workflow_name="Neurochemical_Update",
+                trace_id=gen_trace_id(),
+                group_id=ctx.context.get_value("conversation_id", "default"),
+                metadata={
                     "chemical": chemical,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": value,
+                    "value": value,
                     "source": source,
-                    "cycle": ctx.context.cycle_count,
-                    "type": "chemical_update"
+                    "cycle": ctx.context.cycle_count
                 }
             ):
-                # Store update in context circular buffer
-                ctx.context._add_to_circular_buffer("chemical_updates", {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "chemical": chemical,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": value,
-                    "source": source
-                })
-            
-                # Update timestamp
-                self.last_update = datetime.datetime.now()
-            
-                # Update cached state in context
-                ctx.context.record_neurochemical_values({
-                    c: d["value"] for c, d in self.neurochemicals.items()
-                })
-            
-                # Process chemical interactions
-                interaction_result = await self.process_chemical_interactions(
-                    ctx, chemical, value
-                )
-            
-                # Derive emotions from updated neurochemical state
-                emotional_state = await self.derive_emotional_state(ctx)
-            
-                # Return structured result with SDK-compatible formatting
-                return {
-                    "success": True,
-                    "updated_chemical": chemical,
-                    "old_value": old_value,
-                    "new_value": new_value,
-                    "change": value,
-                    "source": source,
-                    "derived_emotions": emotional_state
-                }
-    
+                if chemical not in self.neurochemicals:
+                    # Return list of valid neurochemicals in error
+                    valid_chemicals = list(self.neurochemicals.keys())
+                    raise UserError(
+                        f"Unknown neurochemical: {chemical}. "
+                        f"Valid options are: {', '.join(valid_chemicals)}"
+                    )
+                
+                # Get pre-update value
+                old_value = self.neurochemicals[chemical]["value"]
+                
+                # Calculate new value with bounds checking
+                new_value = max(0.0, min(1.0, old_value + value))
+                self.neurochemicals[chemical]["value"] = new_value
+                
+                # Create a custom span for the chemical update with improved data structure
+                with custom_span(
+                    "chemical_update",
+                    data={
+                        "chemical": chemical,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source,
+                        "cycle": ctx.context.cycle_count,
+                        "type": "chemical_update"
+                    }
+                ):
+                    # Store update in context circular buffer
+                    ctx.context._add_to_circular_buffer("chemical_updates", {
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "chemical": chemical,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source
+                    })
+                
+                    # Update timestamp
+                    self.last_update = datetime.datetime.now()
+                
+                    # Update cached state in context
+                    ctx.context.record_neurochemical_values({
+                        c: d["value"] for c, d in self.neurochemicals.items()
+                    })
+                
+                    # Process chemical interactions
+                    interaction_result = await self.process_chemical_interactions(
+                        ctx, chemical, value
+                    )
+                
+                    # Derive emotions from updated neurochemical state
+                    emotional_state = await self.derive_emotional_state(ctx)
+                
+                    # Return structured result with SDK-compatible formatting
+                    return {
+                        "success": True,
+                        "updated_chemical": chemical,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source,
+                        "derived_emotions": emotional_state
+                    }
+        
     @function_tool(
         name_override="apply_chemical_decay",
         description_override="Apply decay to all neurochemicals based on time elapsed and decay rates",
