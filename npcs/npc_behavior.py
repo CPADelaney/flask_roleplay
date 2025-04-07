@@ -16,8 +16,6 @@ from db.connection import get_db_connection_context
 
 from memory.wrapper import MemorySystem
 
-# Nyx client
-from nyx.integrate import get_nyx_client
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +508,7 @@ class BehaviorEvolution:
 
 class NPCBehavior:
     """Manages NPC behavior and decision-making."""
+    from nyx.integrate import get_nyx_client  
     
     def __init__(self, npc_id: int):
         self.npc_id = npc_id
