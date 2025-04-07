@@ -7,7 +7,7 @@ added handoff request/response structures and improved SDK integration.
 
 import datetime
 from enum import Enum
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, TypedDict
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, TypedDict, Literal
 
 from pydantic import BaseModel, Field, validator, model_validator, NonNegativeFloat, confloat
 
@@ -338,17 +338,17 @@ class StreamEvent(BaseModel):
 # Specialized stream event types
 class ChemicalUpdateEvent(StreamEvent):
     """Specialized event for chemical updates"""
-    type: StreamEventType = Field(StreamEventType.CHEMICAL_UPDATE, const=True)
+    type: Literal[StreamEventType.CHEMICAL_UPDATE] = StreamEventType.CHEMICAL_UPDATE
     data: Dict[str, Any] = Field(..., description="Chemical update data")
-    
+
 class EmotionChangeEvent(StreamEvent):
     """Specialized event for emotion changes"""
-    type: StreamEventType = Field(StreamEventType.EMOTION_CHANGE, const=True)
+    type: Literal[StreamEventType.EMOTION_CHANGE] = StreamEventType.EMOTION_CHANGE
     data: Dict[str, Any] = Field(..., description="Emotion change data")
-    
+
 class ReflectionEvent(StreamEvent):
     """Specialized event for reflections"""
-    type: StreamEventType = Field(StreamEventType.REFLECTION, const=True)
+    type: Literal[StreamEventType.REFLECTION] = StreamEventType.REFLECTION
     data: Dict[str, Any] = Field(..., description="Reflection data")
 
 class StreamResponse(BaseModel):
