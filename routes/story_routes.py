@@ -1,4 +1,4 @@
-# routes/story_routes.py (Revised)
+# routes/story_routes.py 
 
 import logging
 import json
