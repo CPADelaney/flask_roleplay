@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 # Import your existing modules
 from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
-from npcs.new_npc_creation import spawn_multiple_npcs
+from npcs.new_npc_creation import NPCCreationHandler
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from lore.dynamic_lore_generator import DynamicLoreGenerator
@@ -379,12 +379,12 @@ class NewGameAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
-        # Use existing spawn_multiple_npcs_enhanced function
-        npc_ids = await spawn_multiple_npcs_enhanced(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            environment_desc=environment_desc,
-            day_names=day_names,
+        # Create an instance of NPCCreationHandler
+        npc_handler = NPCCreationHandler()
+        
+        # Use the class method directly
+        npc_ids = await npc_handler.spawn_multiple_npcs(
+            ctx=ctx,
             count=count
         )
         
