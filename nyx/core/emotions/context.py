@@ -11,7 +11,7 @@ import json
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional, TypeVar, Generic, Set, Deque, Union
 
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, Field, model_validator, validator
 from agents import RunContextWrapper, Agent
 
 # Create a TypeVar for the EmotionalContext to be used in type hints
