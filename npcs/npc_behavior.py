@@ -508,13 +508,18 @@ class BehaviorEvolution:
 
 class NPCBehavior:
     """Manages NPC behavior and decision-making."""
-    from nyx.integrate import get_nyx_client  
-    
     def __init__(self, npc_id: int):
         self.npc_id = npc_id
-        self.nyx_client = get_nyx_client()
+        self.nyx_client = None
         self.memory_system = MemorySystem()
         self._user_model = None
+    
+    def get_nyx_client(self):
+        """Lazy-load the Nyx client to avoid circular imports."""
+        if self.nyx_client is None:
+            from nyx.integrate import get_nyx_client
+            self.nyx_client = get_nyx_client()
+        return self.nyx_client
     
     async def get_user_model(self) -> Dict[str, Any]:
         """Get or create the Nyx user model for this NPC."""
