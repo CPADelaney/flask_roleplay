@@ -1141,49 +1141,46 @@ class HormoneSystem:
             "timestamp": datetime.datetime.now().isoformat()
         }
         
-    def update_multi_hormone_interactions(self, ctx):
+    async def update_multi_hormone_interactions(self, ctx):
         """
         Process complex interactions between multiple hormones
         to support sophisticated emotional states
         """
         # Support for Melancholy (combination of multiple hormonal effects)
-        if (self.hormones["melatonyx"]["value"] > 0.6 and 
-            self.hormones["estradyx"]["value"] > 0.5):
-            # This combination supports a contemplative melancholy
+        if (self.hormones["melatonyx"]["value"] > 0.6
+            and self.hormones["estradyx"]["value"] > 0.5):
             await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
             await self.update_hormone(ctx, "cortanyx", 0.05, source="hormone_interaction")
-
+    
         if self.emotional_core and 'testoryx' in self.hormones:
             testoryx_level = self.hormones['testoryx']['value']
             if testoryx_level > 0.6:
-                nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
-                influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
-        
-        # Support for Nostalgia (temporal awareness + emotional memory)
-        if (self.hormones["melatonyx"]["value"] > 0.4 and 
-            self.hormones["oxytonyx"]["value"] > 0.5):
-            # This combination supports nostalgic states
+                # Example: small boost to reward seeking baseline
+                nyxamine_influence = (testoryx_level - 0.5) * 0.1
+                # If you're actually trying to call await something, do so in an async manner,
+                # or remove 'await' if this is just a plain function call.
+    
+        # Support for Nostalgia
+        if (self.hormones["melatonyx"]["value"] > 0.4
+            and self.hormones["oxytonyx"]["value"] > 0.5):
             await self.update_hormone(ctx, "seranix", 0.1, source="hormone_interaction")
             await self.update_hormone(ctx, "nyxamine", 0.05, source="hormone_interaction")
-        
-        # Support for Amusement/Humor (reward + mild arousal + low stress)
-        if (self.hormones["endoryx"]["value"] > 0.6 and 
-            self.hormones["testoryx"]["value"] > 0.4 and
-            self.hormones["cortanyx"]["value"] < 0.3):
-            # This combination supports humor perception
+    
+        # Support for Amusement/Humor
+        if (self.hormones["endoryx"]["value"] > 0.6
+            and self.hormones["testoryx"]["value"] > 0.4
+            and self.hormones["cortanyx"]["value"] < 0.3):
             await self.update_hormone(ctx, "nyxamine", 0.15, source="hormone_interaction")
             await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
-        
-        # Support for Curiosity (reward seeking + temporal awareness)
-        if (self.hormones["endoryx"]["value"] > 0.5 and 
-            self.hormones["melatonyx"]["value"] < 0.4):
-            # This combination supports curiosity and interest
+    
+        # Support for Curiosity
+        if (self.hormones["endoryx"]["value"] > 0.5
+            and self.hormones["melatonyx"]["value"] < 0.4):
             await self.update_hormone(ctx, "nyxamine", 0.1, source="hormone_interaction")
             await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
-        
-        # Support for Boredom (low reward + moderate temporal awareness)
-        if (self.hormones["endoryx"]["value"] < 0.3 and 
-            self.hormones["melatonyx"]["value"] > 0.5):
-            # This combination supports states of boredom
+    
+        # Support for Boredom
+        if (self.hormones["endoryx"]["value"] < 0.3
+            and self.hormones["melatonyx"]["value"] > 0.5):
             await self.update_hormone(ctx, "nyxamine", -0.1, source="hormone_interaction")
             await self.update_hormone(ctx, "adrenyx", -0.1, source="hormone_interaction")
