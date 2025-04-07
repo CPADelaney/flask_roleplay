@@ -1871,3 +1871,220 @@ class EnhancedAgenticActionGenerator:
             return {"error": "UI conversation manager not initialized"}
         return await self.ui_conversation_manager.search_conversation_history(
             query=query, user_id=user_id)
+
+    async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute an action with provided parameters
+        
+        Args:
+            action: The action to execute (with name, parameters, source, etc.)
+            context: Additional execution context
+            
+        Returns:
+            Action execution result with success flag and outcome details
+        """
+        try:
+            # Initialize timing and action details
+            start_time = datetime.datetime.now()
+            action_id = action.get("id", f"action_{uuid.uuid4().hex[:8]}")
+            action_name = action.get("name", "unknown")
+            parameters = action.get("parameters", {})
+            source = action.get("source", ActionSource.MOTIVATION)
+            description = action.get("description", f"Executing {action_name}")
+            
+            logger.info(f"Executing action: {action_name} (ID: {action_id}, Source: {source})")
+            
+            # Initialize context if not provided
+            context = context or {}
+            
+            # Add action metadata to context
+            execution_context = {
+                "action_id": action_id,
+                "action_name": action_name,
+                "source": source,
+                "timestamp": datetime.datetime.now().isoformat(),
+                **context
+            }
+            
+            # Check if we have a registered handler for this action
+            if hasattr(self, "action_handlers") and action_name in self.action_handlers:
+                handler = self.action_handlers[action_name]
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(**parameters)
+                else:
+                    result = handler(**parameters)
+                    
+                # Process handler result
+                success = result.get("success", True) if isinstance(result, dict) else True
+                
+                # Structure complete result
+                action_result = {
+                    "success": success,
+                    "action_id": action_id,
+                    "action_name": action_name,
+                    "execution_time": (datetime.datetime.now() - start_time).total_seconds(),
+                    "result": result
+                }
+                
+                # Add to action history
+                self.action_history.append({
+                    "id": action_id,
+                    "name": action_name,
+                    "parameters": parameters,
+                    "source": source,
+                    "result": action_result,
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                return action_result
+                
+            # If no specific handler exists, attempt to use a default mechanism based on action name
+            # First check if the action name corresponds to a method in this class
+            if hasattr(self, action_name) and callable(getattr(self, action_name)):
+                method = getattr(self, action_name)
+                if asyncio.iscoroutinefunction(method):
+                    result = await method(**parameters)
+                else:
+                    result = method(**parameters)
+                    
+                execution_time = (datetime.datetime.now() - start_time).total_seconds()
+                
+                # Structure result
+                action_result = {
+                    "success": True,
+                    "action_id": action_id,
+                    "action_name": action_name,
+                    "execution_time": execution_time,
+                    "result": result
+                }
+                
+                # Add to action history
+                self.action_history.append({
+                    "id": action_id,
+                    "name": action_name,
+                    "parameters": parameters,
+                    "source": source,
+                    "result": action_result,
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                return action_result
+            
+            # If we reach here, we don't have a handler for this action
+            logger.warning(f"No handler found for action: {action_name}")
+            return {
+                "success": False,
+                "action_id": action_id,
+                "action_name": action_name,
+                "execution_time": (datetime.datetime.now() - start_time).total_seconds(),
+                "error": f"No handler registered for action '{action_name}'"
+            }
+            
+        except Exception as e:
+            # Log and return the error
+            logger.error(f"Error executing action {action.get('name', 'unknown')}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "action_id": action.get("id", "unknown"),
+                "action_name": action.get("name", "unknown"),
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+    
+    def register_action(self, action_name: str, handler: Callable) -> None:
+        """
+        Register a handler for a specific action
+        
+        Args:
+            action_name: Name of the action
+            handler: Function to handle the action execution
+        """
+        async with self._lock:  # Use the existing lock for thread safety
+            # Initialize the action handlers dictionary if it doesn't exist
+            if not hasattr(self, "action_handlers"):
+                self.action_handlers = {}
+            
+            # Check if the handler is callable
+            if not callable(handler):
+                raise ValueError(f"Handler for action '{action_name}' must be callable")
+            
+            # Register the handler
+            self.action_handlers[action_name] = handler
+            
+            # Add to available actions list for context
+            if hasattr(self, "available_actions") and action_name not in self.available_actions:
+                self.available_actions.append(action_name)
+            
+            # Initialize success rates for the new action if not already present
+            if action_name not in self.action_success_rates:
+                self.action_success_rates[action_name] = {"successes": 0, "attempts": 0, "rate": 0.5}
+            
+            logger.info(f"Registered handler for action: {action_name}")
+    
+    async def generate_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate an action based on context (wrapper for generate_optimal_action)
+        
+        Args:
+            context: Current context including state, motivations, and goals
+            
+        Returns:
+            Generated action with name, parameters, and metadata
+        """
+        try:
+            # First update system state to ensure action generation uses current data
+            await self.update_motivations()
+            
+            # Process the context if needed
+            if not isinstance(context, ActionContext):
+                # Gather complete action context from all integrated systems
+                action_context = await self._gather_action_context(context)
+            else:
+                action_context = context
+            
+            # Generate the optimal action
+            action = await self.generate_optimal_action(action_context)
+            
+            # Make sure action has required fields
+            if isinstance(action, dict) and "name" in action:
+                # Ensure the action has an ID
+                if "id" not in action:
+                    action["id"] = f"action_{uuid.uuid4().hex[:8]}"
+                    
+                # Ensure the action has a timestamp
+                if "timestamp" not in action:
+                    action["timestamp"] = datetime.datetime.now().isoformat()
+                    
+                # Add to action history
+                if hasattr(self, "action_history"):
+                    self.action_history.append(action)
+                    if len(self.action_history) > 100:
+                        self.action_history = self.action_history[-100:]
+                
+                return action
+            else:
+                # If the action doesn't have the expected structure, log an error and return a generic action
+                logger.error(f"Generated action doesn't have required fields: {action}")
+                return {
+                    "name": "fallback_action",
+                    "parameters": {},
+                    "source": ActionSource.MOTIVATION,
+                    "description": "Fallback action due to invalid generation result",
+                    "id": f"action_{uuid.uuid4().hex[:8]}",
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+                
+        except Exception as e:
+            logger.error(f"Error generating action: {e}", exc_info=True)
+            
+            # Return a fallback action in case of errors
+            return {
+                "name": "fallback_action",
+                "parameters": {},
+                "source": ActionSource.MOTIVATION,
+                "description": f"Fallback action due to error: {str(e)}",
+                "id": f"action_{uuid.uuid4().hex[:8]}",
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+
+AgenticActionGenerator = EnhancedAgenticActionGenerator
