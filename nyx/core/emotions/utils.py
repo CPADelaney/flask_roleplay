@@ -23,7 +23,7 @@ from agents import (
 )
 from agents.exceptions import UserError, AgentsException, ModelBehaviorError
 from agents.tracing import Trace, Span, gen_span_id, add_trace_processor
-from agents.extensions.handoff_filters import keep_relevant_history
+from agents.extensions.handoff_filters import remove_all_tools
 
 from nyx.core.emotions.context import EmotionalContext
 
@@ -267,7 +267,7 @@ def create_run_config(
             top_p=0.95,
             max_tokens=max_tokens
         ),
-        handoff_input_filter=handoff_filters.keep_relevant_history,
+        handoff_input_filter=remove_all_tools,
         trace_include_sensitive_data=True,
         trace_metadata=metadata
     )
@@ -777,7 +777,7 @@ class EmotionalToolUtils:
                 top_p=0.95,
                 max_tokens=max_tokens
             ),
-            handoff_input_filter=keep_relevant_history,
+            handoff_input_filter=remove_all_tools,
             trace_include_sensitive_data=True,
             trace_metadata=metadata
         )
@@ -845,7 +845,7 @@ class EmotionalToolUtils:
                 top_p=0.95,
                 max_tokens=max_tokens
             ),
-            handoff_input_filter=handoff_filters.keep_relevant_history,
+            handoff_input_filter=remove_all_tools,
             trace_include_sensitive_data=True,
             trace_metadata=metadata
         )
