@@ -31,9 +31,8 @@ class LearningTools:
         self.emotion_derivation_rules = emotion_system.emotion_derivation_rules
         self.reward_learning = emotion_system.reward_learning
     
-    @function_tool
-    @handle_errors("Error recording interaction outcome")
-    async def record_interaction_outcome(self, ctx: RunContextWrapper[EmotionalContext],
+    # Define non-decorated methods that will be wrapped later
+    async def _record_interaction_outcome(self, ctx: RunContextWrapper[EmotionalContext],
                                      interaction_pattern: str,
                                      outcome: str,
                                      strength: float = 1.0) -> Dict[str, Any]:
@@ -41,6 +40,7 @@ class LearningTools:
         Record the outcome of an interaction pattern for learning
         
         Args:
+            ctx: Run context wrapper
             interaction_pattern: Description of the interaction pattern
             outcome: "positive" or "negative"
             strength: Strength of the reinforcement (0.0-1.0)
@@ -83,14 +83,13 @@ class LearningTools:
                 "strength": strength
             }
     
-    @function_tool
-    @handle_errors("Error updating learning rules")
-    async def update_learning_rules(self, ctx: RunContextWrapper[EmotionalContext],
+    async def _update_learning_rules(self, ctx: RunContextWrapper[EmotionalContext],
                                min_occurrences: int = 2) -> Dict[str, Any]:
         """
         Update learning rules based on observed patterns
         
         Args:
+            ctx: Run context wrapper
             min_occurrences: Minimum occurrences to consider a pattern significant
             
         Returns:
@@ -177,12 +176,13 @@ class LearningTools:
                 "negative_patterns": len(self.reward_learning["negative_patterns"])
             }
     
-    @function_tool
-    @handle_errors("Error applying learned adaptations")
-    async def apply_learned_adaptations(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def _apply_learned_adaptations(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
         Apply adaptations based on learned rules
         
+        Args:
+            ctx: Run context wrapper
+            
         Returns:
             Adaptation results
         """
@@ -282,3 +282,23 @@ class LearningTools:
                 "rules_considered": len(relevant_rules),
                 "current_emotion": current_emotion
             }
+    
+    # Define the public methods with proper function_tool decorators
+    @handle_errors("Error recording interaction outcome")
+    def record_interaction_outcome(self, ctx: RunContextWrapper[EmotionalContext],
+                                   interaction_pattern: str,
+                                   outcome: str,
+                                   strength: float = 1.0) -> Dict[str, Any]:
+        """Wrapped version of _record_interaction_outcome"""
+        return function_tool(self._record_interaction_outcome)(ctx, interaction_pattern, outcome, strength)
+    
+    @handle_errors("Error updating learning rules")
+    def update_learning_rules(self, ctx: RunContextWrapper[EmotionalContext],
+                             min_occurrences: int = 2) -> Dict[str, Any]:
+        """Wrapped version of _update_learning_rules"""
+        return function_tool(self._update_learning_rules)(ctx, min_occurrences)
+    
+    @handle_errors("Error applying learned adaptations")
+    def apply_learned_adaptations(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+        """Wrapped version of _apply_learned_adaptations"""
+        return function_tool(self._apply_learned_adaptations)(ctx)
