@@ -1,14 +1,6 @@
-# nyx/core/emotions/tools/neurochemical_tools.py
-
-"""
-Enhanced function tools for neurochemical system operations.
-These tools handle updating and processing neurochemicals with improved
-error handling and better OpenAI Agents SDK integration.
-"""
-
 import datetime
 import logging
-from typing import Dict, Any, Optional, List, Tuple, Union, cast
+from typing import Dict, Any, Optional, List
 
 from agents import (
     function_tool, RunContextWrapper, function_span, custom_span,
@@ -26,21 +18,12 @@ from nyx.core.emotions.utils import handle_errors, EmotionalToolUtils
 
 logger = logging.getLogger(__name__)
 
-# Improved error handler for neurochemical tools with SDK integration
 async def neurochemical_error_handler(ctx: RunContextWrapper[Any], error: Exception) -> str:
     """
     Custom error handler for neurochemical tools with improved tracing
-    
-    Args:
-        ctx: Run context wrapper
-        error: The exception that was raised
-        
-    Returns:
-        Error message for the LLM
+    (unchanged from your original code).
     """
     error_type = type(error).__name__
-    
-    # Create a custom span for error tracing
     with custom_span(
         "neurochemical_error",
         data={
@@ -51,15 +34,11 @@ async def neurochemical_error_handler(ctx: RunContextWrapper[Any], error: Except
         }
     ):
         if isinstance(error, UserError):
-            # For user errors, provide helpful guidance
             logger.warning(f"User error in neurochemical tool: {error}")
             return (f"There was an issue with the neurochemical operation: {error}. "
                     f"Please check the chemical name and ensure values are between -1.0 and 1.0.")
         else:
-            # For system errors, log but provide less detail to user
             logger.error(f"System error in neurochemical tool: {error}", exc_info=True)
-            
-            # Record error in context for analysis
             if ctx and hasattr(ctx, "context"):
                 errors = ctx.context.get_value("system_errors", [])
                 errors.append({
@@ -68,29 +47,31 @@ async def neurochemical_error_handler(ctx: RunContextWrapper[Any], error: Except
                     "message": str(error)
                 })
                 ctx.context.set_value("system_errors", errors)
-                
-                # Update error counts
+
                 error_counts = ctx.context.get_value("error_counts", {})
-                if error_type not in error_counts:
-                    error_counts[error_type] = 0
-                error_counts[error_type] += 1
+                error_counts[error_type] = error_counts.get(error_type, 0) + 1
                 ctx.context.set_value("error_counts", error_counts)
-                
+
             return ("The neurochemical system encountered an internal error. "
                     "The default behavior will be used instead.")
+
 
 class NeurochemicalTools:
     """
     Enhanced function tools for managing the neurochemical state with
-    improved error handling and SDK integration
-    """
+    improved error handling and SDK integration.
     
+    IMPORTANT: For each static @function_tool method here, we retrieve this
+    instance from the context via:
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+    You must set that value somewhere, e.g. in the constructor or
+    higher-level code:
+        ctx.context.set_value("neurochemical_tools_instance", self)
+    """
+
     def __init__(self, neurochemical_system):
         """
-        Initialize with reference to the neurochemical system
-        
-        Args:
-            neurochemical_system: The neurochemical system to interact with
+        Initialize with reference to the neurochemical system.
         """
         self.neurochemicals = neurochemical_system.neurochemicals
         self.chemical_interactions = neurochemical_system.chemical_interactions
@@ -103,32 +84,23 @@ class NeurochemicalTools:
         else:
             self.derive_emotional_state = None
             logger.warning("No derive_emotional_state function found")
-            
-        # Reference to last_update
+        
         self.last_update = neurochemical_system.last_update
     
-    @function_tool(
-        name_override="update_neurochemical",
-        description_override="Update a specific neurochemical with a delta change",
-        failure_error_function=neurochemical_error_handler
-    )
-    async def update_neurochemical(self, ctx: RunContextWrapper[EmotionalContext], 
-                           chemical: str, value: float, 
-                           source: str = "system") -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # 1) update_neurochemical
+    # -------------------------------------------------------------------------
+    async def _update_neurochemical_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext],
+        chemical: str,
+        value: float,
+        source: str = "system"
+    ) -> Dict[str, Any]:
         """
-        Update a specific neurochemical with a delta change - restructured for SDK optimization
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            chemical: Neurochemical to update
-            value: Delta change value
-            source: Source of the change
-            
-        Returns:
-            Update result
+        The actual implementation with 'self'. 
         """
         with function_span("update_neurochemical", input=f"{chemical}:{value}"):
-            # Create a trace for hormone update
             with trace(
                 workflow_name="Neurochemical_Update",
                 trace_id=gen_trace_id(),
@@ -141,21 +113,16 @@ class NeurochemicalTools:
                 }
             ):
                 if chemical not in self.neurochemicals:
-                    # Return list of valid neurochemicals in error
                     valid_chemicals = list(self.neurochemicals.keys())
                     raise UserError(
                         f"Unknown neurochemical: {chemical}. "
                         f"Valid options are: {', '.join(valid_chemicals)}"
                     )
                 
-                # Get pre-update value
                 old_value = self.neurochemicals[chemical]["value"]
-                
-                # Calculate new value with bounds checking
                 new_value = max(0.0, min(1.0, old_value + value))
                 self.neurochemicals[chemical]["value"] = new_value
-                
-                # Create a custom span for the chemical update with improved data structure
+
                 with custom_span(
                     "chemical_update",
                     data={
@@ -168,7 +135,6 @@ class NeurochemicalTools:
                         "type": "chemical_update"
                     }
                 ):
-                    # Store update in context circular buffer
                     ctx.context._add_to_circular_buffer("chemical_updates", {
                         "timestamp": datetime.datetime.now().isoformat(),
                         "chemical": chemical,
@@ -177,24 +143,23 @@ class NeurochemicalTools:
                         "change": value,
                         "source": source
                     })
-                
-                    # Update timestamp
                     self.last_update = datetime.datetime.now()
-                
-                    # Update cached state in context
+
+                    # Update cached state
                     ctx.context.record_neurochemical_values({
                         c: d["value"] for c, d in self.neurochemicals.items()
                     })
                 
-                    # Process chemical interactions
-                    interaction_result = await self.process_chemical_interactions(
-                        ctx, chemical, value
+                    # Process interactions
+                    interaction_result = await self._process_chemical_interactions_impl(
+                        ctx, source_chemical=chemical, source_delta=value
                     )
                 
-                    # Derive emotions from updated neurochemical state
-                    emotional_state = await self.derive_emotional_state(ctx)
+                    # Derive emotions
+                    emotional_state = {}
+                    if self.derive_emotional_state:
+                        emotional_state = await self.derive_emotional_state(ctx)
                 
-                    # Return structured result with SDK-compatible formatting
                     return {
                         "success": True,
                         "updated_chemical": chemical,
@@ -204,28 +169,48 @@ class NeurochemicalTools:
                         "source": source,
                         "derived_emotions": emotional_state
                     }
-        
+
+    @staticmethod
     @function_tool(
-        name_override="apply_chemical_decay",
-        description_override="Apply decay to all neurochemicals based on time elapsed and decay rates",
+        name_override="update_neurochemical",
+        description_override="Update a specific neurochemical with a delta change",
         failure_error_function=neurochemical_error_handler
     )
-    async def apply_chemical_decay(self, ctx: RunContextWrapper[EmotionalContext]) -> ChemicalDecayOutput:
+    async def update_neurochemical(
+        ctx: RunContextWrapper[EmotionalContext],
+        chemical: str,
+        value: float,
+        source: str = "system"
+    ) -> Dict[str, Any]:
         """
-        Apply decay to all neurochemicals based on time elapsed and decay rates
-        
+        Update a specific neurochemical with a delta change - restructured for SDK optimization.
+
         Args:
             ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Updated neurochemical state after decay
+            chemical: Neurochemical to update
+            value: Delta change value
+            source: Source of the change
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._update_neurochemical_impl(ctx, chemical, value, source)
+
+    # -------------------------------------------------------------------------
+    # 2) apply_chemical_decay
+    # -------------------------------------------------------------------------
+    async def _apply_chemical_decay_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> ChemicalDecayOutput:
+        """
+        Actual implementation with 'self'.
         """
         with function_span("apply_chemical_decay"):
             now = datetime.datetime.now()
-            time_delta = (now - self.last_update).total_seconds() / 3600  # hours
-            
-            # Don't decay if less than a minute has passed
-            if time_delta < 0.016:  # about 1 minute in hours
+            time_delta = (now - self.last_update).total_seconds() / 3600
+
+            if time_delta < 0.016:
                 return ChemicalDecayOutput(
                     decay_applied=False,
                     neurochemical_state={c: d["value"] for c, d in self.neurochemicals.items()},
@@ -233,8 +218,7 @@ class NeurochemicalTools:
                     time_elapsed_hours=time_delta,
                     last_update=self.last_update.isoformat()
                 )
-            
-            # Create a span for the decay computation
+
             with custom_span(
                 "chemical_decay",
                 data={
@@ -243,41 +227,30 @@ class NeurochemicalTools:
                     "cycle": ctx.context.cycle_count
                 }
             ):
-                # Apply decay to each neurochemical using comprehension for efficiency
                 original_values = {c: d["value"] for c, d in self.neurochemicals.items()}
-                
                 for chemical, data in self.neurochemicals.items():
                     decay_rate = data["decay_rate"]
-                    
-                    # Get baseline, accounting for temporary hormone influences
                     if "temporary_baseline" in data:
                         baseline = data["temporary_baseline"]
                     else:
                         baseline = data["baseline"]
-                        
+
                     current = data["value"]
-                    
-                    # Calculate decay based on time passed
                     decay_amount = decay_rate * time_delta
-                    
-                    # Decay toward baseline
+
                     if current > baseline:
                         self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
                     elif current < baseline:
                         self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
-                
-                # Update timestamp
+
                 self.last_update = now
-                
-                # Cache the results for future calls
                 new_values = {c: d["value"] for c, d in self.neurochemicals.items()}
                 ctx.context.record_neurochemical_values(new_values)
                 ctx.context.set_value("last_neurochemical_update", now)
-                
-                # Track significant decay events
+
                 for chemical, new_value in new_values.items():
                     old_value = original_values[chemical]
-                    if abs(new_value - old_value) > 0.05:  # Only track significant changes
+                    if abs(new_value - old_value) > 0.05:
                         ctx.context._add_to_circular_buffer("decay_events", {
                             "timestamp": now.isoformat(),
                             "chemical": chemical,
@@ -286,14 +259,13 @@ class NeurochemicalTools:
                             "decay_amount": old_value - new_value,
                             "time_delta": time_delta
                         })
-                
-                # Derive new emotional state after decay
+
+                emotional_state = {}
                 if self.derive_emotional_state:
                     emotional_state = await self.derive_emotional_state(ctx)
                 else:
-                    # Fallback if derive_emotional_state is not available
                     emotional_state = {"Neutral": 0.5}
-                
+
                 return ChemicalDecayOutput(
                     decay_applied=True,
                     neurochemical_state=new_values,
@@ -301,39 +273,47 @@ class NeurochemicalTools:
                     time_elapsed_hours=time_delta,
                     last_update=self.last_update.isoformat()
                 )
-    
+
+    @staticmethod
     @function_tool(
-        name_override="process_chemical_interactions",
-        description_override="Process interactions between neurochemicals when one changes",
+        name_override="apply_chemical_decay",
+        description_override="Apply decay to all neurochemicals based on time elapsed and decay rates",
         failure_error_function=neurochemical_error_handler
     )
-    async def process_chemical_interactions(
-        self, 
+    async def apply_chemical_decay(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> ChemicalDecayOutput:
+        """
+        Apply decay to all neurochemicals based on time elapsed and decay rates.
+
+        Args:
+            ctx: Run context wrapper with emotional state
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._apply_chemical_decay_impl(ctx)
+
+    # -------------------------------------------------------------------------
+    # 3) process_chemical_interactions
+    # -------------------------------------------------------------------------
+    async def _process_chemical_interactions_impl(
+        self,
         ctx: RunContextWrapper[EmotionalContext],
         source_chemical: str,
         source_delta: float
     ) -> NeurochemicalInteractionOutput:
         """
-        Process interactions between neurochemicals when one changes
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            source_chemical: The neurochemical that changed
-            source_delta: The amount it changed by
-            
-        Returns:
-            Interaction results
+        Actual implementation with 'self'.
         """
         with function_span("process_chemical_interactions", input=f"{source_chemical}:{source_delta}"):
-            # Skip processing if source chemical has no interactions or delta is negligible
             if source_chemical not in self.chemical_interactions or abs(source_delta) < 0.01:
                 return NeurochemicalInteractionOutput(
                     source_chemical=source_chemical,
                     source_delta=source_delta,
                     changes={}
                 )
-            
-            # Create a span for chemical interactions
+
             with custom_span(
                 "chemical_interactions",
                 data={
@@ -343,32 +323,25 @@ class NeurochemicalTools:
                 }
             ):
                 changes = {}
-                
-                # Apply interactions to affected chemicals using a more efficient approach
-                # Get all target interactions at once for efficiency
                 target_interactions = self.chemical_interactions[source_chemical]
                 affected_chemicals = [
-                    (chemical, source_delta * multiplier)
-                    for chemical, multiplier in target_interactions.items()
-                    if chemical in self.neurochemicals and abs(source_delta * multiplier) >= 0.01
+                    (chem, source_delta * multiplier)
+                    for chem, multiplier in target_interactions.items()
+                    if chem in self.neurochemicals and abs(source_delta * multiplier) >= 0.01
                 ]
-                
-                # Apply all effects at once
+
                 for chemical, effect in affected_chemicals:
                     old_value = self.neurochemicals[chemical]["value"]
                     new_value = max(0, min(1, old_value + effect))
                     self.neurochemicals[chemical]["value"] = new_value
-                    
-                    # Record change
+
                     changes[chemical] = {
                         "old_value": old_value,
                         "new_value": new_value,
                         "change": new_value - old_value
                     }
-                    
-                    # Track significant interactions in context
-                    if abs(new_value - old_value) > 0.05:  # Only track significant changes
-                        # Create a custom span for each significant interaction
+
+                    if abs(new_value - old_value) > 0.05:
                         with custom_span(
                             "chemical_interaction_effect",
                             data={
@@ -388,39 +361,54 @@ class NeurochemicalTools:
                                 "old_value": old_value,
                                 "new_value": new_value
                             })
-                
-                # Update cached neurochemical values
+
                 ctx.context.record_neurochemical_values({
                     c: d["value"] for c, d in self.neurochemicals.items()
                 })
-                
+
                 return NeurochemicalInteractionOutput(
                     source_chemical=source_chemical,
                     source_delta=source_delta,
                     changes=changes
                 )
-    
+
+    @staticmethod
     @function_tool(
-        name_override="get_neurochemical_state",
-        description_override="Get the current neurochemical state",
+        name_override="process_chemical_interactions",
+        description_override="Process interactions between neurochemicals when one changes",
         failure_error_function=neurochemical_error_handler
     )
-    async def get_neurochemical_state(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def process_chemical_interactions(
+        ctx: RunContextWrapper[EmotionalContext],
+        source_chemical: str,
+        source_delta: float
+    ) -> NeurochemicalInteractionOutput:
         """
-        Get the current neurochemical state
-        
+        Process interactions between neurochemicals when one changes.
+
         Args:
             ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Current neurochemical state
+            source_chemical: The neurochemical that changed
+            source_delta: The amount it changed by
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._process_chemical_interactions_impl(ctx, source_chemical, source_delta)
+
+    # -------------------------------------------------------------------------
+    # 4) get_neurochemical_state
+    # -------------------------------------------------------------------------
+    async def _get_neurochemical_state_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Actual implementation with 'self'.
         """
         with function_span("get_neurochemical_state"):
-            # Check if we have a cached state in context for better performance
             cached_state = ctx.context.get_cached_neurochemicals(max_age_seconds=1.0)
-            
             if cached_state is not None:
-                # Create a span with cached data
                 with custom_span(
                     "cached_neurochemical_state",
                     data={
@@ -442,12 +430,11 @@ class NeurochemicalTools:
                         "cached": True,
                         "trends": ctx.context.get_neurochemical_trends(limit=5)
                     }
-            
-            # Apply decay before returning state
-            if hasattr(self, "apply_chemical_decay"):
-                await self.apply_chemical_decay(ctx)
-            
-            # Create a span with fresh data
+
+            # Apply decay if needed
+            if hasattr(self, "_apply_chemical_decay_impl"):
+                await self._apply_chemical_decay_impl(ctx)
+
             with custom_span(
                 "fresh_neurochemical_state",
                 data={
@@ -455,25 +442,22 @@ class NeurochemicalTools:
                     "cycle": ctx.context.cycle_count
                 }
             ):
-                # Cache the result for future calls
                 state = {c: d["value"] for c, d in self.neurochemicals.items()}
                 ctx.context.record_neurochemical_values(state)
-                
-                # Add current chemical change activity
+
                 chemical_activity = []
                 for chemical, data in self.neurochemicals.items():
                     baseline = data["baseline"]
                     current = data["value"]
                     deviation = current - baseline
-                    
-                    if abs(deviation) > 0.1:  # Only include significant deviations
+                    if abs(deviation) > 0.1:
                         chemical_activity.append({
                             "chemical": chemical,
                             "deviation": deviation,
                             "direction": "above" if deviation > 0 else "below",
                             "significance": abs(deviation) / baseline if baseline > 0 else abs(deviation)
                         })
-                
+
                 return {
                     "chemicals": state,
                     "baselines": {c: d["baseline"] for c, d in self.neurochemicals.items()},
@@ -488,24 +472,38 @@ class NeurochemicalTools:
                     "trends": ctx.context.get_neurochemical_trends(limit=5),
                     "chemical_activity": chemical_activity
                 }
-                
+
+    @staticmethod
     @function_tool(
-        name_override="neurochemical_analysis",
-        description_override="Analyze current neurochemical state for patterns and imbalances",
+        name_override="get_neurochemical_state",
+        description_override="Get the current neurochemical state",
         failure_error_function=neurochemical_error_handler
     )
-    async def analyze_neurochemical_state(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def get_neurochemical_state(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
         """
-        Analyze the current neurochemical state for patterns and imbalances
-        
+        Get the current neurochemical state.
+
         Args:
             ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Analysis of neurochemical state
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._get_neurochemical_state_impl(ctx)
+
+    # -------------------------------------------------------------------------
+    # 5) analyze_neurochemical_state
+    # -------------------------------------------------------------------------
+    async def _analyze_neurochemical_state_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Actual implementation with 'self'.
         """
         with function_span("analyze_neurochemical_state"):
-            # Create a trace for the analysis
             with trace(
                 workflow_name="Neurochemical_Analysis",
                 trace_id=gen_trace_id(),
@@ -515,83 +513,61 @@ class NeurochemicalTools:
                     "timestamp": datetime.datetime.now().isoformat()
                 }
             ):
-                # Get current state - use cached if available
                 current_state = ctx.context.get_cached_neurochemicals()
                 if not current_state:
                     current_state = {c: d["value"] for c, d in self.neurochemicals.items()}
-                
+
                 baselines = {c: d["baseline"] for c, d in self.neurochemicals.items()}
-                
-                # Calculate deviations from baseline
-                deviations = {
-                    c: current_state[c] - baselines[c]
-                    for c in current_state
-                }
-                
-                # Identify dominant neurochemicals (highest above baseline)
+                deviations = {c: current_state[c] - baselines[c] for c in current_state}
+
                 dominant_chemicals = sorted(
                     [(c, d) for c, d in deviations.items() if d > 0.1],
                     key=lambda x: x[1],
                     reverse=True
                 )
-                
-                # Identify suppressed neurochemicals (furthest below baseline)
                 suppressed_chemicals = sorted(
                     [(c, d) for c, d in deviations.items() if d < -0.1],
                     key=lambda x: x[1]
                 )
-                
-                # Calculate balance indices
+
                 excitation_index = current_state.get("nyxamine", 0) + current_state.get("adrenyx", 0)
                 calm_index = current_state.get("seranix", 0) + current_state.get("oxynixin", 0)
                 stress_index = current_state.get("cortanyx", 0) + current_state.get("adrenyx", 0)
-                
-                # Calculate overall system balance
+
                 if excitation_index > 0 and calm_index > 0:
                     balance_ratio = excitation_index / calm_index
                 else:
                     balance_ratio = 1.0
-                
-                # Determine system state
+
                 if balance_ratio > 1.5:
                     system_state = "overstimulated"
                 elif balance_ratio < 0.5:
                     system_state = "subdued"
                 else:
                     system_state = "balanced"
-                
-                # Get recent trends
+
                 trends = ctx.context.get_neurochemical_trends(limit=5)
-                
-                # Identify patterns
                 patterns = {}
                 if trends:
                     for chemical, trend_data in trends.items():
                         if len(trend_data) >= 3:
-                            # Get last three values
                             recent_values = [point["value"] for point in trend_data[-3:]]
-                            
-                            # Check for consistent increase
+                            # consistent increase
                             if all(recent_values[i] < recent_values[i+1] for i in range(len(recent_values)-1)):
                                 patterns[chemical] = "consistently_increasing"
-                            
-                            # Check for consistent decrease
+                            # consistent decrease
                             elif all(recent_values[i] > recent_values[i+1] for i in range(len(recent_values)-1)):
                                 patterns[chemical] = "consistently_decreasing"
-                            
-                            # Check for oscillation
-                            elif (recent_values[0] > recent_values[1] and recent_values[1] < recent_values[2]) or \
-                                 (recent_values[0] < recent_values[1] and recent_values[1] > recent_values[2]):
+                            # oscillation
+                            elif ((recent_values[0] > recent_values[1] and recent_values[1] < recent_values[2]) or
+                                  (recent_values[0] < recent_values[1] and recent_values[1] > recent_values[2])):
                                 patterns[chemical] = "oscillating"
-                            
-                            # Check for plateau
+                            # plateau
                             elif abs(recent_values[0] - recent_values[-1]) < 0.05:
                                 patterns[chemical] = "stable"
-                            
                             else:
                                 patterns[chemical] = "variable"
-                
-                # Create a custom span for the analysis results
+
                 with custom_span(
                     "neurochemical_analysis_result",
                     data={
@@ -603,8 +579,12 @@ class NeurochemicalTools:
                     }
                 ):
                     return {
-                        "dominant_chemicals": [{"chemical": c, "deviation": d} for c, d in dominant_chemicals[:3]] if dominant_chemicals else [],
-                        "suppressed_chemicals": [{"chemical": c, "deviation": d} for c, d in suppressed_chemicals[:3]] if suppressed_chemicals else [],
+                        "dominant_chemicals": [
+                            {"chemical": c, "deviation": d} for c, d in dominant_chemicals[:3]
+                        ] if dominant_chemicals else [],
+                        "suppressed_chemicals": [
+                            {"chemical": c, "deviation": d} for c, d in suppressed_chemicals[:3]
+                        ] if suppressed_chemicals else [],
                         "system_state": system_state,
                         "balance_ratio": balance_ratio,
                         "excitation_index": excitation_index,
@@ -613,24 +593,38 @@ class NeurochemicalTools:
                         "patterns": patterns,
                         "timestamp": datetime.datetime.now().isoformat()
                     }
-                    
+
+    @staticmethod
     @function_tool(
-        name_override="reset_neurochemicals",
-        description_override="Reset neurochemicals to their baseline values",
+        name_override="neurochemical_analysis",
+        description_override="Analyze current neurochemical state for patterns and imbalances",
         failure_error_function=neurochemical_error_handler
     )
-    async def reset_neurochemicals(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def analyze_neurochemical_state(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
         """
-        Reset all neurochemicals to their baseline values
-        
+        Analyze the current neurochemical state for patterns and imbalances.
+
         Args:
             ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Result of reset operation
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._analyze_neurochemical_state_impl(ctx)
+
+    # -------------------------------------------------------------------------
+    # 6) reset_neurochemicals
+    # -------------------------------------------------------------------------
+    async def _reset_neurochemicals_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Actual implementation with 'self'.
         """
         with function_span("reset_neurochemicals"):
-            # Create a trace for the reset operation
             with trace(
                 workflow_name="Neurochemical_Reset",
                 trace_id=gen_trace_id(),
@@ -641,18 +635,13 @@ class NeurochemicalTools:
                     "reason": "manual_reset"
                 }
             ):
-                # Store original values for reporting
                 original_values = {c: d["value"] for c, d in self.neurochemicals.items()}
-                
-                # Reset each neurochemical to its baseline
                 for chemical, data in self.neurochemicals.items():
                     self.neurochemicals[chemical]["value"] = data["baseline"]
-                
-                # Update cached state
+
                 new_values = {c: d["value"] for c, d in self.neurochemicals.items()}
                 ctx.context.record_neurochemical_values(new_values)
-                
-                # Record the reset in context history
+
                 ctx.context._add_to_circular_buffer("system_events", {
                     "event": "neurochemical_reset",
                     "timestamp": datetime.datetime.now().isoformat(),
@@ -660,11 +649,8 @@ class NeurochemicalTools:
                     "new_values": new_values,
                     "cycle": ctx.context.cycle_count
                 })
-                
-                # Update timestamp
                 self.last_update = datetime.datetime.now()
-                
-                # Create a custom span for the reset result
+
                 with custom_span(
                     "neurochemical_reset_result",
                     data={
@@ -672,13 +658,12 @@ class NeurochemicalTools:
                         "cycle": ctx.context.cycle_count
                     }
                 ):
-                    # Derive emotional state after reset
+                    emotional_state = {}
                     if self.derive_emotional_state:
                         emotional_state = await self.derive_emotional_state(ctx)
                     else:
                         emotional_state = {"Neutral": 0.5}
                     
-                    # Store the new emotional state
                     ctx.context.last_emotions = emotional_state
                     
                     return {
@@ -688,3 +673,23 @@ class NeurochemicalTools:
                         "derived_emotions": emotional_state,
                         "timestamp": datetime.datetime.now().isoformat()
                     }
+
+    @staticmethod
+    @function_tool(
+        name_override="reset_neurochemicals",
+        description_override="Reset neurochemicals to their baseline values",
+        failure_error_function=neurochemical_error_handler
+    )
+    async def reset_neurochemicals(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Reset all neurochemicals to their baseline values.
+
+        Args:
+            ctx: Run context wrapper with emotional state
+        """
+        instance = ctx.context.get_value("neurochemical_tools_instance")
+        if not instance:
+            raise UserError("No NeurochemicalTools instance found in context.")
+        return await instance._reset_neurochemicals_impl(ctx)
