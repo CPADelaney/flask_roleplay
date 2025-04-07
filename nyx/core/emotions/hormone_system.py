@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import logging
 import math
+import random  # Added import for random module
 from typing import Dict, Any, Optional, List, Tuple, Union, cast
 
 from agents import (
@@ -214,15 +215,31 @@ class HormoneSystem:
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.3),  # Lower temperature for stability
             tools=[
-                function_tool(self.update_hormone),
-                function_tool(self.update_hormone_cycles),
-                function_tool(self._update_hormone_influences),
-                function_tool(self.get_hormone_circadian_info),
-                function_tool(self.get_hormone_stability)
+                self._wrap_method_as_tool(self.update_hormone),
+                self._wrap_method_as_tool(self.update_hormone_cycles),
+                self._wrap_method_as_tool(self._update_hormone_influences),
+                self._wrap_method_as_tool(self.get_hormone_circadian_info),
+                self._wrap_method_as_tool(self.get_hormone_stability)
             ]
         )
         
         return self.hormone_agent
+
+    # Helper method to wrap class methods as function tools
+    def _wrap_method_as_tool(self, method):
+        """
+        Wraps a class method to make it compatible with function_tool decorator
+        by ensuring RunContextWrapper is the first parameter
+        """
+        async def wrapper(ctx: RunContextWrapper[EmotionalContext], *args, **kwargs):
+            return await method(ctx, *args, **kwargs)
+        
+        # Copy metadata from original method
+        wrapper.__name__ = method.__name__
+        wrapper.__doc__ = method.__doc__
+        
+        # Apply function_tool decorator
+        return function_tool(wrapper)
 
     async def trigger_post_gratification_response(self, ctx, intensity: float = 1.0, gratification_type: str = "general"):
         """Trigger post-gratification, potentially varying effects based on type."""
@@ -343,7 +360,6 @@ class HormoneSystem:
                     "source": source
                 }
     
-    @function_tool
     @handle_errors("Error updating hormone cycles")
     async def update_hormone_cycles(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -399,7 +415,7 @@ class HormoneSystem:
                         new_phase = (old_phase + phase_change) % 1.0
                         
                         # Calculate cycle-based value using a sinusoidal pattern
-                        cycle_amplitude = 0.2  # How much the cycle affects the value
+                        cycle_amplitude = A.2  # How much the cycle affects the value
                         cycle_influence = cycle_amplitude * math.sin(new_phase * 2 * math.pi)
                         
                         # Apply environmental factors
@@ -510,7 +526,6 @@ class HormoneSystem:
         
         return 0.0
     
-    @function_tool
     @handle_errors("Error updating hormone influences")
     async def _update_hormone_influences(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -602,12 +617,12 @@ class HormoneSystem:
                                     "timestamp": datetime.datetime.now().isoformat()
                                 })
                 
-                # This block was indented incorrectly
+                # Fixed indentation issue and added the computed influence to the dict
                 if self.emotional_core and 'testoryx' in self.hormones:
                     testoryx_level = self.hormones['testoryx']['value']
                     if testoryx_level > 0.6:
                         nyxamine_influence = (testoryx_level - 0.5) * 0.1 # Small boost to reward seeking baseline
-                        influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence                
+                        influences["nyxamine"] = influences.get("nyxamine", 0.0) + nyxamine_influence
                 
                 # Store in context for tracking
                 ctx.context.set_value("hormone_influences", {
@@ -740,7 +755,6 @@ class HormoneSystem:
             "new_value": self.environmental_factors[factor]
         }
     
-    @function_tool
     @handle_errors("Error getting hormone phase data")
     async def get_hormone_circadian_info(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -832,7 +846,6 @@ class HormoneSystem:
                         "timestamp": now.isoformat()
                     }
     
-    @function_tool
     @handle_errors("Error calculating hormone stability")
     async def get_hormone_stability(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -944,7 +957,6 @@ class HormoneSystem:
         else:
             return "highly unstable - chaotic regulation"
             
-    @function_tool
     @handle_errors("Error analyzing hormone influences")
     async def analyze_hormone_influences(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
         """
@@ -1157,8 +1169,9 @@ class HormoneSystem:
             if testoryx_level > 0.6:
                 # Example: small boost to reward seeking baseline
                 nyxamine_influence = (testoryx_level - 0.5) * 0.1
-                # If you're actually trying to call await something, do so in an async manner,
-                # or remove 'await' if this is just a plain function call.
+                # Apply the influence to the neurochemical if available
+                if 'nyxamine' in self.emotional_core.neurochemicals:
+                    await self.update_hormone(ctx, "nyxamine", nyxamine_influence, source="testoryx_influence")
     
         # Support for Nostalgia
         if (self.hormones["melatonyx"]["value"] > 0.4
@@ -1169,7 +1182,7 @@ class HormoneSystem:
         # Support for Amusement/Humor
         if (self.hormones["endoryx"]["value"] > 0.6
             and self.hormones["testoryx"]["value"] > 0.4
-            and self.hormones["cortanyx"]["value"] < 0.3):
+            and self.hormones.get("cortanyx", {}).get("value", 1.0) < 0.3):  # Safely check cortanyx
             await self.update_hormone(ctx, "nyxamine", 0.15, source="hormone_interaction")
             await self.update_hormone(ctx, "adrenyx", 0.05, source="hormone_interaction")
     
