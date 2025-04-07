@@ -21,6 +21,16 @@ from story_agent.activity_recommender import activity_recommender_agent, Activit
 
 logger = logging.getLogger(__name__)
 
+class NarrativeResponse(BaseModel):
+    """Structured output for Nyx's narrative responses"""
+    narrative: str = Field(..., description="The main narrative response as Nyx")
+    tension_level: int = Field(0, description="Current narrative tension level (0-10)")
+    generate_image: bool = Field(False, description="Whether an image should be generated for this scene")
+    image_prompt: Optional[str] = Field(None, description="Prompt for image generation if needed")
+    environment_description: Optional[str] = Field(None, description="Updated environment description if changed")
+    time_advancement: bool = Field(False, description="Whether time should advance after this interaction")
+    
+
 class NyxTaskIntegration:
     """Integrates task and activity agents with Nyx's workflow using the OpenAI Agents SDK"""
     
@@ -167,11 +177,10 @@ class NyxTaskIntegration:
     async def enhance_narrative_with_task(
         self,
         ctx,
-        narrative_response: "NarrativeResponse",
+        narrative_response: NarrativeResponse,
         task: Dict[str, Any]
-    ) -> "NarrativeResponse":
+    ) -> NarrativeResponse:
         # We do a local import to avoid circular import at runtime:
-        from nyx.nyx_agent_sdk import NarrativeResponse
         # Add task information to narrative
         task_narrative = (
             f"\n\n{task['npc_involvement']}\n"
@@ -196,9 +205,9 @@ class NyxTaskIntegration:
     async def enhance_narrative_with_activities(
         self,
         ctx,
-        narrative_response: "NarrativeResponse",
+        narrative_response: NarrativeResponse,
         recommendations: List[Dict[str, Any]]
-    ) -> "NarrativeResponse":
+    ) -> NarrativeResponse:
         """
         Enhance Nyx's narrative response with activity recommendations.
         
@@ -206,7 +215,6 @@ class NyxTaskIntegration:
             narrative_response: Original narrative response
             recommendations: List of activity recommendations
         """
-        from nyx.nyx_agent_sdk import NarrativeResponse
         # Add activity recommendations to narrative
         activities_narrative = "\n\nSuggested activities:"
         
