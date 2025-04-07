@@ -28,7 +28,20 @@ from nyx.core.emotions.utils import handle_errors, EmotionalToolUtils
 logger = logging.getLogger(__name__)
 
 class ReflectionTools:
-    """Enhanced function tools for reflection processes with SDK integration"""
+    """
+    Enhanced function tools for reflection processes with SDK integration.
+    
+    IMPORTANT: Because each @function_tool must have RunContextWrapper[...] as its first
+    parameter, we split each tool method into:
+      - A private `_xxx_impl(self, ctx, ...)`
+      - A public `@staticmethod @function_tool` with `ctx` as first param
+        that fetches the instance from `ctx.context.get_value("reflection_tools_instance")`
+        and calls `_xxx_impl(...)`.
+
+    You'll need to ensure something like:
+        ctx.context.set_value("reflection_tools_instance", self)
+    is done so that the static methods can retrieve the instance.
+    """
     
     def __init__(self, emotion_system):
         """
@@ -51,19 +64,15 @@ class ReflectionTools:
             self.get_emotional_state_matrix = None
             logger.warning("No get_emotional_state_matrix function found")
     
-    @function_tool(
-        name_override="generate_internal_thought",
-        description_override="Generate an internal thought/reflection based on current emotional state"
-    )
-    async def generate_internal_thought(self, ctx: RunContextWrapper[EmotionalContext]) -> InternalThoughtOutput:
+    # -------------------------------------------------------------------------
+    # 1) generate_internal_thought
+    # -------------------------------------------------------------------------
+    async def _generate_internal_thought_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> InternalThoughtOutput:
         """
-        Generate an internal thought/reflection based on current emotional state
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            
-        Returns:
-            Internal thought data
+        Actual implementation that uses 'self' to generate internal thoughts.
         """
         with function_span("generate_internal_thought"):
             # Create a trace for thought generation
@@ -230,19 +239,38 @@ class ReflectionTools:
                                 adaptive_change=adaptive_change
                             )
     
+    @staticmethod
     @function_tool(
-        name_override="analyze_reflection_patterns",
-        description_override="Analyze patterns in reflection and emotional processing"
+        name_override="generate_internal_thought",
+        description_override="Generate an internal thought/reflection based on current emotional state"
     )
-    async def analyze_reflection_patterns(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def generate_internal_thought(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> InternalThoughtOutput:
         """
-        Analyze patterns in reflection and emotional processing
+        Generate an internal thought/reflection based on current emotional state
         
         Args:
             ctx: Run context wrapper with emotional state
             
         Returns:
-            Analysis of reflection patterns
+            Internal thought data
+        """
+        instance = ctx.context.get_value("reflection_tools_instance")
+        if not instance:
+            raise UserError("No ReflectionTools instance found in context.")
+        
+        return await instance._generate_internal_thought_impl(ctx)
+    
+    # -------------------------------------------------------------------------
+    # 2) analyze_reflection_patterns
+    # -------------------------------------------------------------------------
+    async def _analyze_reflection_patterns_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Actual implementation that uses 'self' to analyze patterns in reflection and emotional processing.
         """
         with function_span("analyze_reflection_patterns"):
             # Create a trace for pattern analysis
@@ -361,6 +389,29 @@ class ReflectionTools:
                             "timestamp": datetime.datetime.now().isoformat()
                         }
     
+    @staticmethod
+    @function_tool(
+        name_override="analyze_reflection_patterns",
+        description_override="Analyze patterns in reflection and emotional processing"
+    )
+    async def analyze_reflection_patterns(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Analyze patterns in reflection and emotional processing
+        
+        Args:
+            ctx: Run context wrapper with emotional state
+            
+        Returns:
+            Analysis of reflection patterns
+        """
+        instance = ctx.context.get_value("reflection_tools_instance")
+        if not instance:
+            raise UserError("No ReflectionTools instance found in context.")
+        
+        return await instance._analyze_reflection_patterns_impl(ctx)
+    
     def _extract_themes(self, text: str) -> List[str]:
         """
         Extract common themes from reflection text
@@ -393,21 +444,16 @@ class ReflectionTools:
         
         return found_themes
     
-    @function_tool(
-        name_override="get_reflection_history",
-        description_override="Get history of reflection thoughts"
-    )
-    async def get_reflection_history(self, ctx: RunContextWrapper[EmotionalContext], 
-                                limit: int = 5) -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # 3) get_reflection_history
+    # -------------------------------------------------------------------------
+    async def _get_reflection_history_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext],
+        limit: int = 5
+    ) -> Dict[str, Any]:
         """
-        Get history of reflection thoughts
-        
-        Args:
-            ctx: Run context wrapper with emotional state
-            limit: Maximum number of historical entries to return
-            
-        Returns:
-            Recent reflection history
+        Actual implementation that uses 'self' to get history of reflection thoughts.
         """
         with function_span("get_reflection_history"):
             # Get recent thoughts
@@ -449,19 +495,40 @@ class ReflectionTools:
                     "timestamp": datetime.datetime.now().isoformat()
                 }
     
+    @staticmethod
     @function_tool(
-        name_override="generate_wisdom",
-        description_override="Generate wisdom gained from emotional processing"
+        name_override="get_reflection_history",
+        description_override="Get history of reflection thoughts"
     )
-    async def generate_wisdom(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, Any]:
+    async def get_reflection_history(
+        ctx: RunContextWrapper[EmotionalContext],
+        limit: int = 5
+    ) -> Dict[str, Any]:
         """
-        Generate wisdom gained from emotional processing
+        Get history of reflection thoughts
         
         Args:
             ctx: Run context wrapper with emotional state
+            limit: Maximum number of historical entries to return
             
         Returns:
-            Generated wisdom and insights
+            Recent reflection history
+        """
+        instance = ctx.context.get_value("reflection_tools_instance")
+        if not instance:
+            raise UserError("No ReflectionTools instance found in context.")
+        
+        return await instance._get_reflection_history_impl(ctx, limit)
+    
+    # -------------------------------------------------------------------------
+    # 4) generate_wisdom
+    # -------------------------------------------------------------------------
+    async def _generate_wisdom_impl(
+        self,
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Actual implementation that uses 'self' to generate wisdom from emotional processing.
         """
         with function_span("generate_wisdom"):
             # Create a trace for wisdom generation
@@ -585,6 +652,29 @@ class ReflectionTools:
                             "valence_volatility": valence_volatility,
                             "timestamp": datetime.datetime.now().isoformat()
                         }
+    
+    @staticmethod
+    @function_tool(
+        name_override="generate_wisdom",
+        description_override="Generate wisdom gained from emotional processing"
+    )
+    async def generate_wisdom(
+        ctx: RunContextWrapper[EmotionalContext]
+    ) -> Dict[str, Any]:
+        """
+        Generate wisdom gained from emotional processing
+        
+        Args:
+            ctx: Run context wrapper with emotional state
+            
+        Returns:
+            Generated wisdom and insights
+        """
+        instance = ctx.context.get_value("reflection_tools_instance")
+        if not instance:
+            raise UserError("No ReflectionTools instance found in context.")
+        
+        return await instance._generate_wisdom_impl(ctx)
     
     def _get_valence_insight(self, trend: str, volatility: str) -> str:
         """
