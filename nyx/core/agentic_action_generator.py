@@ -33,6 +33,7 @@ from nyx.core.proactive_communication import (
 
 from nyx.tools.computer_use_agent import ComputerUseAgent
 from nyx.tools.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
+from nyx.tools.ui_interaction import UIConversationManager
 
 from agents import Agent, Runner, handoff, InputGuardrail, function_tool, trace, GuardrailFunctionOutput
 from typing import List, Dict, Any, Optional, Union, Literal
@@ -280,7 +281,8 @@ class EnhancedAgenticActionGenerator:
         
         # Social tools
         self.computer_user = ComputerUseAgent(logger=logger)
-        
+         self.ui_conversation_manager = UIConversationManager(system_context=self.system_context)
+       
         # Internal motivation system
         self.motivations = {
             "curiosity": 0.5,
@@ -788,6 +790,10 @@ class EnhancedAgenticActionGenerator:
         
         if hasattr(self, 'action_success_rates'):
             tools.append(function_tool(self.get_action_success_rates))
+
+        tools.append(function_tool(self.create_new_conversation))
+        tools.append(function_tool(self.send_message))
+        tools.append(function_tool(self.search_conversations))    
             
         return tools
     
@@ -1846,3 +1852,22 @@ class EnhancedAgenticActionGenerator:
         selected = templates[novelty_index]
     
         return selected
+
+    async def create_new_conversation(self, user_id: str, title: Optional[str] = None, 
+                                 initial_message: Optional[str] = None) -> Dict[str, Any]:
+        if not self.ui_conversation_manager:
+            return {"error": "UI conversation manager not initialized"}
+        return await self.ui_conversation_manager.create_new_conversation(
+            user_id=user_id, title=title, initial_message=initial_message)
+    
+    async def send_message(self, conversation_id: str, message_content: str) -> Dict[str, Any]:
+        if not self.ui_conversation_manager:
+            return {"error": "UI conversation manager not initialized"}
+        return await self.ui_conversation_manager.send_message(
+            conversation_id=conversation_id, message_content=message_content)
+    
+    async def search_conversations(self, query: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self.ui_conversation_manager:
+            return {"error": "UI conversation manager not initialized"}
+        return await self.ui_conversation_manager.search_conversation_history(
+            query=query, user_id=user_id)
