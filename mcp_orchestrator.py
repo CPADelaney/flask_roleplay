@@ -20,7 +20,7 @@ from typing import Dict, List, Any, Optional, Union, Set, Tuple, Callable
 
 import aiohttp
 import asyncio_extras
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ class TaskRequirement(BaseModel):
     priority: int = Field(default=2, description="Task priority from 1-5")
     estimated_time: int = Field(default=60, description="Estimated time in seconds")
     
-    @root_validator
-    def check_constraints(cls, values):
+    @model_validator
+    def check_constraints(cls, self):
         """Validate constraints on fields"""
         if values.get("complexity") < 1 or values.get("complexity") > 5:
             values["complexity"] = max(1, min(values.get("complexity", 1), 5))
