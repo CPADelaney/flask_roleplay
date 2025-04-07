@@ -36,7 +36,6 @@ from story_agent.story_director_agent import initialize_story_director
 
 # Import agent processing components for full integration
 from nyx.nyx_agent_sdk import process_user_input, generate_reflection
-from nyx.memory_integration_sdk import process_memory_operation, perform_memory_maintenance
 from nyx.user_model_sdk import process_user_input_for_model, get_response_guidance_for_user
 from nyx.scene_manager_sdk import process_scene_input, generate_npc_response
 from nyx.llm_integration import generate_text_completion
