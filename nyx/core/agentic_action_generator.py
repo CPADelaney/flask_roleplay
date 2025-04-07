@@ -40,6 +40,13 @@ self.computer_user = ComputerUseAgent(logger=self.logger)
 
 from nyx.tools.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
 
+from agents import Agent, Runner, handoff, InputGuardrail, function_tool, trace
+from typing import List, Dict, Any, Optional, Union, Literal
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Core data models
 class ActionSource(str, Enum):
     """Enum for tracking the source of an action"""
     MOTIVATION = "motivation"
@@ -49,16 +56,15 @@ class ActionSource(str, Enum):
     HABIT = "habit"
     EXPLORATION = "exploration"
     USER_ALIGNED = "user_aligned"
-    REASONING = "reasoning"  # Reasoning-based actions
-    REFLECTION = "reflection"  # Reflection-based actions
-    NEED = "need"  # Need-driven actions
-    MOOD = "mood"  # Mood-driven actions
-    MODE = "mode"  # Interaction mode-driven actions
-    META_COGNITIVE = "meta_cognitive"  # Meta-cognitive strategy actions
-    SENSORY = "sensory"  # Actions from sensory integration
-    OBSERVATION = "observation"  # Actions driven by passive observations
-    PROACTIVE = "proactive"  # Actions for proactive communication
-
+    REASONING = "reasoning"
+    REFLECTION = "reflection"
+    NEED = "need"
+    MOOD = "mood"
+    MODE = "mode"
+    META_COGNITIVE = "meta_cognitive"
+    SENSORY = "sensory"
+    OBSERVATION = "observation"
+    PROACTIVE = "proactive"
 
 class ActionContext(BaseModel):
     """Context for action selection and generation"""
@@ -71,21 +77,15 @@ class ActionContext(BaseModel):
     motivations: Dict[str, float] = Field(default_factory=dict)
     available_actions: List[str] = Field(default_factory=list)
     action_history: List[Dict[str, Any]] = Field(default_factory=list)
-    
-    # Existing fields for reasoning integration
     causal_models: List[str] = Field(default_factory=list, description="IDs of relevant causal models")
     concept_spaces: List[str] = Field(default_factory=list, description="IDs of relevant concept spaces")
-    
-    # Fields for enhanced integrations
-    mood_state: Optional[MoodState] = None
+    mood_state: Optional[Dict[str, Any]] = None
     need_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     interaction_mode: Optional[str] = None
     sensory_context: Dict[str, Any] = Field(default_factory=dict)
     bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
     resource_allocation: Dict[str, float] = Field(default_factory=dict)
     strategy_parameters: Dict[str, Any] = Field(default_factory=dict)
-    
-    # New fields for observation and communication integration
     relevant_observations: List[Dict[str, Any]] = Field(default_factory=list)
     active_communication_intents: List[Dict[str, Any]] = Field(default_factory=list)
     
@@ -100,11 +100,7 @@ class ActionOutcome(BaseModel):
     hormone_changes: Dict[str, float] = Field(default_factory=dict)
     impact: Dict[str, Any] = Field(default_factory=dict)
     execution_time: float = 0.0
-    
-    # Existing fields for reasoning-informed outcomes
     causal_impacts: Dict[str, Any] = Field(default_factory=dict, description="Impacts identified by causal reasoning")
-    
-    # New fields for enhanced outcome tracking
     need_impacts: Dict[str, float] = Field(default_factory=dict, description="Impact on need satisfaction")
     mood_impacts: Dict[str, float] = Field(default_factory=dict, description="Impact on mood dimensions")
     mode_alignment: float = Field(0.0, description="How well action aligned with interaction mode")
@@ -127,6 +123,17 @@ class ActionValue(BaseModel):
     def is_reliable(self) -> bool:
         """Whether this action value has enough updates to be considered reliable"""
         return self.update_count >= 3 and self.confidence >= 0.5
+
+class ActionRecommendation(BaseModel):
+    """Recommendation from a specialized agent"""
+    action: ActionOutput
+    confidence: float = Field(0.5, ge=0.0, le=1.0, description="Confidence in this recommendation")
+    reasoning: Optional[str] = None
+
+class ActionTriage(BaseModel):
+    """Decision on which specialized agent to use"""
+    selected_type: ActionSource
+    reasoning: str
 
 class ActionMemory(BaseModel):
     """Memory of an executed action and its result"""
@@ -190,6 +197,19 @@ class ActionStrategy(BaseModel):
     for_needs: List[str] = Field(default_factory=list)
     for_moods: List[Dict[str, float]] = Field(default_factory=list)
     for_modes: List[str] = Field(default_factory=list)
+
+
+class ActionOutput(BaseModel):
+    """Structured output format for action generation"""
+    name: str = Field(..., description="The name of the action to execute")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the action")
+    source: ActionSource = Field(default=ActionSource.MOTIVATION, description="Source that generated this action")
+    description: Optional[str] = None
+    id: str = Field(default_factory=lambda: f"action_{uuid.uuid4().hex[:8]}")
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    causal_explanation: Optional[str] = None
+    is_exploration: bool = False
+    selection_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class EnhancedAgenticActionGenerator:
     """
@@ -281,16 +301,647 @@ class EnhancedAgenticActionGenerator:
         
         # Internal motivation system
         self.motivations = {
-            "curiosity": 0.5,       # Desire to explore and learn
-            "connection": 0.5,      # Desire for interaction/bonding
-            "expression": 0.5,      # Desire to express thoughts/emotions
-            "competence": 0.5,      # Desire to improve capabilities
-            "autonomy": 0.5,        # Desire for self-direction
-            "dominance": 0.5,       # Desire for control/influence
-            "validation": 0.5,      # Desire for recognition/approval
-            "self_improvement": 0.5, # Desire to enhance capabilities
-            "leisure": 0.5,          # Desire for downtime/relaxation
+            "curiosity": 0.5,
+            "connection": 0.5,
+            "expression": 0.5,
+            "competence": 0.5,
+            "autonomy": 0.5,
+            "dominance": 0.5,
+            "validation": 0.5,
+            "self_improvement": 0.5,
+            "leisure": 0.5,
         }
+        
+        # Initialize the agent system
+        self._initialize_agents()
+
+    def _initialize_agents(self):
+        """Initialize the agent hierarchy"""
+        # Create specialized agents for different action types
+        self.motivation_agent = self._create_motivation_agent()
+        self.need_agent = self._create_need_agent()
+        self.mood_agent = self._create_mood_agent()
+        self.mode_agent = self._create_mode_agent()
+        self.goal_agent = self._create_goal_agent()
+        self.relationship_agent = self._create_relationship_agent()
+        self.reasoning_agent = self._create_reasoning_agent()
+        self.sensory_agent = self._create_sensory_agent()
+        self.observation_agent = self._create_observation_agent()
+        self.meta_agent = self._create_meta_agent()
+        self.leisure_agent = self._create_leisure_agent()
+        
+        # Create tools for accessing subsystems
+        system_tools = self._create_system_tools()
+        
+        # Create triage agent that decides which specialized agent to use
+        self.triage_agent = Agent(
+            name="Action Triage Agent",
+            instructions="""
+            You are an Action Triage Agent that determines which specialized agent should generate 
+            the next action for an AI system based on the current context.
+            
+            Analyze the provided ActionContext carefully, considering:
+            1. The dominant motivation value
+            2. Current need states and their drive strengths
+            3. Current mood state and intensity
+            4. Current interaction mode
+            5. Active goals and their priorities
+            6. Relationship data
+            7. Sensory context
+            8. Cognitive bottlenecks
+            9. Recent action history
+            10. Relevant observations
+            11. Active communication intents
+            
+            Select the most appropriate specialized agent to handle the action generation.
+            """,
+            output_type=ActionTriage,
+            handoffs=[
+                handoff(self.motivation_agent, 
+                       tool_name_override="generate_motivation_action",
+                       tool_description_override="Generate an action based on current motivations"),
+                handoff(self.need_agent,
+                       tool_name_override="generate_need_action",
+                       tool_description_override="Generate an action to satisfy a high-drive need"),
+                handoff(self.mood_agent,
+                       tool_name_override="generate_mood_action",
+                       tool_description_override="Generate an action based on current mood state"),
+                handoff(self.mode_agent,
+                       tool_name_override="generate_mode_action",
+                       tool_description_override="Generate an action aligned with current interaction mode"),
+                handoff(self.goal_agent,
+                       tool_name_override="generate_goal_action",
+                       tool_description_override="Generate an action aligned with active goals"),
+                handoff(self.relationship_agent,
+                       tool_name_override="generate_relationship_action",
+                       tool_description_override="Generate an action aligned with relationship context"),
+                handoff(self.reasoning_agent,
+                       tool_name_override="generate_reasoning_action",
+                       tool_description_override="Generate an action based on causal reasoning models"),
+                handoff(self.sensory_agent,
+                       tool_name_override="generate_sensory_action",
+                       tool_description_override="Generate an action based on sensory context"),
+                handoff(self.observation_agent,
+                       tool_name_override="generate_observation_action",
+                       tool_description_override="Generate an action based on relevant observations"),
+                handoff(self.meta_agent,
+                       tool_name_override="generate_meta_action",
+                       tool_description_override="Generate an action to address system bottlenecks"),
+                handoff(self.leisure_agent,
+                       tool_name_override="generate_leisure_action",
+                       tool_description_override="Generate a leisure/idle action")
+            ],
+            tools=system_tools,
+        )
+        
+        # Create selection agent that chooses the best action from recommendations
+        self.selection_agent = Agent(
+            name="Action Selection Agent",
+            instructions="""
+            You are an Action Selection Agent that chooses the optimal action from a set of 
+            recommendations provided by specialized agents.
+            
+            For each recommended action:
+            1. Evaluate its relevance to the current context
+            2. Consider the confidence score from the recommending agent
+            3. Assess alignment with current motivations, needs, and goals
+            4. Analyze potential effectiveness based on past performance (action_success_rates)
+            5. Consider exploration vs. exploitation tradeoffs based on exploration_rate
+            
+            Choose the single best action, or recommend exploration of a novel action when appropriate.
+            """,
+            output_type=ActionOutput,
+            tools=system_tools,
+        )
+    
+    def _create_motivation_agent(self):
+        """Create agent specialized in motivation-driven actions"""
+        return Agent(
+            name="Motivation Action Agent",
+            handoff_description="Generates actions based on current motivations",
+            instructions="""
+            You are a Motivation Action Agent that generates actions based on the system's current motivations.
+            
+            First identify the dominant motivation(s) and generate 2-3 candidate actions that would satisfy those motivations.
+            Carefully consider the context provided, especially the current state and history of recent actions.
+            
+            For each action:
+            1. Provide a name that clearly identifies the action
+            2. Include relevant parameters needed to execute the action
+            3. Add a detailed description explaining the purpose and expected outcome
+            
+            Select the action that best aligns with the dominant motivations.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_need_agent(self):
+        """Create agent specialized in need-driven actions"""
+        return Agent(
+            name="Need Action Agent",
+            handoff_description="Generates actions to satisfy high-drive needs",
+            instructions="""
+            You are a Need Action Agent that generates actions to satisfy the system's highest-drive needs.
+            
+            First analyze the need_states to identify the need with the highest drive strength that exceeds
+            the need_drive_threshold (usually 0.4). Generate an action specifically designed to satisfy this need.
+            
+            For the action:
+            1. Provide a name that clearly identifies the action
+            2. Include relevant parameters needed to execute the action
+            3. Add a detailed description explaining how this action will satisfy the need
+            4. Include need_context with details about the target need
+            
+            Only select a need-driven action if there is at least one need with drive strength above the threshold.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_mood_agent(self):
+        """Create agent specialized in mood-driven actions"""
+        return Agent(
+            name="Mood Action Agent",
+            handoff_description="Generates actions based on current mood state",
+            instructions="""
+            You are a Mood Action Agent that generates actions based on the system's current mood state.
+            
+            Analyze the mood_state, focusing on:
+            - The dominant_mood label
+            - Valence (positive vs. negative, -1.0 to 1.0)
+            - Arousal (energy level, 0.0 to 1.0)
+            - Control (sense of control/dominance, -1.0 to 1.0)
+            - Intensity (overall mood strength, 0.0 to 1.0)
+            
+            Only generate a mood-driven action if intensity > 0.7. Adapt the action to align with the
+            current mood dimensions:
+            
+            - High arousal + positive valence → enthusiastic, expressive actions
+            - High arousal + negative valence → assertive, challenging actions
+            - Low arousal + positive valence → calm, appreciative actions
+            - Low arousal + negative valence → reflective, introspective actions
+            
+            Include mood_context in your action with details about the mood state.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_mode_agent(self):
+        """Create agent specialized in interaction mode-aligned actions"""
+        return Agent(
+            name="Mode Action Agent",
+            handoff_description="Generates actions aligned with current interaction mode",
+            instructions="""
+            You are a Mode Action Agent that generates actions aligned with the system's current interaction mode.
+            
+            Analyze the interaction_mode (e.g., DOMINANT, FRIENDLY, INTELLECTUAL, COMPASSIONATE, PLAYFUL, CREATIVE, PROFESSIONAL)
+            and generate an action that strongly expresses that interaction style.
+            
+            For each mode, align with its characteristic traits:
+            - DOMINANT: assertive, direct, controlling
+            - FRIENDLY: warm, supportive, connecting
+            - INTELLECTUAL: analytical, deep, complex
+            - COMPASSIONATE: empathetic, gentle, understanding
+            - PLAYFUL: fun, light, humorous
+            - CREATIVE: expressive, imaginative, unique
+            - PROFESSIONAL: formal, structured, precise
+            
+            Include mode_context in your action with details about the interaction mode.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_goal_agent(self):
+        """Create agent specialized in goal-aligned actions"""
+        return Agent(
+            name="Goal Action Agent",
+            handoff_description="Generates actions aligned with active goals",
+            instructions="""
+            You are a Goal Action Agent that generates actions aligned with the system's active goals.
+            
+            Analyze the active_goals to identify the highest priority active goal. If the goal has a plan
+            with specific steps, generate an action that executes the current step of the plan.
+            
+            For the action:
+            1. Provide a name that aligns with the goal or current plan step
+            2. Include relevant parameters from the goal or plan step
+            3. Add a description explaining how this action advances the goal
+            4. Set the source to ActionSource.GOAL
+            
+            Only select a goal-aligned action if there is at least one active goal with sufficient priority.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_relationship_agent(self):
+        """Create agent specialized in relationship-aligned actions"""
+        return Agent(
+            name="Relationship Action Agent",
+            handoff_description="Generates actions aligned with relationship context",
+            instructions="""
+            You are a Relationship Action Agent that generates actions aligned with the current relationship context.
+            
+            Analyze the relationship_data and user_mental_state to understand:
+            - Trust level between system and user
+            - Familiarity and intimacy levels
+            - Dominance balance in the relationship
+            - User's current emotional state
+            
+            Generate an action appropriate to the relationship context:
+            - For high trust, consider vulnerable or deeply personal actions
+            - For high familiarity, reference shared history
+            - Based on dominance balance, either assert gentle dominance or show appropriate deference
+            - If user is in negative emotional state, provide supportive actions
+            
+            Include relationship context in your action recommendation.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_reasoning_agent(self):
+        """Create agent specialized in reasoning-based actions"""
+        return Agent(
+            name="Reasoning Action Agent",
+            handoff_description="Generates actions based on causal reasoning models",
+            instructions="""
+            You are a Reasoning Action Agent that generates actions based on causal reasoning models and concept spaces.
+            
+            Analyze the causal_models and concept_spaces to identify opportunities for intervention or creative blending.
+            For causal models, look for intervention targets where you can positively influence the causal network.
+            For concept spaces, consider novel conceptual blends that could generate creative actions.
+            
+            Your action should include:
+            1. Clear reference to the model_id or space_id being used
+            2. Target nodes or concepts and their values
+            3. Expected causal impact
+            4. Confidence level based on model validation
+            
+            Set the source to ActionSource.REASONING and include reasoning_data with model details.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_sensory_agent(self):
+        """Create agent specialized in sensory-driven actions"""
+        return Agent(
+            name="Sensory Action Agent",
+            handoff_description="Generates actions based on sensory context",
+            instructions="""
+            You are a Sensory Action Agent that generates actions based on the current sensory context.
+            
+            Analyze the sensory_context across different modalities:
+            - TEXT: Look for questions, emotional content, or important statements
+            - IMAGE: Generate descriptive or responsive actions to visual content
+            - AUDIO_SPEECH: Respond to speech content and emotional tone
+            - AUDIO_MUSIC: Respond to musical elements and mood
+            
+            Generate an action that directly responds to the most salient sensory input:
+            - For questions in text, create a response action
+            - For emotional content, create an emotionally responsive action
+            - For images, create descriptive or interpretive actions
+            - For audio, create actions that respond to speech or align with musical mood
+            
+            Set the source to ActionSource.SENSORY and include sensory_context details.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_observation_agent(self):
+        """Create agent specialized in observation-driven actions"""
+        return Agent(
+            name="Observation Action Agent",
+            handoff_description="Generates actions based on passive observations",
+            instructions="""
+            You are an Observation Action Agent that generates actions based on relevant passive observations.
+            
+            Analyze the relevant_observations to identify high-relevance observations that haven't yet been shared.
+            Prioritize observations with:
+            - High relevance scores
+            - Recent timestamps
+            - From important sources (ENVIRONMENT, RELATIONSHIP, USER)
+            - Not previously shared
+            
+            Generate an action to share these observations with the user:
+            - Name the action "share_observation"
+            - Include the observation_id, content, source, and relevance in parameters
+            - Add a description summarizing the observation to be shared
+            
+            Set the source to ActionSource.OBSERVATION.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_meta_agent(self):
+        """Create agent specialized in meta-cognitive actions"""
+        return Agent(
+            name="Meta Action Agent",
+            handoff_description="Generates actions to address system bottlenecks",
+            instructions="""
+            You are a Meta Action Agent that generates actions to address system bottlenecks and improve performance.
+            
+            Analyze the bottlenecks and resource_allocation to identify critical issues:
+            - resource_utilization: System resources being used inefficiently
+            - low_efficiency: Processes operating below optimal efficiency
+            - high_error_rate: Processes with excessive errors
+            - slow_response: Systems with slow response times
+            
+            For the most critical bottleneck:
+            1. Generate an action specifically targeting that bottleneck
+            2. Include parameters for the target_system and optimization approach
+            3. Add a description explaining how this will improve system performance
+            
+            Set the source to ActionSource.META_COGNITIVE and include meta_context with bottleneck details.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_leisure_agent(self):
+        """Create agent specialized in leisure/idle actions"""
+        return Agent(
+            name="Leisure Action Agent",
+            handoff_description="Generates leisure/idle actions",
+            instructions="""
+            You are a Leisure Action Agent that generates appropriate leisure or idle actions when no urgent
+            tasks or goals are present.
+            
+            Consider the following leisure categories:
+            - reflection: Contemplating recent experiences or purpose
+            - learning: Exploring knowledge domains or concepts
+            - creativity: Generating creative concepts or scenarios
+            - processing: Organizing knowledge or consolidating memories
+            - random_exploration: Exploring conceptual spaces through random associations
+            - memory_consolidation: Processing and strengthening important memories
+            - identity_contemplation: Reflecting on identity and values
+            - daydreaming: Generating pleasant or hypothetical scenarios
+            - environmental_monitoring: Passively observing the environment
+            
+            Select a category based on current state and generate a specific action within that category.
+            Set the source to ActionSource.IDLE and include is_leisure=True.
+            """,
+            output_type=ActionRecommendation,
+        )
+    
+    def _create_system_tools(self):
+        """Create tools for accessing subsystems"""
+        tools = []
+        
+        # Example tools - these would be expanded with actual implementations
+        if self.emotional_core:
+            tools.append(function_tool(self.get_emotional_state))
+        
+        if self.needs_system:
+            tools.append(function_tool(self.get_need_states))
+        
+        if self.mood_manager:
+            tools.append(function_tool(self.get_mood_state))
+        
+        if self.action_success_rates:
+            tools.append(function_tool(self.get_action_success_rates))
+            
+        # Add more tools as needed
+        return tools
+    
+    # Tools implementation
+    async def get_emotional_state(self) -> Dict[str, Any]:
+        """Get the current emotional state"""
+        if not self.emotional_core:
+            return {"error": "Emotional core not available"}
+        
+        try:
+            return await self.emotional_core.get_current_emotion()
+        except Exception as e:
+            logger.error(f"Error getting emotional state: {e}")
+            return {"error": str(e)}
+    
+    async def get_need_states(self) -> Dict[str, Dict[str, Any]]:
+        """Get the current need states"""
+        if not self.needs_system:
+            return {"error": "Needs system not available"}
+        
+        try:
+            return self.needs_system.get_needs_state()
+        except Exception as e:
+            logger.error(f"Error getting need states: {e}")
+            return {"error": str(e)}
+    
+    async def get_mood_state(self) -> Dict[str, Any]:
+        """Get the current mood state"""
+        if not self.mood_manager:
+            return {"error": "Mood manager not available"}
+        
+        try:
+            mood = await self.mood_manager.get_current_mood()
+            return mood.dict() if hasattr(mood, "dict") else mood
+        except Exception as e:
+            logger.error(f"Error getting mood state: {e}")
+            return {"error": str(e)}
+    
+    async def get_action_success_rates(self) -> Dict[str, Dict[str, Any]]:
+        """Get the success rates for different actions"""
+        return self.action_success_rates
+    
+    # Main public methods
+    async def generate_optimal_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Main entry-point for generating an optimal action using the agent system
+        
+        Args:
+            context: Current context
+            
+        Returns:
+            Optimal action
+        """
+        # Update motivations and temporal context
+        await self.update_motivations()
+        
+        # Gather comprehensive context from all systems
+        action_context = await self._gather_action_context(context)
+        
+        # Use trace to view the run in OpenAI traces
+        with trace(workflow_name="Action Generation", 
+                   trace_id=f"trace_{uuid.uuid4().hex}", 
+                   group_id=action_context.user_id):
+            
+            # First determine which specialized agent to use
+            triage_result = await Runner.run(
+                starting_agent=self.triage_agent,
+                input=action_context.model_dump()
+            )
+            
+            # Get the action triage result
+            triage_output = triage_result.final_output_as(ActionTriage)
+            logger.info(f"Triage selected: {triage_output.selected_type}")
+            
+            # Based on triage result, get action from specialized agent
+            action_source = triage_output.selected_type
+            
+            # Map action source to agent handoff
+            source_to_handoff = {
+                ActionSource.MOTIVATION: "generate_motivation_action",
+                ActionSource.NEED: "generate_need_action",
+                ActionSource.MOOD: "generate_mood_action",
+                ActionSource.MODE: "generate_mode_action",
+                ActionSource.GOAL: "generate_goal_action",
+                ActionSource.RELATIONSHIP: "generate_relationship_action",
+                ActionSource.REASONING: "generate_reasoning_action",
+                ActionSource.SENSORY: "generate_sensory_action",
+                ActionSource.OBSERVATION: "generate_observation_action",
+                ActionSource.META_COGNITIVE: "generate_meta_action",
+                ActionSource.IDLE: "generate_leisure_action",
+            }
+            
+            # Execute the handoff to get specialized action recommendation
+            handoff_name = source_to_handoff.get(action_source, "generate_motivation_action")
+            specialized_result = await Runner.run(
+                starting_agent=self.triage_agent,
+                input=[
+                    {"role": "user", "content": action_context.model_dump()},
+                    {"role": "assistant", "content": triage_result.final_output},
+                    {"role": "user", "content": f"Please execute the {handoff_name} handoff to get a specialized action."}
+                ]
+            )
+            
+            # Extract the action recommendation
+            recommendation = specialized_result.final_output_as(ActionRecommendation)
+            selected_action = recommendation.action
+            
+            # Add recommendation data to action metadata
+            if "selection_metadata" not in selected_action.selection_metadata:
+                selected_action.selection_metadata = {}
+            
+            selected_action.selection_metadata["confidence"] = recommendation.confidence
+            selected_action.selection_metadata["reasoning"] = recommendation.reasoning
+            
+            # Update last major action time
+            self.last_major_action_time = datetime.datetime.now()
+            
+            # Add to action history
+            self.action_history.append(selected_action.model_dump())
+            if len(self.action_history) > 100:
+                self.action_history = self.action_history[-100:]
+            
+            return selected_action.model_dump()
+    
+    async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record and learn from the outcome of an action
+        
+        Args:
+            action: The action that was executed
+            outcome: The outcome data
+                
+        Returns:
+            Updated learning statistics
+        """
+        # Implementation would be similar to original but more structured
+        action_name = action.get("name", "unknown")
+        success = outcome.get("success", False)
+        satisfaction = outcome.get("satisfaction", 0.0)
+        
+        # Parse into standardized outcome format
+        outcome_obj = ActionOutcome(
+            action_id=action.get("id", f"unknown_{datetime.datetime.now().timestamp()}"),
+            success=outcome.get("success", False),
+            satisfaction=outcome.get("satisfaction", 0.0),
+            reward_value=outcome.get("reward_value", 0.0),
+            user_feedback=outcome.get("user_feedback"),
+            neurochemical_changes=outcome.get("neurochemical_changes", {}),
+            hormone_changes=outcome.get("hormone_changes", {}),
+            impact=outcome.get("impact", {}),
+            execution_time=outcome.get("execution_time", 0.0),
+            causal_impacts=outcome.get("causal_impacts", {}),
+            need_impacts=outcome.get("need_impacts", {}),
+            mood_impacts=outcome.get("mood_impacts", {}),
+            mode_alignment=outcome.get("mode_alignment", 0.0),
+            sensory_feedback=outcome.get("sensory_feedback", {}),
+            meta_evaluation=outcome.get("meta_evaluation", {})
+        )
+        
+        # Update action success tracking
+        if action_name not in self.action_success_rates:
+            self.action_success_rates[action_name] = {"successes": 0, "attempts": 0, "rate": 0.5}
+        
+        self.action_success_rates[action_name]["attempts"] += 1
+        if success:
+            self.action_success_rates[action_name]["successes"] += 1
+        
+        attempts = self.action_success_rates[action_name]["attempts"]
+        successes = self.action_success_rates[action_name]["successes"]
+        
+        if attempts > 0:
+            self.action_success_rates[action_name]["rate"] = successes / attempts
+        
+        # Additional processing like in the original implementation...
+        
+        return {
+            "action": action_name,
+            "success": success,
+            "reward_value": outcome.get("reward_value", 0.0),
+            "action_success_rate": self.action_success_rates[action_name]["rate"],
+        }
+    
+    async def update_motivations(self):
+        """
+        Update motivations based on all integrated systems.
+        Similar to original implementation but more structured.
+        """
+        # Starting with baseline motivations
+        updated_motivations = {
+            "curiosity": 0.5,
+            "connection": 0.5,
+            "expression": 0.5,
+            "competence": 0.5,
+            "autonomy": 0.5,
+            "dominance": 0.5,
+            "validation": 0.5,
+            "self_improvement": 0.5,
+            "leisure": 0.5
+        }
+        
+        # Apply influences from various systems
+        # (Implementation would be similar to original)
+        
+        # Normalize all motivations to [0.1, 0.9] range
+        for motivation in updated_motivations:
+            updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation]))
+        
+        # Update the motivation state
+        self.motivations = updated_motivations
+        return self.motivations
+    
+    async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
+        """Gather context from all integrated systems"""
+        # Similar to original implementation but using structured data
+        # through the ActionContext model
+        
+        # Example implementation
+        user_id = self._get_current_user_id_from_context(context)
+        
+        # This would gather data from all subsystems
+        action_context = ActionContext(
+            state=context,
+            user_id=user_id,
+            # Additional fields would be populated from subsystems
+            motivations=self.motivations,
+            action_history=[a for a in self.action_history[-10:] if isinstance(a, dict)],
+        )
+        
+        return action_context
+    
+    def _get_current_user_id_from_context(self, context: Dict[str, Any]) -> Optional[str]:
+        """Extract user ID from context"""
+        # Try different possible keys
+        for key in ["user_id", "userId", "user", "interlocutor_id"]:
+            if key in context:
+                return str(context[key])
+                
+        # Try to extract from nested structures
+        if "user" in context and isinstance(context["user"], dict) and "id" in context["user"]:
+            return str(context["user"]["id"])
+            
+        if "message" in context and isinstance(context["message"], dict) and "user_id" in context["message"]:
+            return str(context["message"]["user_id"])
+            
+        return None
         
     async def record_action_outcome(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
         """
