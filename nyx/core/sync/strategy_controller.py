@@ -1,6 +1,7 @@
 # nyx/core/sync/strategy_controller.py
 
 import asyncpg
+from typing import Dict, Any, List
 from datetime import datetime, timedelta
 
 async def insert_strategy(conn, name, type_, payload, ttl_hours=72):
