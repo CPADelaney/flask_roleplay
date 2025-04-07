@@ -44,6 +44,92 @@ class SceneTrigger(BaseModel):
 # ===== Function Tools =====
 
 @function_tool
+async def get_npc_info(ctx, npc_name: str) -> str:
+    """
+    Get information about an NPC.
+    
+    Args:
+        npc_name: Name of the NPC
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # Check cache first
+    cache_key = f"npc:{user_id}:{conversation_id}:{npc_name}"
+    cached_npc = NPC_CACHE.get(cache_key)
+    
+    if cached_npc:
+        return json.dumps(cached_npc)
+    
+    # Fetch from database
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow("""
+            SELECT * FROM NPCStats 
+            WHERE user_id = $1 AND conversation_id = $2 AND npc_name = $3
+        """, user_id, conversation_id, npc_name)
+    
+    if row:
+        npc_data = dict(row)
+        # Cache for future use
+        NPC_CACHE.set(cache_key, npc_data, 300)  # 5 minute TTL
+        return json.dumps(npc_data)
+    else:
+        return f"NPC {npc_name} not found"
+
+@function_tool
+async def get_npcs_in_scene(ctx) -> str:
+    """
+    Get a list of NPCs in the current scene.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with get_db_connection_context() as conn:
+        rows = await conn.fetch("""
+            SELECT npc_name, archetype, current_location, relationship_to_player 
+            FROM NPCStats 
+            WHERE user_id = $1 AND conversation_id = $2 AND 
+                  is_active = TRUE AND introduced = TRUE
+        """, user_id, conversation_id)
+    
+    if rows:
+        npcs = [dict(row) for row in rows]
+        return json.dumps(npcs)
+    else:
+        return "No NPCs in the current scene"
+
+@function_tool
+async def get_location_description(ctx) -> str:
+    """
+    Get the description of the current location.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # Fetch the current location from database
+    async with get_db_connection_context() as conn:
+        row = await conn.fetchrow("""
+            SELECT value FROM CurrentRoleplay 
+            WHERE user_id = $1 AND conversation_id = $2 AND key = 'current_location'
+        """, user_id, conversation_id)
+        
+        if not row or not row["value"]:
+            return "Current location not set"
+        
+        current_location = row["value"]
+        
+        # Now get the location description
+        location_row = await conn.fetchrow("""
+            SELECT description FROM Locations
+            WHERE location_name = $1 AND user_id = $2
+        """, current_location, user_id)
+        
+        if location_row and location_row["description"]:
+            return location_row["description"]
+        else:
+            return f"No description available for {current_location}"
+
+@function_tool
 async def spawn_npc(
     ctx,
     environment_description: str,
@@ -414,83 +500,6 @@ Current context:
     scene_trigger = result.final_output_as(SceneTrigger)
     
     return scene_trigger
-
-    # Create NPC with your existing function
-    npc_data = await spawn_npc(
-        user_id, 
-        conversation_id, 
-        environment_description, 
-        archetype=archetype,
-        relationship=relationship_to_player
-    )
-    
-    if npc_data:
-        return f"NPC created: {npc_data['name']} - {npc_data['archetype']}"
-    else:
-        return "Failed to create NPC"
-
-@function_tool
-async def get_npc_info(ctx, npc_name: str) -> str:
-    """
-    Get information about an NPC.
-    
-    Args:
-        npc_name: Name of the NPC
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    
-    # Check cache first
-    cache_key = f"npc:{user_id}:{conversation_id}:{npc_name}"
-    cached_npc = NPC_CACHE.get(cache_key)
-    
-    if cached_npc:
-        return json.dumps(cached_npc)
-    
-    # Fetch from database
-    async with get_db_connection_context() as conn:
-        row = await conn.fetchrow("""
-            SELECT * FROM NPCStats 
-            WHERE user_id = $1 AND conversation_id = $2 AND npc_name = $3
-        """, user_id, conversation_id, npc_name)
-    
-    if row:
-        npc_data = dict(row)
-        # Cache for future use
-        NPC_CACHE.set(cache_key, npc_data, 300)  # 5 minute TTL
-        return json.dumps(npc_data)
-    else:
-        return f"NPC {npc_name} not found"
-
-@function_tool
-async def get_npcs_in_scene(ctx) -> str:
-    """
-    Get a list of NPCs in the current scene.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    
-    async with get_db_connection_context() as conn:
-        rows = await conn.fetch("""
-            SELECT npc_name, archetype, current_location, relationship_to_player 
-            FROM NPCStats 
-            WHERE user_id = $1 AND conversation_id = $2 AND 
-                  is_active = TRUE AND introduced = TRUE
-        """, user_id, conversation_id)
-    
-    if rows:
-        npcs = [dict(row) for row in rows]
-        return json.dumps(npcs)
-    else:
-        return "No NPCs in the current scene"
-
-@function_tool
-async def get_location_description(ctx) -> str:
-    """
-    Get the description of the current location.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
 
 # Add to the appropriate SDK module for narrative management
 
