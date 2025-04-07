@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 # Import your existing modules
 from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
-from routes.story_routes import build_aggregator_text
 from npcs.new_npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
@@ -484,6 +483,7 @@ class NewGameAgent:
         """
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
+        from routes.story_routes import build_aggregator_text 
         
         # Get aggregator data
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
