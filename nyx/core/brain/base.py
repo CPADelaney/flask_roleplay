@@ -158,8 +158,6 @@ class NyxBrain:
         
         # Agent capabilities
         self.agent_capabilities_initialized = False
-
-        self.ui_conversation_manager = UIConversationManager(system_context=self.system_context)
         
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
     
