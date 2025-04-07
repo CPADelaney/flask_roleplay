@@ -436,9 +436,70 @@ async def _integrate_writing_actions(brain, agentic_system):
         brain: NyxBrain instance
         agentic_system: AgenticCreativitySystem instance
     """
-    # This would be implemented to register action handlers with the brain
-    # For example, registering functions for story writing, code execution, etc.
-    pass
+    if not hasattr(brain, "agentic_action_generator"):
+        logger.warning("Cannot integrate writing actions: agentic_action_generator not available")
+        return
+    
+    # Map action names to creative system methods
+    action_mappings = {
+        "write_story": agentic_system.write_story,
+        "write_poem": agentic_system.write_poem,
+        "write_lyrics": agentic_system.write_lyrics,
+        "write_journal": agentic_system.write_journal,
+        "write_and_execute_code": agentic_system.write_and_execute_code,
+        "analyze_module": agentic_system.analyze_module,
+        "review_code": agentic_system.review_code,
+        "assess_capabilities": agentic_system.assess_capabilities
+    }
+    
+    # Register each action with the action generator
+    for action_name, handler in action_mappings.items():
+        brain.agentic_action_generator.register_action(action_name, handler)
+        
+    logger.info(f"Registered {len(action_mappings)} creative actions with action generator")
+    
+    # Register creative content types with memory system if available
+    if hasattr(brain, "memory_core"):
+        for content_type in ContentType:
+            brain.memory_core.register_memory_type(
+                type_name=f"creative_{content_type.value}",
+                retrieval_weight=0.8,
+                default_significance=7
+            )
+        logger.info("Registered creative content types with memory system")
+            
+    # Create background task for periodic content review
+    import asyncio
+    
+    async def review_task():
+        while True:
+            # Wait for the review interval (e.g., 7 days)
+            await asyncio.sleep(agentic_system.review_interval_days * 24 * 60 * 60)
+            
+            try:
+                # Generate review
+                review_summary = await agentic_system.generate_review_summary()
+                logger.info(f"Generated periodic creative content review: {review_summary['summary_id']}")
+                
+                # Add review to brain's memory
+                if hasattr(brain, "memory_core"):
+                    await brain.memory_core.add_memory(
+                        memory_text=f"Completed creative content review: {review_summary['summary_markdown'][:200]}...",
+                        memory_type="reflection",
+                        significance=8,
+                        metadata={
+                            "review_id": review_summary["summary_id"],
+                            "review_type": "creative_content",
+                            "items_created": review_summary["recent_creations"]["stats"]["total_items"],
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }
+                    )
+            except Exception as e:
+                logger.error(f"Error in creative content review: {e}")
+    
+    # Create the background task
+    asyncio.create_task(review_task())
+    logger.info(f"Started creative content review task (interval: {agentic_system.review_interval_days} days)")
 
 # Example usage
 async def main():
