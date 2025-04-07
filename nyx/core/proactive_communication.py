@@ -43,7 +43,6 @@ class CommunicationIntent(BaseModel):
     context_data: Dict[str, Any] = Field(default_factory=dict, description="Context to include in content generation")
     expiration: Optional[datetime.datetime] = Field(None, description="When this intent expires")
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    # New field for action integration
     action_driven: bool = Field(False, description="Whether this intent was created by an action")
     action_source: Optional[str] = Field(None, description="Source action that created this intent")
     
@@ -94,6 +93,11 @@ class ReflectionOutput(BaseModel):
     identified_patterns: List[Dict[str, Any]] = Field(..., description="Patterns identified in communications")
     confidence: float = Field(..., description="Confidence in the reflection (0.0-1.0)")
     insights_for_improvement: List[str] = Field(..., description="Insights for improved communications")
+
+class MessageContentOutput(BaseModel):
+    """Output for message content validation"""
+    is_appropriate: bool = Field(..., description="Whether the message content is appropriate")
+    reasoning: str = Field(..., description="Reasoning for the appropriateness check")
 
 # =============== Function Tools ===============
 
@@ -819,90 +823,6 @@ async def generate_reflection_on_communications(
         "insights_for_improvement": insights
     }
 
-# =============== Agent Definitions ===============
-
-def create_intent_generation_agent() -> Agent:
-    """Create an agent for generating communication intents"""
-    return Agent(
-        name="Intent Generation Agent",
-        instructions="""You are a specialized agent for generating communication intents for Nyx's proactive interactions.
-
-Create communication intents that feel natural and authentic. These should represent genuine motivations for
-reaching out to users based on relationship context, emotional state, and temporal factors.
-
-When generating intents:
-1. Consider the relationship history and current state with the user
-2. Evaluate the appropriate timing for outreach
-3. Identify the most authentic motivation for reaching out
-4. Balance different types of intents (checking in, sharing insights, etc.)
-5. Adjust urgency appropriately based on context
-
-Your intents should feel like genuine reasons for reaching out that emerge naturally from
-Nyx's internal state and relationship context. Avoid generating intents that feel forced or mechanical.""",
-        model="gpt-4o",
-        tools=[
-            evaluate_user_relationship,
-            generate_intent_for_user
-        ],
-        output_type=IntentGenerationOutput
-    )
-
-def create_content_generation_agent() -> Agent:
-    """Create an agent for generating message content"""
-    return Agent(
-        name="Content Generation Agent",
-        instructions="""You are a specialized agent for generating proactive message content for Nyx.
-
-Create authentic, personalized messages that genuinely express Nyx's intent to communicate with users.
-These should feel like natural outreach rather than formulaic messages.
-
-When generating message content:
-1. Incorporate the intent's motivation authentically
-2. Reference relevant context (relationship, memories, etc.) naturally
-3. Use a tone that aligns with the intent and Nyx's current state
-4. Create content that invites response without pressure
-5. Ensure the message feels personal to the specific relationship
-
-Your messages should sound like they come from a thoughtful entity with genuine motivations
-rather than automated outreach. They should have nuance and depth that reflects Nyx's
-sophisticated understanding of relationships.""",
-        model="gpt-4o",
-        tools=[
-            generate_message_content
-        ],
-        output_type=ContentGenerationOutput
-    )
-
-def create_timing_evaluation_agent() -> Agent:
-    """Create an agent for evaluating message timing"""
-    return Agent(
-        name="Timing Evaluation Agent",
-        instructions="""You are a specialized agent for evaluating the timing of Nyx's proactive messages.
-
-Evaluate whether now is an appropriate time to send a message based on multiple factors:
-1. The user's relationship with Nyx
-2. The intent's urgency and importance
-3. Time since last interaction
-4. Current temporal context (time of day, etc.)
-5. Configured timing rules and preferences
-
-Provide nuanced reasoning about timing decisions, balancing the urgency of communication
-against the risk of messaging at an inappropriate time. Consider both immediate timing
-factors and the broader relationship context.""",
-        model="gpt-4o",
-        tools=[
-            evaluate_timing
-        ],
-        output_type=TimingEvaluationOutput
-    )
-
-# =============== Guardrails ===============
-
-class MessageContentOutput(BaseModel):
-    """Output for message content validation"""
-    is_appropriate: bool = Field(..., description="Whether the message content is appropriate")
-    reasoning: str = Field(..., description="Reasoning for the appropriateness check")
-
 @function_tool
 async def validate_message_content(content: str) -> GuardrailFunctionOutput:
     """
@@ -946,16 +866,13 @@ async def validate_message_content(content: str) -> GuardrailFunctionOutput:
         tripwire_triggered=not is_appropriate,
     )
 
-# Create output guardrail
-message_content_guardrail = OutputGuardrail(guardrail_function=validate_message_content)
-
-# =============== Main Engine ===============
+# =============== ProactiveCommunicationEngine Class ===============
 
 class ProactiveCommunicationEngine:
     """
     Engine that enables Nyx to proactively initiate conversations with users
     based on internal motivations, relationship data, temporal patterns,
-    and now with full integration with the action generation system.
+    and integration with the action generation system.
     """
     
     def __init__(self, 
@@ -969,7 +886,7 @@ class ProactiveCommunicationEngine:
                  needs_system=None,
                  identity_evolution=None,
                  message_sender=None,
-                 action_generator=None):  # New parameter for action generator
+                 action_generator=None):  # Parameter for action generator
         """Initialize with references to required subsystems"""
         # Core systems
         self.emotional_core = emotional_core
@@ -1000,7 +917,7 @@ class ProactiveCommunicationEngine:
         self.reflection_agent = self._create_reflection_agent()
         
         # Add guardrails
-        self.content_generation_agent.output_guardrails = [self._create_message_content_guardrail()]
+        self.content_generation_agent.output_guardrails = [OutputGuardrail(guardrail_function=validate_message_content)]
         
         # Configuration
         self.config = {
@@ -1015,7 +932,7 @@ class ProactiveCommunicationEngine:
                 "start_hour": 8,                # 8:00 AM
                 "end_hour": 22                  # 10:00 PM
             },
-            # New settings for action integration
+            # Settings for action integration
             "action_intent_chance": 0.3,        # Chance to generate intent from action
             "max_action_intents_per_day": 2     # Max action-driven intents per day per user
         }
@@ -1040,6 +957,7 @@ class ProactiveCommunicationEngine:
         # Background task
         self._background_task = None
         self._shutting_down = False
+        self._last_reset_date = datetime.datetime.now()
         
         logger.info("ProactiveCommunicationEngine initialized with action integration")
     
@@ -1144,53 +1062,6 @@ and qualitative insights about communication quality and effectiveness.""",
             output_type=ReflectionOutput
         )
     
-    def _create_message_content_guardrail(self) -> OutputGuardrail:
-        """Create a guardrail for message content"""
-        @function_tool
-        async def validate_message_content(content: str) -> GuardrailFunctionOutput:
-            """
-            Validate message content for appropriateness
-            
-            Args:
-                content: Message content to validate
-                
-            Returns:
-                Validation result
-            """
-            is_appropriate = True
-            reasoning = "Message content is appropriate."
-            
-            # Check for empty content
-            if not content or len(content.strip()) < 10:
-                is_appropriate = False
-                reasoning = "Message content is empty or too short."
-            
-            # Check for appropriate length
-            if len(content) > 2000:
-                is_appropriate = False
-                reasoning = "Message content is too long for a proactive outreach."
-            
-            # Check for question or invitation
-            has_question = "?" in content
-            has_invitation_words = any(word in content.lower() for word in ["would you", "could you", "what about", "your thoughts", "how are you"])
-            
-            if not (has_question or has_invitation_words):
-                is_appropriate = False
-                reasoning = "Message lacks a question or invitation for response."
-            
-            # Create output with validation result
-            output_info = {
-                "is_appropriate": is_appropriate,
-                "reasoning": reasoning
-            }
-            
-            return GuardrailFunctionOutput(
-                output_info=output_info,
-                tripwire_triggered=not is_appropriate,
-            )
-        
-        return OutputGuardrail(guardrail_function=validate_message_content)
-    
     async def start(self):
         """Start the background task for evaluating and sending messages"""
         if self._background_task is None or self._background_task.done():
@@ -1233,224 +1104,10 @@ and qualitative insights about communication quality and effectiveness.""",
     def _reset_daily_counts_if_needed(self):
         """Reset daily action intent counters if it's a new day"""
         now = datetime.datetime.now()
-        if not hasattr(self, "_last_reset_date") or self._last_reset_date.date() != now.date():
+        if self._last_reset_date.date() != now.date():
             self.action_intent_counts = {}
             self._last_reset_date = now
             logger.debug("Reset daily action intent counts")
-    
-    async def create_intent_from_action(self, action: Dict[str, Any], user_id: str) -> Optional[str]:
-        """
-        Create a communication intent based on an executed action
-        
-        Args:
-            action: The action that was executed
-            user_id: Target user ID
-            
-        Returns:
-            Intent ID if created, None otherwise
-        """
-        # Check if we're over the daily limit for this user
-        if user_id in self.action_intent_counts and self.action_intent_counts[user_id] >= self.config["max_action_intents_per_day"]:
-            logger.debug(f"Skipping action-driven intent generation: daily limit reached for user {user_id}")
-            return None
-        
-        # Random chance to generate intent
-        if random.random() > self.config["action_intent_chance"]:
-            return None
-        
-        # Skip if user is blocked
-        if user_id in self.blocked_users:
-            return None
-        
-        with trace(workflow_name="create_action_intent", group_id=action.get("id", "unknown")):
-            try:
-                # Get relationship data
-                relationship_data = {}
-                if self.relationship_manager:
-                    relationship = await self.relationship_manager.get_relationship_state(user_id)
-                    if relationship:
-                        # Convert to dict if needed
-                        if hasattr(relationship, "model_dump"):
-                            relationship_data = relationship.model_dump()
-                        elif hasattr(relationship, "dict"):
-                            relationship_data = relationship.dict()
-                        else:
-                            # Try to convert to dict directly
-                            relationship_data = dict(relationship)
-                
-                # Get emotional state
-                emotional_state = {}
-                if self.emotional_core:
-                    if hasattr(self.emotional_core, "get_formatted_emotional_state"):
-                        emotional_state = self.emotional_core.get_formatted_emotional_state()
-                    elif hasattr(self.emotional_core, "get_current_emotion"):
-                        emotional_state = await self.emotional_core.get_current_emotion()
-                
-                # Run intent generation for action
-                result = await Runner.run(
-                    self.intent_generation_agent,
-                    json.dumps({
-                        "action": action,
-                        "user_data": relationship_data,
-                        "emotional_state": emotional_state,
-                        "relationship_threshold": self.config["relationship_threshold"]
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="ActionIntentGeneration",
-                        trace_metadata={"action_id": action.get("id"), "action_name": action.get("name"), "user_id": user_id}
-                    )
-                )
-                
-                # Extract intent data from result
-                intent_output = result.final_output
-                
-                # Set expiration
-                expiration = datetime.datetime.now() + datetime.timedelta(hours=intent_output.suggested_lifetime_hours)
-                
-                # Create intent
-                intent = CommunicationIntent(
-                    user_id=user_id,
-                    intent_type=intent_output.intent_type,
-                    motivation=intent_output.motivation,
-                    urgency=intent_output.urgency,
-                    content_guidelines={
-                        "template": intent_output.template,
-                        "tone": intent_output.tone,
-                        "max_length": 1500,
-                        "context_elements": intent_output.context_elements
-                    },
-                    context_data=await self._gather_context_for_user(user_id, intent_output.intent_type),
-                    expiration=expiration,
-                    action_driven=True,
-                    action_source=action.get("id")
-                )
-                
-                # Add to active intents
-                self.active_intents.append(intent)
-                
-                # Update daily counter
-                self.action_intent_counts[user_id] = self.action_intent_counts.get(user_id, 0) + 1
-                
-                logger.info(f"Created action-driven communication intent: {intent.intent_type} for user {user_id} with urgency {intent.urgency:.2f}")
-                
-                return intent.intent_id
-                
-            except Exception as e:
-                logger.error(f"Error creating intent from action: {str(e)}")
-                return None
-    
-    async def generate_reflection_on_communications(self, user_id: Optional[str] = None, time_period: str = "all") -> Dict[str, Any]:
-        """
-        Generate a reflection on communication patterns
-        
-        Args:
-            user_id: Optional user ID to focus reflection on
-            time_period: Time period to analyze (day, week, month, all)
-            
-        Returns:
-            Reflection with patterns and insights
-        """
-        with trace(workflow_name="reflect_on_communications"):
-            # Get sent intents
-            sent_intents = self.sent_intents
-            
-            # Convert to dict format for the reflection tool
-            sent_intents_dicts = []
-            for intent in sent_intents:
-                if isinstance(intent, CommunicationIntent):
-                    intent_dict = intent.model_dump()
-                else:
-                    intent_dict = intent
-                sent_intents_dicts.append(intent_dict)
-            
-            # Run the reflection agent
-            result = await Runner.run(
-                self.reflection_agent,
-                json.dumps({
-                    "intents": sent_intents_dicts,
-                    "focus": "patterns",
-                    "user_id": user_id,
-                    "time_period": time_period
-                }),
-                run_config=RunConfig(
-                    workflow_name="CommunicationReflection",
-                    trace_metadata={"user_id": user_id, "time_period": time_period}
-                )
-            )
-            
-            # Extract reflection from result
-            reflection_output = result.final_output
-            
-            # Store reflection in memory if available
-            if self.memory_core:
-                await self.memory_core.add_memory(
-                    memory_text=reflection_output.reflection_text,
-                    memory_type="reflection",
-                    significance=8.0,
-                    tags=["communication_reflection"],
-                    metadata={
-                        "source": "communication_reflection",
-                        "user_id": user_id,
-                        "patterns": reflection_output.identified_patterns,
-                        "insights": reflection_output.insights_for_improvement
-                    }
-                )
-            
-            return reflection_output.model_dump()
-    
-    async def update_configuration(self, config_updates: Dict[str, Any]) -> Dict[str, Any]:
-        """Update configuration parameters"""
-        for key, value in config_updates.items():
-            if key in self.config:
-                if isinstance(self.config[key], dict) and isinstance(value, dict):
-                    # Merge dictionaries for nested configs
-                    self.config[key].update(value)
-                else:
-                    self.config[key] = value
-            
-            # Special case for processing an intent
-            if key == "processed_intent_id":
-                intent_id = value
-                self.active_intents = [i for i in self.active_intents if i.intent_id != intent_id]
-        
-        logger.info(f"Updated proactive communication configuration: {config_updates}")
-        return self.config
-    
-    async def start(self):
-        """Start the background task for evaluating and sending messages"""
-        if self._background_task is None or self._background_task.done():
-            self._shutting_down = False
-            self._background_task = asyncio.create_task(self._background_process())
-            logger.info("Started proactive communication background process")
-    
-    async def stop(self):
-        """Stop the background process"""
-        self._shutting_down = True
-        if self._background_task and not self._background_task.done():
-            self._background_task.cancel()
-            try:
-                await self._background_task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Stopped proactive communication background process")
-    
-    async def _background_process(self):
-        """Background task that periodically evaluates intents and sends messages"""
-        try:
-            while not self._shutting_down:
-                # Generate new intents if needed
-                await self._generate_communication_intents()
-                
-                # Evaluate existing intents
-                await self._evaluate_communication_intents()
-                
-                # Wait before next check
-                await asyncio.sleep(self.config["intent_evaluation_interval"])
-        except asyncio.CancelledError:
-            # Task was cancelled, clean up
-            logger.info("Proactive communication background task cancelled")
-        except Exception as e:
-            logger.error(f"Error in proactive communication background process: {str(e)}")
     
     async def _generate_communication_intents(self):
         """Generate new communication intents based on internal state"""
@@ -1853,7 +1510,169 @@ and qualitative insights about communication quality and effectiveness.""",
         # This should be implemented by the embedding application
         return {"success": True}
     
-    # External API
+    # =============== Action-Driven Intents ===============
+    
+    async def create_intent_from_action(self, action: Dict[str, Any], user_id: str) -> Optional[str]:
+        """
+        Create a communication intent based on an executed action
+        
+        Args:
+            action: The action that was executed
+            user_id: Target user ID
+            
+        Returns:
+            Intent ID if created, None otherwise
+        """
+        # Check if we're over the daily limit for this user
+        if user_id in self.action_intent_counts and self.action_intent_counts[user_id] >= self.config["max_action_intents_per_day"]:
+            logger.debug(f"Skipping action-driven intent generation: daily limit reached for user {user_id}")
+            return None
+        
+        # Random chance to generate intent
+        if random.random() > self.config["action_intent_chance"]:
+            return None
+        
+        # Skip if user is blocked
+        if user_id in self.blocked_users:
+            return None
+        
+        with trace(workflow_name="create_action_intent", group_id=action.get("id", "unknown")):
+            try:
+                # Get relationship data
+                relationship_data = {}
+                if self.relationship_manager:
+                    relationship = await self.relationship_manager.get_relationship_state(user_id)
+                    if relationship:
+                        # Convert to dict if needed
+                        if hasattr(relationship, "model_dump"):
+                            relationship_data = relationship.model_dump()
+                        elif hasattr(relationship, "dict"):
+                            relationship_data = relationship.dict()
+                        else:
+                            # Try to convert to dict directly
+                            relationship_data = dict(relationship)
+                
+                # Get emotional state
+                emotional_state = {}
+                if self.emotional_core:
+                    if hasattr(self.emotional_core, "get_formatted_emotional_state"):
+                        emotional_state = self.emotional_core.get_formatted_emotional_state()
+                    elif hasattr(self.emotional_core, "get_current_emotion"):
+                        emotional_state = await self.emotional_core.get_current_emotion()
+                
+                # Run intent generation for action
+                result = await Runner.run(
+                    self.intent_generation_agent,
+                    json.dumps({
+                        "action": action,
+                        "user_data": relationship_data,
+                        "emotional_state": emotional_state,
+                        "relationship_threshold": self.config["relationship_threshold"]
+                    }),
+                    run_config=RunConfig(
+                        workflow_name="ActionIntentGeneration",
+                        trace_metadata={"action_id": action.get("id"), "action_name": action.get("name"), "user_id": user_id}
+                    )
+                )
+                
+                # Extract intent data from result
+                intent_output = result.final_output
+                
+                # Set expiration
+                expiration = datetime.datetime.now() + datetime.timedelta(hours=intent_output.suggested_lifetime_hours)
+                
+                # Create intent
+                intent = CommunicationIntent(
+                    user_id=user_id,
+                    intent_type=intent_output.intent_type,
+                    motivation=intent_output.motivation,
+                    urgency=intent_output.urgency,
+                    content_guidelines={
+                        "template": intent_output.template,
+                        "tone": intent_output.tone,
+                        "max_length": 1500,
+                        "context_elements": intent_output.context_elements
+                    },
+                    context_data=await self._gather_context_for_user(user_id, intent_output.intent_type),
+                    expiration=expiration,
+                    action_driven=True,
+                    action_source=action.get("id")
+                )
+                
+                # Add to active intents
+                self.active_intents.append(intent)
+                
+                # Update daily counter
+                self.action_intent_counts[user_id] = self.action_intent_counts.get(user_id, 0) + 1
+                
+                logger.info(f"Created action-driven communication intent: {intent.intent_type} for user {user_id} with urgency {intent.urgency:.2f}")
+                
+                return intent.intent_id
+                
+            except Exception as e:
+                logger.error(f"Error creating intent from action: {str(e)}")
+                return None
+    
+    # =============== Public API ===============
+    
+    async def generate_reflection_on_communications(self, user_id: Optional[str] = None, time_period: str = "all") -> Dict[str, Any]:
+        """
+        Generate a reflection on communication patterns
+        
+        Args:
+            user_id: Optional user ID to focus reflection on
+            time_period: Time period to analyze (day, week, month, all)
+            
+        Returns:
+            Reflection with patterns and insights
+        """
+        with trace(workflow_name="reflect_on_communications"):
+            # Get sent intents
+            sent_intents = self.sent_intents
+            
+            # Convert to dict format for the reflection tool
+            sent_intents_dicts = []
+            for intent in sent_intents:
+                if isinstance(intent, CommunicationIntent):
+                    intent_dict = intent.model_dump()
+                else:
+                    intent_dict = intent
+                sent_intents_dicts.append(intent_dict)
+            
+            # Run the reflection agent
+            result = await Runner.run(
+                self.reflection_agent,
+                json.dumps({
+                    "intents": sent_intents_dicts,
+                    "focus": "patterns",
+                    "user_id": user_id,
+                    "time_period": time_period
+                }),
+                run_config=RunConfig(
+                    workflow_name="CommunicationReflection",
+                    trace_metadata={"user_id": user_id, "time_period": time_period}
+                )
+            )
+            
+            # Extract reflection from result
+            reflection_output = result.final_output
+            
+            # Store reflection in memory if available
+            if self.memory_core:
+                await self.memory_core.add_memory(
+                    memory_text=reflection_output.reflection_text,
+                    memory_type="reflection",
+                    significance=8.0,
+                    tags=["communication_reflection"],
+                    metadata={
+                        "source": "communication_reflection",
+                        "user_id": user_id,
+                        "patterns": reflection_output.identified_patterns,
+                        "insights": reflection_output.insights_for_improvement
+                    }
+                )
+            
+            return reflection_output.model_dump()
     
     async def add_proactive_intent(self, 
                                intent_type: str, 
@@ -1979,6 +1798,11 @@ and qualitative insights about communication quality and effectiveness.""",
                     self.config[key].update(value)
                 else:
                     self.config[key] = value
+            
+            # Special case for processing an intent
+            if key == "processed_intent_id":
+                intent_id = value
+                self.active_intents = [i for i in self.active_intents if i.intent_id != intent_id]
         
         logger.info(f"Updated proactive communication configuration: {config_updates}")
         return self.config
