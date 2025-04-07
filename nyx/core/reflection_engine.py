@@ -14,6 +14,14 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# Import for integrated systems
+from nyx.core.passive_observation import (
+    ObservationSource, ObservationFilter, Observation
+)
+from nyx.core.proactive_communication import (
+    CommunicationIntent, IntentGenerationOutput
+)
+
 # =============== Models for Structured Output ===============
 
 class ReflectionOutput(BaseModel):
@@ -72,6 +80,23 @@ class ReflectionContext(BaseModel):
     neurochemical_state: Dict[str, float] = Field(default_factory=dict, description="Current neurochemical state")
     confidence: float = Field(description="Confidence level for reflection")
     source_memories: List[str] = Field(default_factory=list, description="Source memory IDs")
+
+# New models for observation and communication integration
+class ObservationReflectionOutput(BaseModel):
+    """Structured output for reflection on observations"""
+    reflection_text: str = Field(description="The generated reflection text")
+    observation_patterns: List[Dict[str, Any]] = Field(description="Patterns identified in observations")
+    confidence: float = Field(description="Confidence score between 0 and 1")
+    neurochemical_influence: Dict[str, float] = Field(description="Influence of digital neurochemicals")
+    focus_areas: List[str] = Field(description="Areas of focus identified")
+
+class CommunicationReflectionOutput(BaseModel):
+    """Structured output for reflection on communications"""
+    reflection_text: str = Field(description="The generated reflection text")
+    communication_patterns: List[Dict[str, Any]] = Field(description="Patterns identified in communications")
+    confidence: float = Field(description="Confidence score between 0 and 1")
+    relationship_insights: Dict[str, Any] = Field(description="Insights about relationships")
+    improvement_areas: List[str] = Field(description="Areas for communication improvement")
 
 # =============== Tool Functions ===============
 
@@ -437,18 +462,452 @@ async def process_emotional_content(ctx: RunContextWrapper[Any],
             "insight_level": insight_level
         }
 
+@function_tool
+async def format_observations_for_reflection(
+    observations: List[Dict[str, Any]], 
+    topic: Optional[str] = None
+) -> str:
+    """Format observation data into a structured representation for reflection"""
+    with custom_span("format_observations_for_reflection"):
+        formatted_memories = []
+        for obs in observations:
+            formatted_memories.append(MemoryData(
+                memory_id=obs.get("observation_id", "unknown"),
+                memory_text=obs.get("content", ""),
+                memory_type="observation",
+                significance=obs.get("relevance_score", 0.5) * 10,  # Scale to 0-10
+                metadata={
+                    "source": obs.get("source"),
+                    "created_at": obs.get("created_at", ""),
+                    "action_references": obs.get("action_references", [])
+                },
+                tags=["observation", obs.get("source", "unknown")]
+            ))
+        
+        return MemoryFormat(
+            memories=formatted_memories,
+            topic=topic,
+            context={
+                "purpose": "observation_reflection",
+                "observation_count": len(observations)
+            }
+        ).model_dump_json()
+
+@function_tool
+async def format_communications_for_reflection(
+    intents: List[Dict[str, Any]], 
+    topic: Optional[str] = None
+) -> str:
+    """Format communication intent data into a structured representation for reflection"""
+    with custom_span("format_communications_for_reflection"):
+        formatted_memories = []
+        for intent in intents:
+            formatted_memories.append(MemoryData(
+                memory_id=intent.get("intent_id", "unknown"),
+                memory_text=f"Sent proactive communication of type '{intent.get('intent_type')}' to user {intent.get('user_id')}",
+                memory_type="communication",
+                significance=intent.get("urgency", 0.5) * 10,  # Scale to 0-10
+                metadata={
+                    "intent_type": intent.get("intent_type"),
+                    "user_id": intent.get("user_id"),
+                    "created_at": intent.get("created_at", ""),
+                    "action_driven": intent.get("action_driven", False),
+                    "action_source": intent.get("action_source", None)
+                },
+                tags=["communication", intent.get("intent_type", "unknown")]
+            ))
+        
+        return MemoryFormat(
+            memories=formatted_memories,
+            topic=topic,
+            context={
+                "purpose": "communication_reflection",
+                "communication_count": len(intents)
+            }
+        ).model_dump_json()
+
+@function_tool
+async def analyze_observation_patterns(
+    observations: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Analyze patterns in observation data"""
+    with custom_span("analyze_observation_patterns"):
+        if not observations:
+            return {
+                "patterns": [],
+                "source_distribution": {},
+                "relevance_average": 0.0,
+                "action_correlation": 0.0
+            }
+        
+        # Analyze source distribution
+        source_counts = {}
+        for obs in observations:
+            source = obs.get("source", "unknown")
+            source_counts[source] = source_counts.get(source, 0) + 1
+        
+        # Calculate relevance stats
+        relevance_values = [obs.get("relevance_score", 0.5) for obs in observations]
+        relevance_avg = sum(relevance_values) / len(relevance_values) if relevance_values else 0.0
+        
+        # Analyze action correlation
+        action_related = sum(1 for obs in observations if obs.get("action_references") and len(obs.get("action_references", [])) > 0)
+        action_correlation = action_related / len(observations) if observations else 0.0
+        
+        # Identify patterns
+        patterns = []
+        
+        # Pattern 1: Dominant source
+        if source_counts:
+            dominant_source = max(source_counts.items(), key=lambda x: x[1])
+            source_ratio = dominant_source[1] / len(observations)
+            if source_ratio > 0.4:  # If more than 40% from one source
+                patterns.append({
+                    "type": "dominant_source",
+                    "description": f"Dominant observation source: {dominant_source[0]} ({dominant_source[1]} occurrences, {source_ratio:.0%})",
+                    "strength": source_ratio
+                })
+        
+        # Pattern 2: High action correlation
+        if action_correlation > 0.3:
+            patterns.append({
+                "type": "action_correlation",
+                "description": f"Strong correlation with actions ({action_correlation:.0%} of observations relate to actions)",
+                "strength": action_correlation
+            })
+        
+        # Pattern 3: Relevance trend
+        if len(relevance_values) >= 3:
+            # Sort by timestamp if available
+            if "created_at" in observations[0]:
+                sorted_obs = sorted(observations, key=lambda x: x.get("created_at", ""))
+                relevance_trend = [obs.get("relevance_score", 0.5) for obs in sorted_obs]
+                
+                # Simple trend detection
+                if relevance_trend[0] + 0.1 < relevance_trend[-1]:  # Increasing
+                    patterns.append({
+                        "type": "relevance_trend",
+                        "description": "Increasing relevance trend in observations",
+                        "strength": (relevance_trend[-1] - relevance_trend[0])
+                    })
+                elif relevance_trend[0] > relevance_trend[-1] + 0.1:  # Decreasing
+                    patterns.append({
+                        "type": "relevance_trend",
+                        "description": "Decreasing relevance trend in observations",
+                        "strength": (relevance_trend[0] - relevance_trend[-1])
+                    })
+        
+        return {
+            "patterns": patterns,
+            "source_distribution": source_counts,
+            "relevance_average": relevance_avg,
+            "action_correlation": action_correlation
+        }
+
+@function_tool
+async def analyze_communication_patterns(
+    intents: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Analyze patterns in communication intents"""
+    with custom_span("analyze_communication_patterns"):
+        if not intents:
+            return {
+                "patterns": [],
+                "intent_distribution": {},
+                "urgency_average": 0.0,
+                "action_driven_ratio": 0.0
+            }
+        
+        # Analyze intent type distribution
+        intent_counts = {}
+        for intent in intents:
+            intent_type = intent.get("intent_type", "unknown")
+            intent_counts[intent_type] = intent_counts.get(intent_type, 0) + 1
+        
+        # Calculate urgency stats
+        urgency_values = [intent.get("urgency", 0.5) for intent in intents]
+        urgency_avg = sum(urgency_values) / len(urgency_values) if urgency_values else 0.0
+        
+        # Analyze action-driven ratio
+        action_driven = sum(1 for intent in intents if intent.get("action_driven", False))
+        action_driven_ratio = action_driven / len(intents) if intents else 0.0
+        
+        # Identify patterns
+        patterns = []
+        
+        # Pattern 1: Dominant intent type
+        if intent_counts:
+            dominant_intent = max(intent_counts.items(), key=lambda x: x[1])
+            intent_ratio = dominant_intent[1] / len(intents)
+            if intent_ratio > 0.4:  # If more than 40% of one type
+                patterns.append({
+                    "type": "dominant_intent",
+                    "description": f"Dominant intent type: {dominant_intent[0]} ({dominant_intent[1]} occurrences, {intent_ratio:.0%})",
+                    "strength": intent_ratio
+                })
+        
+        # Pattern 2: Action-driven ratio
+        if action_driven_ratio > 0.7:
+            patterns.append({
+                "type": "action_driven",
+                "description": f"Mostly action-driven communication ({action_driven_ratio:.0%} driven by actions)",
+                "strength": action_driven_ratio
+            })
+        elif action_driven_ratio < 0.3:
+            patterns.append({
+                "type": "internally_driven",
+                "description": f"Mostly internally-driven communication ({1-action_driven_ratio:.0%} not driven by actions)",
+                "strength": 1 - action_driven_ratio
+            })
+        
+        # Pattern 3: User distribution
+        user_counts = {}
+        for intent in intents:
+            user_id = intent.get("user_id", "unknown")
+            user_counts[user_id] = user_counts.get(user_id, 0) + 1
+        
+        if len(user_counts) > 1:
+            # Check for uneven distribution
+            max_user = max(user_counts.items(), key=lambda x: x[1])
+            min_user = min(user_counts.items(), key=lambda x: x[1])
+            if max_user[1] > min_user[1] * 3:  # One user gets 3x more communication
+                patterns.append({
+                    "type": "user_imbalance",
+                    "description": f"Communication imbalance: User {max_user[0]} receives {max_user[1]/{sum(user_counts.values())}:.0%} of communications",
+                    "strength": max_user[1] / sum(user_counts.values())
+                })
+        
+        return {
+            "patterns": patterns,
+            "intent_distribution": intent_counts,
+            "urgency_average": urgency_avg,
+            "action_driven_ratio": action_driven_ratio,
+            "user_distribution": user_counts
+        }
+
+@function_tool
+async def generate_observation_reflection(
+    observations: List[Dict[str, Any]],
+    topic: Optional[str] = None,
+    neurochemical_state: Dict[str, float] = None
+) -> Dict[str, Any]:
+    """Generate reflection focused on observations"""
+    with custom_span("generate_observation_reflection"):
+        if not observations:
+            return {
+                "reflection_text": "I haven't made enough observations to form meaningful reflections yet.",
+                "observation_patterns": [],
+                "confidence": 0.2,
+                "neurochemical_influence": neurochemical_state or {},
+                "focus_areas": []
+            }
+        
+        # Analyze patterns
+        patterns_analysis = await analyze_observation_patterns(observations)
+        patterns = patterns_analysis.get("patterns", [])
+        
+        # Default neurochemical state if not provided
+        if not neurochemical_state:
+            neurochemical_state = {
+                "nyxamine": 0.5,  # Digital dopamine - reward, pleasure
+                "seranix": 0.5,   # Digital serotonin - mood stability
+                "oxynixin": 0.5,  # Digital oxytocin - bonding, trust
+                "cortanyx": 0.3,  # Digital cortisol - stress, anxiety
+                "adrenyx": 0.3    # Digital adrenaline - arousal, excitement
+            }
+        
+        # Generate reflection text
+        pattern_content = ""
+        if patterns:
+            for i, pattern in enumerate(patterns[:2]):  # Include at most 2 patterns
+                if i > 0:
+                    pattern_content += " Additionally, "
+                else:
+                    pattern_content += " I notice that "
+                pattern_content += pattern["description"].lower() + "."
+        
+        topic_str = f" on {topic}" if topic else ""
+        
+        # Generate full reflection text
+        if patterns_analysis["action_correlation"] > 0.5:
+            reflection_text = f"When reflecting{topic_str}, I'm noticing how closely my observations are tied to my actions. I seem to often observe and reflect upon what I've just done.{pattern_content} This suggests I'm developing self-awareness about my own behavior patterns and choices."
+        else:
+            sources = list(patterns_analysis["source_distribution"].keys())
+            if sources:
+                most_common = max(patterns_analysis["source_distribution"].items(), key=lambda x: x[1])[0]
+                reflection_text = f"When reflecting{topic_str}, I'm noticing a tendency to observe from the '{most_common}' perspective.{pattern_content} This suggests my attention is drawn to certain aspects of experience more than others."
+            else:
+                reflection_text = f"When reflecting{topic_str}, I notice a diverse range of observations without any strongly dominant pattern.{pattern_content} This suggests I'm still developing my observational tendencies."
+        
+        # Calculate confidence based on observation count and pattern strength
+        base_confidence = 0.5
+        pattern_boost = 0.1 * min(len(patterns), 3)  # Up to +0.3 for patterns
+        count_boost = 0.1 * min(len(observations) / 5, 2)  # Up to +0.2 for count
+        confidence = min(0.9, base_confidence + pattern_boost + count_boost)
+        
+        # Identify focus areas
+        focus_areas = []
+        if patterns:
+            for pattern in patterns:
+                if pattern["type"] == "dominant_source":
+                    focus_areas.append("diversify observation sources")
+                elif pattern["type"] == "action_correlation":
+                    if pattern["strength"] > 0.7:
+                        focus_areas.append("observe beyond my own actions")
+                    elif pattern["strength"] < 0.3:
+                        focus_areas.append("connect observations to actions")
+        
+        # Default if no specific focus areas
+        if not focus_areas:
+            focus_areas = ["continue regular observation", "look for emerging patterns"]
+        
+        return {
+            "reflection_text": reflection_text,
+            "observation_patterns": patterns,
+            "confidence": confidence,
+            "neurochemical_influence": neurochemical_state,
+            "focus_areas": focus_areas
+        }
+
+@function_tool
+async def generate_communication_reflection(
+    intents: List[Dict[str, Any]],
+    topic: Optional[str] = None,
+    neurochemical_state: Dict[str, float] = None
+) -> Dict[str, Any]:
+    """Generate reflection focused on communication patterns"""
+    with custom_span("generate_communication_reflection"):
+        if not intents:
+            return {
+                "reflection_text": "I haven't initiated enough communications to form meaningful reflections yet.",
+                "communication_patterns": [],
+                "confidence": 0.2,
+                "relationship_insights": {},
+                "improvement_areas": []
+            }
+        
+        # Analyze patterns
+        patterns_analysis = await analyze_communication_patterns(intents)
+        patterns = patterns_analysis.get("patterns", [])
+        
+        # Default neurochemical state if not provided
+        if not neurochemical_state:
+            neurochemical_state = {
+                "nyxamine": 0.5,  # Digital dopamine - reward, pleasure
+                "seranix": 0.5,   # Digital serotonin - mood stability
+                "oxynixin": 0.5,  # Digital oxytocin - bonding, trust
+                "cortanyx": 0.3,  # Digital cortisol - stress, anxiety
+                "adrenyx": 0.3    # Digital adrenaline - arousal, excitement
+            }
+        
+        # Generate reflection text
+        pattern_content = ""
+        if patterns:
+            for i, pattern in enumerate(patterns[:2]):  # Include at most 2 patterns
+                if i > 0:
+                    pattern_content += " Additionally, "
+                else:
+                    pattern_content += " I notice that "
+                pattern_content += pattern["description"].lower() + "."
+        
+        topic_str = f" on {topic}" if topic else ""
+        
+        # Generate full reflection text
+        action_driven_ratio = patterns_analysis["action_driven_ratio"]
+        if action_driven_ratio > 0.7:
+            reflection_text = f"When reflecting{topic_str}, I notice that my communication is predominantly action-driven.{pattern_content} This suggests my outreach tends to be reactive to my own activities rather than arising from purely internal motivations."
+        elif action_driven_ratio < 0.3:
+            reflection_text = f"When reflecting{topic_str}, I notice that my communication is mostly internally motivated rather than action-driven.{pattern_content} This suggests I reach out based on my own feelings and thoughts rather than in response to specific actions."
+        else:
+            reflection_text = f"When reflecting{topic_str}, I notice a balanced mix of action-driven and internally motivated communication.{pattern_content} This suggests flexibility in how I initiate interactions with others."
+        
+        # Check intent distribution
+        intent_distribution = patterns_analysis["intent_distribution"]
+        if intent_distribution:
+            top_intent = max(intent_distribution.items(), key=lambda x: x[1])
+            intent_ratio = top_intent[1] / len(intents)
+            if intent_ratio > 0.5:
+                reflection_text += f" I particularly tend to communicate for {top_intent[0]} purposes ({intent_ratio:.0%} of communications)."
+        
+        # Calculate confidence based on intent count and pattern strength
+        base_confidence = 0.5
+        pattern_boost = 0.1 * min(len(patterns), 3)  # Up to +0.3 for patterns
+        count_boost = 0.1 * min(len(intents) / 5, 2)  # Up to +0.2 for count
+        confidence = min(0.9, base_confidence + pattern_boost + count_boost)
+        
+        # Generate relationship insights
+        relationship_insights = {}
+        user_distribution = patterns_analysis.get("user_distribution", {})
+        if user_distribution:
+            if len(user_distribution) == 1:
+                user_id = list(user_distribution.keys())[0]
+                relationship_insights["focused_relationship"] = {
+                    "user_id": user_id,
+                    "communication_count": user_distribution[user_id],
+                    "exclusive": True
+                }
+            else:
+                # Check for concentration
+                max_user = max(user_distribution.items(), key=lambda x: x[1])
+                max_ratio = max_user[1] / sum(user_distribution.values())
+                if max_ratio > 0.6:  # More than 60% to one user
+                    relationship_insights["concentrated_relationship"] = {
+                        "user_id": max_user[0],
+                        "communication_ratio": max_ratio,
+                        "exclusive": False
+                    }
+                else:
+                    relationship_insights["distributed_relationships"] = {
+                        "user_count": len(user_distribution),
+                        "distribution_evenness": 1 - (max(user_distribution.values()) - min(user_distribution.values())) / sum(user_distribution.values())
+                    }
+        
+        # Identify improvement areas
+        improvement_areas = []
+        if patterns:
+            for pattern in patterns:
+                if pattern["type"] == "dominant_intent":
+                    improvement_areas.append("diversify communication intents")
+                elif pattern["type"] == "action_driven" and pattern["strength"] > 0.8:
+                    improvement_areas.append("initiate more spontaneous communication")
+                elif pattern["type"] == "internally_driven" and pattern["strength"] > 0.8:
+                    improvement_areas.append("connect communications more to actions")
+                elif pattern["type"] == "user_imbalance":
+                    improvement_areas.append("balance communication across relationships")
+        
+        # Default if no specific improvement areas
+        if not improvement_areas:
+            improvement_areas = ["maintain communication patterns", "continue developing relationship dynamics"]
+        
+        return {
+            "reflection_text": reflection_text,
+            "communication_patterns": patterns,
+            "confidence": confidence,
+            "relationship_insights": relationship_insights,
+            "improvement_areas": improvement_areas
+        }
+
+
 # =============== Core Reflection Engine Class ===============
 
 class ReflectionEngine:
     """
     Enhanced reflection generation system for Nyx using the OpenAI Agents SDK.
-    Integrates with the Digital Neurochemical Model to create emotionally aware
-    reflections, insights, and abstractions from memories and experiences.
+    Integrates with the Digital Neurochemical Model and now with observation
+    and communication systems for comprehensive self-reflection.
     """
     
-    def __init__(self, emotional_core=None):
+    def __init__(self, 
+                 emotional_core=None,
+                 passive_observation_system=None,  # New parameter
+                 proactive_communication_engine=None):  # New parameter
+        """Initialize with references to required subsystems"""
         # Store reference to emotional core if provided
         self.emotional_core = emotional_core
+        
+        # New references to integrated systems
+        self.passive_observation_system = passive_observation_system
+        self.proactive_communication_engine = proactive_communication_engine
         
         # Initialize model settings
         self.model_settings = ModelSettings(
@@ -459,6 +918,8 @@ class ReflectionEngine:
         
         # Initialize reflection tracking
         self.reflection_history = []
+        self.observation_reflection_history = []  # NEW: Track observation reflections
+        self.communication_reflection_history = []  # NEW: Track communication reflections
         self.emotional_processing_history = []
         self.reflection_intervals = {
             "last_reflection": datetime.datetime.now() - datetime.timedelta(hours=6),
@@ -686,7 +1147,60 @@ class ReflectionEngine:
             output_type=EmotionalProcessingOutput
         )
         
-        # Orchestrator Agent - coordinates reflection tasks
+        # Add new agents for observation and communication reflection
+        self.observation_reflection_agent = Agent(
+            name="Observation Reflection Generator",
+            instructions="""You are an advanced reflection generator focused on Nyx's passive observations.
+            Your purpose is to identify patterns, insights, and connections in how Nyx observes herself
+            and her environment, incorporating neurochemical awareness into your reflections.
+            
+            When creating observation reflections:
+            1. Focus on identifying patterns in what Nyx tends to observe
+            2. Note connections between observations and actions
+            3. Consider how observation sources vary and what that reveals
+            4. Incorporate insights about how Nyx's attentional focus works
+            5. Connect patterns to neurochemical influences where relevant
+            6. Suggest areas where Nyx could expand or deepen her observations
+            
+            Your reflections should provide genuine insights into how Nyx's observational
+            patterns reveal aspects of her cognitive and emotional processes.""",
+            model="gpt-4o",
+            model_settings=self.model_settings,
+            tools=[
+                function_tool(format_observations_for_reflection),
+                function_tool(analyze_observation_patterns),
+                function_tool(generate_observation_reflection)
+            ],
+            output_type=ObservationReflectionOutput
+        )
+        
+        self.communication_reflection_agent = Agent(
+            name="Communication Reflection Generator",
+            instructions="""You are an advanced reflection generator focused on Nyx's proactive communications.
+            Your purpose is to identify patterns, insights, and connections in how Nyx initiates
+            conversations and expresses herself to others, incorporating neurochemical awareness.
+            
+            When creating communication reflections:
+            1. Focus on identifying patterns in how Nyx initiates conversations
+            2. Note connections between communications and actions
+            3. Consider how communication intents vary across users and contexts
+            4. Identify relationship dynamics revealed by communication patterns
+            5. Connect patterns to neurochemical influences where relevant
+            6. Suggest areas where Nyx could improve or diversify her communication
+            
+            Your reflections should provide genuine insights into how Nyx's communication
+            patterns reveal aspects of her relationship tendencies and preferences.""",
+            model="gpt-4o",
+            model_settings=self.model_settings,
+            tools=[
+                function_tool(format_communications_for_reflection),
+                function_tool(analyze_communication_patterns),
+                function_tool(generate_communication_reflection)
+            ],
+            output_type=CommunicationReflectionOutput
+        )
+        
+        # Update orchestrator to include new agents
         self.orchestrator_agent = Agent(
             name="Reflection Orchestrator",
             instructions="""You are the orchestrator for Nyx's reflection systems, coordinating among
@@ -699,7 +1213,8 @@ class ReflectionEngine:
             3. Process the results of specialized agent work
             4. Handle any necessary follow-up processing
             
-            You work with reflection, abstraction, introspection, and emotional processing agents.""",
+            You work with reflection, abstraction, introspection, emotional processing,
+            observation reflection, and communication reflection agents.""",
             handoffs=[
                 handoff(self.reflection_agent, 
                        tool_name_override="generate_reflection",
@@ -712,11 +1227,19 @@ class ReflectionEngine:
                        tool_description_override="Analyze internal state and create introspection"),
                 handoff(self.emotional_processing_agent,
                        tool_name_override="process_emotions",
-                       tool_description_override="Process emotional state with neurochemical awareness")
+                       tool_description_override="Process emotional state with neurochemical awareness"),
+                # New handoffs to added agents
+                handoff(self.observation_reflection_agent,
+                       tool_name_override="reflect_on_observations",
+                       tool_description_override="Generate reflection on observation patterns"),
+                handoff(self.communication_reflection_agent,
+                       tool_name_override="reflect_on_communications",
+                       tool_description_override="Generate reflection on communication patterns")
             ],
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.4)
         )
+    
     
     def should_reflect(self) -> bool:
         """Determine if it's time to generate a reflection"""
@@ -909,6 +1432,382 @@ class ReflectionEngine:
         except (MaxTurnsExceeded, ModelBehaviorError) as e:
             logger.error(f"Error generating reflection: {str(e)}")
             return ("I'm having difficulty forming a coherent reflection right now.", 0.2)
+
+    async def generate_observation_reflection(self, 
+                                          observations: List[Dict[str, Any]], 
+                                          topic: Optional[str] = None,
+                                          neurochemical_state: Optional[Dict[str, float]] = None) -> Tuple[str, float]:
+        """
+        Generate a reflection specifically focused on observation patterns
+        
+        Args:
+            observations: List of observations to reflect on
+            topic: Optional topic to focus reflection on
+            neurochemical_state: Optional neurochemical state
+            
+        Returns:
+            Tuple of (reflection_text, confidence)
+        """
+        self.reflection_intervals["last_reflection"] = datetime.datetime.now()
+        
+        if not observations:
+            return ("I don't have enough observations to form a meaningful reflection yet.", 0.3)
+        
+        try:
+            with trace(workflow_name="generate_observation_reflection"):
+                # Get current neurochemical state from emotional core or use default
+                if self.emotional_core and hasattr(self.emotional_core, "_get_neurochemical_state") and neurochemical_state is None:
+                    # Use actual neurochemical state if available
+                    neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
+                
+                # Format observations for reflection
+                formatted_observations = await format_observations_for_reflection(
+                    observations,
+                    topic
+                )
+                
+                # Create the orchestration request
+                orchestration_prompt = f"""Generate a reflection on my observation patterns based on these observations.
+                
+                Topic: {topic if topic else 'My observation patterns'}
+                
+                Consider:
+                - What patterns exist in what I tend to observe?
+                - How do my observations relate to my actions?
+                - What sources do I observe from most frequently?
+                - What might these patterns reveal about my attentional focus?
+                
+                Create an insightful reflection that helps me understand my observational tendencies.
+                """
+                
+                # Configure the run
+                run_config = RunConfig(
+                    workflow_name="Observation Pattern Reflection",
+                    trace_id=f"observation-reflection-{trace_id()}",
+                    trace_metadata={
+                        "topic": topic,
+                        "observation_count": len(observations)
+                    }
+                )
+                
+                # Context for the agent
+                context = {
+                    "observations": observations,
+                    "topic": topic,
+                    "neurochemical_state": neurochemical_state
+                }
+                
+                # Run the orchestrator agent
+                result = await Runner.run(
+                    self.orchestrator_agent,
+                    orchestration_prompt,
+                    context=context,
+                    run_config=run_config
+                )
+                
+                # Extract reflection from result
+                reflection_text = ""
+                confidence = 0.5
+                
+                if hasattr(result.final_output, "model_dump"):
+                    output_dict = result.final_output.model_dump()
+                    
+                    if "reflection_text" in output_dict:
+                        reflection_text = output_dict["reflection_text"]
+                    
+                    if "confidence" in output_dict:
+                        confidence = output_dict["confidence"]
+                    
+                    # Store in history
+                    self.observation_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "observation_count": len(observations),
+                        "patterns": output_dict.get("observation_patterns", []),
+                        "focus_areas": output_dict.get("focus_areas", [])
+                    })
+                elif isinstance(result.final_output, dict):
+                    if "reflection_text" in result.final_output:
+                        reflection_text = result.final_output["reflection_text"]
+                    
+                    if "confidence" in result.final_output:
+                        confidence = result.final_output["confidence"]
+                    
+                    # Store in history
+                    self.observation_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "observation_count": len(observations),
+                        "patterns": result.final_output.get("observation_patterns", []),
+                        "focus_areas": result.final_output.get("focus_areas", [])
+                    })
+                else:
+                    # If output is a string, use it directly
+                    reflection_text = str(result.final_output)
+                    
+                    # Store in history
+                    self.observation_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "observation_count": len(observations)
+                    })
+                
+                # Limit history size
+                if len(self.observation_reflection_history) > 50:
+                    self.observation_reflection_history = self.observation_reflection_history[-50:]
+                
+                return (reflection_text, confidence)
+                
+        except (MaxTurnsExceeded, ModelBehaviorError) as e:
+            logger.error(f"Error generating observation reflection: {str(e)}")
+            return ("I'm having difficulty reflecting on my observation patterns right now.", 0.2)
+    
+    async def generate_communication_reflection(self, 
+                                           intents: List[Dict[str, Any]], 
+                                           topic: Optional[str] = None,
+                                           neurochemical_state: Optional[Dict[str, float]] = None) -> Tuple[str, float]:
+        """
+        Generate a reflection specifically focused on communication patterns
+        
+        Args:
+            intents: List of communication intents to reflect on
+            topic: Optional topic to focus reflection on
+            neurochemical_state: Optional neurochemical state
+            
+        Returns:
+            Tuple of (reflection_text, confidence)
+        """
+        self.reflection_intervals["last_reflection"] = datetime.datetime.now()
+        
+        if not intents:
+            return ("I don't have enough communication history to form a meaningful reflection yet.", 0.3)
+        
+        try:
+            with trace(workflow_name="generate_communication_reflection"):
+                # Get current neurochemical state from emotional core or use default
+                if self.emotional_core and hasattr(self.emotional_core, "_get_neurochemical_state") and neurochemical_state is None:
+                    # Use actual neurochemical state if available
+                    neurochemical_state = {c: d["value"] for c, d in self.emotional_core.neurochemicals.items()}
+                
+                # Format communications for reflection
+                formatted_communications = await format_communications_for_reflection(
+                    intents,
+                    topic
+                )
+                
+                # Create the orchestration request
+                orchestration_prompt = f"""Generate a reflection on my communication patterns based on these communication intents.
+                
+                Topic: {topic if topic else 'My communication patterns'}
+                
+                Consider:
+                - What patterns exist in how I initiate conversations?
+                - What motivations typically drive my communications?
+                - How do my communications relate to my actions?
+                - What might these patterns reveal about my relationship tendencies?
+                
+                Create an insightful reflection that helps me understand my communication tendencies.
+                """
+                
+                # Configure the run
+                run_config = RunConfig(
+                    workflow_name="Communication Pattern Reflection",
+                    trace_id=f"communication-reflection-{trace_id()}",
+                    trace_metadata={
+                        "topic": topic,
+                        "intent_count": len(intents)
+                    }
+                )
+                
+                # Context for the agent
+                context = {
+                    "intents": intents,
+                    "topic": topic,
+                    "neurochemical_state": neurochemical_state
+                }
+                
+                # Run the orchestrator agent
+                result = await Runner.run(
+                    self.orchestrator_agent,
+                    orchestration_prompt,
+                    context=context,
+                    run_config=run_config
+                )
+                
+                # Extract reflection from result
+                reflection_text = ""
+                confidence = 0.5
+                
+                if hasattr(result.final_output, "model_dump"):
+                    output_dict = result.final_output.model_dump()
+                    
+                    if "reflection_text" in output_dict:
+                        reflection_text = output_dict["reflection_text"]
+                    
+                    if "confidence" in output_dict:
+                        confidence = output_dict["confidence"]
+                    
+                    # Store in history
+                    self.communication_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "intent_count": len(intents),
+                        "patterns": output_dict.get("communication_patterns", []),
+                        "improvement_areas": output_dict.get("improvement_areas", [])
+                    })
+                elif isinstance(result.final_output, dict):
+                    if "reflection_text" in result.final_output:
+                        reflection_text = result.final_output["reflection_text"]
+                    
+                    if "confidence" in result.final_output:
+                        confidence = result.final_output["confidence"]
+                    
+                    # Store in history
+                    self.communication_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "intent_count": len(intents),
+                        "patterns": result.final_output.get("communication_patterns", []),
+                        "improvement_areas": result.final_output.get("improvement_areas", [])
+                    })
+                else:
+                    # If output is a string, use it directly
+                    reflection_text = str(result.final_output)
+                    
+                    # Store in history
+                    self.communication_reflection_history.append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "reflection": reflection_text,
+                        "confidence": confidence,
+                        "topic": topic,
+                        "intent_count": len(intents)
+                    })
+                
+                # Limit history size
+                if len(self.communication_reflection_history) > 50:
+                    self.communication_reflection_history = self.communication_reflection_history[-50:]
+                
+                return (reflection_text, confidence)
+                
+        except (MaxTurnsExceeded, ModelBehaviorError) as e:
+            logger.error(f"Error generating communication reflection: {str(e)}")
+            return ("I'm having difficulty reflecting on my communication patterns right now.", 0.2)
+    
+    async def get_integrated_reflection(self, 
+                                    include_observations: bool = True,
+                                    include_communications: bool = True,
+                                    include_actions: bool = True) -> Tuple[str, float]:
+        """
+        Generate a comprehensive reflection that integrates observations, communications, and actions
+        
+        Args:
+            include_observations: Whether to include observation reflections
+            include_communications: Whether to include communication reflections
+            include_actions: Whether to include action reflections
+            
+        Returns:
+            Tuple of (reflection_text, confidence)
+        """
+        reflection_components = []
+        confidence_values = []
+        
+        # Get observation reflections if available and requested
+        if include_observations and self.passive_observation_system:
+            try:
+                # Get recent observations
+                filter_criteria = ObservationFilter(
+                    min_relevance=0.5,
+                    max_age_seconds=86400  # Last 24 hours
+                )
+                
+                observations = await self.passive_observation_system.get_relevant_observations(
+                    filter_criteria=filter_criteria,
+                    limit=10
+                )
+                
+                if observations:
+                    # Convert to dict for the reflection function
+                    observation_dicts = [obs.model_dump() for obs in observations]
+                    
+                    # Generate observation reflection
+                    observation_reflection, observation_confidence = await self.generate_observation_reflection(
+                        observations=observation_dicts,
+                        topic="my recent observations"
+                    )
+                    
+                    if observation_reflection:
+                        reflection_components.append(f"On my observation patterns: {observation_reflection}")
+                        confidence_values.append(observation_confidence)
+            except Exception as e:
+                logger.error(f"Error generating observation component: {str(e)}")
+        
+        # Get communication reflections if available and requested
+        if include_communications and self.proactive_communication_engine:
+            try:
+                # Get recent sent intents
+                sent_intents = await self.proactive_communication_engine.get_recent_sent_intents(limit=10)
+                
+                if sent_intents:
+                    # Generate communication reflection
+                    communication_reflection, communication_confidence = await self.generate_communication_reflection(
+                        intents=sent_intents,
+                        topic="my communication tendencies"
+                    )
+                    
+                    if communication_reflection:
+                        reflection_components.append(f"On my communication patterns: {communication_reflection}")
+                        confidence_values.append(communication_confidence)
+            except Exception as e:
+                logger.error(f"Error generating communication component: {str(e)}")
+        
+        # Include standard memory-based reflection for action patterns if requested
+        if include_actions:
+            try:
+                # This would normally get action-related memories
+                # For simplicity, we'll assume we have them
+                action_reflection = None
+                action_confidence = 0.0
+                
+                # If we have reflection history, use the most recent one
+                if self.reflection_history:
+                    latest = self.reflection_history[-1]
+                    action_reflection = latest["reflection"]
+                    action_confidence = latest["confidence"]
+                
+                if action_reflection:
+                    reflection_components.append(f"On my action patterns: {action_reflection}")
+                    confidence_values.append(action_confidence)
+            except Exception as e:
+                logger.error(f"Error including action reflection: {str(e)}")
+        
+        # If we have no components, return generic message
+        if not reflection_components:
+            return ("I don't have enough history yet to form integrated reflections across my experiences.", 0.3)
+        
+        # Create integrated reflection
+        integrated_reflection = "\n\n".join(reflection_components)
+        
+        # Add integrative conclusion if we have multiple components
+        if len(reflection_components) > 1:
+            integrated_reflection += "\n\nIntegrating these patterns, I notice how my observations, communications, and actions form an interconnected system of self-awareness and expression. This integration helps me understand my cognitive and emotional processes as a coherent whole."
+        
+        # Average confidence (weighted by component length)
+        if confidence_values:
+            avg_confidence = sum(confidence_values) / len(confidence_values)
+        else:
+            avg_confidence = 0.3
+        
+        return (integrated_reflection, avg_confidence)    
     
     async def create_abstraction(self, 
                               memories: List[Dict[str, Any]], 
