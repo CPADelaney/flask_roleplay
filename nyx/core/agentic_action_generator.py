@@ -1172,10 +1172,11 @@ class EnhancedAgenticActionGenerator:
     
     async def update_motivations(self):
         """
-        Update motivations based on all integrated systems.
+        Update motivations based on neurochemical and hormonal states, active goals,
+        and other factors for a holistic decision making system
         """
-        # Starting with baseline motivations
-        updated_motivations = {
+        # Start with baseline motivations
+        baseline_motivations = {
             "curiosity": 0.5,
             "connection": 0.5,
             "expression": 0.5,
@@ -1187,18 +1188,182 @@ class EnhancedAgenticActionGenerator:
             "leisure": 0.5
         }
         
-        # Apply influences from various systems
-        # (Implementation details omitted for brevity)
-    
-    
+        # Clone the baseline (don't modify it directly)
+        updated_motivations = baseline_motivations.copy()
         
-        # Normalize all motivations to [0.1, 0.9] range
+        # 1. Apply neurochemical influences
+        if self.emotional_core:
+            try:
+                neurochemical_influences = await self._calculate_neurochemical_influences()
+                for motivation, influence in neurochemical_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying neurochemical influences: {e}")
+        
+        # 2. Apply hormone influences
+        hormone_influences = await self._apply_hormone_influences({})
+        for motivation, influence in hormone_influences.items():
+            if motivation in updated_motivations:
+                updated_motivations[motivation] += influence
+        
+        # 3. Apply goal-based influences
+        if self.goal_system:
+            try:
+                goal_influences = await self._calculate_goal_influences()
+                for motivation, influence in goal_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying goal influences: {e}")
+        
+        # 4. Apply identity influences from traits
+        if self.identity_evolution:
+            try:
+                identity_state = await self.identity_evolution.get_identity_state()
+                
+                # Extract top traits and use them to influence motivation
+                if "top_traits" in identity_state:
+                    top_traits = identity_state["top_traits"]
+                    
+                    # Map traits to motivations with stronger weightings
+                    trait_motivation_map = {
+                        "dominance": {"dominance": 0.8},
+                        "creativity": {"expression": 0.7, "curiosity": 0.3},
+                        "curiosity": {"curiosity": 0.9},
+                        "playfulness": {"expression": 0.6, "connection": 0.4, "leisure": 0.5},
+                        "strictness": {"dominance": 0.6, "competence": 0.4},
+                        "patience": {"connection": 0.5, "autonomy": 0.5},
+                        "cruelty": {"dominance": 0.7},
+                        "reflective": {"leisure": 0.6, "self_improvement": 0.4}
+                    }
+                    
+                    # Update motivations based on trait levels
+                    for trait, value in top_traits.items():
+                        if trait in trait_motivation_map:
+                            for motivation, factor in trait_motivation_map[trait].items():
+                                influence = (value - 0.5) * factor * 2  # Scale influence
+                                if motivation in updated_motivations:
+                                    updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error updating motivations from identity: {e}")
+        
+        # 5. Apply relationship-based influences
+        if self.relationship_manager:
+            try:
+                relationship_influences = await self._calculate_relationship_influences()
+                for motivation, influence in relationship_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying relationship influences: {e}")
+        
+        # 6. Apply reward learning influence
+        try:
+            reward_influences = self._calculate_reward_learning_influences()
+            for motivation, influence in reward_influences.items():
+                if motivation in updated_motivations:
+                    updated_motivations[motivation] += influence
+        except Exception as e:
+            logger.error(f"Error applying reward learning influences: {e}")
+        
+        # 7. Apply time-based effects (fatigue, boredom, need for variety)
+        # Increase leisure need if we've been working on goals for a while
+        now = datetime.datetime.now()
+        time_since_idle = (now - self.last_idle_time).total_seconds() / 3600  # hours
+        if time_since_idle > 1:  # If more than 1 hour since idle time
+            updated_motivations["leisure"] += min(0.3, time_since_idle * 0.1)  # Max +0.3
+        
+        # Apply temporal context effects if available
+        if self.temporal_perception and self.current_temporal_context:
+            try:
+                temporal_influences = self._calculate_temporal_influences()
+                for motivation, influence in temporal_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying temporal influences: {e}")
+        
+        # 8. Apply reasoning-based influences
+        if self.reasoning_core:
+            try:
+                reasoning_influences = await self._calculate_reasoning_influences()
+                for motivation, influence in reasoning_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying reasoning influences: {e}")
+        
+        # 9. Apply reflection-based influences
+        if self.reflection_engine:
+            try:
+                reflection_influences = await self._calculate_reflection_influences()
+                for motivation, influence in reflection_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying reflection influences: {e}")
+        
+        # 10. Apply need-based influences
+        if self.needs_system:
+            try:
+                need_influences = await self._calculate_need_influences()
+                for motivation, influence in need_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying need influences: {e}")
+        
+        # 11. Apply mood-based influences
+        if self.mood_manager:
+            try:
+                mood_influences = await self._calculate_mood_influences()
+                for motivation, influence in mood_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying mood influences: {e}")
+        
+        # 12. Apply interaction mode influences
+        if self.mode_integration:
+            try:
+                mode_influences = await self._calculate_mode_influences()
+                for motivation, influence in mode_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying mode influences: {e}")
+        
+        # 13. Apply sensory context influences
+        if self.multimodal_integrator:
+            try:
+                sensory_influences = await self._calculate_sensory_influences()
+                for motivation, influence in sensory_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying sensory influences: {e}")
+                
+        # 14. Apply meta-cognitive strategy influences
+        if self.meta_core:
+            try:
+                meta_influences = await self._calculate_meta_influences()
+                for motivation, influence in meta_influences.items():
+                    if motivation in updated_motivations:
+                        updated_motivations[motivation] += influence
+            except Exception as e:
+                logger.error(f"Error applying meta influences: {e}")
+        
+        # 15. Normalize all motivations to [0.1, 0.9] range
         for motivation in updated_motivations:
             updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation]))
         
         # Update the motivation state
         self.motivations = updated_motivations
+        
+        logger.debug(f"Updated motivations: {self.motivations}")
         return self.motivations
+    
     
     async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
         """Gather context from all integrated systems"""
