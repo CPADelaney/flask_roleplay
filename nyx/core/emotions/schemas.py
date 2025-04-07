@@ -9,7 +9,7 @@ import datetime
 from enum import Enum
 from typing import Dict, List, Any, Optional, Tuple, Union, Set, TypedDict
 
-from pydantic import BaseModel, Field, validator, root_validator, NonNegativeFloat, confloat
+from pydantic import BaseModel, Field, validator, model_validator, NonNegativeFloat, confloat
 
 # =============================================================================
 # Base Models and Enums
@@ -242,20 +242,19 @@ class EmotionalResponseOutput(BaseModel):
         """Get the arousal category for this response"""
         return EmotionArousal.from_value(self.arousal)
         
-    @root_validator
-    def validate_emotional_state(cls, values):
-        """Ensure consistency between primary emotion and valence/arousal"""
-        if all(k in values for k in ["primary_emotion", "valence", "arousal"]):
-            primary = values["primary_emotion"]
-            if hasattr(primary, "valence") and hasattr(primary, "arousal"):
-                # Validate that overall valence isn't too far from primary emotion valence
-                if abs(primary.valence - values["valence"]) > 0.5:
-                    values["valence"] = (primary.valence + values["valence"]) / 2
-                    
-                # Validate that overall arousal isn't too far from primary emotion arousal
-                if abs(primary.arousal - values["arousal"]) > 0.5:
-                    values["arousal"] = (primary.arousal + values["arousal"]) / 2
-        return values
+    @model_validator(mode="after")
+    def validate_emotional_state(cls, self):
+        """
+        Ensure consistency between primary emotion and overall valence/arousal.
+        This runs *after* normal field validation, with 'self' being the model instance.
+        """
+        if abs(self.primary_emotion.valence - self.valence) > 0.5:
+            self.valence = (self.primary_emotion.valence + self.valence) / 2
+
+        if abs(self.primary_emotion.arousal - self.arousal) > 0.5:
+            self.arousal = (self.primary_emotion.arousal + self.arousal) / 2
+
+        return self
 
 # =============================================================================
 # Handoff Request/Response Models
@@ -268,8 +267,8 @@ class NeurochemicalRequest(BaseModel):
     intensity: confloat(ge=0.0, le=1.0) = Field(0.5, description="Emotion intensity")
     update_chemicals: bool = Field(True, description="Whether to update chemicals")
     
-    @root_validator
-    def check_trigger_data(cls, values):
+    @model_validator(mode="after")
+    def check_trigger_data(cls, self):
         """Ensure either input_text or dominant_emotion is provided"""
         if not values.get('input_text') and not values.get('dominant_emotion'):
             raise ValueError("Either input_text or dominant_emotion must be provided")
