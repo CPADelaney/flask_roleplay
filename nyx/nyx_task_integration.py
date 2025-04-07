@@ -10,11 +10,10 @@ systems with Nyx's narrative workflow.
 import logging
 from typing import Dict, List, Any, Optional, Tuple
 import json
-from pydantic import BaseModel, Field
 
 # Updated imports for Agents SDK
 from agents import Agent, Runner, function_tool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Import the task agent and recommendation agent
 from story_agent.creative_task_agent import femdom_task_agent, CreativeTask
