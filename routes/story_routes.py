@@ -20,10 +20,10 @@ from utils.performance import timed_function
 
 # Import core logic modules
 from db.connection import get_db_connection_context
-from logic.universal_updater import apply_universal_updates
-from logic.aggregator import get_aggregated_roleplay_context
+from logic.universal_updater_agent import apply_universal_updates
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 from logic.time_cycle import get_current_time, should_advance_time, nightly_maintenance
-from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
+from logic.inventory_system_sdk import InventoryContext
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from logic.resource_management import ResourceManager
 from routes.settings_routes import generate_mega_setting_logic
@@ -42,7 +42,7 @@ from logic.narrative_progression import get_current_narrative_stage, check_for_p
 
 from logic.social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary, apply_crossroads_choice
 
-from logic.addiction_system import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
+from logic.addiction_system_sdk import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
 
 from nyx.nyx_agent_sdk import process_user_input
 
