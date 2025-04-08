@@ -10,6 +10,8 @@ from typing import Dict, List, Any, Optional, Type, Set, Callable
 from agents import Agent, Runner, function_tool, trace, RunContextWrapper, GuardrailFunctionOutput, ModelSettings
 from agents.run import RunConfig
 
+from pydantic import BaseModel, Field
+
 # Placeholders for dependencies
 from lore.data_access import BaseDataAccess  # Or your real DB access class
 from lore.utils.caching import LoreCache  # Or real caching implementation
