@@ -249,6 +249,17 @@ class InternalThoughtsManager:
             ),
             output_type=ThoughtGenerationOutput
         )
+
+    async def pre_process_input(thoughts_manager: InternalThoughtsManager, user_input: str, user_id: str = None) -> List[InternalThought]:
+        if thoughts_manager is None:
+            return []
+        return await thoughts_manager.process_input(user_input, user_id)
+    
+    async def pre_process_output(thoughts_manager: InternalThoughtsManager, planned_response: str, context: Dict[str, Any]) -> str:
+        if thoughts_manager is None:
+            return planned_response
+        filtered_response, _ = await thoughts_manager.process_output(planned_response, context)
+        return filtered_response    
     
     def _create_critique_agent(self) -> Agent:
         """Create an agent for self-critiquing thoughts."""
