@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 # Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, StreamingResponse,
+    Agent, function_tool, Runner, trace, RunResultStreaming,
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff, ModelSettings
 )
 from agents.run_context import RunContextWrapper
@@ -1205,7 +1205,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             """
             
 # Create a streaming run configuration
-            streaming_config = StreamingRunConfig(
+            streaming_config = RunConfig(
                 workflow_name="GeopoliticalEvolution",
                 chunk_size=150,  # Characters per chunk
                 trace_metadata={
