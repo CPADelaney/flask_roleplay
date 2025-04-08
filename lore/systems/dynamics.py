@@ -5,7 +5,7 @@ import json
 import random
 import re
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, AsyncGenerator
 from pydantic import BaseModel, Field
 
 # ------------------ AGENTS SDK IMPORTS ------------------
