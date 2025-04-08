@@ -11,13 +11,13 @@ from agents import (
     Runner,
     function_tool,
     handoff,
-    StreamingResponse,
+    RunResultStreaming,
     GuardrailFunctionOutput,
     InputGuardrail,
     OutputGuardrail
 )
 from agents.run_context import RunContextWrapper
-from agents.run import RunConfig, StreamingRunConfig
+from agents.run import RunConfig
 
 # Project-specific import
 from lore.core.base_manager import BaseLoreManager
