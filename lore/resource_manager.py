@@ -19,7 +19,7 @@ import os
 import json
 import sys
 import gc
-from .base_manager import BaseManager
+from lore.core.base_manager import BaseManager
 import aiofiles
 
 logger = logging.getLogger(__name__)
