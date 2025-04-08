@@ -12,7 +12,7 @@ from agents import (
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff
 )
 from agents.run_context import RunContextWrapper
-from agents.run import RunConfig, StreamingRunConfig
+from agents.run import RunConfig
 from agents.models import ModelSettings
 
 # Governance & others
