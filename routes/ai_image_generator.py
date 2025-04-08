@@ -12,7 +12,7 @@ import requests
 from werkzeug.utils import secure_filename
 from db.connection import get_db_connection_context
 from flask import Blueprint, request, jsonify, session, current_app
-from logic.addiction_system_sdk import get_addiction_status
+from logic.addiction_system_sdk import check_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
 from dotenv import load_dotenv
 
@@ -258,7 +258,7 @@ async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
     detailed_npcs, player_stats, user_preferences, journal_entries = await get_npc_and_roleplay_context(
         user_id, conversation_id, npc_names
     )
-    addiction_status = await get_addiction_status(user_id, conversation_id, "Chase")
+    addiction_status = await check_addiction_status(user_id, conversation_id, "Chase")
 
     npcs = []
     for name in npc_names:
