@@ -9,10 +9,11 @@ import json
 from memory.wrapper import MemorySystem
 from npcs.npc_agent import NPCAgent
 from data.npc_dal import NPCDataAccess
-from lore.lore_system import LoreSystem
+# Replace LoreManager import with these:
+from lore.data_access import LoreKnowledgeAccess
+from db.connection import get_db_connection_context
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
-from db.connection import get_db_connection_context
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -37,7 +38,8 @@ class NPCBeliefFormation:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_id = npc_id
-        self.lore_manager = LoreSystem(user_id, conversation_id)
+        # Replace LoreManager with LoreKnowledgeAccess
+        self.lore_knowledge = LoreKnowledgeAccess(user_id, conversation_id)
         self.memory_system = None
         
     async def initialize(self):
@@ -326,7 +328,8 @@ class NPCBeliefFormation:
             await self.initialize()
             
         # Get the new knowledge
-        knowledge = await self.lore_manager.get_lore_by_id(knowledge_type, knowledge_id)
+        # Changed: using lore_knowledge instead of lore_manager
+        knowledge = await self.lore_knowledge.get_lore_by_id(knowledge_type, knowledge_id)
         if not knowledge:
             return {"error": "Knowledge not found"}
             
@@ -351,16 +354,16 @@ class NPCBeliefFormation:
             
         # Get knowledge level to determine impact
         knowledge_level = 5  # Default
-        async with self.lore_manager.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                knowledge_row = await conn.fetchrow("""
-                    SELECT knowledge_level FROM LoreKnowledge
-                    WHERE entity_type = 'npc' AND entity_id = $1
-                    AND lore_type = $2 AND lore_id = $3
-                """, self.npc_id, knowledge_type, knowledge_id)
-                
-                if knowledge_row:
-                    knowledge_level = knowledge_row["knowledge_level"]
+        # Changed: using get_db_connection_context instead of get_connection_pool
+        async with get_db_connection_context() as conn:
+            knowledge_row = await conn.fetchrow("""
+                SELECT knowledge_level FROM LoreKnowledge
+                WHERE entity_type = 'npc' AND entity_id = $1
+                AND lore_type = $2 AND lore_id = $3
+            """, self.npc_id, knowledge_type, knowledge_id)
+            
+            if knowledge_row:
+                knowledge_level = knowledge_row["knowledge_level"]
         
         # Knowledge impact factor
         impact = knowledge_level / 10.0
@@ -403,6 +406,7 @@ class NPCBeliefFormation:
             "knowledge_name": knowledge_name,
             "knowledge_level": knowledge_level
         }
+    
     
     async def create_opposing_belief(self, belief_id: str) -> Dict[str, Any]:
         """
