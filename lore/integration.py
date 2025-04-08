@@ -29,7 +29,6 @@ from npcs.belief_system_integration import NPCBeliefSystemIntegration
 from memory.wrapper import MemorySystem
 
 # Import Nyx governance
-from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 
@@ -68,6 +67,9 @@ class BaseIntegration:
             return True
             
         try:
+            # Import here instead
+            from nyx.integrate import get_central_governance
+            
             # Initialize governance
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
             
