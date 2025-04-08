@@ -26,20 +26,15 @@ class FunctionToolRegistry:
     def register_tool(self, function: Callable, category: str = "general", dependencies: List[str] = None):
         """
         Register a function tool in the registry.
-        
-        Args:
-            function: The function tool to register
-            category: Category for grouping related tools
-            dependencies: List of tool IDs that this tool depends on
         """
         # Skip if not a function tool
         if not hasattr(function, "_is_function_tool") or not function._is_function_tool:
-            logging.warning(f"Attempted to register non-function tool: {function.__name__}")
+            logging.warning(f"Attempted to register non-function tool: {getattr(function, '__name__', str(function))}")
             return
         
-        # Create a unique ID for the tool
-        module_name = function.__module__
-        function_name = function.__name__
+        # Create a unique ID for the tool - get module name and function name safely
+        module_name = getattr(function, "__module__", "unknown_module")
+        function_name = getattr(function, "__name__", f"unnamed_tool_{id(function)}")
         tool_id = f"{module_name}.{function_name}"
         
         # Register the tool
