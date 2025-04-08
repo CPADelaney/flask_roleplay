@@ -134,6 +134,18 @@ class NyxBrain:
         )
         self.mode_integration = ModeIntegrationManager(nyx_brain=self)
 
+        self.thoughts_manager = InternalThoughtsManager(
+            passive_observation_system=self.passive_observation_system,
+            reflection_engine=self.reflection_engine,
+            imagination_simulator=self.imagination_simulator,
+            theory_of_mind=self.theory_of_mind,
+            relationship_reflection=self.relationship_manager,  # Using relationship_manager
+            proactive_communication=self.proactive_communication_engine,
+            emotional_core=self.emotional_core,
+            memory_core=self.memory_core
+        )
+        logger.debug("Internal thoughts manager initialized")        
+
         self.event_bus = None
         self.system_context = None
         self.integrated_tracer = None
@@ -542,17 +554,6 @@ async def initialize(self):
         
         logger.info(f"Creative system initialized at: {self.creative_system.content_system.base_directory}")
 
-        thoughts_manager = InternalThoughtsManager(
-            passive_observation_system=passive_observation_system,
-            reflection_engine=reflection_engine,
-            imagination_simulator=imagination_simulator,
-            theory_of_mind=theory_of_mind,
-            relationship_reflection=relationship_reflection,
-            proactive_communication=proactive_communication,
-            emotional_core=emotional_core,
-            memory_core=memory_core
-        )        
-        
         # Register creative actions with action generator
         if hasattr(self, "agentic_action_generator"):
             self._register_creative_actions()    
@@ -1925,7 +1926,11 @@ async def _register_processing_modules(self):
         Returns:
             Processing results
         """
-        internal_thoughts = await pre_process_input(thoughts_manager, user_input, user_id)
+        if hasattr(self, 'thoughts_manager'):
+            internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, user_id)
+        else:
+            logger.warning("Thoughts manager not available for input processing")
+            internal_thoughts = []
         
         mode_results = await self.mode_integration.process_input(user_input)
 
@@ -2092,7 +2097,11 @@ async def _register_processing_modules(self):
             except Exception as e:
                 logger.error(f"Error applying conditioning to response: {e}")
 
-        filtered_response = await pre_process_output(thoughts_manager, response, context)
+        if hasattr(self, 'thoughts_manager'):
+            filtered_response = await pre_process_output(self.thoughts_manager, response, context)
+        else:
+            logger.warning("Thoughts manager not available for output processing")
+            filtered_response = response
         
         return filtered_response
         
