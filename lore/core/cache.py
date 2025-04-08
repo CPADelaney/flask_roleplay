@@ -8,9 +8,8 @@ from dataclasses import dataclass
 import json
 import logging
 
-from agents import Agent, function_tool, Runner, trace
+from agents import Agent, function_tool, Runner, trace, ModelSettings
 from agents.run import RunConfig
-from agents.models import ModelSettings
 
 @dataclass
 class CacheAnalytics:
