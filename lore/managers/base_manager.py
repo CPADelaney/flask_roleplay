@@ -7,9 +7,8 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Type, Set, Callable
 
 # Agents SDK imports
-from agents import Agent, Runner, function_tool, trace, RunContextWrapper, GuardrailFunctionOutput
+from agents import Agent, Runner, function_tool, trace, RunContextWrapper, GuardrailFunctionOutput, ModelSettings
 from agents.run import RunConfig
-from agents.models import ModelSettings
 
 # Placeholders for dependencies
 from lore.data_access import BaseDataAccess  # Or your real DB access class
