@@ -23,7 +23,9 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance_permission
 from nyx.directive_handler import DirectiveHandler
 
-from db.connection import get_db_connection
+# Updated import to use the new context manager
+from db.connection import get_db_connection_context
+
 from embedding.vector_store import generate_embedding, vector_similarity
 
 from lore.core.cache import GLOBAL_LORE_CACHE
@@ -48,7 +50,6 @@ class BaseLoreManager:
         self.governor = None
         self.initialized = False
         self.cache_namespace = self.__class__.__name__.lower()
-        self.db_pool = None
         
         # Define standard table columns for common operations
         self._standard_columns = {
@@ -79,7 +80,6 @@ class BaseLoreManager:
         if not self.initialized:
             await self._initialize_governance()
             await self._initialize_tables()
-            await self._initialize_db_pool()
             self.initialized = True
     
     async def _initialize_governance(self):
@@ -88,12 +88,6 @@ class BaseLoreManager:
         if not self.governor:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
         return self.governor
-    
-    async def _initialize_db_pool(self):
-        """Initialize database connection pool."""
-        if not self.db_pool:
-            self.db_pool = await get_db_connection(self.user_id, self.conversation_id)
-        return self.db_pool
     
     async def _initialize_tables(self):
         """Initialize database tables - to be implemented by derived classes."""
@@ -107,8 +101,7 @@ class BaseLoreManager:
         Args:
             table_definitions: Dictionary mapping table names to CREATE TABLE statements
         """
-        db_pool = await self._initialize_db_pool()
-        async with db_pool.acquire() as conn:
+        async with get_db_connection_context() as conn:
             for table_name, create_statement in table_definitions.items():
                 # Check if table exists
                 table_exists = await conn.fetchval(f"""
@@ -199,8 +192,7 @@ class BaseLoreManager:
                 RETURNING id
             """
             
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 record_id = await conn.fetchval(query, *values)
                 
                 # Generate embedding if text data is provided
@@ -239,8 +231,7 @@ class BaseLoreManager:
             return cached
             
         try:
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 record = await conn.fetchrow(f"""
                     SELECT * FROM {table_name}
                     WHERE id = $1
@@ -283,8 +274,7 @@ class BaseLoreManager:
                 WHERE id = ${len(values) + 1}
             """
             
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 result = await conn.execute(query, *values, record_id)
                 
                 # Update embedding if text content changed
@@ -326,8 +316,7 @@ class BaseLoreManager:
             True if deletion succeeded, False otherwise
         """
         try:
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 result = await conn.execute(f"""
                     DELETE FROM {table_name}
                     WHERE id = $1
@@ -376,8 +365,7 @@ class BaseLoreManager:
                 
             query += f" LIMIT {limit}"
             
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 records = await conn.fetch(query, *values)
                 return [dict(record) for record in records]
         except Exception as e:
@@ -401,8 +389,7 @@ class BaseLoreManager:
             # Generate embedding for the query text
             embedding = await generate_embedding(text)
             
-            db_pool = await self._initialize_db_pool()
-            async with db_pool.acquire() as conn:
+            async with get_db_connection_context() as conn:
                 # Check if the table has an embedding column
                 has_embedding = await conn.fetchval(f"""
                     SELECT EXISTS (
