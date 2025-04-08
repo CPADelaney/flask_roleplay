@@ -13,11 +13,10 @@ from agents.run import RunConfig
 from pydantic import BaseModel, Field
 
 # Placeholders for dependencies
-from lore.data_access import BaseDataAccess  # Or your real DB access class
-from lore.utils.caching import LoreCache  # Or real caching implementation
+from lore.data_access import BaseDataAccess
+from lore.core.cache import LoreCache  
 from lore.error_manager import ErrorHandler
 from lore.resource_manager import MetricsManager
-from lore.core.cache import LoreCacheManager  # For the second class usage
 
 logger = logging.getLogger(__name__)
 
