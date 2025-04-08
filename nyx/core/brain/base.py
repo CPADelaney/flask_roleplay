@@ -205,7 +205,8 @@ async def initialize(self):
         from nyx.core.mood_manager import MoodManager
         from nyx.core.theory_of_mind import TheoryOfMind
         from nyx.core.imagination_simulator import ImaginationSimulator
-
+        from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+        
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mode_integration import ModeIntegrationManager
@@ -540,6 +541,17 @@ async def initialize(self):
         self._start_creative_review_task()
         
         logger.info(f"Creative system initialized at: {self.creative_system.content_system.base_directory}")
+
+        thoughts_manager = InternalThoughtsManager(
+            passive_observation_system=passive_observation_system,
+            reflection_engine=reflection_engine,
+            imagination_simulator=imagination_simulator,
+            theory_of_mind=theory_of_mind,
+            relationship_reflection=relationship_reflection,
+            proactive_communication=proactive_communication,
+            emotional_core=emotional_core,
+            memory_core=memory_core
+        )        
         
         # Register creative actions with action generator
         if hasattr(self, "agentic_action_generator"):
@@ -1913,6 +1925,8 @@ async def _register_processing_modules(self):
         Returns:
             Processing results
         """
+        internal_thoughts = await pre_process_input(thoughts_manager, user_input, user_id)
+        
         mode_results = await self.mode_integration.process_input(user_input)
 
         response_guidance = self.mode_integration.get_response_guidance()
@@ -1983,6 +1997,9 @@ async def _register_processing_modules(self):
             
             # Optionally record feedback
             await self.mode_integration.record_mode_feedback(True)  # Assuming success
+
+            if thoughts_manager.config["debug_mode"]:
+                print(f"Generated {len(internal_thoughts)} internal thoughts")            
             
             
             return await self.conditioned_input_processor.process_input(
@@ -2074,8 +2091,10 @@ async def _register_processing_modules(self):
                 response["conditioning_applied"] = True
             except Exception as e:
                 logger.error(f"Error applying conditioning to response: {e}")
+
+        filtered_response = await pre_process_output(thoughts_manager, response, context)
         
-        return response
+        return filtered_response
         
     async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
