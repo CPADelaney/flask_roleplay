@@ -11,7 +11,7 @@ from agents import Agent, function_tool, Runner, ModelSettings
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
