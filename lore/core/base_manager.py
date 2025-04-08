@@ -19,7 +19,6 @@ from agents.run import RunConfig
 from agents.run_context import RunContextWrapper
 
 # --- NYX/PROJECT-SPECIFIC IMPORTS ---
-from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance_permission
 from nyx.directive_handler import DirectiveHandler
@@ -85,6 +84,7 @@ class BaseLoreManager:
     
     async def _initialize_governance(self):
         """Initialize Nyx governance connection."""
+        from nyx.integrate import get_central_governance
         if not self.governor:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
         return self.governor
