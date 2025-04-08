@@ -2026,22 +2026,26 @@ async def generate_ritual(
         output_type=CompleteRitual
     )
     
+    deity_str = ""
+    if deity_data:
+        deity_str = f"DEITY:\n{json.dumps(deity_data, indent=2)}"
+    
     prompt = f"""
-    Generate a detailed {purpose} ritual for the religion of {pantheon_data['name']}.
-    
-    PANTHEON:
-    {json.dumps(pantheon_data, indent=2)}
-    
-    {f'DEITY:\n{json.dumps(deity_data, indent=2)}' if deity_data else ''}
-    
-    FORMALITY LEVEL: {formality_level}/10
-    
-    EXISTING PRACTICES:
-    {json.dumps(practice_data, indent=2)}
-    
-    Create a CompleteRitual object with detailed components, ensuring it reflects
-    matriarchal power structures and feminine divine authority.
-    """
+        Generate a detailed {purpose} ritual for the religion of {pantheon_data['name']}.
+        
+        PANTHEON:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        {deity_str}
+        
+        FORMALITY LEVEL: {formality_level}/10
+        
+        EXISTING PRACTICES:
+        {json.dumps(practice_data, indent=2)}
+        
+        Create a CompleteRitual object with detailed components, ensuring it reflects
+        matriarchal power structures and feminine divine authority.
+        """
     
     result = await Runner.run(ritual_agent, prompt, context=run_ctx.context)
     ritual_data = result.final_output
