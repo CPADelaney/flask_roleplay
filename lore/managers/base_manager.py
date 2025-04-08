@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Type, Set, Callable
+from typing import Dict, List, Any, Optional, Type, Set, Callable, Protocol, runtime_checkable
 
 # Agents SDK imports
 from agents import Agent, Runner, function_tool, trace, RunContextWrapper, GuardrailFunctionOutput, ModelSettings
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from lore.data_access import BaseDataAccess
 from lore.core.cache import LoreCache  
 from lore.error_manager import ErrorHandler
-from lore.metrics import MetricsManager
+from lore.metrics import MetricsManager, metrics_manager as metrics
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,28 @@ class DatabaseAccess:
         # Dummy placeholder
         return True
 
-# Placeholder for your metrics
-metrics = MetricsManager()
+# ------------------------------------------------------------------------
+# Function Wrapper Classes to handle Callable in Pydantic models
+# ------------------------------------------------------------------------
+@runtime_checkable
+class AsyncCallable(Protocol):
+    """Protocol for async callables."""
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class FunctionWrapper(BaseModel):
+    """Wrapper for callable functions to work with Pydantic schemas."""
+    # Define this as a model to exclude from schema generation
+    model_config = {
+        "json_schema_extra": {"exclude": ["func"]}
+    }
+    
+    func: Optional[Callable] = Field(default=None, exclude=True)
+    
+    def __call__(self, *args, **kwargs):
+        """Make the wrapper itself callable."""
+        if self.func is None:
+            return None
+        return self.func(*args, **kwargs)
 
 # ------------------------------------------------------------------------
 # Infrastructure Agent
@@ -85,9 +105,9 @@ class BaseLoreManager:
             duration = (datetime.utcnow() - start_time).total_seconds()
 
             if data:
-                metrics.record_cache_operation(self.__class__.__name__, True)
+                await metrics.record_cache_operation(self.__class__.__name__, True)
             else:
-                metrics.record_cache_operation(self.__class__.__name__, False)
+                await metrics.record_cache_operation(self.__class__.__name__, False)
 
             return data
         except Exception as e:
@@ -103,7 +123,7 @@ class BaseLoreManager:
             start_time = datetime.utcnow()
             self.cache.set(cache_key, data)
             duration = (datetime.utcnow() - start_time).total_seconds()
-            metrics.record_cache_operation(self.__class__.__name__, True)
+            await metrics.record_cache_operation(self.__class__.__name__, True)
             return True
         except Exception as e:
             self.error_handler.handle_error(e)
@@ -247,15 +267,17 @@ class BaseManager:
             except asyncio.CancelledError:
                 pass
 
-    @function_tool
-    async def get_cached_data(
+    # This method needs a special implementation to handle the Callable parameter
+    # We'll use a non-decorated version for normal use and a decorated version for the agent
+    async def get_cached_data_impl(
         self,
         data_type: str,
         data_id: str,
         fetch_func: Optional[Callable] = None
     ) -> Optional[Any]:
         """
-        Get data from cache or fetch if not available (function tool).
+        Implementation of get_cached_data that accepts a callable directly.
+        This version is used internally and not exposed as a function tool.
         """
         try:
             cached_value = await self.cache_manager.get_lore(data_type, data_id)
@@ -272,6 +294,60 @@ class BaseManager:
         except Exception as e:
             logger.error(f"Error getting cached data: {e}")
             return None
+            
+    @function_tool
+    async def get_cached_data(
+        self,
+        data_type: str,
+        data_id: str,
+        function_id: Optional[str] = None  # Use a function ID instead of a direct callable
+    ) -> Optional[Any]:
+        """
+        Get data from cache or fetch if not available (function tool).
+        This version is exposed as a function tool and uses function_id instead of direct callables.
+        """
+        try:
+            cached_value = await self.cache_manager.get_lore(data_type, data_id)
+            if cached_value is not None:
+                return cached_value
+
+            if function_id:
+                # Implement a registry of functions that can be looked up by ID
+                # This is a pattern to avoid passing Callables directly
+                fetch_func = self._get_function_by_id(function_id)
+                if fetch_func:
+                    value = await fetch_func()
+                    if value is not None:
+                        await self.cache_manager.set_lore(data_type, data_id, value)
+                    return value
+
+            return None
+        except Exception as e:
+            logger.error(f"Error getting cached data: {e}")
+            return None
+            
+    def _get_function_by_id(self, function_id: str) -> Optional[Callable]:
+        """
+        Get a function by its ID from a registry.
+        This is a placeholder - you would implement a real registry.
+        """
+        # Example implementation
+        function_registry = {
+            "get_user_data": self._fetch_user_data,
+            "get_conversation_data": self._fetch_conversation_data,
+            # Add more functions as needed
+        }
+        return function_registry.get(function_id)
+        
+    async def _fetch_user_data(self) -> Dict[str, Any]:
+        """Example fetch function for user data."""
+        # Placeholder implementation
+        return {"user_id": self.user_id, "name": "Example User"}
+        
+    async def _fetch_conversation_data(self) -> Dict[str, Any]:
+        """Example fetch function for conversation data."""
+        # Placeholder implementation
+        return {"conversation_id": self.conversation_id, "messages": []}
 
     @function_tool
     async def set_cached_data(
