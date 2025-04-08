@@ -16,7 +16,7 @@ import asyncpg
 from datetime import datetime
 
 from db.connection import get_db_connection_context
-from embedding.vector_store import generate_embedding, vector_similarity
+from embedding.vector_store import generate_embedding, compute_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -1029,7 +1029,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                             continue
                             
                         # Calculate similarity
-                        similarity = vector_similarity(query_embedding, item["embedding"])
+                        similarity = compute_similarity(query_embedding, item["embedding"])
                         
                         # Only include if above threshold
                         if similarity >= min_relevance:
@@ -1103,7 +1103,7 @@ class LoreKnowledgeAccess(BaseDataAccess):
                         continue
                 
                 # Calculate similarity
-                similarity = vector_similarity(query_embedding, lore_item["embedding"])
+                similarity = compute_similarity(query_embedding, lore_item["embedding"])
                 
                 # Add to results
                 lore_with_knowledge = {
