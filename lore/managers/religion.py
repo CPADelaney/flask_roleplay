@@ -21,6 +21,8 @@ from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE  # If you have a global cache
 
+from pydantic import BaseModel
+
 logger = logging.getLogger(__name__)
 
 class ReligionManager(BaseLoreManager):
