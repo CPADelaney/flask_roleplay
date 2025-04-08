@@ -6,7 +6,7 @@ This module provides Pydantic models for structuring and validating lore data.
 """
 
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, RootModel
 from datetime import datetime
 
 
@@ -38,9 +38,10 @@ class FactionModel(BaseModel):
     symbol_description: Optional[str] = Field(None, description="Description of faction symbol")
 
 
-class FactionsOutput(BaseModel):
+# Using RootModel for Pydantic v2 compatibility instead of __root__
+class FactionsOutput(RootModel):
     """Container for multiple factions."""
-    __root__: List[FactionModel]
+    root: List[FactionModel]
 
 
 class CulturalElementModel(BaseModel):
@@ -54,9 +55,10 @@ class CulturalElementModel(BaseModel):
     related_elements: Optional[List[str]] = Field(None, description="Connected cultural elements")
 
 
-class CulturalElementsOutput(BaseModel):
+# Using RootModel for Pydantic v2 compatibility
+class CulturalElementsOutput(RootModel):
     """Container for multiple cultural elements."""
-    __root__: List[CulturalElementModel]
+    root: List[CulturalElementModel]
 
 
 class HistoricalEventModel(BaseModel):
@@ -72,9 +74,10 @@ class HistoricalEventModel(BaseModel):
     commemorated_by: Optional[str] = Field(None, description="How it's remembered")
 
 
-class HistoricalEventsOutput(BaseModel):
+# Using RootModel for Pydantic v2 compatibility
+class HistoricalEventsOutput(RootModel):
     """Container for multiple historical events."""
-    __root__: List[HistoricalEventModel]
+    root: List[HistoricalEventModel]
 
 
 class LocationModel(BaseModel):
@@ -88,9 +91,10 @@ class LocationModel(BaseModel):
     strategic_importance: Optional[str] = Field(None, description="Tactical or resource value")
 
 
-class LocationsOutput(BaseModel):
+# Using RootModel for Pydantic v2 compatibility
+class LocationsOutput(RootModel):
     """Container for multiple locations."""
-    __root__: List[LocationModel]
+    root: List[LocationModel]
 
 
 class QuestModel(BaseModel):
@@ -105,6 +109,7 @@ class QuestModel(BaseModel):
     lore_significance: Optional[str] = Field(None, description="Connection to world lore")
 
 
-class QuestsOutput(BaseModel):
+# Using RootModel for Pydantic v2 compatibility
+class QuestsOutput(RootModel):
     """Container for multiple quests."""
-    __root__: List[QuestModel]
+    root: List[QuestModel]
