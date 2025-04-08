@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 # Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, StreamingResponse, ModelSettings,
+    Agent, function_tool, Runner, trace, RunResultStreaming, ModelSettings,
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff
 )
 from agents.run_context import RunContextWrapper
