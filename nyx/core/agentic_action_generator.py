@@ -30,10 +30,14 @@ from nyx.core.passive_observation import (
 from nyx.core.proactive_communication import (
     ProactiveCommunicationEngine, CommunicationIntent, IntentGenerationOutput
 )
+from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
 
 from nyx.tools.computer_use_agent import ComputerUseAgent
 from nyx.tools.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
 from nyx.tools.ui_interaction import UIConversationManager
+
+from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+
 
 from agents import Agent, Runner, handoff, InputGuardrail, function_tool, trace, GuardrailFunctionOutput
 from typing import List, Dict, Any, Optional, Union, Literal
@@ -378,6 +382,17 @@ class EnhancedAgenticActionGenerator:
             "reflection": 0.2
         }
         self.action_count_since_evaluation = 0
+
+        thoughts_manager = InternalThoughtsManager(
+            passive_observation_system=passive_observation_system,
+            reflection_engine=reflection_engine,
+            imagination_simulator=imagination_simulator,
+            theory_of_mind=theory_of_mind,
+            relationship_reflection=relationship_reflection,
+            proactive_communication=proactive_communication,
+            emotional_core=emotional_core,
+            memory_core=memory_core
+        )                     
         
         # Lock for thread safety
         self._lock = asyncio.Lock()
