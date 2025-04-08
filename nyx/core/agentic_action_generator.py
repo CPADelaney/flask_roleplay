@@ -383,7 +383,7 @@ class EnhancedAgenticActionGenerator:
         }
         self.action_count_since_evaluation = 0
 
-        thoughts_manager = InternalThoughtsManager(
+        self.thoughts_manager = InternalThoughtsManager(
             passive_observation_system=passive_observation_system,
             reflection_engine=reflection_engine,
             imagination_simulator=imagination_simulator,
