@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from lore.data_access import BaseDataAccess
 from lore.core.cache import LoreCache  
 from lore.error_manager import ErrorHandler
-from lore.resource_manager import MetricsManager
+from lore.metrics import MetricsManager
 
 logger = logging.getLogger(__name__)
 
