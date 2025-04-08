@@ -18,7 +18,7 @@ from dataclasses import dataclass, asdict
 import psutil
 from functools import wraps
 import structlog
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Histogram, Gauge
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = structlog.get_logger(__name__)
