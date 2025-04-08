@@ -13,7 +13,7 @@ from agents import (
 )
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
-from agents.models import ModelSettings
+from agents import ModelSettings
 
 # Governance & others
 from nyx.nyx_governance import AgentType, DirectivePriority
