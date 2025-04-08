@@ -16,7 +16,6 @@ from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 from npcs.new_npc_creation import NPCCreationHandler
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from lore.dynamic_lore_generator import DynamicLoreGenerator
 
 # Import database connections
@@ -639,6 +638,9 @@ class NewGameAgent:
         
         # Generate initial conflict
         try:
+            # MODIFIED: Import ConflictSystemIntegration only when needed
+            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+            
             conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
             initial_conflict = await conflict_integration.generate_conflict({
                 "conflict_type": "major",
