@@ -26,7 +26,7 @@ from nyx.directive_handler import DirectiveHandler
 # Updated import to use the new context manager
 from db.connection import get_db_connection_context
 
-from embedding.vector_store import generate_embedding, vector_similarity
+from embedding.vector_store import generate_embedding, compute_similarity
 
 from lore.core.cache import GLOBAL_LORE_CACHE
 
