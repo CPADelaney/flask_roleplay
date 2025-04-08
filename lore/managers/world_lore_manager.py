@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Agents SDK (import what you need)
 from agents import Agent, function_tool, Runner, trace, ModelSettings, handoff
