@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from db.connection import get_db_connection_context
 
 # Nyx governance integration
-from nyx.integrate import get_central_governance
+# Moved imports to function level to avoid circular imports
 from nyx.nyx_governance import (
     AgentType,
     DirectiveType,
@@ -94,6 +94,9 @@ class AddictionContext:
         
     async def initialize(self):
         """Initialize context with governance integration"""
+        # Lazy import to avoid circular dependency
+        from nyx.integrate import get_central_governance
+        
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
         
         # Initialize directive handler
@@ -102,7 +105,7 @@ class AddictionContext:
             self.conversation_id, 
             AgentType.UNIVERSAL_UPDATER,
             "addiction_system",
-            governance=governance  # pass the object here
+            governance=self.governor  # pass the object here
         )
         
         # Register handlers for different directive types
@@ -779,6 +782,9 @@ async def register_with_governance(user_id: int, conversation_id: int):
         user_id: User ID
         conversation_id: Conversation ID
     """
+    # Lazy import to avoid circular dependency
+    from nyx.integrate import get_central_governance
+    
     # Get governor
     governor = await get_central_governance(user_id, conversation_id)
     
