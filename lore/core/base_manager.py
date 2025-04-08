@@ -163,7 +163,7 @@ class BaseLoreManager:
     # Standardized CRUD Operations
     # ---------------------------
 
-    @with_governance_permission
+    @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="create")
     @function_tool
     async def create_record(self, table_name: str, data: Dict[str, Any]) -> int:
         """
@@ -211,7 +211,7 @@ class BaseLoreManager:
             logging.error(f"Error creating record in {table_name}: {e}")
             raise
     
-    @with_governance_permission
+    @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="read")
     @function_tool
     async def get_record(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -246,7 +246,7 @@ class BaseLoreManager:
             logging.error(f"Error fetching record {record_id} from {table_name}: {e}")
             return None
     
-    @with_governance_permission
+    @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="update")
     @function_tool
     async def update_record(self, table_name: str, record_id: int, data: Dict[str, Any]) -> bool:
         """
@@ -302,7 +302,7 @@ class BaseLoreManager:
             logging.error(f"Error updating record {record_id} in {table_name}: {e}")
             return False
     
-    @with_governance_permission
+    @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="delete")
     @function_tool
     async def delete_record(self, table_name: str, record_id: int) -> bool:
         """
@@ -328,7 +328,7 @@ class BaseLoreManager:
             logging.error(f"Error deleting record {record_id} from {table_name}: {e}")
             return False
     
-    @with_governance_permission
+    @with_governance_permission(agent_type=AgentType.NARRATIVE_CRAFTER, action_type="query")
     @function_tool
     async def query_records(
         self,
