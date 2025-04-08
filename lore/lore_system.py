@@ -17,10 +17,10 @@ from lore.managers.education import EducationalSystemManager
 from lore.managers.religion import ReligionManager
 from lore.managers.local_lore import LocalLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
-from lore.managers.regional_culture import RegionalCultureSystem
+from lore.systems.regional_culture import RegionalCultureSystem
 from lore.managers.base_manager import BaseLoreManager
 from lore.managers.politics import WorldPoliticsManager
-from lore.managers.dynamics import LoreDynamicsSystem  # example if you want the 'dynamics system' too
+from lore.systems.dynamics import LoreDynamicsSystem  # example if you want the 'dynamics system' too
 
 # 2. Existing data-access and integration imports
 from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
