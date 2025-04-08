@@ -9,12 +9,11 @@ from pydantic import BaseModel, Field
 
 # Agents SDK imports
 from agents import (
-    Agent, function_tool, Runner, trace, StreamingResponse,
+    Agent, function_tool, Runner, trace, StreamingResponse, ModelSettings,
     GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff
 )
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
-from agents.models import ModelSettings
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
