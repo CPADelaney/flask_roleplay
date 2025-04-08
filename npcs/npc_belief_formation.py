@@ -9,7 +9,7 @@ import json
 from memory.wrapper import MemorySystem
 from npcs.npc_agent import NPCAgent
 from data.npc_dal import NPCDataAccess
-from lore.lore_manager import LoreManager
+from lore.lore_system import LoreSystem
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from db.connection import get_db_connection_context
@@ -37,7 +37,7 @@ class NPCBeliefFormation:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.npc_id = npc_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        self.lore_manager = LoreSystem(user_id, conversation_id)
         self.memory_system = None
         
     async def initialize(self):
