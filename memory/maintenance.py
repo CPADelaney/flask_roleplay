@@ -8,7 +8,7 @@ import psutil
 
 from db.connection import get_db_connection_context
 from .telemetry import MemoryTelemetry
-from prometheus_client import Histogram
+from prometheus_client import Counter, Histogram, Gauge
 
 logger = logging.getLogger(__name__)
 
