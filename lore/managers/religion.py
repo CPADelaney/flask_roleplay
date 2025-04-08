@@ -6,10 +6,9 @@ import random
 from typing import Dict, List, Any, Optional
 
 # Agents SDK imports
-from agents import Agent, function_tool, Runner
+from agents import Agent, function_tool, Runner, ModelSettings
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
-from agents.models import ModelSettings
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
