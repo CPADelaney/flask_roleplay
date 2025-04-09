@@ -56,7 +56,7 @@ from lore.lore_generator import DynamicLoreGenerator
 from lore.validation import ValidationManager
 from lore.error_manager import ErrorHandler
 
-from .nyx_agent_sdk import NyxAgent
+from .nyx_agent_sdk import AgentContext
 from .nyx_enhanced_system import NyxEnhancedSystem
 from .response_filter import ResponseFilter
 from .nyx_planner import NyxPlanner
