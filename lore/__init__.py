@@ -26,7 +26,6 @@ from .error_manager import ErrorHandler, LoreError, handle_errors
 # Utility components
 from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
 from .validation import ValidationManager, ValidationResult
-from .lore_directive_handler import LoreDirectiveHandler
 from .lore_tools import (
     generate_foundation_lore,
     generate_factions,
@@ -69,7 +68,6 @@ __all__ = [
     'LoreKnowledgeAccess',
     'ValidationManager',
     'ValidationResult',
-    'LoreDirectiveHandler',
     'generate_foundation_lore',
     'generate_factions',
     'generate_cultural_elements',
