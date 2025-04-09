@@ -26,7 +26,7 @@ from .error_manager import ErrorHandler, LoreError, handle_errors
 # Utility components
 from .data_access import NPCDataAccess, LocationDataAccess, FactionDataAccess, LoreKnowledgeAccess
 from .validation import ValidationManager, ValidationResult
-from .lore_tools import (
+from lore.core.tool_registry import (
     generate_foundation_lore,
     generate_factions,
     generate_cultural_elements,
