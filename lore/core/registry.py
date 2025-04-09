@@ -1,10 +1,13 @@
 # lore/core/registry.py
 
+from __future__ import annotations
 import json
 import logging
 import importlib
 import inspect
 from typing import Dict, Any, List, Type, Optional, Callable
+
+from lore.core.base_manager import BaseLoreManager
 
 from agents import (
     Agent, function_tool, Runner, trace, GuardrailFunctionOutput, 
