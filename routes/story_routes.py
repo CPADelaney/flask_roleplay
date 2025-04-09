@@ -48,7 +48,7 @@ from nyx.nyx_agent_sdk import process_user_input
 
 from typing import List, Dict, Any, Optional
 
-from lore.dynamic_lore_generator import DynamicLoreGenerator
+from lore.lore_generator import DynamicLoreGenerator
 
 story_bp = Blueprint("story_bp", __name__)
 
