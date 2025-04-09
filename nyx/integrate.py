@@ -60,7 +60,7 @@ from .nyx_agent_sdk import AgentContext
 from .nyx_enhanced_system import NyxEnhancedSystem
 from .response_filter import ResponseFilter
 from .nyx_planner import NyxPlanner
-from .nyx_task_integration import TaskIntegration
+from .nyx_task_integration import NyxTaskIntegration
 from .memory_integration_sdk import MemoryIntegration
 from .scene_manager_sdk import SceneManager
 from .user_model_sdk import UserModel
