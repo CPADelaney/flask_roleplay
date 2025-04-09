@@ -52,7 +52,7 @@ from db.connection import get_db_connection_context
 # Caching utilities
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
-from lore.dynamic_lore_generator import DynamicLoreGenerator
+from lore.lore_generator import DynamicLoreGenerator
 from lore.unified_validation import ValidationManager
 from lore.error_handler import ErrorHandler
 
