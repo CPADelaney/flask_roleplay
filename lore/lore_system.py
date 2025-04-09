@@ -28,7 +28,6 @@ from .integration import NPCLoreIntegration, ConflictIntegration, ContextEnhance
 from .lore_generator import DynamicLoreGenerator
 
 # 3. Nyx governance
-from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
 from datetime import timedelta
@@ -94,6 +93,7 @@ class LoreSystem:
 
         try:
             # Initialize governance
+            from nyx.integrate import get_central_governance
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
 
             # 6. Initialize the data access + integration components
@@ -128,9 +128,11 @@ class LoreSystem:
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
         if not self.governor:
+            from nyx.integrate import get_central_governance
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
 
         # Register this system with governance
+        from nyx.integrate import get_central_governance
         await self.governor.register_agent(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_system",
