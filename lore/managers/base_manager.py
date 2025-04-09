@@ -215,6 +215,178 @@ class BaseLoreManager:
             self.error_handler.handle_error(e)
             raise
 
+class LoreCacheManager:
+    """
+    Manager class for working with the LoreCache system.
+    Provides a higher-level interface for the application-specific needs.
+    """
+    
+    def __init__(
+        self,
+        user_id: int,
+        conversation_id: int,
+        max_size_mb: float = 100,
+        redis_url: Optional[str] = None
+    ):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Convert MB to estimated entries (rough approximation)
+        # Assuming average entry size of about 1KB
+        estimated_entries = int(max_size_mb * 1024)
+        
+        # Use global cache instance or create a new one
+        if redis_url:
+            # If redis URL is provided, we'd set up Redis caching
+            # This is a placeholder - actual Redis integration would go here
+            self.cache = LoreCache(max_size=estimated_entries)
+        else:
+            # Use the global instance by default
+            self.cache = GLOBAL_LORE_CACHE
+    
+    async def start(self):
+        """Start the cache manager."""
+        # Initialization tasks, like warming up the cache
+        logger.info(f"Starting cache manager for user {self.user_id}")
+    
+    async def stop(self):
+        """Stop the cache manager."""
+        # Cleanup tasks
+        logger.info(f"Stopping cache manager for user {self.user_id}")
+    
+    async def get_lore(self, data_type: str, data_id: str) -> Optional[Any]:
+        """
+        Get data from the cache.
+        
+        Args:
+            data_type: The type of data (namespace)
+            data_id: The ID of the data entry
+            
+        Returns:
+            The cached data or None if not found
+        """
+        return await self.cache.get(
+            namespace=data_type,
+            key=data_id,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id
+        )
+    
+    async def set_lore(
+        self,
+        data_type: str,
+        data_id: str,
+        value: Any,
+        ttl: Optional[int] = None,
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """
+        Set data in the cache.
+        
+        Args:
+            data_type: The type of data (namespace)
+            data_id: The ID of the data entry
+            value: The data to cache
+            ttl: Optional time-to-live in seconds
+            tags: Optional tags for categorizing the data
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Priority calculation based on tags
+        priority = 0
+        if tags:
+            # Higher priority for important tags
+            if "critical" in tags:
+                priority = 10
+            elif "important" in tags:
+                priority = 7
+            elif "frequently_accessed" in tags:
+                priority = 5
+        
+        await self.cache.set(
+            namespace=data_type,
+            key=data_id,
+            value=value,
+            ttl=ttl,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            priority=priority
+        )
+        return True
+    
+    async def invalidate_lore(
+        self,
+        data_type: str,
+        data_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """
+        Invalidate cached data.
+        
+        Args:
+            data_type: The type of data (namespace)
+            data_id: Optional specific ID to invalidate
+            recursive: If True, invalidate all entries with matching pattern
+        """
+        if data_id is not None:
+            # Invalidate specific entry
+            await self.cache.invalidate(
+                namespace=data_type,
+                key=data_id,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+        elif recursive:
+            # Invalidate all entries in namespace
+            await self.cache.clear_namespace(namespace=data_type)
+        else:
+            # Invalidate entries for current user in namespace
+            pattern = f".*_{self.user_id}"
+            if self.conversation_id:
+                pattern += f"_{self.conversation_id}"
+            await self.cache.invalidate_pattern(
+                namespace=data_type,
+                pattern=pattern
+            )
+    
+    async def clear_all(self) -> None:
+        """Clear all cached data for this user/conversation."""
+        # Clear all namespaces for the current user/conversation
+        pattern = f".*_{self.user_id}"
+        if self.conversation_id:
+            pattern += f"_{self.conversation_id}"
+        
+        # This is a simplified approach - a real implementation
+        # might be more selective
+        for namespace in self._get_all_namespaces():
+            await self.cache.invalidate_pattern(
+                namespace=namespace,
+                pattern=pattern
+            )
+    
+    def _get_all_namespaces(self) -> Set[str]:
+        """
+        Get all cache namespaces in use.
+        This is a placeholder - real implementation would track namespaces.
+        """
+        # In a real implementation, you might store this in a registry
+        return {"user_data", "conversation_data", "world_data", "entity_data"}
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get statistics about cache usage."""
+        # Convert the CacheAnalytics data to a dict
+        stats = vars(self.cache.analytics)
+        
+        # Add manager-specific stats
+        stats.update({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        return stats
+
 
 # ---------------------------------------------------------------------------
 # BaseManager
