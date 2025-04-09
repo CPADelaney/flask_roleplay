@@ -22,7 +22,7 @@ import gc
 from lore.managers.base_manager import BaseManager, BaseLoreManager
 import aiofiles
 
-from lore.metrics import MetricsManager
+from lore.metrics import MetricsManager, metrics_manager
 
 logger = logging.getLogger(__name__)
 
