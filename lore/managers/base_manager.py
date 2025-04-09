@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 # Placeholders for dependencies
 from lore.data_access import BaseDataAccess
-from lore.core.cache import LoreCache  
+from lore.core.cache import LoreCache, GLOBAL_LORE_CACHE
 from lore.error_manager import ErrorHandler
 from lore.metrics import MetricsManager, metrics_manager as metrics
 
