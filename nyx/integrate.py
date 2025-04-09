@@ -53,7 +53,7 @@ from db.connection import get_db_connection_context
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
 from lore.lore_generator import DynamicLoreGenerator
-from lore.unified_validation import ValidationManager
+from lore.validation import ValidationManager
 from lore.error_handler import ErrorHandler
 
 from .nyx_agent_sdk import NyxAgent
