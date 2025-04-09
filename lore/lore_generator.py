@@ -31,7 +31,6 @@ from .unified_schemas import (
 )
 
 # Nyx governance integration
-from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 
@@ -275,6 +274,7 @@ class BaseGenerator:
             
         try:
             # Initialize governance
+            from nyx.integrate import get_central_governance
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
             
             # Initialize data access components
@@ -292,6 +292,8 @@ class BaseGenerator:
     async def initialize_governance(self) -> bool:
         """Initialize governance connection."""
         try:
+            from nyx.integrate import get_central_governance
+            
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
             return True
         except Exception as e:
