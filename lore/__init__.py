@@ -56,7 +56,6 @@ def _deprecated(func_or_class):
 __all__ = [
     'LoreSystem',
     'register_lore_routes',
-    'register_all_lore_modules_with_governance',
     'DynamicLoreGenerator',
     'NPCLoreIntegration',
     'ConflictIntegration',
