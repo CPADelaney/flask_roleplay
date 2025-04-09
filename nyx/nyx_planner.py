@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 import random
 import re
 from collections import defaultdict
-from nyx.nyx_memory_system import NyxMemorySystem
+from memory.memory_nyx_integration import MemoryNyxBridge
 from db.connection import get_db_connection_context
 import json
 
@@ -119,7 +119,7 @@ class NyxPlanner:
         """Initialize connection to memory system"""
         try:
             # Initialize memory system connection
-            self.memory_graph = await NyxMemorySystem.get_instance(
+            self.memory_graph = await MemoryNyxBridge.get_instance(
                 self.user_id,
                 self.conversation_id
             )
