@@ -84,6 +84,7 @@ class WorldLoreManager(BaseManager):
             output_type=WorldQueryAgent
         )
 
+
     @function_tool
     async def query_world_state(self, query: str) -> str:
         """Handle a natural language query about the world state."""
@@ -552,11 +553,251 @@ class WorldLoreManager(BaseManager):
         """Get a connection pool for database operations"""
         if not hasattr(self, '_pool'):
             self._pool = await asyncpg.create_pool(dsn=DB_DSN)
-        return self._pool 
+        return self._pool
 
+    # Implementation of cultural diffusion methods
+    async def _apply_language_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply language diffusion effects between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Check if both nations have languages
+                nation1_langs = await conn.fetch("""
+                    SELECT * FROM Languages 
+                    WHERE $1 = ANY(primary_regions) OR $1 = ANY(minority_regions)
+                """, nation1_id)
+                
+                nation2_langs = await conn.fetch("""
+                    SELECT * FROM Languages 
+                    WHERE $1 = ANY(primary_regions) OR $1 = ANY(minority_regions)
+                """, nation2_id)
+                
+                if not nation1_langs or not nation2_langs:
+                    return
+                
+                # Apply vocabulary diffusion
+                if "vocabulary" in effects:
+                    for vocab_change in effects["vocabulary"]:
+                        # Update common phrases or add new ones
+                        for lang in nation1_langs:
+                            lang_id = lang["id"]
+                            common_phrases = lang.get("common_phrases", {})
+                            if isinstance(common_phrases, str):
+                                try:
+                                    common_phrases = json.loads(common_phrases)
+                                except:
+                                    common_phrases = {}
+                            
+                            # Add new phrases from the other nation
+                            for phrase, meaning in vocab_change.get("adopted_phrases", {}).items():
+                                common_phrases[phrase] = meaning
+                            
+                            # Update the language
+                            await conn.execute("""
+                                UPDATE Languages
+                                SET common_phrases = $1
+                                WHERE id = $2
+                            """, json.dumps(common_phrases), lang_id)
+                
+                # Record the cultural exchange
+                exchange_id = await conn.fetchval("""
+                    INSERT INTO CulturalExchanges (
+                        nation1_id, nation2_id, exchange_type, exchange_details, timestamp
+                    )
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id
+                """, nation1_id, nation2_id, "language_diffusion", json.dumps(effects), datetime.now())
+                
+                # Log the exchange in world history
+                await conn.execute("""
+                    INSERT INTO WorldHistory (
+                        event_type, description, involved_entities, timestamp
+                    )
+                    VALUES ($1, $2, $3, $4)
+                """, "cultural_exchange", 
+                f"Language exchange occurred between nations {nation1_id} and {nation2_id}",
+                json.dumps([nation1_id, nation2_id]), datetime.now())
 
-    # Inherited from base: _validate_data, _execute_db_query, get_connection_pool, etc.
-    # We can override or extend them if needed, or rely on the base implementation.
+    async def _apply_artistic_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply artistic and creative diffusion between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Record artistic exchange in cultural elements
+                if "artistic_elements" in effects:
+                    for element in effects["artistic_elements"]:
+                        # Check if the cultural element already exists
+                        existing = await conn.fetchrow("""
+                            SELECT id FROM CulturalElements
+                            WHERE name = $1 AND element_type = 'artistic'
+                        """, element["name"])
+                        
+                        if existing:
+                            # Update existing element
+                            await conn.execute("""
+                                UPDATE CulturalElements
+                                SET description = $1, practiced_by = array_append(practiced_by, $2)
+                                WHERE id = $3
+                            """, element["description"], f"Nation {nation2_id}", existing["id"])
+                        else:
+                            # Create new cultural element
+                            await conn.execute("""
+                                INSERT INTO CulturalElements (
+                                    name, element_type, description, practiced_by, significance,
+                                    historical_origin
+                                )
+                                VALUES ($1, $2, $3, $4, $5, $6)
+                            """, element["name"], "artistic", element["description"],
+                            [f"Nation {nation1_id}", f"Nation {nation2_id}"],
+                            element.get("significance", 5),
+                            f"Cultural exchange between nations {nation1_id} and {nation2_id}")
+
+    async def _apply_religious_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply religious practice and belief diffusion between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Track religious changes in the appropriate tables
+                # This is a simplified implementation
+                if "religious_practices" in effects:
+                    for practice in effects["religious_practices"]:
+                        # Add or update practice in religious tables
+                        existing = await conn.fetchrow("""
+                            SELECT id FROM ReligiousPractices
+                            WHERE name = $1
+                        """, practice["name"])
+                        
+                        if existing:
+                            # Update existing practice
+                            await conn.execute("""
+                                UPDATE ReligiousPractices
+                                SET description = $1, followers = array_append(followers, $2)
+                                WHERE id = $3
+                            """, practice["description"], f"Nation {nation2_id}", existing["id"])
+                        else:
+                            # Create new practice
+                            await conn.execute("""
+                                INSERT INTO ReligiousPractices (
+                                    name, description, origin, followers, significance
+                                )
+                                VALUES ($1, $2, $3, $4, $5)
+                            """, practice["name"], practice["description"],
+                            f"Cultural exchange with Nation {nation1_id}",
+                            [f"Nation {nation1_id}", f"Nation {nation2_id}"],
+                            practice.get("significance", 5))
+
+    async def _apply_fashion_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply fashion and clothing diffusion between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Implement fashion diffusion effects
+                # This is a simplified implementation
+                if "fashion_elements" in effects:
+                    for element in effects["fashion_elements"]:
+                        # Add to cultural elements table with fashion type
+                        await conn.execute("""
+                            INSERT INTO CulturalElements (
+                                name, element_type, description, practiced_by, significance,
+                                historical_origin
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            ON CONFLICT (name, element_type) 
+                            DO UPDATE SET description = EXCLUDED.description,
+                                        practiced_by = array_append(CulturalElements.practiced_by, $7)
+                        """, element["name"], "fashion", element["description"],
+                        [f"Nation {nation2_id}"], element.get("significance", 5),
+                        f"Adopted from Nation {nation1_id}", f"Nation {nation2_id}")
+
+    async def _apply_cuisine_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply culinary and food diffusion between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Implement cuisine diffusion
+                if "cuisine_elements" in effects:
+                    for dish in effects["cuisine_elements"]:
+                        # Add to culinary database or cultural elements
+                        await conn.execute("""
+                            INSERT INTO CulinaryTraditions (
+                                name, nation_origin, description, ingredients, preparation,
+                                cultural_significance, adopted_by
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT (name) 
+                            DO UPDATE SET adopted_by = array_append(CulinaryTraditions.adopted_by, $8)
+                        """, dish["name"], nation1_id, dish["description"],
+                        dish.get("ingredients", []), dish.get("preparation", ""),
+                        dish.get("significance", ""), [nation2_id], nation2_id)
+
+    async def _apply_customs_diffusion(self, nation1_id: int, nation2_id: int, effects: Dict[str, Any]) -> None:
+        """Apply social customs and etiquette diffusion between nations."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Implement social customs diffusion
+                if "social_customs" in effects:
+                    for custom in effects["social_customs"]:
+                        # Create or update social norms/customs
+                        await conn.execute("""
+                            INSERT INTO SocialCustoms (
+                                name, nation_origin, description, context, formality_level,
+                                adopted_by, adoption_date
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT (name) 
+                            DO UPDATE SET adopted_by = array_append(SocialCustoms.adopted_by, $8)
+                        """, custom["name"], nation1_id, custom["description"],
+                        custom.get("context", "social"), custom.get("formality_level", "medium"),
+                        [nation2_id], datetime.now(), nation2_id)
+
+    async def _update_plan_step(self, plan_id: str, step_index: int, outcome: Dict[str, Any]) -> None:
+        """Update a plan step with its outcome."""
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # First, fetch the current plan
+                plan_data = await conn.fetchrow("""
+                    SELECT plan_data FROM NarrativePlans 
+                    WHERE id = $1
+                """, plan_id)
+                
+                if not plan_data:
+                    logging.error(f"Plan {plan_id} not found")
+                    return
+                
+                # Parse plan JSON
+                try:
+                    plan = json.loads(plan_data["plan_data"])
+                except (json.JSONDecodeError, KeyError):
+                    logging.error(f"Failed to parse plan data for {plan_id}")
+                    return
+                
+                # Update the step with the outcome
+                if "steps" in plan and 0 <= step_index < len(plan["steps"]):
+                    plan["steps"][step_index]["status"] = "completed"
+                    plan["steps"][step_index]["outcome"] = outcome
+                    plan["steps"][step_index]["completed_at"] = datetime.now().isoformat()
+                    
+                    # Update the overall plan status if all steps are complete
+                    all_completed = all(step.get("status") == "completed" for step in plan["steps"])
+                    if all_completed:
+                        plan["status"] = "completed"
+                        plan["completed_at"] = datetime.now().isoformat()
+                    
+                    # Save the updated plan
+                    await conn.execute("""
+                        UPDATE NarrativePlans
+                        SET plan_data = $1,
+                            status = $2,
+                            updated_at = $3
+                        WHERE id = $4
+                    """, json.dumps(plan), plan["status"], datetime.now(), plan_id)
+                    
+                    # Log the step completion
+                    await conn.execute("""
+                        INSERT INTO PlanExecutionLog (
+                            plan_id, step_index, step_title, outcome_summary, timestamp
+                        )
+                        VALUES ($1, $2, $3, $4, $5)
+                    """, plan_id, step_index, 
+                       plan["steps"][step_index].get("title", f"Step {step_index}"),
+                       json.dumps(outcome), datetime.now())
+                else:
+                    logging.error(f"Invalid step index {step_index} for plan {plan_id}")
 
 # Create a singleton instance if desired
 world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
@@ -691,12 +932,107 @@ class MasterCoordinationAgent:
             "pending_tasks": len(self.coordination_memory["pending_tasks"]),
             "consistency_issues": len(self.coordination_memory["consistency_issues"])
         }
-    
+        
     async def _get_related_content(self, content: Dict[str, Any], content_type: str) -> List[Dict[str, Any]]:
         """Get existing content related to the new content for consistency checking."""
-        # Implementation would depend on specific content relationships
-        # This is a placeholder
-        return []
+        related_content = []
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                if content_type == "faction":
+                    # Find factions with shared territory, rivals, or allies
+                    if "territory" in content:
+                        territory_factions = await conn.fetch("""
+                            SELECT id, name, type, description, territory 
+                            FROM Factions
+                            WHERE territory && $1
+                        """, content.get("territory", []))
+                        related_content.extend([dict(f) for f in territory_factions])
+                    
+                    # Find related by mentioned rivals
+                    if "rivals" in content:
+                        rival_factions = await conn.fetch("""
+                            SELECT id, name, type, description 
+                            FROM Factions
+                            WHERE name = ANY($1)
+                        """, content.get("rivals", []))
+                        related_content.extend([dict(f) for f in rival_factions])
+                    
+                    # Find related by mentioned allies
+                    if "allies" in content:
+                        ally_factions = await conn.fetch("""
+                            SELECT id, name, type, description 
+                            FROM Factions
+                            WHERE name = ANY($1)
+                        """, content.get("allies", []))
+                        related_content.extend([dict(f) for f in ally_factions])
+                
+                elif content_type == "location":
+                    # Find locations in the same region or connected
+                    if "region" in content:
+                        region_locations = await conn.fetch("""
+                            SELECT id, name, description, type, controlling_faction 
+                            FROM Locations
+                            WHERE region = $1
+                        """, content.get("region"))
+                        related_content.extend([dict(l) for l in region_locations])
+                    
+                    # Find locations controlled by the same faction
+                    if "controlling_faction" in content:
+                        faction_locations = await conn.fetch("""
+                            SELECT id, name, description, type
+                            FROM Locations
+                            WHERE controlling_faction = $1
+                        """, content.get("controlling_faction"))
+                        related_content.extend([dict(l) for l in faction_locations])
+                
+                elif content_type == "historical_event":
+                    # Find events in the same time period
+                    if "date_description" in content:
+                        related_events = await conn.fetch("""
+                            SELECT id, name, description, date_description, significance 
+                            FROM HistoricalEvents
+                            WHERE date_description LIKE '%' || $1 || '%'
+                        """, content.get("date_description", ""))
+                        related_content.extend([dict(e) for e in related_events])
+                    
+                    # Find events with the same participating factions
+                    if "participating_factions" in content:
+                        faction_events = await conn.fetch("""
+                            SELECT id, name, description, date_description, participating_factions
+                            FROM HistoricalEvents
+                            WHERE participating_factions && $1
+                        """, content.get("participating_factions", []))
+                        related_content.extend([dict(e) for e in faction_events])
+                
+                elif content_type == "character" or content_type == "notable_figure":
+                    # Find characters with same affiliations
+                    if "affiliations" in content:
+                        affiliation_chars = await conn.fetch("""
+                            SELECT id, name, description, affiliations 
+                            FROM NotableFigures
+                            WHERE affiliations && $1
+                        """, content.get("affiliations", []))
+                        related_content.extend([dict(c) for c in affiliation_chars])
+                    
+                    # Find characters with same titles or roles
+                    if "titles" in content:
+                        titled_chars = await conn.fetch("""
+                            SELECT id, name, description, titles 
+                            FROM NotableFigures
+                            WHERE titles && $1
+                        """, content.get("titles", []))
+                        related_content.extend([dict(c) for c in titled_chars])
+        
+        # Remove duplicates based on id
+        seen_ids = set()
+        unique_related = []
+        for item in related_content:
+            if item["id"] not in seen_ids:
+                seen_ids.add(item["id"])
+                unique_related.append(item)
+        
+        return unique_related
 
 class UnifiedTraceSystem:
     """
@@ -921,22 +1257,114 @@ class ContentValidationTool:
     
     async def _fetch_related_content(self, content: Dict[str, Any], content_type: str) -> Dict[str, List[Dict[str, Any]]]:
         """Fetch content related to the provided content for contextual validation."""
-        # Implementation would vary based on content relationships
-        # Placeholder example:
         related = {}
         
-        if content_type == "nation":
-            # Get neighboring nations
-            if "neighboring_nations" in content:
-                nations = []
-                for neighbor in content["neighboring_nations"]:
-                    # This is a simplified example; actual implementation would query the database
-                    nation_data = await self.world_lore_manager.get_world_data(f"nation_{neighbor}")
-                    if nation_data:
-                        nations.append(nation_data)
-                related["neighboring_nations"] = nations
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                if content_type == "nation":
+                    # Get neighboring nations
+                    if "neighboring_nations" in content:
+                        nations = []
+                        for neighbor in content["neighboring_nations"]:
+                            nation_data = await conn.fetchrow("""
+                                SELECT * FROM Nations
+                                WHERE id = $1
+                            """, neighbor)
+                            if nation_data:
+                                nations.append(dict(nation_data))
+                        related["neighboring_nations"] = nations
+                    
+                    # Get religions practiced in the nation
+                    religions = await conn.fetch("""
+                        SELECT r.* 
+                        FROM Religions r
+                        JOIN NationReligions nr ON r.id = nr.religion_id
+                        WHERE nr.nation_id = $1
+                    """, content.get("id"))
+                    if religions:
+                        related["religions"] = [dict(r) for r in religions]
+                    
+                    # Get cultural traditions
+                    traditions = await conn.fetch("""
+                        SELECT ce.* 
+                        FROM CulturalElements ce
+                        WHERE $1 = ANY(ce.practiced_by)
+                    """, content.get("name", ""))
+                    if traditions:
+                        related["cultural_traditions"] = [dict(t) for t in traditions]
+                
+                elif content_type == "religion":
+                    # Get nations where this religion is practiced
+                    nations = await conn.fetch("""
+                        SELECT n.* 
+                        FROM Nations n
+                        JOIN NationReligions nr ON n.id = nr.nation_id
+                        WHERE nr.religion_id = $1
+                    """, content.get("id"))
+                    if nations:
+                        related["practicing_nations"] = [dict(n) for n in nations]
+                    
+                    # Get deities associated with this religion
+                    deities = await conn.fetch("""
+                        SELECT * FROM Deities
+                        WHERE religion_id = $1
+                    """, content.get("id"))
+                    if deities:
+                        related["deities"] = [dict(d) for d in deities]
+                    
+                    # Get religious practices
+                    practices = await conn.fetch("""
+                        SELECT * FROM ReligiousPractices
+                        WHERE religion_id = $1
+                    """, content.get("id"))
+                    if practices:
+                        related["practices"] = [dict(p) for p in practices]
+                
+                elif content_type == "faction":
+                    # Get faction leaders
+                    leaders = await conn.fetch("""
+                        SELECT nf.* 
+                        FROM NotableFigures nf
+                        WHERE nf.id = ANY($1)
+                    """, content.get("leadership", []))
+                    if leaders:
+                        related["leaders"] = [dict(l) for l in leaders]
+                    
+                    # Get controlled locations
+                    locations = await conn.fetch("""
+                        SELECT * FROM Locations
+                        WHERE controlling_faction = $1
+                    """, content.get("name", ""))
+                    if locations:
+                        related["controlled_locations"] = [dict(l) for l in locations]
+                    
+                    # Get rival factions
+                    rivals = await conn.fetch("""
+                        SELECT * FROM Factions
+                        WHERE name = ANY($1)
+                    """, content.get("rivals", []))
+                    if rivals:
+                        related["rival_factions"] = [dict(r) for r in rivals]
+                
+                elif content_type == "location":
+                    # Get controlling faction
+                    faction = await conn.fetchrow("""
+                        SELECT * FROM Factions
+                        WHERE name = $1
+                    """, content.get("controlling_faction", ""))
+                    if faction:
+                        related["controlling_faction"] = dict(faction)
+                    
+                    # Get historical events at this location
+                    events = await conn.fetch("""
+                        SELECT * FROM HistoricalEvents
+                        WHERE $1 = ANY(affected_locations)
+                    """, content.get("name", ""))
+                    if events:
+                        related["historical_events"] = [dict(e) for e in events]
         
         return related
+
 
 class LoreRelationshipMapper:
     """
@@ -1047,25 +1475,282 @@ class LoreRelationshipMapper:
     
     async def _store_relationship_graph(self, graph: Dict[str, Any]) -> None:
         """Store a relationship graph in the database."""
-        # Implementation would depend on database structure
-        pass
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Create transaction
+                async with conn.transaction():
+                    # Store the graph metadata
+                    graph_id = await conn.fetchval("""
+                        INSERT INTO LoreRelationshipGraphs (
+                            user_id, creation_date, graph_name, description
+                        ) VALUES ($1, $2, $3, $4)
+                        RETURNING id
+                    """, self.user_id, datetime.now(), graph.get("name", "Graph"), graph.get("description", ""))
+                    
+                    # Store all nodes
+                    for node in graph.get("nodes", []):
+                        await conn.execute("""
+                            INSERT INTO LoreGraphNodes (
+                                graph_id, node_id, lore_type, lore_id, label, metadata
+                            ) VALUES ($1, $2, $3, $4, $5, $6)
+                        """, graph_id, node.get("id"), node.get("type"), 
+                        node.get("lore_id"), node.get("label"), json.dumps(node.get("metadata", {})))
+                    
+                    # Store all edges
+                    for edge in graph.get("edges", []):
+                        await conn.execute("""
+                            INSERT INTO LoreGraphEdges (
+                                graph_id, source_id, target_id, relationship_type, 
+                                strength, directional, metadata
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        """, graph_id, edge.get("source"), edge.get("target"),
+                        edge.get("type"), edge.get("strength", 1.0), 
+                        edge.get("directional", True), json.dumps(edge.get("metadata", {})))
     
     async def _get_element_relationships(self, element_id: str) -> Dict[str, Any]:
         """Get previously mapped relationships for an element."""
-        # Implementation would depend on database structure
-        return {"related_elements": []}
+        relationships = {"related_elements": []}
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Check if table exists
+                table_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'loregraphedges'
+                    );
+                """)
+                
+                if not table_exists:
+                    return relationships
+                
+                # Get all outgoing relationships
+                outgoing = await conn.fetch("""
+                    SELECT e.*, n.lore_type, n.label
+                    FROM LoreGraphEdges e
+                    JOIN LoreGraphNodes n ON e.target_id = n.node_id
+                    WHERE e.source_id = $1
+                """, element_id)
+                
+                # Get all incoming relationships
+                incoming = await conn.fetch("""
+                    SELECT e.*, n.lore_type, n.label
+                    FROM LoreGraphEdges e
+                    JOIN LoreGraphNodes n ON e.source_id = n.node_id
+                    WHERE e.target_id = $1
+                """, element_id)
+                
+                for rel in outgoing:
+                    relationships["related_elements"].append({
+                        "id": rel["target_id"],
+                        "type": rel["lore_type"],
+                        "name": rel["label"],
+                        "relationship_type": rel["relationship_type"],
+                        "relationship_strength": rel["strength"],
+                        "direction": "outgoing"
+                    })
+                
+                for rel in incoming:
+                    relationships["related_elements"].append({
+                        "id": rel["source_id"],
+                        "type": rel["lore_type"],
+                        "name": rel["label"],
+                        "relationship_type": rel["relationship_type"],
+                        "relationship_strength": rel["strength"],
+                        "direction": "incoming"
+                    })
+        
+        return relationships
     
     async def _store_element_relationships(self, element_id: str, relationships: Dict[str, Any]) -> None:
         """Store relationships for an element."""
-        # Implementation would depend on database structure
-        pass
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Create transaction
+                async with conn.transaction():
+                    # Find graph ID for this element, or create a new one
+                    graph_id = await conn.fetchval("""
+                        SELECT graph_id FROM LoreGraphNodes
+                        WHERE node_id = $1
+                        LIMIT 1
+                    """, element_id)
+                    
+                    if not graph_id:
+                        graph_id = await conn.fetchval("""
+                            INSERT INTO LoreRelationshipGraphs (
+                                user_id, creation_date, graph_name, description
+                            ) VALUES ($1, $2, $3, $4)
+                            RETURNING id
+                        """, self.user_id, datetime.now(), "Generated Graph", "Automatically generated relationships")
+                        
+                        # Ensure the element node exists
+                        await conn.execute("""
+                            INSERT INTO LoreGraphNodes (
+                                graph_id, node_id, lore_type, lore_id, label
+                            ) VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (graph_id, node_id) DO NOTHING
+                        """, graph_id, element_id, "unknown", element_id, f"Element {element_id}")
+                    
+                    # Add all related elements
+                    for relation in relationships.get("related_elements", []):
+                        related_id = relation.get("id")
+                        relationship_type = relation.get("relationship_type", "related")
+                        strength = relation.get("relationship_strength", 1.0)
+                        direction = relation.get("direction", "outgoing")
+                        
+                        # Ensure the related node exists
+                        await conn.execute("""
+                            INSERT INTO LoreGraphNodes (
+                                graph_id, node_id, lore_type, lore_id, label
+                            ) VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (graph_id, node_id) DO NOTHING
+                        """, graph_id, related_id, relation.get("type", "unknown"), 
+                        related_id, relation.get("name", f"Element {related_id}"))
+                        
+                        # Add the edge in the proper direction
+                        if direction == "outgoing":
+                            source_id, target_id = element_id, related_id
+                        else:
+                            source_id, target_id = related_id, element_id
+                        
+                        await conn.execute("""
+                            INSERT INTO LoreGraphEdges (
+                                graph_id, source_id, target_id, relationship_type, 
+                                strength, directional
+                            ) VALUES ($1, $2, $3, $4, $5, $6)
+                            ON CONFLICT (graph_id, source_id, target_id) 
+                            DO UPDATE SET relationship_type = EXCLUDED.relationship_type,
+                                        strength = EXCLUDED.strength
+                        """, graph_id, source_id, target_id, relationship_type, 
+                        strength, True)
     
     async def _get_potential_related(self, element_type: str, element: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Get potential related elements based on element type and content."""
-        # Implementation would depend on specific lore relationships
-        # This is a placeholder
-        return []
-    
+        related_elements = []
+        
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                if element_type == "faction":
+                    # Get factions with similar territory
+                    if "territory" in element:
+                        similar_territory = await conn.fetch("""
+                            SELECT id, name, type, description, territory 
+                            FROM Factions
+                            WHERE id != $1 AND territory && $2
+                            LIMIT 5
+                        """, element.get("id", -1), element.get("territory", []))
+                        
+                        for faction in similar_territory:
+                            related_elements.append({
+                                "id": faction["id"],
+                                "name": faction["name"],
+                                "type": "faction",
+                                "potential_relationship": "territorial"
+                            })
+                    
+                    # Get factions with similar goals
+                    if "goals" in element:
+                        goals_str = " ".join(element.get("goals", []))
+                        if goals_str:
+                            similar_goals = await conn.fetch("""
+                                SELECT id, name, type, description, goals 
+                                FROM Factions
+                                WHERE id != $1 AND 
+                                      SIMILARITY(
+                                        ARRAY_TO_STRING(goals, ' '), $2
+                                      ) > 0.3
+                                LIMIT 5
+                            """, element.get("id", -1), goals_str)
+                            
+                            for faction in similar_goals:
+                                related_elements.append({
+                                    "id": faction["id"],
+                                    "name": faction["name"],
+                                    "type": "faction",
+                                    "potential_relationship": "ideological"
+                                })
+                
+                elif element_type == "location":
+                    # Get nearby locations
+                    if "region" in element:
+                        nearby_locations = await conn.fetch("""
+                            SELECT id, name, type, description, region
+                            FROM Locations
+                            WHERE id != $1 AND region = $2
+                            LIMIT 5
+                        """, element.get("id", -1), element.get("region"))
+                        
+                        for location in nearby_locations:
+                            related_elements.append({
+                                "id": location["id"],
+                                "name": location["name"],
+                                "type": "location",
+                                "potential_relationship": "proximity"
+                            })
+                    
+                    # Get locations controlled by same faction
+                    if "controlling_faction" in element and element["controlling_faction"]:
+                        faction_locations = await conn.fetch("""
+                            SELECT id, name, type, description
+                            FROM Locations
+                            WHERE id != $1 AND controlling_faction = $2
+                            LIMIT 5
+                        """, element.get("id", -1), element.get("controlling_faction"))
+                        
+                        for location in faction_locations:
+                            related_elements.append({
+                                "id": location["id"],
+                                "name": location["name"],
+                                "type": "location",
+                                "potential_relationship": "political"
+                            })
+                
+                elif element_type == "historical_event":
+                    # Get events in similar time period
+                    if "date_description" in element:
+                        similar_time = await conn.fetch("""
+                            SELECT id, name, description, date_description
+                            FROM HistoricalEvents
+                            WHERE id != $1 AND 
+                                  SIMILARITY(date_description, $2) > 0.3
+                            LIMIT 5
+                        """, element.get("id", -1), element.get("date_description", ""))
+                        
+                        for event in similar_time:
+                            related_elements.append({
+                                "id": event["id"],
+                                "name": event["name"],
+                                "type": "historical_event",
+                                "potential_relationship": "temporal"
+                            })
+                    
+                    # Get events with shared participants
+                    if "participating_factions" in element:
+                        shared_participants = await conn.fetch("""
+                            SELECT id, name, description, participating_factions
+                            FROM HistoricalEvents
+                            WHERE id != $1 AND 
+                                  participating_factions && $2
+                            LIMIT 5
+                        """, element.get("id", -1), element.get("participating_factions", []))
+                        
+                        for event in shared_participants:
+                            related_elements.append({
+                                "id": event["id"],
+                                "name": event["name"],
+                                "type": "historical_event",
+                                "potential_relationship": "participant"
+                            })
+        
+        # Ensure unique results
+        seen_ids = set()
+        unique_results = []
+        for item in related_elements:
+            if item["id"] not in seen_ids:
+                seen_ids.add(item["id"])
+                unique_results.append(item)
+        
+        return unique_results
     def _merge_relationships(self, existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
         """Merge existing and new relationship data."""
         if "related_elements" not in existing:
@@ -1080,14 +1765,79 @@ class LoreRelationshipMapper:
         return existing
         
 class WorldQueryAgent(BaseModel):
-    """Simulate world query processing."""
+    """Agent that processes queries about the world state."""
     query: str
+    world_id: str = "main"
 
     @function_tool
-    async def process_query(self, ctx: RunContextWrapper) -> str:
-        """Process the procedural query and return relevant world data."""
-        # Example: Simply return a mock response for the query for demonstration purposes
-        return f"Processing query: {self.query}"
+    async def process_query(self, ctx: Optional[RunContextWrapper] = None) -> str:
+        """Process a natural language query about the world state."""
+        # Extract key entities and intents from the query
+        query_terms = self.query.lower().split()
+        entity_types = ["faction", "location", "history", "character", "event", "magic"]
+        
+        # Determine query intent
+        intent = "general"
+        if any(term in query_terms for term in ["who", "person", "character", "leader"]):
+            intent = "character"
+        elif any(term in query_terms for term in ["where", "place", "location", "city"]):
+            intent = "location"
+        elif any(term in query_terms for term in ["when", "time", "date", "year", "history"]):
+            intent = "timeline"
+        elif any(term in query_terms for term in ["how", "works", "system", "magic"]):
+            intent = "system"
+        
+        # Construct database query based on intent
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                if intent == "character":
+                    results = await conn.fetch("""
+                        SELECT * FROM NotableFigures 
+                        WHERE world_id = $1 
+                        ORDER BY significance DESC LIMIT 5
+                    """, self.world_id)
+                    
+                    response = "Here are the notable characters in this world:\n\n"
+                    for result in results:
+                        response += f"- {result['name']}: {result['description'][:100]}...\n"
+                
+                elif intent == "location":
+                    results = await conn.fetch("""
+                        SELECT * FROM Locations 
+                        WHERE world_id = $1 
+                        ORDER BY significance DESC LIMIT 5
+                    """, self.world_id)
+                    
+                    response = "Here are significant locations in this world:\n\n"
+                    for result in results:
+                        response += f"- {result['name']}: {result['description'][:100]}...\n"
+                
+                elif intent == "timeline":
+                    results = await conn.fetch("""
+                        SELECT * FROM HistoricalEvents 
+                        WHERE world_id = $1 
+                        ORDER BY date_order DESC LIMIT 5
+                    """, self.world_id)
+                    
+                    response = "Key historical events in chronological order:\n\n"
+                    for result in results:
+                        response += f"- {result['date_description']}: {result['name']} - {result['description'][:100]}...\n"
+                
+                else:
+                    # General world information
+                    result = await conn.fetchrow("""
+                        SELECT * FROM WorldLore 
+                        WHERE id = $1 LIMIT 1
+                    """, self.world_id)
+                    
+                    if result:
+                        response = f"World '{result['name']}' overview:\n\n"
+                        response += result['description']
+                    else:
+                        response = f"No general information found for world {self.world_id}"
+        
+        return response
+
 
 class WorldDocumentationAgent(BaseModel):
     """Generate readable summaries of world history and current state."""
@@ -1096,34 +1846,324 @@ class WorldDocumentationAgent(BaseModel):
     include_current_state: bool = True
 
     @function_tool
-    async def generate_documentation(self, ctx: RunContextWrapper) -> str:
+    async def generate_documentation(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Generate documentation for the world state and history."""
-        documentation = f"World {self.world_id} Summary:\n"
-        if self.include_history:
-            history = await self.get_world_history(self.world_id)
-            documentation += f"\nWorld History:\n{history}"
+        documentation = f"# World Documentation: {self.world_id}\n\n"
+        
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                # Get world overview
+                world_data = await conn.fetchrow("""
+                    SELECT * FROM WorldLore WHERE id = $1
+                """, self.world_id)
+                
+                if world_data:
+                    documentation += f"## Overview\n\n{world_data['description']}\n\n"
+                
+                if self.include_history:
+                    # Get historical events
+                    history_data = await conn.fetch("""
+                        SELECT * FROM HistoricalEvents 
+                        WHERE world_id = $1
+                        ORDER BY date_order
+                    """, self.world_id)
+                    
+                    documentation += "## Historical Timeline\n\n"
+                    for event in history_data:
+                        documentation += f"### {event['name']} ({event['date_description']})\n\n"
+                        documentation += f"{event['description']}\n\n"
+                        documentation += f"**Significance**: {event['significance']}/10\n\n"
 
-        if self.include_current_state:
-            current_state = await self.get_world_data(self.world_id)
-            documentation += f"\nCurrent State:\n{current_state}"
-
+                if self.include_current_state:
+                    # Get current factions
+                    factions = await conn.fetch("""
+                        SELECT * FROM Factions 
+                        WHERE world_id = $1
+                    """, self.world_id)
+                    
+                    documentation += "## Current Factions\n\n"
+                    for faction in factions:
+                        documentation += f"### {faction['name']}\n\n"
+                        documentation += f"**Type**: {faction['type']}\n\n"
+                        documentation += f"{faction['description']}\n\n"
+                        
+                        if faction.get('values'):
+                            values = faction['values'] if isinstance(faction['values'], list) else json.loads(faction['values'])
+                            documentation += "**Values**: " + ", ".join(values) + "\n\n"
+                    
+                    # Get locations
+                    locations = await conn.fetch("""
+                        SELECT * FROM Locations 
+                        WHERE world_id = $1
+                    """, self.world_id)
+                    
+                    documentation += "## Significant Locations\n\n"
+                    for location in locations:
+                        documentation += f"### {location['name']}\n\n"
+                        documentation += f"**Type**: {location['type']}\n\n"
+                        documentation += f"{location['description']}\n\n"
+        
         return documentation
 
     async def get_world_history(self, world_id: str) -> str:
-        """Fetch world history."""
-        # In a real implementation, this would query the database or cache
-        return f"History of world {world_id}"
+        """Fetch world history for the documentation agent."""
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                # Get the historical events
+                events = await conn.fetch("""
+                    SELECT * FROM HistoricalEvents
+                    WHERE world_id = $1
+                    ORDER BY date_order
+                """, world_id)
+                
+                if not events:
+                    return f"No historical records found for world {world_id}."
+                
+                history = f"## History of {world_id}\n\n"
+                
+                # Group events by time periods
+                time_periods = {}
+                for event in events:
+                    period = event.get("time_period", "Unknown Era")
+                    if period not in time_periods:
+                        time_periods[period] = []
+                    time_periods[period].append(dict(event))
+                
+                # Format the history by time periods
+                for period, period_events in time_periods.items():
+                    history += f"### {period}\n\n"
+                    for event in period_events:
+                        history += f"**{event['name']}** ({event['date_description']}): {event['description']}\n\n"
+                        if event.get("consequences"):
+                            history += f"*Consequences*: {', '.join(event['consequences'])}\n\n"
+                
+                return history
 
     async def get_world_data(self, world_id: str) -> str:
-        """Fetch current world state."""
-        return f"Current state of world {world_id}"
+        """Fetch current world state for the documentation agent."""
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                # Get the world data
+                world = await conn.fetchrow("""
+                    SELECT * FROM worlds
+                    WHERE id = $1
+                """, world_id)
+                
+                if not world:
+                    return f"No data found for world {world_id}."
+                
+                world_data = dict(world)
+                
+                # Get factions
+                factions = await conn.fetch("""
+                    SELECT * FROM Factions
+                    WHERE world_id = $1
+                """, world_id)
+                
+                # Get nations
+                nations = await conn.fetch("""
+                    SELECT * FROM Nations
+                    WHERE world_id = $1
+                """, world_id)
+                
+                # Get major locations
+                locations = await conn.fetch("""
+                    SELECT * FROM Locations
+                    WHERE world_id = $1
+                    ORDER BY significance DESC
+                    LIMIT 10
+                """, world_id)
+                
+                # Format the state information
+                state = f"## Current State of {world_data.get('name', world_id)}\n\n"
+                state += f"{world_data.get('description', 'No description available.')}\n\n"
+                
+                state += "### Major Powers\n\n"
+                for nation in nations:
+                    state += f"**{nation['name']}** ({nation['government_type']}): {nation['description']}\n\n"
+                
+                state += "### Active Factions\n\n"
+                for faction in factions:
+                    state += f"**{faction['name']}** ({faction['type']}): {faction['description']}\n\n"
+                
+                state += "### Notable Locations\n\n"
+                for location in locations:
+                    state += f"**{location['name']}** ({location['type']}): {location['description']}\n\n"
+                
+                return state
 
 class InconsistencyResolutionAgent(BaseModel):
     """Resolve inconsistencies between world lore elements."""
     world_id: str
 
     @function_tool
-    async def resolve_inconsistencies(self, ctx: RunContextWrapper) -> str:
+    async def resolve_inconsistencies(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Analyze world lore and resolve any inconsistencies."""
-        # For demonstration, return a mock resolution.
-        return f"Analyzed inconsistencies in world {self.world_id} and proposed fixes."
+        inconsistencies = await self.identify_inconsistencies()
+        
+        if not inconsistencies:
+            return f"No inconsistencies found in world {self.world_id}."
+        
+        # Process each inconsistency
+        resolutions = []
+        
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                for inconsistency in inconsistencies:
+                    resolution = await self.resolve_single_inconsistency(conn, inconsistency)
+                    resolutions.append({
+                        "issue": inconsistency,
+                        "resolution": resolution
+                    })
+                    
+                    # Log the resolution in the database
+                    await conn.execute("""
+                        INSERT INTO LoreInconsistencyLog 
+                        (world_id, issue_description, resolution, timestamp)
+                        VALUES ($1, $2, $3, $4)
+                    """, self.world_id, inconsistency["description"], resolution, datetime.now())
+        
+        # Format the response
+        result = f"Resolved {len(resolutions)} inconsistencies in world {self.world_id}:\n\n"
+        
+        for i, res in enumerate(resolutions, 1):
+            result += f"{i}. Issue: {res['issue']['description']}\n"
+            result += f"   Resolution: {res['resolution']}\n\n"
+        
+        return result
+    
+    async def identify_inconsistencies(self) -> List[Dict[str, Any]]:
+        """Identify inconsistencies in world lore."""
+        inconsistencies = []
+        
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                # Check for timeline inconsistencies
+                timeline_issues = await conn.fetch("""
+                    WITH event_pairs AS (
+                        SELECT e1.id as id1, e2.id as id2, 
+                               e1.name as name1, e2.name as name2,
+                               e1.date_order as date1, e2.date_order as date2,
+                               e1.description as desc1, e2.description as desc2
+                        FROM HistoricalEvents e1
+                        JOIN HistoricalEvents e2 ON e1.id < e2.id
+                        WHERE e1.world_id = $1 AND e2.world_id = $1
+                    )
+                    SELECT * FROM event_pairs
+                    WHERE (date1 > date2 AND date2 > 0)
+                       OR (desc1 LIKE '%' || name2 || '%' AND date1 < date2)
+                       OR (desc2 LIKE '%' || name1 || '%' AND date2 < date1)
+                """, self.world_id)
+                
+                for issue in timeline_issues:
+                    inconsistencies.append({
+                        "type": "timeline",
+                        "entities": [issue["id1"], issue["id2"]],
+                        "description": f"Timeline inconsistency between '{issue['name1']}' and '{issue['name2']}'",
+                        "details": {
+                            "event1": {
+                                "id": issue["id1"],
+                                "name": issue["name1"],
+                                "date_order": issue["date1"]
+                            },
+                            "event2": {
+                                "id": issue["id2"],
+                                "name": issue["name2"],
+                                "date_order": issue["date2"]
+                            }
+                        }
+                    })
+                
+                # Check for faction leadership inconsistencies
+                faction_issues = await conn.fetch("""
+                    WITH faction_leaders AS (
+                        SELECT f.id as faction_id, f.name as faction_name,
+                               n1.id as leader_id, n1.name as leader_name
+                        FROM Factions f
+                        JOIN NotableFigures n1 ON n1.id = ANY(f.leadership)
+                        WHERE f.world_id = $1
+                    )
+                    SELECT fl1.faction_id, fl1.faction_name,
+                           fl1.leader_id as leader1_id, fl1.leader_name as leader1_name,
+                           fl2.leader_id as leader2_id, fl2.leader_name as leader2_name
+                    FROM faction_leaders fl1
+                    JOIN faction_leaders fl2 ON fl1.faction_id = fl2.faction_id AND fl1.leader_id < fl2.leader_id
+                """, self.world_id)
+                
+                for issue in faction_issues:
+                    inconsistencies.append({
+                        "type": "leadership",
+                        "entities": [issue["faction_id"], issue["leader1_id"], issue["leader2_id"]],
+                        "description": f"Multiple leadership claims for faction '{issue['faction_name']}'",
+                        "details": {
+                            "faction": {
+                                "id": issue["faction_id"],
+                                "name": issue["faction_name"]
+                            },
+                            "leader1": {
+                                "id": issue["leader1_id"],
+                                "name": issue["leader1_name"]
+                            },
+                            "leader2": {
+                                "id": issue["leader2_id"],
+                                "name": issue["leader2_name"]
+                            }
+                        }
+                    })
+        
+        return inconsistencies
+    
+    async def resolve_single_inconsistency(self, conn, inconsistency: Dict[str, Any]) -> str:
+        """Resolve a single inconsistency and update the database."""
+        if inconsistency["type"] == "timeline":
+            # Resolve timeline inconsistency
+            event1 = inconsistency["details"]["event1"]
+            event2 = inconsistency["details"]["event2"]
+            
+            # Decide which event to adjust
+            if event1["date_order"] > event2["date_order"]:
+                # Move event1 to before event2
+                new_date_order = event2["date_order"] - 1
+                await conn.execute("""
+                    UPDATE HistoricalEvents 
+                    SET date_order = $1
+                    WHERE id = $2
+                """, new_date_order, event1["id"])
+                
+                return f"Adjusted date order of '{event1['name']}' to occur before '{event2['name']}'"
+            else:
+                # Events reference each other but dates are correct
+                # Update descriptions to clarify reference
+                event1_desc = await conn.fetchval("""
+                    SELECT description FROM HistoricalEvents WHERE id = $1
+                """, event1["id"])
+                
+                updated_desc = event1_desc + f"\n\nNote: This event occurred before '{event2['name']}' but references it due to prophecy/legend."
+                
+                await conn.execute("""
+                    UPDATE HistoricalEvents 
+                    SET description = $1
+                    WHERE id = $2
+                """, updated_desc, event1["id"])
+                
+                return f"Clarified that '{event1['name']}' references future event '{event2['name']}' in its description"
+        
+        elif inconsistency["type"] == "leadership":
+            # Resolve faction leadership inconsistency
+            faction = inconsistency["details"]["faction"]
+            leader1 = inconsistency["details"]["leader1"]
+            leader2 = inconsistency["details"]["leader2"]
+            
+            # Option 1: Make one leader primary, one advisor
+            await conn.execute("""
+                UPDATE Factions
+                SET leadership = $1,
+                    advisors = array_append(advisors, $2)
+                WHERE id = $3
+            """, [leader1["id"]], leader2["id"], faction["id"])
+            
+            return f"Resolved by making '{leader1['name']}' the primary leader and '{leader2['name']}' an advisor to faction '{faction['name']}'"
+        
+        else:
+            return f"Unknown inconsistency type: {inconsistency['type']}"
+
