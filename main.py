@@ -43,6 +43,7 @@ from routes.multiuser_routes import multiuser_bp
 from routes.nyx_agent_routes import nyx_agent_bp
 from routes.conflict_routes import conflict_bp
 from routes.npc_learning_routes import npc_learning_bp
+from routes.auth import register_auth_routes
 
 # MCP Orchestrator
 from mcp_orchestrator import MCPOrchestrator
