@@ -1772,6 +1772,7 @@ class WorldQueryAgent(BaseModel):
     """Agent that processes queries about the world state."""
     query: str
     world_id: str = "main"
+    process_query: ClassVar
 
     @function_tool
     async def process_query(self, ctx: Optional[RunContextWrapper] = None) -> str:
@@ -1848,7 +1849,8 @@ class WorldDocumentationAgent(BaseModel):
     world_id: str
     include_history: bool = True
     include_current_state: bool = True
-
+    process_query: ClassVar
+    
     @function_tool
     async def generate_documentation(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Generate documentation for the world state and history."""
@@ -1999,7 +2001,8 @@ class WorldDocumentationAgent(BaseModel):
 class InconsistencyResolutionAgent(BaseModel):
     """Resolve inconsistencies between world lore elements."""
     world_id: str
-
+    process_query: ClassVar
+    
     @function_tool
     async def resolve_inconsistencies(self, ctx: Optional[RunContextWrapper] = None) -> str:
         """Analyze world lore and resolve any inconsistencies."""
