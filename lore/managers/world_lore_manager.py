@@ -8,7 +8,7 @@ allowing each core operation to be called as an agent function tool if desired.
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Set, Union
+from typing import Dict, Any, Optional, List, Set, Union, ClassVar
 from datetime import datetime
 import uuid
 import json
