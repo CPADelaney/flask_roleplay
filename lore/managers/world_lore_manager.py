@@ -8,21 +8,33 @@ allowing each core operation to be called as an agent function tool if desired.
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, List, Set, Union
 from datetime import datetime
-
-from pydantic import BaseModel, Field
-
+import uuid
+import json
+import asyncio
 import asyncpg
+import random
+import re
 
 # Agents SDK (import what you need)
 from agents import Agent, function_tool, Runner, trace, ModelSettings, handoff
-# Or: from agents import Agent, function_tool, Runner, ...
-# (depending on your usage patterns)
+from agents.run import RunConfig
+from agents.run_context import RunContextWrapper
+
+# Import for dependencies
+from pydantic import BaseModel, Field
+
+# Database connection string
+DB_DSN = os.getenv("DB_DSN") 
+
+logger = logging.getLogger(__name__)
+
+from lore.managers.base_manager import BaseManager
+from lore.resource_manager import resource_manager
 
 # Because we might want to store or retrieve data from an LLM orchestrator
 # we define a ResourceOpsAgent for demonstration:
-# (You can remove it or rename it if you don't plan on LLM usage here.)
 RESOURCE_OPS_AGENT = Agent(
     name="ResourceOpsAgent",
     instructions=(
@@ -31,13 +43,7 @@ RESOURCE_OPS_AGENT = Agent(
         "and checking resource usage. Keep everything thread-safe and consistent."
     ),
     model="o3-mini"
-    # model_settings, etc., if needed
 )
-
-logger = logging.getLogger(__name__)
-
-from lore.managers.base_manager import BaseManager
-from lore.resource_manager import resource_manager
 
 class WorldLoreManager(BaseManager):
     """
