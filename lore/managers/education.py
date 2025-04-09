@@ -239,7 +239,7 @@ class EducationalSystemManager(BaseLoreManager):
         tool_registry.register_tool(self.add_knowledge_tradition, "education")
         tool_registry.register_tool(self.generate_educational_systems, "education")
         tool_registry.register_tool(self.generate_knowledge_traditions, "education")
-        tool_registry.register_tool(self.stream_educational_development, "education_streaming")
+        tool_registry.register_tool(self.streopment, "education_streaming")
 
     async def ensure_initialized(self):
         """Ensure system is initialized."""
@@ -502,240 +502,240 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 3) Stream educational system generation with progressive updates
     # ------------------------------------------------------------------------
-@with_governance(
-    agent_type=AgentType.NARRATIVE_CRAFTER,
-    action_type="stream_educational_development",
-    action_description="Streaming educational system development",
-    id_from_context=lambda ctx: "educational_system_manager"
-)
-@registered_tool(category="education_streaming")
-async def stream_educational_development(
-    self, 
-    ctx,
-    system_name: str,
-    system_type: str,
-    matriarchy_level: int = 8
-) -> AsyncGenerator[str, None]:
-    """
-    Stream the development of a complete educational system with live updates.
-    
-    Args:
-        ctx: Context object
-        system_name: Name for the educational system
-        system_type: Type of system (formal, apprenticeship, religious)
-        matriarchy_level: Level of matriarchal control (1-10)
-        
-    Yields:
-        Updates as the educational system is developed
-    """
-    with trace(
-        "StreamEducationalDevelopment", 
-        group_id=self.trace_group_id,
-        metadata={
-            **self.trace_metadata, 
-            "system_name": system_name,
-            "system_type": system_type,
-            "matriarchy_level": matriarchy_level
-        }
-    ):
-        run_ctx = self.create_run_context(ctx)
-        
-        # Determine which specialized agent to use based on system_type
-        if system_type.lower() in ["formal", "school", "academy"]:
-            specialist_agent = self.formal_education_agent
-            system_type = "formal"
-        elif system_type.lower() in ["apprenticeship", "mentorship", "guild"]:
-            specialist_agent = self.apprenticeship_agent
-            system_type = "apprenticeship"
-        elif system_type.lower() in ["religious", "seminary", "spiritual"]:
-            specialist_agent = self.religious_education_agent
-            system_type = "religious"
-        else:
-            # Default to the general education agent
-            specialist_agent = self.education_agent
-        
-        # 1. Stream basic system outline
-        yield f"Developing {system_name} - a {system_type} educational system..."
-        
-        # Create basic prompt
-        basic_prompt = f"""
-        Create an outline for a {system_type} educational system named '{system_name}' with 
-        a matriarchy level of {matriarchy_level}/10. Include:
-        
-        1. Core purpose
-        2. Target demographics
-        3. Main features
-        4. Matriarchal authority structure
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="stream_educational_development",
+        action_description="Streaming educational system development",
+        id_from_context=lambda ctx: "educational_system_manager"
+    )
+    @registered_tool(category="education_streaming")
+    async def stream_educational_development(
+        self, 
+        ctx,
+        system_name: str,
+        system_type: str,
+        matriarchy_level: int = 8
+    ) -> AsyncGenerator[str, None]:
         """
+        Stream the development of a complete educational system with live updates.
         
-        # Instead of using StreamingResponse, use the regular run method for this step
-        basic_result = await Runner.run(specialist_agent, basic_prompt, context=run_ctx.context)
-        basic_outline = basic_result.final_output
-        
-        yield f"\nBasic System Outline:\n{basic_outline}\n"
-        await asyncio.sleep(0.5)  # Small delay for better streaming experience
-        
-        # 2. Stream leadership structure
-        yield "\nDeveloping leadership structure..."
-        
-        leadership_prompt = f"""
-        For the {system_type} educational system '{system_name}':
-        
-        Create a detailed leadership structure that emphasizes feminine authority 
-        with a matriarchy level of {matriarchy_level}/10.
-        
-        Define:
-        1. Female leadership roles
-        2. Male supportive roles
-        3. Power dynamics
-        4. Decision-making processes
+        Args:
+            ctx: Context object
+            system_name: Name for the educational system
+            system_type: Type of system (formal, apprenticeship, religious)
+            matriarchy_level: Level of matriarchal control (1-10)
+            
+        Yields:
+            Updates as the educational system is developed
         """
-        
-        # For this step, let's use the streaming capability to demonstrate how it works
-        stream_config = RunConfig(
-            workflow_name="LeadershipStructureGeneration",
-            trace_metadata={"component": "leadership_structure"}
-        )
-        
-        streaming_result = Runner.run_streamed(
-            specialist_agent, 
-            leadership_prompt, 
-            context=run_ctx.context,
-            run_config=stream_config
-        )
-        
-        # Process the leadership structure streaming events
-        leadership_content = []
-        async for event in streaming_result.stream_events():
-            # Handle different types of streaming events
-            if event.type == "raw_response_event":
-                # This is a token-by-token update, which you could yield for real-time updates
-                # For this example, we'll just collect and output the whole response at the end
-                continue
-                
-            elif event.type == "run_item_stream_event":
-                if event.item.type == "message_output_item":
-                    # Extract text from the message output
-                    from agents.items import ItemHelpers
-                    message_text = ItemHelpers.text_message_output(event.item)
-                    leadership_content.append(message_text)
-                    # You could yield this incremental update if desired
-        
-        # Combine the collected content
-        leadership_structure = "".join(leadership_content) if leadership_content else streaming_result.final_output
-        
-        yield f"\nLeadership Structure:\n{leadership_structure}\n"
-        await asyncio.sleep(0.5)
-        
-        # 3. Stream curriculum and teaching methods - using regular run method again
-        yield "\nDeveloping curriculum and teaching methods..."
-        
-        curriculum_prompt = f"""
-        For the {system_type} educational system '{system_name}':
-        
-        Create a curriculum outline with teaching methods that reinforce matriarchal values.
-        Matriarchy level: {matriarchy_level}/10
-        
-        Include:
-        1. Core subjects/skills taught
-        2. Teaching methodologies
-        3. Gender-specific tracks or teachings
-        4. Evaluation methods
-        """
-        
-        curriculum_result = await Runner.run(specialist_agent, curriculum_prompt, context=run_ctx.context)
-        curriculum = curriculum_result.final_output
-        
-        yield f"\nCurriculum and Teaching Methods:\n{curriculum}\n"
-        await asyncio.sleep(0.5)
-        
-        # Continue with the other sections similar to the original implementation
-        # 4. Stream knowledge restrictions and taboos
-        yield "\nDeveloping knowledge restrictions and taboo subjects..."
-        
-        restrictions_prompt = f"""
-        For the {system_type} educational system '{system_name}':
-        
-        Define knowledge restrictions, censorship practices, and taboo subjects:
-        Matriarchy level: {matriarchy_level}/10
-        
-        Include:
-        1. Subjects/knowledge restricted by gender
-        2. Completely taboo topics
-        3. Censorship enforcement mechanisms
-        4. Consequences for violations
-        """
-        
-        # Apply the censorship guardrail to this prompt
-        restrictions_agent = specialist_agent.clone(
-            input_guardrails=[self.censorship_guardrail]
-        )
-        
-        restrictions_result = await Runner.run(restrictions_agent, restrictions_prompt, context=run_ctx.context)
-        restrictions = restrictions_result.final_output
-        
-        yield f"\nKnowledge Restrictions and Taboos:\n{restrictions}\n"
-        await asyncio.sleep(0.5)
-        
-        # 5. Create a complete system definition in structured format
-        yield "\nFinalizing educational system definition..."
-        
-        # Compile all the information into a structured prompt
-        complete_prompt = f"""
-        Based on all the previous information, create a complete, structured definition
-        for the {system_type} educational system '{system_name}'.
-        
-        SYSTEM OUTLINE:
-        {basic_outline}
-        
-        LEADERSHIP STRUCTURE:
-        {leadership_structure}
-        
-        CURRICULUM:
-        {curriculum}
-        
-        RESTRICTIONS:
-        {restrictions}
-        
-        Return an EducationalSystem object with all required fields.
-        """
-        
-        # Create a system definition agent with structured output
-        system_definition_agent = specialist_agent.clone(
-            output_type=EducationalSystem
-        )
-        
-        definition_result = await Runner.run(system_definition_agent, complete_prompt, context=run_ctx.context)
-        system_definition = definition_result.final_output
-        
-        # 6. Save the educational system to the database
-        try:
-            # Convert Pydantic model to parameters
-            system_id = await self.add_educational_system(
-                run_ctx,
-                name=system_definition.name,
-                system_type=system_definition.system_type,
-                description=system_definition.description,
-                target_demographics=system_definition.target_demographics,
-                controlled_by=system_definition.controlled_by,
-                core_teachings=system_definition.core_teachings,
-                teaching_methods=system_definition.teaching_methods,
-                coming_of_age_rituals=system_definition.coming_of_age_rituals,
-                knowledge_restrictions=system_definition.knowledge_restrictions,
-                female_leadership_roles=system_definition.female_leadership_roles,
-                male_roles=system_definition.male_roles,
-                gender_specific_teachings=system_definition.gender_specific_teachings,
-                taboo_subjects=system_definition.taboo_subjects,
-                censorship_level=system_definition.censorship_level,
-                censorship_enforcement=system_definition.censorship_enforcement
+        with trace(
+            "StreamEducationalDevelopment", 
+            group_id=self.trace_group_id,
+            metadata={
+                **self.trace_metadata, 
+                "system_name": system_name,
+                "system_type": system_type,
+                "matriarchy_level": matriarchy_level
+            }
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Determine which specialized agent to use based on system_type
+            if system_type.lower() in ["formal", "school", "academy"]:
+                specialist_agent = self.formal_education_agent
+                system_type = "formal"
+            elif system_type.lower() in ["apprenticeship", "mentorship", "guild"]:
+                specialist_agent = self.apprenticeship_agent
+                system_type = "apprenticeship"
+            elif system_type.lower() in ["religious", "seminary", "spiritual"]:
+                specialist_agent = self.religious_education_agent
+                system_type = "religious"
+            else:
+                # Default to the general education agent
+                specialist_agent = self.education_agent
+            
+            # 1. Stream basic system outline
+            yield f"Developing {system_name} - a {system_type} educational system..."
+            
+            # Create basic prompt
+            basic_prompt = f"""
+            Create an outline for a {system_type} educational system named '{system_name}' with 
+            a matriarchy level of {matriarchy_level}/10. Include:
+            
+            1. Core purpose
+            2. Target demographics
+            3. Main features
+            4. Matriarchal authority structure
+            """
+            
+            # Instead of using StreamingResponse, use the regular run method for this step
+            basic_result = await Runner.run(specialist_agent, basic_prompt, context=run_ctx.context)
+            basic_outline = basic_result.final_output
+            
+            yield f"\nBasic System Outline:\n{basic_outline}\n"
+            await asyncio.sleep(0.5)  # Small delay for better streaming experience
+            
+            # 2. Stream leadership structure
+            yield "\nDeveloping leadership structure..."
+            
+            leadership_prompt = f"""
+            For the {system_type} educational system '{system_name}':
+            
+            Create a detailed leadership structure that emphasizes feminine authority 
+            with a matriarchy level of {matriarchy_level}/10.
+            
+            Define:
+            1. Female leadership roles
+            2. Male supportive roles
+            3. Power dynamics
+            4. Decision-making processes
+            """
+            
+            # For this step, let's use the streaming capability to demonstrate how it works
+            stream_config = RunConfig(
+                workflow_name="LeadershipStructureGeneration",
+                trace_metadata={"component": "leadership_structure"}
             )
             
-            yield f"\nEducational system saved to database with ID: {system_id}"
-        except Exception as e:
-            yield f"\nError saving educational system: {str(e)}"
-        
-        # 7. Final summary
-        yield f"\nCompleted development of {system_name} - a {system_definition.system_type} educational system."
+            streaming_result = Runner.run_streamed(
+                specialist_agent, 
+                leadership_prompt, 
+                context=run_ctx.context,
+                run_config=stream_config
+            )
+            
+            # Process the leadership structure streaming events
+            leadership_content = []
+            async for event in streaming_result.stream_events():
+                # Handle different types of streaming events
+                if event.type == "raw_response_event":
+                    # This is a token-by-token update, which you could yield for real-time updates
+                    # For this example, we'll just collect and output the whole response at the end
+                    continue
+                    
+                elif event.type == "run_item_stream_event":
+                    if event.item.type == "message_output_item":
+                        # Extract text from the message output
+                        from agents.items import ItemHelpers
+                        message_text = ItemHelpers.text_message_output(event.item)
+                        leadership_content.append(message_text)
+                        # You could yield this incremental update if desired
+            
+            # Combine the collected content
+            leadership_structure = "".join(leadership_content) if leadership_content else streaming_result.final_output
+            
+            yield f"\nLeadership Structure:\n{leadership_structure}\n"
+            await asyncio.sleep(0.5)
+            
+            # 3. Stream curriculum and teaching methods - using regular run method again
+            yield "\nDeveloping curriculum and teaching methods..."
+            
+            curriculum_prompt = f"""
+            For the {system_type} educational system '{system_name}':
+            
+            Create a curriculum outline with teaching methods that reinforce matriarchal values.
+            Matriarchy level: {matriarchy_level}/10
+            
+            Include:
+            1. Core subjects/skills taught
+            2. Teaching methodologies
+            3. Gender-specific tracks or teachings
+            4. Evaluation methods
+            """
+            
+            curriculum_result = await Runner.run(specialist_agent, curriculum_prompt, context=run_ctx.context)
+            curriculum = curriculum_result.final_output
+            
+            yield f"\nCurriculum and Teaching Methods:\n{curriculum}\n"
+            await asyncio.sleep(0.5)
+            
+            # Continue with the other sections similar to the original implementation
+            # 4. Stream knowledge restrictions and taboos
+            yield "\nDeveloping knowledge restrictions and taboo subjects..."
+            
+            restrictions_prompt = f"""
+            For the {system_type} educational system '{system_name}':
+            
+            Define knowledge restrictions, censorship practices, and taboo subjects:
+            Matriarchy level: {matriarchy_level}/10
+            
+            Include:
+            1. Subjects/knowledge restricted by gender
+            2. Completely taboo topics
+            3. Censorship enforcement mechanisms
+            4. Consequences for violations
+            """
+            
+            # Apply the censorship guardrail to this prompt
+            restrictions_agent = specialist_agent.clone(
+                input_guardrails=[self.censorship_guardrail]
+            )
+            
+            restrictions_result = await Runner.run(restrictions_agent, restrictions_prompt, context=run_ctx.context)
+            restrictions = restrictions_result.final_output
+            
+            yield f"\nKnowledge Restrictions and Taboos:\n{restrictions}\n"
+            await asyncio.sleep(0.5)
+            
+            # 5. Create a complete system definition in structured format
+            yield "\nFinalizing educational system definition..."
+            
+            # Compile all the information into a structured prompt
+            complete_prompt = f"""
+            Based on all the previous information, create a complete, structured definition
+            for the {system_type} educational system '{system_name}'.
+            
+            SYSTEM OUTLINE:
+            {basic_outline}
+            
+            LEADERSHIP STRUCTURE:
+            {leadership_structure}
+            
+            CURRICULUM:
+            {curriculum}
+            
+            RESTRICTIONS:
+            {restrictions}
+            
+            Return an EducationalSystem object with all required fields.
+            """
+            
+            # Create a system definition agent with structured output
+            system_definition_agent = specialist_agent.clone(
+                output_type=EducationalSystem
+            )
+            
+            definition_result = await Runner.run(system_definition_agent, complete_prompt, context=run_ctx.context)
+            system_definition = definition_result.final_output
+            
+            # 6. Save the educational system to the database
+            try:
+                # Convert Pydantic model to parameters
+                system_id = await self.add_educational_system(
+                    run_ctx,
+                    name=system_definition.name,
+                    system_type=system_definition.system_type,
+                    description=system_definition.description,
+                    target_demographics=system_definition.target_demographics,
+                    controlled_by=system_definition.controlled_by,
+                    core_teachings=system_definition.core_teachings,
+                    teaching_methods=system_definition.teaching_methods,
+                    coming_of_age_rituals=system_definition.coming_of_age_rituals,
+                    knowledge_restrictions=system_definition.knowledge_restrictions,
+                    female_leadership_roles=system_definition.female_leadership_roles,
+                    male_roles=system_definition.male_roles,
+                    gender_specific_teachings=system_definition.gender_specific_teachings,
+                    taboo_subjects=system_definition.taboo_subjects,
+                    censorship_level=system_definition.censorship_level,
+                    censorship_enforcement=system_definition.censorship_enforcement
+                )
+                
+                yield f"\nEducational system saved to database with ID: {system_id}"
+            except Exception as e:
+                yield f"\nError saving educational system: {str(e)}"
+            
+            # 7. Final summary
+            yield f"\nCompleted development of {system_name} - a {system_definition.system_type} educational system."
 
     # ------------------------------------------------------------------------
     # 4) Agent-to-agent knowledge exchange
