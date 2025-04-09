@@ -25,7 +25,6 @@ from db.connection import get_db_connection_context
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from nyx.integrate import get_central_governance, register_with_governance
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
