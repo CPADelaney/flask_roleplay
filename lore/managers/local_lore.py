@@ -203,7 +203,7 @@ class LocalLoreManager(BaseLoreManager):
         self._init_specialized_agents()
         
         # Register function tools
-        self._register_tools()
+        self._()
     
     def _init_specialized_agents(self):
         """Initialize specialized agents for different lore tasks."""
@@ -295,19 +295,53 @@ class LocalLoreManager(BaseLoreManager):
 
     def _register_tools(self):
         """Register function tools with the central registry."""
-        tool_registry.register_tool(self.add_urban_myth, "local_lore")
-        tool_registry.register_tool(self.add_local_history, "local_lore")
-        tool_registry.register_tool(self.add_landmark, "local_lore")
-        tool_registry.register_tool(self.evolve_myth, "myth_evolution")
-        tool_registry.register_tool(self.connect_myth_history, "narrative_connection")
-        tool_registry.register_tool(self.connect_history_landmark, "narrative_connection")
-        tool_registry.register_tool(self.ensure_narrative_consistency, "narrative_consistency")
-        tool_registry.register_tool(self.simulate_myth_transmission, "myth_transmission")
-
-        ### NEW ###
-        tool_registry.register_tool(self.generate_legend_variants, "myth_variants")
-        tool_registry.register_tool(self.develop_tourist_attraction, "tourism_development")
-        tool_registry.register_tool(self.simulate_tradition_dynamics, "oral_vs_written")
+        # Use wrapper functions that handle 'self' parameter properly
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_urban_myth(ctx, *args, **kwargs), 
+            "local_lore"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_local_history(ctx, *args, **kwargs), 
+            "local_lore"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_landmark(ctx, *args, **kwargs), 
+            "local_lore"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.evolve_myth(ctx, *args, **kwargs), 
+            "myth_evolution"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.connect_myth_history(ctx, *args, **kwargs), 
+            "narrative_connection"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.connect_history_landmark(ctx, *args, **kwargs), 
+            "narrative_connection"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.ensure_narrative_consistency(ctx, *args, **kwargs), 
+            "narrative_consistency"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.simulate_myth_transmission(ctx, *args, **kwargs), 
+            "myth_transmission"
+        )
+        
+        # NEW tools
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.generate_legend_variants(ctx, *args, **kwargs), 
+            "myth_variants"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.develop_tourist_attraction(ctx, *args, **kwargs), 
+            "tourism_development"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.simulate_tradition_dynamics(ctx, *args, **kwargs), 
+            "oral_vs_written"
+        )
 
     async def initialize_tables(self):
         """Ensure all local lore tables exist with enhanced fields."""
@@ -442,7 +476,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Adding urban myth: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
     async def add_urban_myth(
         self,
         ctx,
@@ -519,7 +552,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Adding local history event: {event_name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
     async def add_local_history(
         self,
         ctx,
@@ -617,7 +649,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Adding landmark: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
     async def add_landmark(
         self,
         ctx,
@@ -734,7 +765,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Evolving urban myth: {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="myth_evolution")
     async def evolve_myth(
         self,
         ctx,
@@ -978,7 +1008,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Connecting myth {myth_id} to history {history_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="narrative_connection")
     async def connect_myth_history(
         self,
         ctx,
@@ -1109,7 +1138,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Connecting history {history_id} to landmark {landmark_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="narrative_connection")
     async def connect_history_landmark(
         self,
         ctx,
@@ -1270,7 +1298,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Ensuring narrative consistency for location {location_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="narrative_consistency")
     async def ensure_narrative_consistency(
         self,
         ctx,
@@ -1479,7 +1506,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Simulating transmission of myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="myth_transmission")
     async def simulate_myth_transmission(
         self,
         ctx,
@@ -2155,7 +2181,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Creating contradictory legend variants for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="myth_variants")
     async def generate_legend_variants(
         self,
         ctx,
@@ -2234,7 +2259,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Developing tourism for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="tourism_development")
     async def develop_tourist_attraction(
         self,
         ctx,
@@ -2313,7 +2337,6 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Simulating oral vs. written tradition for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="oral_vs_written")
     async def simulate_tradition_dynamics(
         self,
         ctx,
