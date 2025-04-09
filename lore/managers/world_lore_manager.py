@@ -13,6 +13,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+import asyncpg
+
 # Agents SDK (import what you need)
 from agents import Agent, function_tool, Runner, trace, ModelSettings, handoff
 # Or: from agents import Agent, function_tool, Runner, ...
