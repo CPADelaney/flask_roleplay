@@ -60,6 +60,14 @@ from .frameworks.matriarchal import (
 # Utils
 from .utils.theming import MatriarchalThemingUtils
 
+# Managers
+from .managers.geopolitical import GeopoliticalSystemManager
+from .managers.local_lore import LocalLoreManager
+from .managers.religion import ReligionManager
+from .managers.education import EducationalSystemManager
+from .managers.politics import WorldPoliticsManager
+from .managers.world_lore_manager import WorldLoreManager
+
 def _deprecated(func_or_class):
     """Mark a function or class as deprecated with a warning."""
     @functools.wraps(func_or_class)
@@ -130,5 +138,13 @@ __all__ = [
     'PowerExpression',
     
     # Utils
-    'MatriarchalThemingUtils'
+    'MatriarchalThemingUtils',
+    
+    # Additional managers
+    'GeopoliticalSystemManager',
+    'LocalLoreManager',
+    'ReligionManager',
+    'EducationalSystemManager',
+    'WorldPoliticsManager',
+    'WorldLoreManager'
 ]
