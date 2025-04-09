@@ -54,7 +54,7 @@ from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
 from lore.lore_generator import DynamicLoreGenerator
 from lore.validation import ValidationManager
-from lore.error_handler import ErrorHandler
+from lore.error_manager import ErrorHandler
 
 from .nyx_agent_sdk import NyxAgent
 from .nyx_enhanced_system import NyxEnhancedSystem
