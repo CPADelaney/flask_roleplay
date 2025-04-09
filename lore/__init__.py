@@ -35,6 +35,31 @@ from .lore_generator import (
     generate_quest_hooks
 )
 
+# Configuration system
+from .config import LoreConfig, ConfigManager, get_config, get_lore_config
+
+# Core managers and utilities
+from .core.base_manager import BaseLoreManager
+from .core.cache import LoreCache, GLOBAL_LORE_CACHE
+from .core.registry import ManagerRegistry
+from .core.tool_registry import FunctionToolRegistry, tool_registry, registered_tool
+
+# Systems
+from .systems.dynamics import LoreDynamicsSystem, MultiStepPlanner, NarrativeEvaluator
+from .systems.regional_culture import RegionalCultureSystem
+
+# Frameworks
+from .frameworks.matriarchal import (
+    MatriarchalPowerStructureFramework, 
+    PowerHierarchy, 
+    CorePrinciples,
+    HierarchicalConstraint,
+    PowerExpression
+)
+
+# Utils
+from .utils.theming import MatriarchalThemingUtils
+
 def _deprecated(func_or_class):
     """Mark a function or class as deprecated with a warning."""
     @functools.wraps(func_or_class)
@@ -53,6 +78,7 @@ def _deprecated(func_or_class):
 
 # Export the main interface
 __all__ = [
+    # Existing components
     'LoreSystem',
     'register_lore_routes',
     'DynamicLoreGenerator',
@@ -73,5 +99,36 @@ __all__ = [
     'generate_cultural_elements',
     'generate_historical_events',
     'generate_locations',
-    'generate_quest_hooks'
+    'generate_quest_hooks',
+    
+    # Configuration system
+    'LoreConfig',
+    'ConfigManager',
+    'get_config',
+    'get_lore_config',
+    
+    # Core managers and utilities
+    'BaseLoreManager',
+    'LoreCache',
+    'GLOBAL_LORE_CACHE',
+    'ManagerRegistry',
+    'FunctionToolRegistry',
+    'tool_registry',
+    'registered_tool',
+    
+    # Systems
+    'LoreDynamicsSystem',
+    'MultiStepPlanner',
+    'NarrativeEvaluator',
+    'RegionalCultureSystem',
+    
+    # Frameworks
+    'MatriarchalPowerStructureFramework',
+    'PowerHierarchy',
+    'CorePrinciples',
+    'HierarchicalConstraint',
+    'PowerExpression',
+    
+    # Utils
+    'MatriarchalThemingUtils'
 ]
