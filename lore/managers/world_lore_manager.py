@@ -806,9 +806,6 @@ class WorldLoreManager(BaseManager):
                 else:
                     logging.error(f"Invalid step index {step_index} for plan {plan_id}")
 
-# Create a singleton instance if desired
-world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
-
 class MasterCoordinationAgent:
     """
     Master agent for coordinating lore subsystems, ensuring consistency and coherence.
@@ -2174,3 +2171,5 @@ class InconsistencyResolutionAgent(BaseModel):
         else:
             return f"Unknown inconsistency type: {inconsistency['type']}"
 
+# Create a singleton instance if desired
+world_lore_manager = WorldLoreManager(user_id=0, conversation_id=0)
