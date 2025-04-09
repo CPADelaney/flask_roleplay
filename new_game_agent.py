@@ -16,7 +16,7 @@ from logic.calendar import update_calendar_names
 from logic.aggregator_sdk import get_aggregated_roleplay_context
 from npcs.new_npc_creation import NPCCreationHandler
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from lore.dynamic_lore_generator import DynamicLoreGenerator
+from lore.lore_generator import DynamicLoreGenerator
 
 # Import database connections
 from db.connection import get_db_connection_context
