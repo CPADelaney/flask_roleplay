@@ -19,7 +19,6 @@ from .lore_routes import register_lore_routes
 # Core components
 from .lore_generator import DynamicLoreGenerator
 from .integration import NPCLoreIntegration, ConflictIntegration, ContextEnhancer
-from .governance_registration import register_all_lore_modules_with_governance
 
 # Error handling
 from .error_manager import ErrorHandler, LoreError, handle_errors
