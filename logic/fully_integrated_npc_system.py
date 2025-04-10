@@ -38,13 +38,6 @@ from logic.stats_logic import (
     STAT_COMBINATIONS
 )
 
-# Import the new NPC creation system
-from npcs.new_npc_creation import (
-    NPCCreationHandler, 
-    RunContextWrapper, 
-    NPCCreationResult
-)
-
 # Import agent-based architecture components
 from npcs.npc_agent import NPCAgent
 from npcs.npc_agent_system import NPCAgentSystem
@@ -126,6 +119,11 @@ class IntegratedNPCSystem:
             user_id: The user ID
             conversation_id: The conversation ID
         """
+         from npcs.new_npc_creation import (
+            NPCCreationHandler, 
+            RunContextWrapper, 
+            NPCCreationResult
+        )       
         self.user_id = user_id
         self.conversation_id = conversation_id
         
@@ -415,7 +413,12 @@ class IntegratedNPCSystem:
             NPC ID
         """
         logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
-        
+        from npcs.new_npc_creation import (
+            NPCCreationHandler, 
+            RunContextWrapper, 
+            NPCCreationResult
+        )        
+                
         try:
             # Create context for the NPC creation handler
             ctx = RunContextWrapper({
@@ -819,6 +822,11 @@ class IntegratedNPCSystem:
         Returns:
             List of created NPC IDs
         """
+        from npcs.new_npc_creation import (
+            NPCCreationHandler, 
+            RunContextWrapper, 
+            NPCCreationResult
+        )        
         # Create context for the NPC creation handler
         ctx = RunContextWrapper({
             "user_id": self.user_id,
