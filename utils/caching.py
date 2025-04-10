@@ -11,6 +11,7 @@ from datetime import datetime
 import json
 import hashlib
 import zlib
+from functools import wraps
 import sys # Import sys for getsizeof
 
 from prometheus_client import Counter, Histogram, Gauge
@@ -920,6 +921,26 @@ async def delete_cache(key: str):
 
 logger.info("Added wrapper functions: get_cache, set_cache, delete_cache")
 USER_MODEL_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
+
+class CacheDecorator:
+    def cached(self, timeout=300):
+        def decorator(f):
+            @wraps(f)
+            async def decorated_function(*args, **kwargs):
+                # Simple implementation - you might want to enhance this
+                # based on your actual caching needs
+                cache_key = f.__name__ + str(args) + str(kwargs)
+                cached_result = NPC_CACHE.get(cache_key)
+                if cached_result:
+                    return cached_result
+                result = await f(*args, **kwargs)
+                NPC_CACHE.set(cache_key, result, timeout)
+                return result
+            return decorated_function
+        return decorator
+
+# Create an instance to use as a decorator
+cache = CacheDecorator()
 
 
 # --- Remove redundant/example code ---
