@@ -251,11 +251,27 @@ class GeopoliticalSystemManager(BaseLoreManager):
 
     def _register_tools(self):
         """Register function tools with the central registry."""
-        tool_registry.register_tool(self.add_geographic_region, "geopolitical")
-        tool_registry.register_tool(self.generate_world_nations, "geopolitical")
-        tool_registry.register_tool(self.simulate_conflict, "geopolitical_conflict")
-        tool_registry.register_tool(self.resolve_border_dispute, "geopolitical_conflict")
-        tool_registry.register_tool(self.predict_geopolitical_evolution, "geopolitical_prediction")
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_geographic_region(ctx, *args, **kwargs), 
+            "geopolitical"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.generate_world_nations(ctx, *args, **kwargs), 
+            "geopolitical"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.simulate_conflict(ctx, *args, **kwargs), 
+            "geopolitical_conflict"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.resolve_border_dispute(ctx, *args, **kwargs), 
+            "geopolitical_conflict"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.predict_geopolitical_evolution(ctx, *args, **kwargs), 
+            "geopolitical_prediction"
+        )
+        # These don't need wrappers as they are standalone functions
         tool_registry.register_tool(simulate_trade, "economic_trade")
         tool_registry.register_tool(simulate_geography_impact, "climate_geography_effect")
         tool_registry.register_tool(simulate_espionage, "covert_operations")
