@@ -26,6 +26,36 @@ from logic.conflict_system.conflict_agents import (
 
 logger = logging.getLogger(__name__)
 
+async def get_central_governance(user_id: int, conversation_id: int) -> 'NyxUnifiedGovernor':
+    """
+    Get or create a central governance instance for a specific user and conversation.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        NyxUnifiedGovernor instance
+    """
+    # Import NyxUnifiedGovernor here to avoid circular imports
+    from nyx.nyx_governance import NyxUnifiedGovernor
+    
+    # Check if instance exists in cache
+    cache_key = f"governance_{user_id}_{conversation_id}"
+    
+    # Try to get from cache
+    cached = CACHE_TTL.get(cache_key)
+    if cached:
+        return cached
+    
+    # Create new instance
+    governor = NyxUnifiedGovernor(user_id, conversation_id)
+    
+    # Store in cache
+    CACHE_TTL[cache_key] = governor
+    
+    return governor
+    
 class ConflictSystemIntegration:
     """
     Integration class for conflict system with Nyx governance.
