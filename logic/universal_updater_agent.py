@@ -564,15 +564,12 @@ async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any
         return {"success": False, "reason": permission["reasoning"]}
     
     try:
-        # Import locally to avoid circular import
-        from logic.universal_updater import apply_universal_updates_async
-        
         # Ensure user_id and conversation_id are set in updates
         updates["user_id"] = user_id
         updates["conversation_id"] = conversation_id
         
         async with get_db_connection_context() as conn:
-            # Apply updates
+            # Apply updates using the function defined in this same file
             result = await apply_universal_updates_async(
                 user_id,
                 conversation_id,
@@ -592,6 +589,8 @@ async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any
     except Exception as e:
         logging.error(f"Error applying universal updates: {e}")
         return {"success": False, "error": str(e)}
+
+
 
 # -------------------------------------------------------------------------------
 # Guardrail Functions
