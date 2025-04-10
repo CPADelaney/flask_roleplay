@@ -15,11 +15,6 @@ import contextlib
 from db.connection import get_db_connection_context
 
 # Import existing modules to utilize their functionality
-from logic.social_links import (
-    create_social_link,
-    update_link_type_and_level,
-    add_link_event
-)
 from logic.time_cycle import (
     advance_time_with_events,
     get_current_time,
@@ -1225,6 +1220,7 @@ class IntegratedNPCSystem:
         Raises:
             RelationshipError: If there's an issue creating the relationship
         """
+        from logic.social_links import create_social_link                                    
         try:
             # Using create_social_link
             link_id = create_social_link(
@@ -1285,6 +1281,7 @@ class IntegratedNPCSystem:
         Raises:
             RelationshipError: If there's an issue updating the relationship
         """
+        from logic.social_links import update_link_type_and_level
         try:
             # Get the relationship details before update
             async with get_db_connection_context() as conn:
@@ -1380,6 +1377,7 @@ class IntegratedNPCSystem:
         Raises:
             RelationshipError: If there's an issue adding the event
         """
+        from logic.social_links import add_link_event      
         try:
             # Get the relationship details
             async with get_db_connection_context() as conn:
