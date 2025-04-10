@@ -612,35 +612,35 @@ async def add_dream_sequence(user_id: int, conversation_id: int) -> Optional[Dic
         current_stage = await get_current_narrative_stage(user_id, conversation_id)
         stage_name = current_stage.name if current_stage else NARRATIVE_STAGES[0].name
         
-            # Dream templates
-            templates = [
-                "You're sitting in a chair as {npc1} circles you slowly. \"Show me your hands,\" she says. "
-                "You extend them, surprised to find intricate strings wrapped around each finger, extending upward. "
-                "\"Do you see who's holding them?\" she asks. You look up, but the ceiling is mirrored, "
-                "showing only your own face looking back down at you, smiling with an expression that isn't yours.",
+        # Dream templates
+        templates = [
+            "You're sitting in a chair as {npc1} circles you slowly. \"Show me your hands,\" she says. "
+            "You extend them, surprised to find intricate strings wrapped around each finger, extending upward. "
+            "\"Do you see who's holding them?\" she asks. You look up, but the ceiling is mirrored, "
+            "showing only your own face looking back down at you, smiling with an expression that isn't yours.",
                 
-                "You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, "
-                "doorways leading to impossible spaces. Your phone rings. It's {npc1}. \"Where are you?\" you ask desperately. "
-                "\"I'm right here,\" she says, her voice coming both from the phone and from behind you. "
-                "\"I've always been right here. You're the one who's lost.\"",
+            "You're searching your home frantically, calling {npc1}'s name. The rooms shift and expand, "
+            "doorways leading to impossible spaces. Your phone rings. It's {npc1}. \"Where are you?\" you ask desperately. "
+            "\"I'm right here,\" she says, her voice coming both from the phone and from behind you. "
+            "\"I've always been right here. You're the one who's lost.\"",
                 
-                "You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. "
-                "\"I don't understand why you're struggling,\" she says, not moving yet somehow keeping pace beside you. "
-                "\"You stopped walking on your own long ago.\" You look down to find your legs have merged with the floor entirely, "
-                "indistinguishable from the material beneath.",
+            "You're trying to walk away from {npc1}, but your feet sink deeper into the floor with each step. "
+            "\"I don't understand why you're struggling,\" she says, not moving yet somehow keeping pace beside you. "
+            "\"You stopped walking on your own long ago.\" You look down to find your legs have merged with the floor entirely, "
+            "indistinguishable from the material beneath.",
                 
-                "You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, "
-                "saying words you didn't intend. The audience nods approvingly. \"Much better,\" whispers {npc2} from beside you. "
-                "\"Your ideas were never as good as hers anyway.\"",
+            "You're giving a presentation to a room full of people, but every time you speak, your voice comes out as {npc1}'s voice, "
+            "saying words you didn't intend. The audience nods approvingly. \"Much better,\" whispers {npc2} from beside you. "
+            "\"Your ideas were never as good as hers anyway.\"",
                 
-                "You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. "
-                "In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, "
-                "all versions of her turn to look at you simultaneously. \"Which one is real?\" they ask in unison. \"The one you needed, or the one who needed you?\"",
+            "You're walking through an unfamiliar house, opening doors that should lead outside but only reveal more rooms. "
+            "In each room, {npc1} is engaged in a different activity, wearing a different expression. In the final room, "
+            "all versions of her turn to look at you simultaneously. \"Which one is real?\" they ask in unison. \"The one you needed, or the one who needed you?\"",
                 
-                "You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, "
-                "looking up at you and conversing, their voices perfectly clear despite the water. "
-                "\"They still think they're above it all,\" says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."
-            ]
+            "You're swimming in deep water. Below you, {npc1} and {npc2} walk along the bottom, "
+            "looking up at you and conversing, their voices perfectly clear despite the water. "
+            "\"They still think they're above it all,\" says {npc1}, and they both laugh. You realize you can't remember how to reach the surface."
+        ]
             
         # Choose a template
         dream_template = random.choice(templates)
