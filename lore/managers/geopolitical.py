@@ -238,7 +238,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             instructions="Simulate the effects of climate and geography on political development.",
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.7),
-            tools=[climate_geography_effect]  # Add the function tool directly
+            tools=[simulate_geography_impact]  # Add the function tool directly
         )
         
         self.covert_operations_agent = Agent(
@@ -246,7 +246,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             instructions="Simulate espionage and covert operations between nations.",
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.8),
-            tools=[covert_operations]  # Add the function tool directly
+            tools=[simulate_espionage]  # Add the function tool directly
         )
 
     def _register_tools(self):
