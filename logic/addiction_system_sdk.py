@@ -883,3 +883,65 @@ async def process_addiction_directive(directive_data: Dict[str, Any], user_id: i
     result = await addiction_context.directive_handler._handle_action_directive(directive_data)
     
     return result
+async def get_addiction_status(
+    user_id: int,
+    conversation_id: int,
+    player_name: str
+) -> Dict[str, Any]:
+    """
+    Get comprehensive addiction status for a player.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        player_name: Name of the player
+        
+    Returns:
+        Dictionary with addiction status
+    """
+    # Create addiction context
+    addiction_context = AddictionContext(user_id, conversation_id)
+    await addiction_context.initialize()
+    
+    # Use existing function to get addiction levels
+    levels_result = await check_addiction_levels(
+        RunContextWrapper(addiction_context),
+        player_name
+    )
+    
+    # Format the addiction status with labels
+    result = {
+        "has_addictions": levels_result.get("has_addictions", False),
+        "addictions": {}
+    }
+    
+    # Process general addictions
+    addiction_levels = levels_result.get("addiction_levels", {})
+    for addiction_type, level in addiction_levels.items():
+        if level > 0:  # Only include active addictions
+            result["addictions"][addiction_type] = {
+                "level": level,
+                "label": get_addiction_label(level),
+                "type": "general"
+            }
+    
+    # Process NPC-specific addictions
+    npc_specific = levels_result.get("npc_specific_addictions", [])
+    for addiction in npc_specific:
+        addiction_type = addiction.get("addiction_type")
+        npc_id = addiction.get("npc_id")
+        npc_name = addiction.get("npc_name", f"NPC#{npc_id}")
+        level = addiction.get("level", 0)
+        
+        if level > 0:  # Only include active addictions
+            key = f"{addiction_type}_{npc_id}"
+            result["addictions"][key] = {
+                "level": level,
+                "label": get_addiction_label(level),
+                "type": "npc_specific",
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "addiction_type": addiction_type
+            }
+    
+    return result
