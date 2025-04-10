@@ -203,7 +203,7 @@ class LocalLoreManager(BaseLoreManager):
         self._init_specialized_agents()
         
         # Register function tools
-        self._()
+        self._register_tools()
     
     def _init_specialized_agents(self):
         """Initialize specialized agents for different lore tasks."""
