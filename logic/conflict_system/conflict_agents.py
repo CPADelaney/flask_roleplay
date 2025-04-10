@@ -17,9 +17,49 @@ from agents import Agent, function_tool, handoff, GuardrailFunctionOutput, RunCo
 from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
-from logic.npc_relationship_manager import get_relationship_status, get_manipulation_leverage
+from npcs.npc_relationship import NPCRelationshipManager
+from logic.relationship_integration import RelationshipIntegration
+
 
 logger = logging.getLogger(__name__)
+
+async def get_relationship_status(user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id):
+    """Adapter function that uses existing relationship code."""
+    if entity1_type == 'npc':
+        manager = NPCRelationshipManager(entity1_id, user_id, conversation_id)
+        return await manager.get_relationship_details(entity2_type, entity2_id)
+    else:
+        # For other entity types, use the integration class
+        integrator = RelationshipIntegration(user_id, conversation_id)
+        return await integrator.get_relationship(entity1_type, entity1_id, entity2_type, entity2_id)
+
+async def get_manipulation_leverage(user_id, conversation_id, manipulator_id, target_id):
+    """Adapter function that calculates manipulation leverage."""
+    manager = NPCRelationshipManager(manipulator_id, user_id, conversation_id)
+    relationship = await manager.get_relationship_details('npc', target_id)
+    
+    # Calculate leverage based on relationship factors
+    leverage = 0.0
+    link_level = relationship.get("link_level", 0)
+    dynamics = relationship.get("dynamics", {})
+    
+    # Base calculation on relationship level
+    if link_level > 75:
+        leverage = 0.8
+    elif link_level > 50:
+        leverage = 0.5
+    elif link_level > 25:
+        leverage = 0.3
+    
+    # Adjust based on relationship dynamics if available
+    control = dynamics.get("control", 0)
+    leverage += control / 100.0 * 0.2  # Add up to 0.2 based on control level
+    
+    return {
+        "leverage_score": min(1.0, leverage),
+        "relationship_level": link_level,
+        "relationship_type": relationship.get("link_type", "neutral")
+    }
 
 # Context class for sharing data between agents
 class ConflictContext:
