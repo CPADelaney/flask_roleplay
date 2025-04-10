@@ -94,7 +94,7 @@ class BaseEntity(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class World(BaseEntity):
     """World/Setting model"""
