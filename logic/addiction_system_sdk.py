@@ -727,6 +727,49 @@ async def process_addiction_update(
         "target_npc_id": target_npc_id
     }
 
+async def process_addiction_effects(
+    user_id: int,
+    conversation_id: int,
+    player_name: str,
+    addiction_status: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Process addiction effects based on the provided addiction status.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        player_name: Name of the player
+        addiction_status: Addiction status from get_addiction_status
+        
+    Returns:
+        Dictionary with addiction effects
+    """
+    # Create addiction context
+    addiction_context = AddictionContext(user_id, conversation_id)
+    await addiction_context.initialize()
+    
+    # Generate effects using existing function
+    effects_result = await generate_addiction_effects(
+        RunContextWrapper(addiction_context),
+        player_name,
+        addiction_status
+    )
+    
+    return effects_result
+
+def get_addiction_label(level: int) -> str:
+    """
+    Get the label for an addiction level.
+    
+    Args:
+        level: Addiction level (0-4)
+        
+    Returns:
+        Label for the addiction level
+    """
+    return ADDICTION_LEVELS.get(level, "Unknown")
+
 async def check_addiction_status(
     user_id: int,
     conversation_id: int,
