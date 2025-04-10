@@ -5,8 +5,7 @@ import json
 import random
 from typing import Dict, Any, List
 from db.connection import get_db_connection_context
-from quart import Blueprint, request, jsonify, session, redirect, url_for
-from logic.social_links import add_link_event  # We'll import or define these from your social_links
+from quart import Blueprint, request, jsonify, session, redirect, url_for  # We'll import or define these from your social_links
 
 stats_bp = Blueprint('stats_bp', __name__)
 
@@ -600,6 +599,7 @@ def check_social_link_milestones():
     you'd incorporate them here. 
     Currently just uses a broad 'player is involved' approach.
     """
+    from logic.social_links import add_link_event
     conn = get_db_connection()
     cursor = conn.cursor()
 
