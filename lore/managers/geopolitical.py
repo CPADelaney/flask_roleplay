@@ -114,9 +114,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
         
         # Initialize specialized agents
         self._init_specialized_agents()
-        
-        # Register function tools
-        self._register_tools()
     
     def _init_specialized_agents(self):
         """Initialize specialized agents for different tasks."""
@@ -249,32 +246,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             tools=[simulate_espionage]  # Add the function tool directly
         )
 
-    def _register_tools(self):
-        """Register function tools with the central registry."""
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.add_geographic_region(ctx, *args, **kwargs), 
-            "geopolitical"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.generate_world_nations(ctx, *args, **kwargs), 
-            "geopolitical"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.simulate_conflict(ctx, *args, **kwargs), 
-            "geopolitical_conflict"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.resolve_border_dispute(ctx, *args, **kwargs), 
-            "geopolitical_conflict"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.predict_geopolitical_evolution(ctx, *args, **kwargs), 
-            "geopolitical_prediction"
-        )
-        # These don't need wrappers as they are standalone functions
-        tool_registry.register_tool(simulate_trade, "economic_trade")
-        tool_registry.register_tool(simulate_geography_impact, "climate_geography_effect")
-        tool_registry.register_tool(simulate_espionage, "covert_operations")
 
     async def _initialize_tables(self):
         """Initialize necessary tables with enhanced fields."""
@@ -1378,3 +1349,7 @@ async def simulate_espionage(ctx: RunContextWrapper, agent_name: str, target_nat
         "secrecy_level": secrecy_level
     }
     return json.dumps(espionage_details)
+                                
+tool_registry.register_tool(simulate_trade, "economic_trade")
+tool_registry.register_tool(simulate_geography_impact, "climate_geography_effect")
+tool_registry.register_tool(simulate_espionage, "covert_operations")
