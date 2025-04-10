@@ -15,11 +15,15 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime
 
 # LangChain imports
+from langchain_community.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+from langchain_core.vectorstores import VectorStore
+from langchain_core.embeddings import Embeddings
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
-from langchain.llms import HuggingFaceHub, HuggingFacePipeline
-from langchain.schema import Document
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
 from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 from typing import List
