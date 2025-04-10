@@ -2258,43 +2258,43 @@ class IntegratedNPCSystem:
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
 
-async def retrieve_relevant_memories(self, context, limit=5, memory_types=None):
-        """
-        Unified memory retrieval method that delegates to appropriate implementation.
-        
-        Args:
-            context: Query context (text or dict)
-            limit: Maximum memories to retrieve
-            memory_types: Optional filter for memory types
+    async def retrieve_relevant_memories(self, context, limit=5, memory_types=None):
+            """
+            Unified memory retrieval method that delegates to appropriate implementation.
             
-        Returns:
-            List of relevant memories
-        """
-        memory_types = memory_types or ["observation", "reflection", "semantic", "secondhand"]
-        
-        # Extract query text for cache key
-        query_text = self._extract_query_text(context)
-        cache_key = f"mem_{hash(query_text)}_{limit}"
-        
-        # Check cache
-        cached_memories = self._check_memory_cache(cache_key)
-        if cached_memories:
-            return cached_memories
-        
-        try:
-            # Delegate to appropriate implementation
-            if MEMORY_SYSTEM_AVAILABLE:
-                memories = await self._retrieve_memories_optimized(context, limit, memory_types)
-            else:
-                memories = await self._retrieve_memories_fallback(context, limit, memory_types)
+            Args:
+                context: Query context (text or dict)
+                limit: Maximum memories to retrieve
+                memory_types: Optional filter for memory types
+                
+            Returns:
+                List of relevant memories
+            """
+            memory_types = memory_types or ["observation", "reflection", "semantic", "secondhand"]
             
-            # Cache the result
-            self._cache_memories(cache_key, memories)
-            return memories
-        except Exception as e:
-            logger.error(f"Error retrieving memories: {e}")
-            # Return emergency fallback memories
-            return self._get_fallback_memories()
+            # Extract query text for cache key
+            query_text = self._extract_query_text(context)
+            cache_key = f"mem_{hash(query_text)}_{limit}"
+            
+            # Check cache
+            cached_memories = self._check_memory_cache(cache_key)
+            if cached_memories:
+                return cached_memories
+            
+            try:
+                # Delegate to appropriate implementation
+                if MEMORY_SYSTEM_AVAILABLE:
+                    memories = await self._retrieve_memories_optimized(context, limit, memory_types)
+                else:
+                    memories = await self._retrieve_memories_fallback(context, limit, memory_types)
+                
+                # Cache the result
+                self._cache_memories(cache_key, memories)
+                return memories
+            except Exception as e:
+                logger.error(f"Error retrieving memories: {e}")
+                # Return emergency fallback memories
+                return self._get_fallback_memories()
     
     def _extract_query_text(self, context):
         """Extract query text from context."""
