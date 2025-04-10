@@ -1,10 +1,11 @@
 # routes/universal_update.py
+
 from flask import Blueprint, request, jsonify, session
 import asyncio
 import asyncpg
 import os
 from db.connection import get_db_connection_context
-from logic.universal_updater import apply_universal_updates_async
+from logic.universal_updater_agent import apply_universal_updates_async 
 
 universal_bp = Blueprint("universal_bp", __name__)
 
