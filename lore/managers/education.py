@@ -239,7 +239,7 @@ class EducationalSystemManager(BaseLoreManager):
         tool_registry.register_tool(self.add_knowledge_tradition, "education")
         tool_registry.register_tool(self.generate_educational_systems, "education")
         tool_registry.register_tool(self.generate_knowledge_traditions, "education")
-        tool_registry.register_tool(self.streopment, "education_streaming")
+        tool_registry.register_tool(self.stream_educational_development, "education_streaming") 
 
     async def ensure_initialized(self):
         """Ensure system is initialized."""
