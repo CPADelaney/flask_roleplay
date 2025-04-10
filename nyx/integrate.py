@@ -62,8 +62,8 @@ from .response_filter import ResponseFilter
 from .nyx_planner import NyxPlanner
 from .nyx_task_integration import NyxTaskIntegration
 from memory.memory_integration import MemoryIntegration
-from .scene_manager_sdk import SceneManager
-from .user_model_sdk import UserModel
+from .scene_manager_sdk import SceneContext
+from .user_model_sdk import UserModelContext, UserModelManager
 
 logger = logging.getLogger(__name__)
 
