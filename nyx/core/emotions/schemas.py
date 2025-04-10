@@ -85,7 +85,7 @@ class NeurochemicalState(BaseModel):
     
     class Config:
         """Pydantic config"""
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "nyxamine": {"value": 0.5, "baseline": 0.5, "decay_rate": 0.05},
                 "seranix": {"value": 0.6, "baseline": 0.6, "decay_rate": 0.03},
