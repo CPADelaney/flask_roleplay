@@ -872,3 +872,214 @@ async def register_with_governance(user_id: int, conversation_id: int):
         duration_minutes=24*60  # 24 hours
     )
     logging.info("Time cycle agent registered with Nyx governance")
+
+# Add this to logic/time_cycle.py
+
+class ActivityManager:
+    """
+    Manages activities in the game, providing methods to process, classify, 
+    and handle effects of player activities.
+    
+    This class serves as a connection point between player input, 
+    the time system, and activity effects.
+    """
+    
+    def __init__(self):
+        """Initialize the activity manager."""
+        self.activity_types = list(TIME_CONSUMING_ACTIVITIES.keys()) + list(OPTIONAL_ACTIVITIES.keys())
+        self.activity_classifiers = {
+            # Simple keyword mappings for activity detection
+            "sleep": ["sleep", "rest", "nap", "bed", "tired"],
+            "work_shift": ["work", "job", "shift", "office"],
+            "class_attendance": ["class", "lecture", "study", "school"],
+            "social_event": ["party", "gathering", "social", "event", "meet"],
+            "training": ["train", "practice", "exercise", "workout"],
+            "extended_conversation": ["talk", "discuss", "conversation", "chat"],
+            "personal_time": ["relax", "chill", "alone", "personal", "me time"],
+            "quick_chat": ["say hi", "greet", "hello", "hey"],
+            "observe": ["look", "watch", "observe", "see"],
+            "check_phone": ["phone", "message", "text", "call"]
+        }
+        
+        # Cache for recently processed activities
+        self.recent_activities = {}
+        
+        logger.info("ActivityManager initialized")
+    
+    async def process_activity(self, user_id: int, conversation_id: int, 
+                               player_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process a player activity to determine type, effects, and time advancement.
+        
+        Args:
+            user_id: The user ID
+            conversation_id: The conversation ID
+            player_input: Text description of player activity
+            context: Additional context information
+            
+        Returns:
+            Dictionary with activity processing results
+        """
+        # Create default context if none provided
+        if context is None:
+            context = {}
+            
+        # Check if activity type is explicitly provided in context
+        if "activity_type" in context:
+            activity_type = context["activity_type"]
+        else:
+            # Classify the activity based on input
+            activity_type = self._classify_activity(player_input, context)
+        
+        # Determine if the activity should advance time
+        advance_info = should_advance_time(activity_type)
+        
+        # Calculate effects based on activity type
+        effects = self._calculate_activity_effects(activity_type, player_input, context)
+        
+        # Cache this activity
+        cache_key = f"{user_id}:{conversation_id}:{hash(player_input)}"
+        self.recent_activities[cache_key] = {
+            "activity_type": activity_type,
+            "processed_at": datetime.now(),
+            "advances_time": advance_info["should_advance"]
+        }
+        
+        # Create and return result
+        result = {
+            "activity_type": activity_type,
+            "time_advance": advance_info,
+            "effects": effects,
+            "intensity": self._calculate_intensity(player_input, context)
+        }
+        
+        logger.info(f"Processed activity '{activity_type}' for user {user_id}")
+        return result
+    
+    def _classify_activity(self, player_input: str, context: Dict[str, Any] = None) -> str:
+        """
+        Classify player input into an activity type using keyword matching
+        and context analysis.
+        
+        Args:
+            player_input: Text description of player activity
+            context: Additional context information
+            
+        Returns:
+            Classified activity type
+        """
+        # Normalize input
+        input_lower = player_input.lower()
+        
+        # Location-based context can affect classification
+        location = context.get("location", "").lower() if context else ""
+        
+        # Check each activity type's keywords
+        matches = {}
+        for activity_type, keywords in self.activity_classifiers.items():
+            score = 0
+            for keyword in keywords:
+                if keyword in input_lower:
+                    score += 1
+            if score > 0:
+                matches[activity_type] = score
+        
+        # If we have matches, return the highest scoring one
+        if matches:
+            max_score = max(matches.values())
+            top_matches = [k for k, v in matches.items() if v == max_score]
+            return top_matches[0]  # Return first top match
+        
+        # Apply location-based heuristics for better classification
+        if location:
+            if "bed" in location or "bedroom" in location:
+                if "lie" in input_lower or "sit" in input_lower:
+                    return "rest"
+            elif "class" in location or "school" in location:
+                return "class_attendance"
+            elif "work" in location or "office" in location:
+                return "work_shift"
+            # Add more location-based rules as needed
+        
+        # Fall back to classification function from time_cycle.py
+        return classify_player_input(player_input)
+    
+    def _calculate_activity_effects(self, activity_type: str, 
+                                  player_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Calculate effects of an activity on resources and stats.
+        
+        Args:
+            activity_type: Type of activity
+            player_input: Text description of player activity
+            context: Additional context information
+            
+        Returns:
+            Dictionary with calculated effects
+        """
+        effects = {}
+        
+        # Get base effects from predefined activities
+        if activity_type in TIME_CONSUMING_ACTIVITIES:
+            base_effects = TIME_CONSUMING_ACTIVITIES[activity_type].get("stat_effects", {})
+            effects.update(base_effects)
+        elif activity_type in OPTIONAL_ACTIVITIES:
+            base_effects = OPTIONAL_ACTIVITIES[activity_type].get("stat_effects", {})
+            effects.update(base_effects)
+        
+        # Adjust effects based on player input and context
+        intensity = self._calculate_intensity(player_input, context)
+        
+        # Scale effects by intensity
+        for stat, value in effects.items():
+            effects[stat] = int(value * intensity)
+        
+        # Apply random variation (±20%)
+        for stat, value in effects.items():
+            variation = random.uniform(0.8, 1.2)
+            effects[stat] = int(value * variation)
+        
+        return effects
+    
+    def _calculate_intensity(self, player_input: str, context: Dict[str, Any] = None) -> float:
+        """
+        Calculate the intensity of an activity based on player input.
+        
+        Args:
+            player_input: Text description of player activity
+            context: Additional context information
+            
+        Returns:
+            Intensity value between 0.5 and 1.5
+        """
+        # Default intensity
+        intensity = 1.0
+        
+        # Intensity modifiers based on keywords
+        intensity_keywords = {
+            # Intensity increasers
+            "intensely": 0.3,
+            "vigorously": 0.3,
+            "hard": 0.2,
+            "thoroughly": 0.2,
+            "completely": 0.2,
+            "aggressively": 0.3,
+            
+            # Intensity decreasers
+            "lightly": -0.2,
+            "casually": -0.2,
+            "briefly": -0.3,
+            "quickly": -0.3,
+            "halfheartedly": -0.4
+        }
+        
+        # Apply modifiers based on keywords in input
+        input_lower = player_input.lower()
+        for keyword, modifier in intensity_keywords.items():
+            if keyword in input_lower:
+                intensity += modifier
+        
+        # Ensure intensity stays within reasonable bounds
+        intensity = max(0.5, min(1.5, intensity))
+        
+        return intensity
