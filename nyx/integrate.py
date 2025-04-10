@@ -64,6 +64,7 @@ from .nyx_task_integration import NyxTaskIntegration
 from memory.memory_integration import MemoryIntegration
 from .scene_manager_sdk import SceneContext
 from .user_model_sdk import UserModelContext, UserModelManager
+from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
