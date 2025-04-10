@@ -5,6 +5,7 @@ import json
 import random
 from typing import Dict, Any, List
 from db.connection import get_db_connection_context
+from quart import Blueprint, request, jsonify, session, redirect, url_for
 from logic.social_links import add_link_event  # We'll import or define these from your social_links
 
 stats_bp = Blueprint('stats_bp', __name__)
