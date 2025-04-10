@@ -11,7 +11,7 @@ import asyncpg
 from typing import Dict, List, Any, Optional
 
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
-from logic.npc_agents import NPCAgentSystem  # Your existing NPC system
+from npcs.npc_agent_system import NPCAgentSystem  # Your existing NPC system
 from db.connection import get_db_connection_context
 
 from agents import Agent, function_tool, Runner, ModelSettings, trace
