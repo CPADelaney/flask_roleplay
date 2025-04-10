@@ -119,7 +119,7 @@ class IntegratedNPCSystem:
             user_id: The user ID
             conversation_id: The conversation ID
         """
-         from npcs.new_npc_creation import (
+        from npcs.new_npc_creation import (
             NPCCreationHandler, 
             RunContextWrapper, 
             NPCCreationResult
