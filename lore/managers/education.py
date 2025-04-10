@@ -152,8 +152,6 @@ class EducationalSystemManager(BaseLoreManager):
         self.censorship_guardrail = CensorshipGuardrail()
         self.strict_censorship_guardrail = CensorshipGuardrail(strict_mode=True)
         
-        # Register this instance with the tool registry
-        self._register_tools()
 
     def _init_specialized_agents(self):
         """Initialize specialized agents for different educational domains."""
@@ -231,29 +229,6 @@ class EducationalSystemManager(BaseLoreManager):
             ),
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.7)
-        )
-
-    def _register_tools(self):
-        """Register function tools with the central registry."""
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.add_educational_system(ctx, *args, **kwargs), 
-            "education"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.add_knowledge_tradition(ctx, *args, **kwargs), 
-            "education"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.generate_educational_systems(ctx, *args, **kwargs), 
-            "education"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.generate_knowledge_traditions(ctx, *args, **kwargs), 
-            "education"
-        )
-        tool_registry.register_tool(
-            lambda ctx, *args, **kwargs: self.stream_educational_development(ctx, *args, **kwargs), 
-            "education_streaming"
         )
 
     async def ensure_initialized(self):
