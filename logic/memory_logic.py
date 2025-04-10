@@ -1537,12 +1537,11 @@ async def check_for_automated_reveals(user_id: int, conversation_id: int) -> lis
         return []
     
 @staticmethod
-async def get_perception_difficulty(user_id: int, conversation_id: int, npc_id: int) -> dict: # Changed to async def
+async def get_perception_difficulty(user_id: int, conversation_id: int, npc_id: int) -> dict:
     """Calculate perception difficulty against NPC mask using asyncpg."""
     try:
         async with get_db_connection_context() as conn:
              # Fetch mask, NPC stats, and player stats
-             # Could potentially run these fetches concurrently with asyncio.gather
              mask_data_json = await conn.fetchval("""
                   SELECT mask_data FROM NPCMasks
                   WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
@@ -1558,12 +1557,20 @@ async def get_perception_difficulty(user_id: int, conversation_id: int, npc_id: 
 
              if not npc_row:
                   return {"error": f"NPC {npc_id} not found", "npc_id": npc_id}
+                  
+             dominance, cruelty = npc_row['dominance'], npc_row['cruelty']
 
              # Assume player name is 'Chase' - adapt if needed
              player_row = await conn.fetchrow("""
                   SELECT mental_resilience, confidence FROM PlayerStats
                   WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
              """, user_id, conversation_id)
+             
+             # Default values if player not found
+             mental_resilience, confidence = 50, 50
+             if player_row:
+                 mental_resilience = player_row['mental_resilience']
+                 confidence = player_row['confidence']
 
              # Decode mask (Sync)
              mask_data = {}
@@ -1574,64 +1581,35 @@ async def get_perception_difficulty(user_id: int, conversation_id: int, npc_id: 
              if not isinstance(mask_data, dict): mask_data = {}
              mask = NPCMask.from_dict(mask_data)
             
-            # Get NPC stats
-            cursor.execute("""
-                SELECT dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-            """, (user_id, conversation_id, npc_id))
+             # Calculate base difficulty based on integrity
+             base_difficulty = mask.integrity / 2  # 0-50
             
-            npc_row = cursor.fetchone()
-            if not npc_row:
-                return {"error": f"NPC with id {npc_id} not found"}
-                
-            dominance, cruelty = npc_row
+             # Add difficulty based on dominance/cruelty (higher = better at deception)
+             stat_factor = (dominance + cruelty) / 4  # 0-50
             
-            # Get player stats
-            cursor.execute("""
-                SELECT mental_resilience, confidence
-                FROM PlayerStats
-                WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-            """, (user_id, conversation_id))
+             # Calculate total difficulty
+             total_difficulty = base_difficulty + stat_factor
             
-            player_row = cursor.fetchone()
+             # Calculate player's perception ability
+             perception_ability = (mental_resilience + confidence) / 2
             
-            if player_row:
-                mental_resilience, confidence = player_row
-            else:
-                mental_resilience, confidence = 50, 50  # Default values
+             # Calculate final difficulty rating
+             if perception_ability > 0:
+                 relative_difficulty = total_difficulty / perception_ability
+             else:
+                 relative_difficulty = total_difficulty
             
-            mask = NPCMask.from_dict(mask_data)
-            
-            # Calculate base difficulty based on integrity
-            base_difficulty = mask.integrity / 2  # 0-50
-            
-            # Add difficulty based on dominance/cruelty (higher = better at deception)
-            stat_factor = (dominance + cruelty) / 4  # 0-50
-            
-            # Calculate total difficulty
-            total_difficulty = base_difficulty + stat_factor
-            
-            # Calculate player's perception ability
-            perception_ability = (mental_resilience + confidence) / 2
-            
-            # Calculate final difficulty rating
-            if perception_ability > 0:
-                relative_difficulty = total_difficulty / perception_ability
-            else:
-                relative_difficulty = total_difficulty
-            
-            difficulty_rating = ""
-            if relative_difficulty < 0.5:
-                difficulty_rating = "Very Easy"
-            elif relative_difficulty < 0.8:
-                difficulty_rating = "Easy"
-            elif relative_difficulty < 1.2:
-                difficulty_rating = "Moderate"
-            elif relative_difficulty < 1.5:
-                difficulty_rating = "Difficult"
-            else:
-                difficulty_rating = "Very Difficult"
+             difficulty_rating = ""
+             if relative_difficulty < 0.5:
+                 difficulty_rating = "Very Easy"
+             elif relative_difficulty < 0.8:
+                 difficulty_rating = "Easy"
+             elif relative_difficulty < 1.2:
+                 difficulty_rating = "Moderate"
+             elif relative_difficulty < 1.5:
+                 difficulty_rating = "Difficult"
+             else:
+                 difficulty_rating = "Very Difficult"
             
              return {
                   "npc_id": npc_id, "mask_integrity": mask.integrity,
