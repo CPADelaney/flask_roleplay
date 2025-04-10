@@ -235,11 +235,26 @@ class EducationalSystemManager(BaseLoreManager):
 
     def _register_tools(self):
         """Register function tools with the central registry."""
-        tool_registry.register_tool(self.add_educational_system, "education")
-        tool_registry.register_tool(self.add_knowledge_tradition, "education")
-        tool_registry.register_tool(self.generate_educational_systems, "education")
-        tool_registry.register_tool(self.generate_knowledge_traditions, "education")
-        tool_registry.register_tool(self.stream_educational_development, "education_streaming") 
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_educational_system(ctx, *args, **kwargs), 
+            "education"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.add_knowledge_tradition(ctx, *args, **kwargs), 
+            "education"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.generate_educational_systems(ctx, *args, **kwargs), 
+            "education"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.generate_knowledge_traditions(ctx, *args, **kwargs), 
+            "education"
+        )
+        tool_registry.register_tool(
+            lambda ctx, *args, **kwargs: self.stream_educational_development(ctx, *args, **kwargs), 
+            "education_streaming"
+        )
 
     async def ensure_initialized(self):
         """Ensure system is initialized."""
