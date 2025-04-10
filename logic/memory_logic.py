@@ -3,7 +3,7 @@
 import os
 import json
 import random
-from typing import Optional
+from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
 # Removed: import psycopg2
 import asyncpg # Added
