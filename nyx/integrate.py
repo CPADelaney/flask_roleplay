@@ -22,6 +22,8 @@ from memory.memory_nyx_integration import (
 )
 from memory.memory_agent_sdk import create_memory_agent, MemorySystemContext
 
+from lore.validation import ValidationManager
+
 import asyncpg
 
 # Import the unified governance system
@@ -70,7 +72,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize components
 lore_system = LoreSystem()
-lore_validator = LoreValidator()
+lore_validator = ValidationManager()
 error_handler = ErrorHandler()
 
 async def generate_lore_with_governance(
