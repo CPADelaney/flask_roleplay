@@ -51,12 +51,12 @@ from npcs.new_npc_creation import (
 )
 
 # Import agent-based architecture components
-from logic.npc_agents.npc_agent import NPCAgent
-from logic.npc_agents.agent_system import NPCAgentSystem
-from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
-from logic.npc_agents.decision_engine import NPCDecisionEngine
-from logic.npc_agents.relationship_manager import NPCRelationshipManager
-from logic.npc_agents.memory_manager import EnhancedMemoryManager
+from npcs.npc_agent import NPCAgent
+from npcs.npc_agent_system import NPCAgentSystem
+from npcs.npc_coordinator import NPCAgentCoordinator
+from npcs.npc_decisions import NPCDecisionEngine
+from npcs.npc_relationship import NPCRelationshipManager
+from npcs.npc_memory import MemoryContext, NPCMemoryManager
 
 # Import for memory system
 try:
