@@ -29,7 +29,6 @@ from logic.resource_management import ResourceManager
 from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from config import CONFIG
 
 # Import IntegratedNPCSystem
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
@@ -580,7 +579,7 @@ async def process_npc_interactions_batch(npc_system, nearby_npcs, user_input, ac
     interaction_type = determine_interaction_type(user_input, activity_type)
     
     # Process in batches of 3 for better performance
-    batch_size = CONFIG.NPC_BATCH_SIZE  # Should be 3 by default based on config.py
+    batch_size = 3  # Should be 3 by default based on config.py
     npc_responses = []
     
     # Process each batch concurrently
