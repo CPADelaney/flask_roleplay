@@ -472,74 +472,77 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 Your response MUST be valid JSON with exactly this structure:
 ```json
 {json.dumps(example_output, indent=2)}
-⚠️ IMPORTANT:
+```
 
-DO NOT include code fences (```) in your response
-DO NOT include any explanations or extra text
-DO NOT modify the key name "memory"
-Return ONLY the JSON object
-You MUST return exactly 3 memories
+⚠️ IMPORTANT: 
+- DO NOT include code fences (```) in your response
+- DO NOT include any explanations or extra text
+- DO NOT modify the key name "memory"
+- Return ONLY the JSON object
+- You MUST return exactly 3 memories
 """
-messages = [{"role": "system", "content": system_instructions}]
-logger.info("Calling GPT for shared memory generation...")
-Implement retry logic with backoff (async sleep)
-max_retries = 2
-last_exception = None
-for attempt in range(1, max_retries + 1):
-try:
-logger.info(f"Memory generation attempt {attempt}/{max_retries}")
-      # Get OpenAI client
-      openai_client = get_openai_client()
-      
-      # Call the OpenAI API asynchronously
-      response = await openai_client.chat.responses.create(
-          model="gpt-4o", 
-          messages=messages,
-          temperature=0.7,
-          response_format={"type": "json_object"}
-      )
+    messages = [{"role": "system", "content": system_instructions}]
+    logger.info("Calling GPT for shared memory generation...")
 
-      memory_output = response.choices[0].message.content.strip()
-      logger.info(f"GPT response received (length: {len(memory_output)})")
+    # Implement retry logic with backoff (async sleep)
+    max_retries = 2
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Memory generation attempt {attempt}/{max_retries}")
+            
+            # Get OpenAI client
+            openai_client = get_openai_client()
+            
+            # Call the OpenAI API asynchronously using the new Responses API
+            response = await openai_client.chat.responses.create(
+                model="gpt-4o", 
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"}
+            )
 
-      # Validate JSON structure and memory count
-      if memory_output.startswith("{") and memory_output.endswith("}"):
-          try:
-              memory_data = json.loads(memory_output)
-              if "memory" in memory_data and isinstance(memory_data["memory"], list):
-                  memories = memory_data["memory"]
-                  
-                  # Ensure we have exactly 3 memories as required
-                  if len(memories) < 3:
-                      logger.warning(f"Only received {len(memories)} memories, expecting 3")
-                      raise ValueError(f"Invalid number of memories: {len(memories)}, need exactly 3")
-                  
-                  # If we have more than 3, trim to exactly 3
-                  if len(memories) > 3:
-                      logger.warning(f"Received {len(memories)} memories, trimming to 3")
-                      memory_data["memory"] = memories[:3]
-                      memory_output = json.dumps(memory_data)
-                      
-                  # Valid JSON with exactly 3 memories, return it
-                  return memory_output
-          except json.JSONDecodeError as e:
-              logger.error(f"Invalid JSON in response: {e}")
-      else:
-          logger.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
+            memory_output = response.choices[0].message.content.strip()
+            logger.info(f"GPT response received (length: {len(memory_output)})")
 
-  except Exception as e:
-      last_exception = e
-      logger.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}", exc_info=True)
+            # Validate JSON structure and memory count
+            if memory_output.startswith("{") and memory_output.endswith("}"):
+                try:
+                    memory_data = json.loads(memory_output)
+                    if "memory" in memory_data and isinstance(memory_data["memory"], list):
+                        memories = memory_data["memory"]
+                        
+                        # Ensure we have exactly 3 memories as required
+                        if len(memories) < 3:
+                            logger.warning(f"Only received {len(memories)} memories, expecting 3")
+                            raise ValueError(f"Invalid number of memories: {len(memories)}, need exactly 3")
+                        
+                        # If we have more than 3, trim to exactly 3
+                        if len(memories) > 3:
+                            logger.warning(f"Received {len(memories)} memories, trimming to 3")
+                            memory_data["memory"] = memories[:3]
+                            memory_output = json.dumps(memory_data)
+                            
+                        # Valid JSON with exactly 3 memories, return it
+                        return memory_output
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in response: {e}")
+            else:
+                logger.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
 
-  # Wait before retrying
-  if attempt < max_retries:
-      wait_time = 2 ** attempt  # Exponential backoff (2, 4 seconds)
-      logger.info(f"Retrying in {wait_time} seconds...")
-      await asyncio.sleep(wait_time)
-If all retries failed
-logger.error(f"Failed to generate memory after {max_retries} attempts. Last error: {last_exception}")
-return None
+        except Exception as e:
+            last_exception = e
+            logger.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}", exc_info=True)
 
+        # Wait before retrying
+        if attempt < max_retries:
+            wait_time = 2 ** attempt  # Exponential backoff (2, 4 seconds)
+            logger.info(f"Retrying in {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+
+    # If all retries failed
+    logger.error(f"Failed to generate memory after {max_retries} attempts. Last error: {last_exception}")
+    return None
 
 
 def extract_or_create_memory_fallback(text_output, npc_name, target_name):
