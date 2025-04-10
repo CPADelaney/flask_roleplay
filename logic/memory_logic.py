@@ -361,11 +361,27 @@ async def fetch_formatted_locations(user_id: int, conversation_id: int) -> str: 
         return "Error processing location data.\n"
 
 
-async def get_shared_memory(user_id: int, conversation_id: int, relationship: dict, npc_name: str, archetype_summary: str = "", archetype_extras_summary: str = "") -> Optional[str]: # Changed to async def
-    """Generates shared memory text using GPT, incorporating DB lookups."""
+async def get_shared_memory(user_id: int, conversation_id: int, relationship: dict, 
+                           npc_name: str, archetype_summary: str = "", 
+                           archetype_extras_summary: str = "") -> Optional[str]:
+    """
+    Generates shared memory text using GPT, incorporating DB lookups.
+    
+    Args:
+        user_id: User ID for database context
+        conversation_id: Conversation ID for database context
+        relationship: Dictionary containing relationship details
+        npc_name: Name of the NPC
+        archetype_summary: Summary of NPC archetype (optional)
+        archetype_extras_summary: Additional archetype details (optional)
+        
+    Returns:
+        JSON string containing generated memories, or None if generation fails
+    """
     logger.info(f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}")
 
     mega_description = "an undefined setting"
+    current_setting = "Default Setting Name"
     locations_table_formatted = "No location data available.\n"
 
     try:
@@ -375,20 +391,18 @@ async def get_shared_memory(user_id: int, conversation_id: int, relationship: di
             # Use the existing async helper function, passing the connection
             stored_settings = await get_stored_setting(conn, user_id, conversation_id)
             mega_description = stored_settings.get("EnvironmentDesc", "an undefined setting")
-            current_setting = stored_settings.get("CurrentSetting", "Default Setting Name") # Use this too?
+            current_setting = stored_settings.get("CurrentSetting", "Default Setting Name")
             logger.info(f"Retrieved environment desc (first 100): {mega_description[:100]}...")
+            logger.info(f"Current setting: {current_setting}")
 
-            # Fetch formatted locations using the same connection
-            logger.debug("Fetching and formatting current locations...")
-            # We need fetch_formatted_locations to accept an optional connection or refactor it
-            # For now, let's call the standalone async version (which gets its own connection)
-            # Optimization: Pass `conn` to fetch_formatted_locations if refactored
+        # Fetch formatted locations
+        logger.debug("Fetching and formatting current locations...")
         locations_table_formatted = await fetch_formatted_locations(user_id, conversation_id)
         logger.info(f"Formatted locations retrieved:\n{locations_table_formatted}")
 
     except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-         logger.error(f"Database error fetching context for get_shared_memory: {db_err}", exc_info=True)
-         # Continue with default descriptions
+        logger.error(f"Database error fetching context for get_shared_memory: {db_err}", exc_info=True)
+        # Continue with default descriptions
 
     except Exception as e:
         logger.error(f"Unexpected error fetching context in get_shared_memory: {e}", exc_info=True)
@@ -412,6 +426,8 @@ async def get_shared_memory(user_id: int, conversation_id: int, relationship: di
             f"The afternoon we spent by the lake skipping stones remains vivid in my mind. The cool mist on my face and the soft laughter we shared created a rare moment of peace between us, momentarily setting aside our complicated history."
         ]
     }
+    
+    # Incorporate current_setting into the system instructions
     system_instructions = f"""
 # Memory Generation for {npc_name}
 
@@ -421,6 +437,7 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 
 ## Setting Information
 - **Current World:** {mega_description}
+- **Current Setting:** {current_setting}
 - **Key Locations:**
 {locations_table_formatted}
 - **Additional Context:**
@@ -432,7 +449,7 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 1. Generate THREE distinct first-person memories from {npc_name}'s perspective about interactions with {target_name}.
    - If no relationships exist, create three defining life moment memories instead.
 2. Each memory must be 2-3 sentences written in {npc_name}'s authentic voice.
-3. Set each memory in a specific location from the provided list or another contextually appropriate location.
+3. Set each memory in a specific location from the provided list or another contextually appropriate location in {current_setting}.
 4. Include at least one vivid sensory detail (sight, sound, smell, taste, or touch) per memory.
 5. Show clear emotional responses from both {npc_name} and {target_name}.
 6. Include different types of interactions:
@@ -455,78 +472,75 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 Your response MUST be valid JSON with exactly this structure:
 ```json
 {json.dumps(example_output, indent=2)}
-```
+⚠️ IMPORTANT:
 
-⚠️ IMPORTANT: 
-- DO NOT include code fences (```) in your response
-- DO NOT include any explanations or extra text
-- DO NOT modify the key name "memory"
-- Return ONLY the JSON object
+DO NOT include code fences (```) in your response
+DO NOT include any explanations or extra text
+DO NOT modify the key name "memory"
+Return ONLY the JSON object
+You MUST return exactly 3 memories
 """
 messages = [{"role": "system", "content": system_instructions}]
 logger.info("Calling GPT for shared memory generation...")
-
-# Implement retry logic with backoff (async sleep)
+Implement retry logic with backoff (async sleep)
 max_retries = 2
 last_exception = None
 for attempt in range(1, max_retries + 1):
-    try:
-        logger.info(f"Memory generation attempt {attempt}/{max_retries}")
-        # *** CRITICAL: Ensure get_openai_client() returns an ASYNC client ***
-        # If it returns a SYNC client, use asyncio.to_thread:
-        # response = await asyncio.to_thread(
-        #      get_openai_client().chat.completions.create,
-        #      model="gpt-4o",
-        #      messages=messages,
-        #      temperature=0.7,
-        #      response_format={"type": "json_object"}
-        # )
-        # Assuming ASYNC client:
-        response = await get_openai_client().chat.completions.create(
-            model="gpt-4o", # Or your preferred model
-            messages=messages,
-            temperature=0.7,
-            response_format={"type": "json_object"} # Force JSON output if using compatible models
-        )
+try:
+logger.info(f"Memory generation attempt {attempt}/{max_retries}")
+      # Get OpenAI client
+      openai_client = get_openai_client()
+      
+      # Call the OpenAI API asynchronously
+      response = await openai_client.chat.responses.create(
+          model="gpt-4o", 
+          messages=messages,
+          temperature=0.7,
+          response_format={"type": "json_object"}
+      )
 
-        memory_output = response.choices[0].message.content.strip()
-        logger.info(f"GPT response received (length: {len(memory_output)})")
+      memory_output = response.choices[0].message.content.strip()
+      logger.info(f"GPT response received (length: {len(memory_output)})")
 
-        # Validate JSON structure
-        if memory_output.startswith("{") and memory_output.endswith("}"):
-            try:
-                memory_data = json.loads(memory_output)
-                if "memory" in memory_data and isinstance(memory_data["memory"], list) and len(memory_data["memory"]) >= 1: # Allow fewer than 3?
-                     # Pad if necessary? Or just return what we got? Let's return what we got.
-                     # while len(memory_data["memory"]) < 3:
-                     #    memory_data["memory"].append(f"A simple memory involving {target_name} was formed.")
-                     # return json.dumps(memory_data)
-                    return memory_output # Return valid JSON string
-                else:
-                    logger.warning("Response missing 'memory' array or array too short.")
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in response: {e}")
-        else:
-            logger.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
+      # Validate JSON structure and memory count
+      if memory_output.startswith("{") and memory_output.endswith("}"):
+          try:
+              memory_data = json.loads(memory_output)
+              if "memory" in memory_data and isinstance(memory_data["memory"], list):
+                  memories = memory_data["memory"]
+                  
+                  # Ensure we have exactly 3 memories as required
+                  if len(memories) < 3:
+                      logger.warning(f"Only received {len(memories)} memories, expecting 3")
+                      raise ValueError(f"Invalid number of memories: {len(memories)}, need exactly 3")
+                  
+                  # If we have more than 3, trim to exactly 3
+                  if len(memories) > 3:
+                      logger.warning(f"Received {len(memories)} memories, trimming to 3")
+                      memory_data["memory"] = memories[:3]
+                      memory_output = json.dumps(memory_data)
+                      
+                  # Valid JSON with exactly 3 memories, return it
+                  return memory_output
+          except json.JSONDecodeError as e:
+              logger.error(f"Invalid JSON in response: {e}")
+      else:
+          logger.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
 
-        # If validation failed, maybe retry or fallback
-        last_exception = ValueError("Invalid response format from AI") # Set placeholder error
+  except Exception as e:
+      last_exception = e
+      logger.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}", exc_info=True)
 
-    except Exception as e: # Catch API errors, timeouts, etc.
-        last_exception = e
-        logger.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}", exc_info=True)
-
-    # Wait before retrying
-    if attempt < max_retries:
-        wait_time = 2 ** attempt # Exponential backoff (2, 4 seconds)
-        logger.info(f"Retrying in {wait_time} seconds...")
-        await asyncio.sleep(wait_time) # Use async sleep
-
-# If all retries failed
+  # Wait before retrying
+  if attempt < max_retries:
+      wait_time = 2 ** attempt  # Exponential backoff (2, 4 seconds)
+      logger.info(f"Retrying in {wait_time} seconds...")
+      await asyncio.sleep(wait_time)
+If all retries failed
 logger.error(f"Failed to generate memory after {max_retries} attempts. Last error: {last_exception}")
-# Return a fallback JSON string or None
-# return create_memory_fallback(npc_name, target_name) # This is sync, fine
-return None # Indicate failure more clearly than fallback sometimes
+return None
+
+
 
 def extract_or_create_memory_fallback(text_output, npc_name, target_name):
     """
