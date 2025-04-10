@@ -58,6 +58,12 @@ from npcs.npc_decisions import NPCDecisionEngine
 from npcs.npc_relationship import NPCRelationshipManager
 from npcs.npc_memory import MemoryContext, NPCMemoryManager
 
+from npcs.belief_system_integration import NPCBeliefSystemIntegration, enhance_npc_with_belief_system
+from npcs.lore_context_manager import LoreContextManager
+from npcs.npc_behavior import BehaviorEvolution, NPCBehavior
+from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManager
+from npcs.npc_perception import EnvironmentPerception, PerceptionContext
+
 # Import for memory system
 try:
     from memory.wrapper import MemorySystem
@@ -400,90 +406,308 @@ class IntegratedNPCSystem:
     # NPC CREATION AND MANAGEMENT
     #=================================================================
     
-    async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
+    async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female", specific_traits: Dict[str, Any] = None) -> int:
         """
-        Create a new NPC using the new NPCCreationHandler.
+        Create a new NPC using the enhanced NPCCreationHandler.
         
         Args:
             environment_desc: Description of the environment
             day_names: List of day names
             sex: Gender of the NPC
+            specific_traits: Dictionary with specific traits to incorporate (optional)
             
         Returns:
             NPC ID
         """
         logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
         
-        # Exponential backoff settings
-        retry_count = 0
-        max_retries = 3
-        backoff_factor = 1.5
+        try:
+            # Create context for the NPC creation handler
+            ctx = RunContextWrapper({
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+            
+            # Use the enhanced NPC creation system
+            creation_result = await self.npc_creation_handler.create_npc_with_context(
+                environment_desc=environment_desc,
+                archetype_names=None,  # Let the system choose appropriate archetypes
+                specific_traits=specific_traits or {"sex": sex},
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            npc_id = creation_result.npc_id
+            npc_name = creation_result.npc_name
+            current_location = creation_result.current_location
+            memories = creation_result.memories
+            
+            # Initialize advanced systems for the new NPC
+            await self._initialize_advanced_npc_systems(
+                npc_id=npc_id,
+                npc_name=npc_name,
+                memories=memories,
+                current_location=current_location
+            )
+            
+            logger.info(f"Successfully created NPC {npc_id} ({npc_name})")
+            return npc_id
+            
+        except Exception as e:
+            logger.error(f"Error creating NPC: {e}")
+            # Try fallback approach
+            return await self._create_minimal_fallback_npc(
+                f"NPC_{datetime.now().timestamp()}",
+                sex
+            )
+    
+    async def _initialize_advanced_npc_systems(
+        self, 
+        npc_id: int, 
+        npc_name: str, 
+        memories: List[Dict[str, Any]],
+        current_location: str
+    ):
+        """Initialize all advanced systems for a new NPC."""
+        try:
+            # Initialize NPC agent as before
+            if npc_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            
+            agent = self.agent_system.npc_agents[npc_id]
+            
+            # Enhance agent with belief system
+            enhance_npc_with_belief_system(agent)
+            
+            # Initialize perception system
+            agent.perception_system = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
+            
+            # Initialize behavior evolution
+            agent.behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
+            
+            # Initialize learning adaptation
+            agent.learning_system = NPCLearningAdaptation(self.user_id, self.conversation_id, npc_id)
+            await agent.learning_system.initialize()
+            
+            # Initialize lore context
+            agent.lore_context = LoreContextManager(self.user_id, self.conversation_id)
+            
+            # Process memories as before
+            memory_system = await agent._get_memory_system()
+            for memory in memories:
+                memory_text = memory if isinstance(memory, str) else memory.get("text", "")
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance="medium",
+                    tags=["creation", "origin"]
+                )
         
-        while retry_count <= max_retries:
-            try:
-                # Create context for the NPC creation handler
-                ctx = RunContextWrapper({
-                    "user_id": self.user_id,
-                    "conversation_id": self.conversation_id
-                })
-                
-                # Use the new NPC creation system
-                creation_result = await self.npc_creation_handler.create_npc_with_context(
-                    environment_desc=environment_desc,
-                    archetype_names=None,  # Let the system choose appropriate archetypes
-                    specific_traits={"sex": sex},  # Pass the requested sex
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id
-                )
-                
-                npc_id = creation_result.npc_id
-                npc_name = creation_result.npc_name
-                current_location = creation_result.current_location
-                memories = creation_result.memories
-                
-                # Create agent and initialize in background
-                asyncio.create_task(
-                    self._initialize_npc_agent(
-                        npc_id=npc_id,
-                        npc_name=npc_name,
-                        memories=memories,
-                        current_location=current_location,
-                        time_of_day="Morning"  # Default or get from time system
-                    )
-                )
-                
-                # Update cache with new NPC
-                self.npc_cache[npc_id] = {
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "last_updated": datetime.now()
-                }
-                
-                logger.info(f"Successfully created NPC {npc_id} ({npc_name})")
-                return npc_id
-                
-            except Exception as e:
-                # Handle the retry logic
-                retry_count += 1
-                error_msg = f"Error creating NPC (attempt {retry_count}/{max_retries}): {e}"
-                logger.error(error_msg)
-                
-                if retry_count <= max_retries:
-                    wait_time = (backoff_factor ** retry_count) * 0.5
-                    logger.warning(f"Retrying in {wait_time:.1f}s")
-                    await asyncio.sleep(wait_time)
-                else:
-                    # Try minimal fallback NPC on final retry
-                    try:
-                        # Create minimal viable NPC with just essential fields
-                        minimal_npc_id = await self._create_minimal_fallback_npc(
-                            f"NPC_{datetime.now().timestamp()}",
-                            sex
-                        )
-                        return minimal_npc_id
-                    except Exception as fallback_error:
-                        logger.error(f"Even fallback NPC creation failed: {fallback_error}")
-                        raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
+        except Exception as e:
+            logger.error(f"Error initializing advanced systems for NPC {npc_id}: {e}")
+
+    async def process_event_for_beliefs(self, event_text: str, event_type: str, npc_ids: List[int], factuality: float = 1.0) -> Dict[str, Any]:
+        """
+        Process a game event to generate beliefs for multiple NPCs.
+        
+        Args:
+            event_text: Description of the event
+            event_type: Type of event
+            npc_ids: List of NPC IDs who witnessed the event
+            factuality: Base factuality level for beliefs
+            
+        Returns:
+            Information about the beliefs formed
+        """
+        # Create a belief system integration if not already cached
+        belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
+        await belief_system.initialize()
+        
+        # Process the event for beliefs
+        result = await belief_system.process_event_for_beliefs(
+            event_text=event_text,
+            event_type=event_type,
+            npc_ids=npc_ids,
+            factuality=factuality
+        )
+        
+        return result
+    
+    async def process_conversation_for_beliefs(self, conversation_text: str, speaker_id: Union[int, str], listener_id: int, topic: str = "general", credibility: float = 0.7) -> Dict[str, Any]:
+        """
+        Process a conversation to generate beliefs for an NPC.
+        
+        Args:
+            conversation_text: The content of what was said
+            speaker_id: ID of the speaker (NPC ID or 'player')
+            listener_id: NPC ID of the listener
+            topic: Topic of conversation
+            credibility: How credible the speaker is (0.0-1.0)
+            
+        Returns:
+            Information about the beliefs formed
+        """
+        belief_system = NPCBeliefSystemIntegration(self.user_id, self.conversation_id)
+        await belief_system.initialize()
+        
+        result = await belief_system.process_conversation_for_beliefs(
+            conversation_text=conversation_text,
+            speaker_id=speaker_id,
+            listener_id=listener_id,
+            topic=topic,
+            credibility=credibility
+        )
+        
+        return result
+
+    async def perceive_environment_for_npc(self, npc_id: int, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Have an NPC perceive their environment.
+        
+        Args:
+            npc_id: ID of the NPC
+            context: Context information for perception
+            
+        Returns:
+            Perception results
+        """
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        
+        # Initialize perception system if not already done
+        if not hasattr(agent, "perception_system"):
+            agent.perception_system = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
+        
+        # Convert to PerceptionContext if needed
+        if not isinstance(context, PerceptionContext):
+            context = PerceptionContext(**context)
+        
+        # Perform perception
+        perception_result = await agent.perception_system.perceive_environment(context)
+        
+        return perception_result.dict()
+
+    async def evaluate_npc_scheming(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Evaluate if an NPC should adjust their behavior, escalate plans, or set new secret goals.
+        
+        Args:
+            npc_id: ID of the NPC to evaluate
+            
+        Returns:
+            Dictionary with scheming adjustments
+        """
+        # Create a behavior evolution instance
+        behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
+        
+        # Evaluate scheming
+        adjustments = await behavior_evolution.evaluate_npc_scheming(npc_id)
+        
+        # Apply adjustments
+        if "error" not in adjustments:
+            await behavior_evolution.apply_scheming_adjustments(npc_id, adjustments)
+        
+        return adjustments
+    
+    async def evaluate_npc_scheming_for_all(self, npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """
+        Evaluate and update scheming behavior for multiple NPCs.
+        
+        Args:
+            npc_ids: List of NPC IDs to evaluate
+            
+        Returns:
+            Dictionary mapping NPC IDs to their scheming adjustments
+        """
+        behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
+        return await behavior_evolution.evaluate_npc_scheming_for_all(npc_ids)
+
+    async def record_player_interaction_for_npc(self, npc_id: int, interaction_type: str, interaction_details: Dict[str, Any], player_response: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Record a player interaction to drive NPC learning and adaptation.
+        
+        Args:
+            npc_id: ID of the NPC
+            interaction_type: Type of interaction
+            interaction_details: Details about the interaction
+            player_response: Optional information about how the player responded
+            
+        Returns:
+            Learning outcomes and adaptation results
+        """
+        # Create a learning system for this NPC
+        learning_system = NPCLearningAdaptation(self.user_id, self.conversation_id, npc_id)
+        await learning_system.initialize()
+        
+        # Record the interaction
+        result = await learning_system.record_player_interaction(
+            interaction_type=interaction_type,
+            interaction_details=interaction_details,
+            player_response=player_response
+        )
+        
+        return result
+    
+    async def process_recent_memories_for_learning(self, npc_id: int, days: int = 7) -> Dict[str, Any]:
+        """
+        Process recent memories to drive NPC learning.
+        
+        Args:
+            npc_id: ID of the NPC
+            days: Number of days of memories to process
+            
+        Returns:
+            Learning outcomes and adaptation results
+        """
+        learning_system = NPCLearningAdaptation(self.user_id, self.conversation_id, npc_id)
+        await learning_system.initialize()
+        
+        result = await learning_system.process_recent_memories_for_learning(days=days)
+        
+        return result
+
+    async def get_lore_context_for_npc(self, npc_id: int, context_type: str) -> Dict[str, Any]:
+        """
+        Get lore context for an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            context_type: Type of context to retrieve
+            
+        Returns:
+            Lore context information
+        """
+        lore_manager = LoreContextManager(self.user_id, self.conversation_id)
+        
+        context = await lore_manager.get_lore_context(npc_id, context_type)
+        
+        return context
+    
+    async def handle_lore_change(self, lore_change: Dict[str, Any], source_npc_id: int, affected_npcs: List[int]) -> Dict[str, Any]:
+        """
+        Handle a lore change, analyzing impact and propagating to NPCs.
+        
+        Args:
+            lore_change: Details of the lore change
+            source_npc_id: ID of the NPC who is the source of the change
+            affected_npcs: List of NPC IDs affected by the change
+            
+        Returns:
+            Analysis and propagation results
+        """
+        lore_manager = LoreContextManager(self.user_id, self.conversation_id)
+        
+        result = await lore_manager.handle_lore_change(
+            lore_change=lore_change,
+            source_npc_id=source_npc_id,
+            affected_npcs=affected_npcs
+        )
+        
+        return result
 
     async def _initialize_npc_agent(
         self, 
@@ -3114,10 +3338,9 @@ class IntegratedNPCSystem:
     
     async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
-        Process scheduled activities for all NPCs using the agent system.
-        Optimized for better performance with many NPCs through batching.
+        Process scheduled activities for all NPCs using enhanced systems.
         """
-        logger.info("Processing scheduled activities")
+        logger.info("Processing scheduled activities with enhanced systems")
         
         try:
             # Get current time information for context
@@ -3132,7 +3355,7 @@ class IntegratedNPCSystem:
                 "activity_type": "scheduled"
             }
             
-            # Get all NPCs with their current locations - batch query for performance
+            # Get all NPCs with their current locations
             npc_data = await self._fetch_all_npc_data_for_activities()
             
             # Count total NPCs to process
@@ -3142,59 +3365,75 @@ class IntegratedNPCSystem:
                 
             logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
             
-            # For very large NPC counts, process in batches rather than all at once
-            batch_size = 20  # Adjust based on system capabilities
+            # Process in batches for better performance
             npc_responses = []
+            behavior_updates = {}
+            learning_updates = {}
             
-            # Process in batches
-            for i in range(0, total_npcs, batch_size):
-                batch = list(npc_data.items())[i:i+batch_size]
-                
-                # Create tasks for this batch
-                batch_tasks = []
-                for npc_id, data in batch:
-                    batch_tasks.append(
-                        self._process_single_npc_activity(npc_id, data, base_context)
-                    )
-                
-                # Run batch concurrently
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Process batch results
-                for result in batch_results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Error processing scheduled activity: {result}")
-                    elif result:  # Skip None results
-                        npc_responses.append(result)
+            # Process each NPC
+            for npc_id, data in npc_data.items():
+                try:
+                    # Get or create NPC agent
+                    if npc_id not in self.agent_system.npc_agents:
+                        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
                     
-                # If we have multiple batches, add a small delay between them to reduce system load
-                if i + batch_size < total_npcs:
-                    await asyncio.sleep(0.1)
+                    agent = self.agent_system.npc_agents[npc_id]
+                    
+                    # Enhance with advanced systems if needed
+                    if not hasattr(agent, "perception_system"):
+                        agent.perception_system = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
+                    
+                    if not hasattr(agent, "behavior_evolution"):
+                        agent.behavior_evolution = BehaviorEvolution(self.user_id, self.conversation_id)
+                    
+                    if not hasattr(agent, "learning_system"):
+                        agent.learning_system = NPCLearningAdaptation(self.user_id, self.conversation_id, npc_id)
+                        await agent.learning_system.initialize()
+                    
+                    # Perform perception
+                    perception_context = {
+                        "location": data["location"],
+                        "time_of_day": base_context["time_of_day"],
+                        "description": f"Scheduled activity at {data['location']}"
+                    }
+                    
+                    await agent.perception_system.perceive_environment(perception_context)
+                    
+                    # Process behavior evolution
+                    behavior_result = await agent.behavior_evolution.evaluate_npc_scheming(npc_id)
+                    behavior_updates[npc_id] = behavior_result
+                    
+                    # Process learning
+                    learning_result = await agent.learning_system.process_recent_memories_for_learning(days=1)
+                    learning_updates[npc_id] = learning_result
+                    
+                    # Perform scheduled activity
+                    activity_result = await agent.perform_scheduled_activity()
+                    
+                    if activity_result:
+                        # Format result for output
+                        formatted_result = {
+                            "npc_id": npc_id,
+                            "npc_name": data["name"],
+                            "location": data["location"],
+                            "action": activity_result.get("action", {}),
+                            "result": activity_result.get("result", {}),
+                            "behavior_update": behavior_result,
+                            "learning_update": learning_result
+                        }
+                        
+                        npc_responses.append(formatted_result)
                 
-            # After all NPCs processed, do agent system coordination
-            try:
-                # Call the internal coordination method
-                agent_responses = await self._process_coordination_activities(base_context)
-            except Exception as e:
-                logger.error(f"Error in agent system coordination: {e}")
-                agent_responses = []
+                except Exception as e:
+                    logger.error(f"Error processing activity for NPC {npc_id}: {e}")
             
-            # Combined results from individual processing and agent system
-            combined_results = {
+            # Return combined results
+            return {
                 "npc_responses": npc_responses,
-                "agent_system_responses": agent_responses,
-                "count": len(npc_responses) + len(agent_responses)
+                "behavior_updates": behavior_updates,
+                "learning_updates": learning_updates,
+                "count": len(npc_responses)
             }
-            
-            # Add summary statistics
-            combined_results["stats"] = {
-                "total_npcs": total_npcs,
-                "successful_activities": len(npc_responses),
-                "time_of_day": time_of_day,
-                "processing_time": None  # Could add timing info here
-            }
-            
-            return combined_results
                 
         except Exception as e:
             error_msg = f"Error processing NPC scheduled activities: {e}"
@@ -3657,7 +3896,7 @@ class IntegratedNPCSystem:
     #=================================================================
     # HIGH-LEVEL INTERACTION HANDLERS
     #=================================================================
-    
+         
     async def handle_npc_interaction(
         self, 
         npc_id: int, 
@@ -3666,7 +3905,7 @@ class IntegratedNPCSystem:
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Handle interaction between player and NPC with improved performance.
+        Handle interaction between player and NPC with improved systems.
         
         Args:
             npc_id: ID of the NPC
@@ -3685,6 +3924,12 @@ class IntegratedNPCSystem:
             return cached_result
         
         try:
+            # Get or create NPC agent
+            if npc_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            
+            agent = self.agent_system.npc_agents[npc_id]
+            
             # Create player action object
             player_action = {
                 "type": interaction_type,
@@ -3692,75 +3937,68 @@ class IntegratedNPCSystem:
                 "target_npc_id": npc_id
             }
             
-            # Prepare context with defaults
+            # Prepare context
             context_obj = context or {}
             context_obj["interaction_type"] = interaction_type
             
-            # Get or create NPC agent
-            if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            # Environment perception
+            if not hasattr(agent, "perception_system"):
+                agent.perception_system = EnvironmentPerception(npc_id, self.user_id, self.conversation_id)
             
-            # Process through the agent system using transaction management
-            # UPDATED: Use async context manager for transaction
-            async with self._transaction_context() as conn:
-                # Get NPC details for performance boosting (single query)
-                npc_details = await self._fetch_npc_basic_data(conn, npc_id)
-                
-                if not npc_details:
-                    raise NPCNotFoundError(f"NPC with ID {npc_id} not found")
-                
-                # Get relationships (single query)
-                links = await self._fetch_npc_relationships(npc_id, conn)
-                npc_details["relationships"] = links
-                
-                # Add to context
-                context_obj["npc_details"] = npc_details
-                
-                # Process the agent action
-                result = await self.agent_system.handle_player_action(player_action, context_obj)
-                
-                # Process the activity and potentially advance time
-                activity_result = await self.process_player_activity(player_input, context_obj)
-                
-                # Combine results
-                combined_result = {
-                    "npc_id": npc_id,
-                    "interaction_type": interaction_type,
-                    "npc_responses": result.get("npc_responses", []),
-                    "events": [],
-                    "memories_created": [],
-                    "stat_changes": {},
-                    "time_advanced": activity_result.get("time_advanced", False)
-                }
-                
-                # Add time advancement info if applicable
-                if activity_result.get("time_advanced", False):
-                    combined_result["new_time"] = activity_result.get("new_time")
-                    
-                    # If time advanced, add any events that occurred
-                    for event in activity_result.get("events", []):
-                        combined_result["events"].append(event)
-                
-                # Calculate and apply stat effects to player based on interaction type
-                stat_changes = await self._calculate_stat_changes(npc_details, interaction_type)
-                
-                if stat_changes:
-                    # Apply stat changes within transaction
-                    await self._apply_stat_changes_transaction(
-                        conn,
-                        stat_changes, 
-                        f"Interaction with {npc_details['npc_name']}: {interaction_type}"
-                    )
-                    combined_result["stat_changes"] = stat_changes
-                
-                # Cache result if successful (with TTL)
-                self._cache_interaction_result(cache_key, combined_result)
-                
-                return combined_result
-                
-        except NPCNotFoundError as e:
-            logger.error(f"NPC not found: {e}")
-            return {"error": str(e), "npc_id": npc_id}
+            perception_context = {
+                "location": context_obj.get("location"),
+                "time_of_day": context_obj.get("time_of_day"),
+                "description": f"Player says: {player_input}",
+                "player_action": player_action
+            }
+            
+            perception_result = await agent.perception_system.perceive_environment(perception_context)
+            
+            # Process through agent system
+            npc_response = await self.agent_system.handle_player_action(player_action, context_obj)
+            
+            # Record for learning and adaptation
+            if not hasattr(agent, "learning_system"):
+                agent.learning_system = NPCLearningAdaptation(self.user_id, self.conversation_id, npc_id)
+                await agent.learning_system.initialize()
+            
+            interaction_details = {
+                "summary": f"Player said: {player_input}",
+                "type": interaction_type
+            }
+            
+            learning_result = await agent.learning_system.record_player_interaction(
+                interaction_type=interaction_type,
+                interaction_details=interaction_details,
+                player_response={"text": player_input}
+            )
+            
+            # Update beliefs if appropriate
+            if not hasattr(agent, "belief_system"):
+                enhance_npc_with_belief_system(agent)
+            
+            # Only form beliefs for significant interactions
+            if interaction_type in ["command", "question", "statement", "emotional"]:
+                belief_result = await agent.form_belief_about(
+                    observation=f"Player {interaction_type}: {player_input}",
+                    factuality=0.8
+                )
+            else:
+                belief_result = None
+            
+            # Combine results
+            combined_result = {
+                "npc_id": npc_id,
+                "interaction_type": interaction_type,
+                "npc_responses": npc_response.get("npc_responses", []),
+                "perception": perception_result.dict() if hasattr(perception_result, "dict") else perception_result,
+                "learning": learning_result,
+                "belief_formed": belief_result is not None,
+                "stat_changes": npc_response.get("stat_changes", {})
+            }
+            
+            return combined_result
+            
         except Exception as e:
             logger.error(f"Error handling NPC interaction: {e}")
             return {"error": str(e), "npc_id": npc_id}
