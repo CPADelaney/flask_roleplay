@@ -18,6 +18,9 @@ import asyncio # Added for potential use
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
+from logic.relationship_integration import RelationshipIntegration
+from typing import Dict, Any, Optional, List, Union
+
 import asyncpg # Added import
 
 # ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
@@ -30,12 +33,9 @@ from agents import (
     AsyncOpenAI,
     OpenAIResponsesModel
 )
-# Note: OpenAIResponsesModel imported twice, removed duplicate
-# from agents.models.openai_responses import OpenAIResponsesModel
 
 # ~~~~~~~~~ DB imports & any other placeholders ~~~~~~~~~
 from db.connection import get_db_connection_context # Use context manager
-# from db.connection import get_db_connection # REMOVED
 
 # ~~~~~~~~~ Logging Configuration ~~~~~~~~~
 # Define logger at module level for consistency
@@ -602,6 +602,37 @@ async def check_for_relationship_crossroads(user_id: int, conversation_id: int) 
         logger.error(f"Unexpected error checking crossroads: {e}", exc_info=True)
         return None
 
+
+async def get_relationship_dynamic_level(user_id: int, entity_id: int, dynamic_name: str = "trust") -> int:
+    """
+    Get the level of a specific relationship dynamic between player and an entity.
+    
+    Args:
+        user_id: The user (player) ID
+        entity_id: The entity ID (typically an NPC)
+        dynamic_name: Name of the dynamic to get (default: "trust")
+        
+    Returns:
+        Current level of the dynamic
+    """
+    integration = RelationshipIntegration(user_id, user_id)  # Assuming conversation_id is also user_id
+    return await integration.get_dynamic_level("player", user_id, "npc", entity_id, dynamic_name)
+
+async def update_relationship_dynamic(user_id: int, entity_id: int, dynamic_name: str, change: int) -> int:
+    """
+    Update a specific relationship dynamic between player and an entity.
+    
+    Args:
+        user_id: The user (player) ID
+        entity_id: The entity ID (typically an NPC)
+        dynamic_name: Name of the dynamic to update
+        change: Amount to change the dynamic by
+        
+    Returns:
+        New level of the dynamic
+    """
+    integration = RelationshipIntegration(user_id, user_id)  # Assuming conversation_id is also user_id
+    return await integration.update_dynamic("player", user_id, "npc", entity_id, dynamic_name, change)
 
 async def apply_crossroads_choice(
     user_id: int,
