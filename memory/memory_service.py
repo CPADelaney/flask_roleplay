@@ -16,11 +16,17 @@ from datetime import datetime
 import uuid
 
 # LangChain imports
-from langchain.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
+from langchain.schema import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_core.embeddings import Embeddings
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.llms import HuggingFaceHub, HuggingFacePipeline
+from langchain.output_parsers import PydanticOutputParser
+
 
 # Import vector store implementations - dynamic for flexibility
 from memory.chroma_vector_store import ChromaVectorDatabase
