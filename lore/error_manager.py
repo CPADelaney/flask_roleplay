@@ -190,7 +190,7 @@ class ErrorHandler:
         self._operation_counts = {}
         self._operation_timestamps = {}
         self._error_history = []
-        self._max_error_history = config.get('max_error_history', 1000)
+        self._max_error_history = self.config.get('max_error_history', 1000)
     
     async def start_monitoring(self):
         """Start monitoring tasks."""
