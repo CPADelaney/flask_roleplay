@@ -3,6 +3,7 @@
 import os
 import json
 import random
+from typing import Optional
 import logging
 # Removed: import psycopg2
 import asyncpg # Added
