@@ -79,6 +79,8 @@ from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons
 
+from nyx.core.memory_core import BrainMemoryCore
+
 logger = logging.getLogger(__name__)
 
 # Global placeholder for SocketIO instance
@@ -502,6 +504,9 @@ def create_flask_app():
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
     app.before_request(ip_block_middleware)
+
+    app.nyx_brain = BrainMemoryCore()
+    await app.nyx_brain.initialize()
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
     init_chat_routes(app) # Ensure this uses asyncpg if needed
