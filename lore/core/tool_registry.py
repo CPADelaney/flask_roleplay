@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Any, List, Callable, Optional, Type, Union
 import functools
 
-from agents import function_tool, Agent
+from agents import function_tool, Agent, FunctionTool
 
 class FunctionToolRegistry:
     """
@@ -27,37 +27,21 @@ class FunctionToolRegistry:
         """
         Register a function tool in the registry.
         """
-        # For bound methods, check the underlying function
-        if inspect.ismethod(function):
+        # Handle FunctionTool instances, regular functions, and bound methods.
+        is_function_tool = False
+    
+        if isinstance(function, FunctionTool):
+            is_function_tool = True
+        elif inspect.ismethod(function):
             func_obj = function.__func__
-            is_tool = hasattr(func_obj, "_is_function_tool") and func_obj._is_function_tool
+            is_function_tool = hasattr(func_obj, "_is_function_tool") and func_obj._is_function_tool
         else:
-            # For regular functions
-            is_tool = hasattr(function, "_is_function_tool") and function._is_function_tool
-        
-        # Skip if not a function tool
-        if not is_tool:
+            is_function_tool = hasattr(function, "_is_function_tool") and function._is_function_tool
+    
+        if not is_function_tool:
             logging.warning(f"Attempted to register non-function tool: {getattr(function, '__name__', str(function))}")
             return
-        
-        # Create a unique ID for the tool
-        module_name = getattr(function, "__module__", "unknown_module")
-        function_name = getattr(function, "__name__", f"unnamed_tool_{id(function)}")
-        tool_id = f"{module_name}.{function_name}"
-        
-        # Register the tool
-        self._tools[tool_id] = function
-        
-        # Add to category
-        if category not in self._categories:
-            self._categories[category] = []
-        self._categories[category].append(tool_id)
-        
-        # Register dependencies
-        if dependencies:
-            self._dependencies[tool_id] = dependencies
-        
-        logging.info(f"Registered function tool: {tool_id} in category: {category}")
+
     
     def get_tool(self, tool_id: str) -> Optional[Callable]:
         """Get a registered function tool by its ID."""
