@@ -93,7 +93,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> 'NyxUnif
     cache_key = f"governance_{user_id}_{conversation_id}"
     
     # Try to get from cache
-    cached = CACHE_TTL.get(cache_key)
+    cached = AGENT_DIRECTIVE_CACHE.get(cache_key)
     if cached:
         return cached
     
@@ -101,7 +101,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> 'NyxUnif
     governor = NyxUnifiedGovernor(user_id, conversation_id)
     
     # Store in cache
-    CACHE_TTL[cache_key] = governor
+    AGENT_DIRECTIVE_CACHE[cache_key] = governor
     
     return governor
 
