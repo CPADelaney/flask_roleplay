@@ -316,21 +316,17 @@ async def initialize_systems(app):
         try:
             from nyx.core.brain.base import NyxBrain
             from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint
-            
+        
             system_user_id = 0
             system_conversation_id = 0
-            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id) # Assuming async
+            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
             await app.nyx_brain.initialize()
             logger.info("Global NyxBrain instance initialized.")
-            
-            # 🔥 Restore from last checkpoint!
-            latest_checkpoint = await app.nyx_brain.load_latest_checkpoint()
-            if latest_checkpoint:
-                await app.nyx_brain.restore_from_checkpoint(latest_checkpoint)
-            else:
-                logger.info("No previous checkpoint to restore for NyxBrain.")     
+        
+            # RESTORE ONLY FROM THE DISTRIBUTED CHECKPOINT LOGIC:
+            await app.nyx_brain.restore_entity_from_distributed_checkpoints()
                 
-            asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))
+            asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))          
             
             # Register processors (ensure handlers are async)
             from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
