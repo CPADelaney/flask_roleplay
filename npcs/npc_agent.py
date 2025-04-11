@@ -269,6 +269,22 @@ class NPCContext:
             'emotional_state': LRUCache(capacity=5, default_ttl=120),  # 2 minutes
             'mask': LRUCache(capacity=5, default_ttl=300)  # 5 minutes
         }
+
+    async def get_lore_system(user_id: int, conversation_id: int):
+        """
+        Get an initialized instance of the LoreSystem.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Initialized LoreSystem instance
+        """
+        from lore.lore_system import LoreSystem
+        lore_system = LoreSystem.get_instance(user_id, conversation_id)
+        await lore_system.initialize()
+        return lore_system    
         
     async def get_memory_system(self) -> MemorySystem:
         """Lazy-load the memory system."""
@@ -591,22 +607,6 @@ async def execute_npc_action(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
             )
-
-async def get_lore_system(user_id: int, conversation_id: int):
-    """
-    Get an initialized instance of the LoreSystem.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Initialized LoreSystem instance
-    """
-    from lore.lore_system import LoreSystem
-    lore_system = LoreSystem.get_instance(user_id, conversation_id)
-    await lore_system.initialize()
-    return lore_system
 
 async def report_action_to_nyx(
     ctx: RunContextWrapper[NPCContext],
