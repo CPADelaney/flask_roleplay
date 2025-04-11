@@ -953,6 +953,8 @@ async def initialize(self):
         for evt in events:
             self.apply_event(evt["event_type"], evt["event_payload"])
 
+# TODO: add log_event to each behavior in its source definition    
+
     def apply_event(self, event_type, event_payload):
         """
         Apply an event to this agent's state. Expand as you add new event types!
