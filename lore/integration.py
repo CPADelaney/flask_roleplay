@@ -21,10 +21,6 @@ from .data_access import (
     LoreKnowledgeAccess
 )
 
-# Import belief system
-from npcs.npc_belief_formation import NPCBeliefFormation
-from npcs.belief_system_integration import NPCBeliefSystemIntegration
-
 # Import memory system
 from memory.wrapper import MemorySystem
 
@@ -113,6 +109,8 @@ class NPCLoreIntegration(BaseIntegration):
         self.npc_id = npc_id
         
         # Initialize belief systems
+        from npcs.npc_belief_formation import NPCBeliefFormation
+        from npcs.belief_system_integration import NPCBeliefSystemIntegration
         self.belief_integration = NPCBeliefSystemIntegration(user_id, conversation_id)
         self.belief_system = None
         if npc_id:
@@ -125,6 +123,8 @@ class NPCLoreIntegration(BaseIntegration):
             
         try:
             # Initialize belief system if needed
+            from npcs.npc_belief_formation import NPCBeliefFormation
+            from npcs.belief_system_integration import NPCBeliefSystemIntegration
             if self.npc_id and self.belief_system:
                 await self.belief_system.initialize()
                 
@@ -563,6 +563,8 @@ class NPCLoreIntegration(BaseIntegration):
         memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         
         # Get belief system for this NPC
+        from npcs.npc_belief_formation import NPCBeliefFormation
+        from npcs.belief_system_integration import NPCBeliefSystemIntegration
         belief_system = self.belief_integration.get_belief_system_for_npc(npc_id)
         await belief_system.initialize()
         
@@ -597,6 +599,8 @@ class NPCLoreIntegration(BaseIntegration):
                     )
                     
                     # Form a belief about the faction (high factuality since it's their own faction)
+                    from npcs.npc_belief_formation import NPCBeliefFormation
+                    from npcs.belief_system_integration import NPCBeliefSystemIntegration
                     await belief_system.form_subjective_belief_from_observation(
                         observation=f"{faction_data['name']} is a faction that represents my interests and values.",
                         factuality=0.9
@@ -610,6 +614,8 @@ class NPCLoreIntegration(BaseIntegration):
                 culture_data = await self.lore_knowledge.get_lore_by_id("CulturalElements", culture["id"])
                 
                 if culture_data:
+                    from npcs.npc_belief_formation import NPCBeliefFormation
+                    from npcs.belief_system_integration import NPCBeliefSystemIntegration
                     memory_text = f"I observe the {culture_data['name']}, which is a {culture_data['type']}. "
                     memory_text += culture_data.get("description", "")[:100]
                     
@@ -654,6 +660,8 @@ class NPCLoreIntegration(BaseIntegration):
                     
                     # Form a belief about the historical event (with medium factuality)
                     # Historical interpretations often have bias
+                    from npcs.npc_belief_formation import NPCBeliefFormation
+                    from npcs.belief_system_integration import NPCBeliefSystemIntegration
                     await belief_system.form_subjective_belief_from_observation(
                         observation=f"The {event_data['name']} had a significant impact on our history.",
                         factuality=0.7  # Allow for some personal interpretation
