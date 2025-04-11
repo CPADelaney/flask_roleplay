@@ -19,6 +19,7 @@ eventlet>=0.24.1
 asgiref
 quart
 asyncio-extras
+Tkinter
 
 # Web framework
 flask==3.0.0
