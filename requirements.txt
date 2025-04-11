@@ -19,7 +19,6 @@ eventlet>=0.24.1
 asgiref
 quart
 asyncio-extras
-Tkinter
 smolagents>=1.0.0
 
 # Web framework
