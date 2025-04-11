@@ -4038,11 +4038,11 @@ async def express_attraction(self, target_user_id: str, intensity: float, expres
         return {"success": False, "reason": f"Error: {str(e)}"}
         
     @function_tool
-async def generate_femdom_activity_ideas(self, 
-                                    user_id: str,
-                                    purpose: str,
-                                    desired_intensity_range: Tuple[int, int] = (3, 7),
-                                    num_ideas: int = 4) -> Dict:
+    async def generate_femdom_activity_ideas(self, 
+                                        user_id: str,
+                                        purpose: str,
+                                        desired_intensity_range: Tuple[int, int] = (3, 7),
+                                        num_ideas: int = 4) -> Dict:
     """
     Generates tailored Femdom activity ideas using the appropriate agent.
     
