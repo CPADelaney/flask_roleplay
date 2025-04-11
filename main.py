@@ -403,7 +403,7 @@ def create_flask_app():
     # --- Basic Config ---
     try:
         # Use environment variables with defaults for security keys
-        app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'default-insecure-secret-key-please-change')
+        app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-insecure-secret-key-please-change')
         if app.config['SECRET_KEY'] == 'default-insecure-secret-key-please-change':
              logger.warning("FLASK_SECRET_KEY is not set or is using the insecure default!")
 
