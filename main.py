@@ -40,7 +40,7 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
-from routes.nyx_agent_routes import nyx_agent_bp
+from routes.nyx_agent_routes_sdk import nyx_agent_bp
 from routes.conflict_routes import conflict_bp
 from routes.npc_learning_routes import npc_learning_bp
 from routes.auth import register_auth_routes
