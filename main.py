@@ -126,7 +126,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if universal_update:
             logger.info(f"[BG Task {conversation_id}] Applying universal updates...")
             try:
-                from logic.universal_updater import apply_universal_updates_async # Needs to be async
+                from logic.universal_updater_agent import apply_universal_updates_async # Needs to be async
                 async with get_db_connection_context() as conn: # Use async context manager
                     await apply_universal_updates_async(
                         user_id,
@@ -355,7 +355,7 @@ async def initialize_systems(app):
 
         # Universal updater (assuming async)
         try:
-            from logic.universal_updater import initialize_universal_updater
+            from logic.universal_updater_agent import initialize_universal_updater
             await initialize_universal_updater() # Assuming async
             logger.info("Universal updater initialized.")
         except Exception as e: logger.error(f"Error initializing Universal Updater: {e}", exc_info=True)
