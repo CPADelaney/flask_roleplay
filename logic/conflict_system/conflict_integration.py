@@ -906,7 +906,8 @@ async def register_with_governance(user_id: int, conversation_id: int) -> Dict[s
         # Register with governance
         await governance.governor.register_agent(
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_instance=conflict_system
+            agent_instance=conflict_system,
+            agent_id="conflict_system"
         )
         
         # Store in local registry
@@ -1184,7 +1185,8 @@ async def register_enhanced_integration(user_id: int, conversation_id: int) -> D
         # Register with governance
         await governance.governor.register_agent(
             agent_type=AgentType.CONFLICT_ANALYST,
-            agent_instance=enhanced_system
+            agent_instance=enhanced_system,
+            agent_id="conflict_analyst"        
         )
         
         # Store in local registry
