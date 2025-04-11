@@ -15,13 +15,14 @@ from agents import (
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
-from nyx_distributed_checkpoint import DistributedCheckpointMixin
+from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
+from nyx.core.brain.nyx_event_log import EventLogMixin
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-class NyxBrain(DistributedCheckpointMixin):
+class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     """
     Central integration point for all Nyx systems.
     Uses composition to delegate to specialized components while managing their coordination.
@@ -942,6 +943,113 @@ async def initialize(self):
         except Exception as e:
             logger.error(f"Error initializing domination procedures: {str(e)}")
             return {"success": False, "error": str(e)}
+
+    async def replay_events(self, since_time=None, limit=10000):
+        """
+        Rebuilds Nyx's state by replaying logged events,
+        optionally since a checkpoint's timestamp.
+        """
+        events = await self.get_events_since(since_time, limit)
+        for evt in events:
+            self.apply_event(evt["event_type"], evt["event_payload"])
+
+    def apply_event(self, event_type, event_payload):
+        # --- Memory/diary events ---
+        if event_type == "thought":
+            # Diary-style, likely a string
+            self.memory.append(event_payload["diary"])
+        elif event_type == "memory_update":
+            # Explicit memory item (could be list or str)
+            item = event_payload.get("memory_item")
+            if item and item not in self.memory:
+                self.memory.append(item)
+    
+        # --- Emotions, mood, feeling ---
+        elif event_type == "emotion":
+            # e.g. {'emotions': [{'label': 'joy', 'intensity': 0.7}]}
+            self.current_emotions.extend(event_payload["emotions"])
+            # Optionally: deduplicate
+            self.current_emotions = self._dedupe_emotions(self.current_emotions)
+    
+        elif event_type == "mood_change":
+            self.mood = event_payload["to"]
+    
+        # --- User/system interaction ---
+        elif event_type == "user_message":
+            msg = event_payload if isinstance(event_payload, dict) else {"raw": event_payload}
+            self.message_history.append(msg)
+    
+        elif event_type == "system_message":
+            self.system_log.append(event_payload)
+    
+        # --- Goals/needs/satisfactions ---
+        elif event_type == "goal_added":
+            # e.g. {'goal': {'text': "...", ...}}
+            self.goals.append(event_payload["goal"])
+        elif event_type == "goal_completed":
+            goal = event_payload.get("goal")
+            if goal in self.goals:
+                self.goals.remove(goal)
+            self.completed_goals.append(goal)
+    
+        elif event_type == "need_update":
+            # e.g. {'need': 'sleep', 'delta': -0.2}
+            need = event_payload["need"]
+            delta = event_payload["delta"]
+            self.needs[need] = self.needs.get(need, 0) + delta
+    
+        # --- Stats / settings / personality changes ---
+        elif event_type == "stat_update":
+            # e.g. {'stat': 'curiosity', 'new_value': 0.8}
+            self.stats[event_payload["stat"]] = event_payload["new_value"]
+    
+        elif event_type == "setting_change":
+            self.settings[event_payload["setting"]] = event_payload["value"]
+    
+        # --- Name, persona, identity ---
+        elif event_type == "identity_change":
+            # e.g. {'name': 'Alice', 'persona': 'Cheerful Hacker'}
+            self.name = event_payload.get("name", self.name)
+            self.persona = event_payload.get("persona", self.persona)
+    
+        # --- Memory deletion (undo/redo style events, rare but advanced) ---
+        elif event_type == "memory_delete":
+            item = event_payload.get("memory_item")
+            if item in self.memory:
+                self.memory.remove(item)
+    
+        elif event_type == "undo":
+            # Custom logic to pop/reverse last event, etc
+            self.undo_last_event()  # you'd need to implement an undo system
+    
+        # --- Arbitrary user/system state ---
+        elif event_type == "custom_state":
+            # Allows for entirely generic fields to be set/restored
+            for k, v in event_payload.items():
+                setattr(self, k, v)
+    
+        # --- Unknown or legacy event (log for debug) ---
+        else:
+            # You’ll want a logger here in real code!
+            print(f"WARNING: Unrecognized event_type: {event_type} -> {event_payload}")
+    
+    def _dedupe_emotions(self, emotions):
+        # Example dedupe helper: keep only one per label, latest intensity
+        seen = {}
+        for em in emotions:
+            seen[em['label']] = em
+        return list(seen.values())
+
+    async def restore_from_events_and_checkpoints(self):
+        last_checkpoint = await self.load_latest_checkpoint()  # optional, if using hybrid
+        if last_checkpoint:
+            await self.restore_from_checkpoint(last_checkpoint)
+            since = last_checkpoint["checkpoint_time"]
+        else:
+            since = None
+        await self.replay_events(since_time=since)
+        
+        
     
     async def trace_operation(self, source_module: str, operation: str, **kwargs):
         """
