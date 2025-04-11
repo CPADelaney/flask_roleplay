@@ -79,10 +79,6 @@ from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons
 
-# Config and utilities
-from .config.settings import config
-from .utils.health_check import HealthCheck
-
 logger = logging.getLogger(__name__)
 
 # Global placeholder for SocketIO instance
