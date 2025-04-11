@@ -100,6 +100,9 @@ async def get_central_governance(user_id: int, conversation_id: int) -> 'NyxUnif
     # Create new instance
     governor = NyxUnifiedGovernor(user_id, conversation_id)
     
+    # Initialize the governor asynchronously
+    await governor._initialize_systems()
+    
     # Store in cache
     AGENT_DIRECTIVE_CACHE[cache_key] = governor
     
