@@ -420,9 +420,6 @@ class IPBlockList:
         
         return result
 
-# Create global instance
-ip_block_list = IPBlockList()
-
 def ip_block_middleware():
     """
     Middleware function for IP blocking.
@@ -443,3 +440,6 @@ def ip_block_middleware():
         loop.create_task(check_ip())
     else:
         asyncio.run(check_ip())
+
+# Create global instance
+ip_block_list = IPBlockList()
