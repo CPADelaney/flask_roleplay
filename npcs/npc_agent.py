@@ -22,6 +22,7 @@ from agents.tracing import custom_span, generation_span, function_span
 from db.connection import get_db_connection_context  # Updated import
 from memory.wrapper import MemorySystem
 from .lore_context_manager import LoreContextManager
+from lore.lore_system import LoreSystem
 
 logger = logging.getLogger(__name__)
 
@@ -591,6 +592,21 @@ async def execute_npc_action(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
             )
+
+async def get_lore_system(user_id: int, conversation_id: int):
+    """
+    Get an initialized instance of the LoreSystem.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized LoreSystem instance
+    """
+    lore_system = LoreSystem.get_instance(user_id, conversation_id)
+    await lore_system.initialize()
+    return lore_system
 
 async def report_action_to_nyx(
     ctx: RunContextWrapper[NPCContext],
