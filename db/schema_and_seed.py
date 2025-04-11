@@ -91,7 +91,22 @@ async def create_all_tables():
                 '''
                 CREATE INDEX IF NOT EXISTS idx_nyx_brain_checkpoints_nyx_id_time 
                 ON nyx_brain_checkpoints(nyx_id, checkpoint_time DESC);
-                '''                
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS nyx_brain_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    nyx_id TEXT NOT NULL,
+                    instance_id TEXT NOT NULL,
+                    event_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    event_type TEXT NOT NULL,
+                    event_payload JSONB NOT NULL,
+                    UNIQUE(nyx_id, instance_id, event_time, event_type)
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nyx_brain_events_nyx_id_time 
+                ON nyx_brain_events(nyx_id, event_time desc);                
+                ''',
                 '''
                 CREATE TABLE IF NOT EXISTS GameRules (
                     id SERIAL PRIMARY KEY,
