@@ -293,7 +293,6 @@ async def initialize_systems(app):
         async def initialize_openai_integration():
             """Initialize the OpenAI integration system."""
             try:
-                from nyx.eternal.openai_integration import initialize
                 from nyx.nyx_agent_sdk import process_user_input
 
                 api_key = os.environ.get("OPENAI_API_KEY")
@@ -394,7 +393,6 @@ async def initialize_systems(app):
 async def initialize_openai_integration():
     """Initialize the OpenAI integration system."""
     try:
-        from nyx.eternal.openai_integration import initialize
         from nyx.nyx_agent_sdk import process_user_input # Assuming this is the correct base processor
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key: logger.warning("OPENAI_API_KEY not set.")
