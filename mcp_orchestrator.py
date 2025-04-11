@@ -45,19 +45,19 @@ class TaskRequirement(BaseModel):
     priority: int = Field(default=2, description="Task priority from 1-5")
     estimated_time: int = Field(default=60, description="Estimated time in seconds")
     
-    @model_validator
-    def check_constraints(cls, self):
+    @model_validator(mode='after')
+    def check_constraints(self) -> 'TaskRequirement':
         """Validate constraints on fields"""
-        if values.get("complexity") < 1 or values.get("complexity") > 5:
-            values["complexity"] = max(1, min(values.get("complexity", 1), 5))
+        if self.complexity < 1 or self.complexity > 5:
+            self.complexity = max(1, min(self.complexity, 5))
         
-        if values.get("priority") < 1 or values.get("priority") > 5:
-            values["priority"] = max(1, min(values.get("priority", 2), 5))
+        if self.priority < 1 or self.priority > 5:
+            self.priority = max(1, min(self.priority, 2), 5)
             
-        if values.get("estimated_time") < 0:
-            values["estimated_time"] = 60
+        if self.estimated_time < 0:
+            self.estimated_time = 60
             
-        return values
+        return self
 
 class MCPTool(BaseModel):
     """Model representing an MCP tool/server"""
