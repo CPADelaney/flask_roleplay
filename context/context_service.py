@@ -968,7 +968,7 @@ async def validate_context_budget_tool(
 
 
 @function_tool
-async def run_maintenance_tool(
+async def run_context_maintenance_tool(
     ctx: RunContextWrapper
 ) -> Dict[str, Any]:
     """
@@ -1087,7 +1087,7 @@ def create_context_service_orchestrator() -> Agent:
         """,
         tools=[
             validate_context_budget_tool,
-            run_maintenance_tool,
+            run_context_maintenance_tool,
             get_base_context_tool,
             get_relevant_npcs_tool,
             get_location_details_tool,
