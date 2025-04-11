@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from nyx.nyx_agent_sdk import process_user_input, generate_reflection, initialize_agents
 from logic.time_cycle import should_advance_time, advance_time_with_events
 from logic.social_links import check_for_relationship_crossroads, check_for_relationship_ritual
-from logic.addiction_system import process_addiction_effects, get_addiction_status
+from logic.addiction_system_sdk import process_addiction_effects, get_addiction_status
 from logic.rule_enforcement import enforce_all_rules_on_player
 from utils.performance import PerformanceTracker, timed_function
 from utils.caching import NPC_CACHE, MEMORY_CACHE
