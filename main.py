@@ -349,7 +349,8 @@ async def initialize_systems(app):
 
         # NPC learning (assuming async)
         try:
-            await NPCLearningManager.initialize_system() # Assuming async
+            learning_manager = NPCLearningManager(system_user_id, system_conversation_id)
+            await learning_manager.initialize()
             logger.info("NPC learning system initialized.")
         except Exception as e: logger.error(f"Error initializing NPC Learning: {e}", exc_info=True)
 
