@@ -1,5 +1,5 @@
 # meltdown.py
-
+"""
 from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection_context
 from logic.meltdown_logic import (
@@ -197,3 +197,4 @@ async def generate_meltdown_line(npc_id):
             "meltdown_level": meltdown_level,
             # "meltdown_line": meltdown_line
         }), 200
+"""
