@@ -45,6 +45,8 @@ from routes.conflict_routes import conflict_bp
 from routes.npc_learning_routes import npc_learning_bp
 from routes.auth import register_auth_routes
 
+from nyx.core.brain.base import NyxBrain
+
 # MCP Orchestrator
 from mcp_orchestrator import MCPOrchestrator
 
