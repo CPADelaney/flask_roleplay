@@ -579,59 +579,160 @@ async def initialize(self):
         raise
 
     @classmethod
-    async def load_latest_checkpoint(cls):
-        """
-        Fetch and parse the latest LLM- or agentic-generated checkpoint, returning just the checkpoint_data dict.
-        """
-        async with get_db_connection_context() as conn:
-            row = await conn.fetchrow(
-                "SELECT serialized_state FROM nyx_brain_checkpoints ORDER BY checkpoint_time DESC LIMIT 1"
-            )
-        if row and row.get("serialized_state"):
-            try:
-                state = json.loads(row['serialized_state'])
-                return state.get("checkpoint_data", {})  # Only the agent-approved fields
-            except Exception as e:
-                logger.error(f"Checkpoint JSON parse failed: {e}")
-        return {}
-
     async def restore_from_checkpoint(self, checkpoint_data: dict):
         """
-        Actually apply saved fields to this NyxBrain instance.
-        Expand this based on your actual state model!
+        Apply agentic checkpoint data back onto this NyxBrain instance/subsystems.
+        Safely checks for all supported major fields.
         """
         if not checkpoint_data:
-            logger.info("No checkpoint data found for restore. Booting cold.")
+            logger.info("No checkpoint data found for restore — booting cold.")
             return False
 
-        # Emotional State
+        # --- Core affective state ---
         if self.emotional_core and "emotional_state" in checkpoint_data:
             try:
                 await self.emotional_core.set_emotional_state(checkpoint_data["emotional_state"])
             except Exception as e:
-                logger.warning(f"Failed to restore emotional state: {e}")
+                logger.warning(f"Restore: emotional_state failed: {e}")
 
-        # Hormones
         if self.hormone_system and "hormones" in checkpoint_data:
             try:
                 self.hormone_system.set_state(checkpoint_data["hormones"])
             except Exception as e:
-                logger.warning(f"Failed to restore hormones: {e}")
+                logger.warning(f"Restore: hormone state failed: {e}")
 
-        # Goals/history
-        if self.goal_manager and "goals" in checkpoint_data:
-            try:
-                await self.goal_manager.restore_goals(checkpoint_data["goals"])
-            except Exception as e:
-                logger.warning(f"Failed to restore goals: {e}")
-
-        # Mood, needs, other state, etc...
         if self.mood_manager and "mood_state" in checkpoint_data:
             try:
-                await self.mood_manager.set_current_mood(checkpoint_data["mood_state"])
+                if hasattr(self.mood_manager, "set_current_mood"):
+                    await self.mood_manager.set_current_mood(checkpoint_data["mood_state"])
             except Exception as e:
-                logger.warning(f"Failed to restore mood state: {e}")
-    
+                logger.warning(f"Restore: mood_state failed: {e}")
+
+        # --- Needs ("drive" state) ---
+        if self.needs_system and "needs" in checkpoint_data:
+            try:
+                if hasattr(self.needs_system, "set_needs_state"):
+                    await self.needs_system.set_needs_state(checkpoint_data["needs"])
+            except Exception as e:
+                logger.warning(f"Restore: needs failed: {e}")
+
+        # --- Goals ---
+        if self.goal_manager and "goals" in checkpoint_data:
+            try:
+                if hasattr(self.goal_manager, "restore_goals"):
+                    await self.goal_manager.restore_goals(checkpoint_data["goals"])
+                elif hasattr(self.goal_manager, "set_goals"):
+                    await self.goal_manager.set_goals(checkpoint_data["goals"])
+            except Exception as e:
+                logger.warning(f"Restore: goals failed: {e}")
+
+        # --- Memory [recent or special memories, diary] ---
+        if self.memory_core and "recent_memories" in checkpoint_data:
+            try:
+                if hasattr(self.memory_core, "load_recent_memories"):
+                    await self.memory_core.load_recent_memories(checkpoint_data["recent_memories"])
+                elif hasattr(self.memory_core, "import_memories"):
+                    await self.memory_core.import_memories(checkpoint_data["recent_memories"])
+                # else: skip—they should be re-encoded by the brain loop
+            except Exception as e:
+                logger.warning(f"Restore: recent_memories failed: {e}")
+
+        # --- Identity and traits (if present) ---
+        if getattr(self, "identity_evolution", None) and "identity" in checkpoint_data:
+            try:
+                if hasattr(self.identity_evolution, "restore_identity"):
+                    await self.identity_evolution.restore_identity(checkpoint_data["identity"])
+                elif hasattr(self.identity_evolution, "set_identity_state"):
+                    await self.identity_evolution.set_identity_state(checkpoint_data["identity"])
+            except Exception as e:
+                logger.warning(f"Restore: identity failed: {e}")
+
+        # --- Mode integration (current interaction style) ---
+        if getattr(self, "mode_integration", None) and "mode" in checkpoint_data:
+            try:
+                if hasattr(self.mode_integration, "set_mode_state"):
+                    await self.mode_integration.set_mode_state(checkpoint_data["mode"])
+                elif hasattr(self.mode_integration, "load_mode"):
+                    await self.mode_integration.load_mode(checkpoint_data["mode"])
+            except Exception as e:
+                logger.warning(f"Restore: mode integration failed: {e}")
+
+        # --- Conceptual/causal/model state ---
+        if getattr(self, "reasoning_core", None) and "causal_state" in checkpoint_data:
+            try:
+                if hasattr(self.reasoning_core, "restore_state"):
+                    await self.reasoning_core.restore_state(checkpoint_data["causal_state"])
+            except Exception as e:
+                logger.warning(f"Restore: causal_state failed: {e}")
+
+        # --- Theory of Mind / user model ---
+        if getattr(self, "theory_of_mind", None) and "user_model" in checkpoint_data:
+            try:
+                if hasattr(self.theory_of_mind, "restore_state"):
+                    await self.theory_of_mind.restore_state(checkpoint_data["user_model"])
+            except Exception as e:
+                logger.warning(f"Restore: user_model failed: {e}")
+
+        # --- Temporal context ---
+        if getattr(self, "temporal_perception", None) and "temporal_context" in checkpoint_data:
+            try:
+                if hasattr(self.temporal_perception, "restore_context"):
+                    await self.temporal_perception.restore_context(checkpoint_data["temporal_context"])
+                elif hasattr(self.temporal_perception, "set_context"):
+                    await self.temporal_perception.set_context(checkpoint_data["temporal_context"])
+            except Exception as e:
+                logger.warning(f"Restore: temporal_context failed: {e}")
+
+        # --- Sensory context ---
+        if getattr(self, "multimodal_integrator", None) and "sensory_context" in checkpoint_data:
+            try:
+                if hasattr(self.multimodal_integrator, "load_context"):
+                    await self.multimodal_integrator.load_context(checkpoint_data["sensory_context"])
+            except Exception as e:
+                logger.warning(f"Restore: sensory_context failed: {e}")
+
+        # --- Reflection engine (if present, e.g. insights/diary) ---
+        if getattr(self, "reflection_engine", None) and "reflection_insights" in checkpoint_data:
+            try:
+                if hasattr(self.reflection_engine, "import_insights"):
+                    await self.reflection_engine.import_insights(checkpoint_data["reflection_insights"])
+            except Exception as e:
+                logger.warning(f"Restore: reflection_insights failed: {e}")
+
+        # --- Action values (Q-tables, RL stats) ---
+        if hasattr(self, "action_values") and "action_values" in checkpoint_data:
+            try:
+                self.action_values = checkpoint_data["action_values"]
+            except Exception as e:
+                logger.warning(f"Restore: action_values failed: {e}")
+
+        # --- Action history/habits/other agentic learning memory ---
+        if hasattr(self, "action_history") and "action_history" in checkpoint_data:
+            try:
+                self.action_history = checkpoint_data["action_history"]
+            except Exception as e:
+                logger.warning(f"Restore: action_history failed: {e}")
+        if hasattr(self, "habits") and "habits" in checkpoint_data:
+            try:
+                self.habits = checkpoint_data["habits"]
+            except Exception as e:
+                logger.warning(f"Restore: habits failed: {e}")
+
+        # --- Goal strategies and planning ---
+        if hasattr(self, "action_strategies") and "action_strategies" in checkpoint_data:
+            try:
+                self.action_strategies = checkpoint_data["action_strategies"]
+            except Exception as e:
+                logger.warning(f"Restore: action_strategies failed: {e}")
+
+        # --- Custom trackers, mode adaptation, bottlenecks ---
+        if hasattr(self, "mode_adaptation_strength") and "mode_adaptation_strength" in checkpoint_data:
+            self.mode_adaptation_strength = checkpoint_data["mode_adaptation_strength"]
+        if hasattr(self, "detected_bottlenecks") and "detected_bottlenecks" in checkpoint_data:
+            self.detected_bottlenecks = checkpoint_data["detected_bottlenecks"]
+
+        logger.info("NyxBrain state fully restored from checkpoint.")
+        return True
 
     async def publish_event(self, event: Any) -> None:
         """
@@ -960,19 +1061,132 @@ async def initialize(self):
             return None
 
     async def gather_checkpoint_state(self, event="periodic", extra:dict=None):
+        """Collects as much current agent state as possible for checkpointing."""
+        now = datetime.datetime.now().isoformat()
         state = {
-            "emotional_state": (await self.emotional_core.get_emotional_state()) if self.emotional_core else {},
-            "hormones": self.hormone_system.get_state() if self.hormone_system else {},
-            "goals": (await self.goal_manager.get_all_goals()) if self.goal_manager else [],
-            "needs": self.needs_system.get_needs_state() if self.needs_system else {},
-            "mood_state": (await self.mood_manager.get_current_mood()).dict() if self.mood_manager and hasattr(self.mood_manager.get_current_mood(), "dict") else {},
-            # Add more as relevant
-            "recent_memories": (await self.memory_core.retrieve_memories(query="", limit=5)) if self.memory_core else [],
             "event": event,
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": now
         }
+
+        # --- Core affective state ---
+        if self.emotional_core:
+            try:
+                state["emotional_state"] = await self.emotional_core.get_emotional_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting emotional_state: {e}")
+
+        if self.hormone_system:
+            try:
+                state["hormones"] = self.hormone_system.get_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting hormones: {e}")
+
+        if self.mood_manager:
+            try:
+                mood = await self.mood_manager.get_current_mood()
+                state["mood_state"] = mood.dict() if hasattr(mood, "dict") else mood
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting mood_state: {e}")
+
+        # --- Needs state ---
+        if self.needs_system:
+            try:
+                if hasattr(self.needs_system, "get_needs_state"):
+                    state["needs"] = self.needs_system.get_needs_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting needs: {e}")
+
+        # --- Goals ---
+        if self.goal_manager:
+            try:
+                if hasattr(self.goal_manager, "get_all_goals"):
+                    state["goals"] = await self.goal_manager.get_all_goals()
+                elif hasattr(self.goal_manager, "get_current_goals"):
+                    state["goals"] = await self.goal_manager.get_current_goals()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting goals: {e}")
+
+        # --- Memory/diary/reflections ---
+        if self.memory_core:
+            try:
+                if hasattr(self.memory_core, "get_recent_memories"):
+                    state["recent_memories"] = await self.memory_core.get_recent_memories(limit=10)
+                elif hasattr(self.memory_core, "get_memories"):
+                    state["recent_memories"] = await self.memory_core.get_memories(limit=10)
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting recent_memories: {e}")
+
+        if getattr(self, "reflection_engine", None):
+            try:
+                if hasattr(self.reflection_engine, "export_insights"):
+                    state["reflection_insights"] = await self.reflection_engine.export_insights(limit=10)
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting reflection_insights: {e}")
+
+        # --- Identity (traits etc) ---
+        if getattr(self, "identity_evolution", None):
+            try:
+                if hasattr(self.identity_evolution, "get_identity_state"):
+                    state["identity"] = await self.identity_evolution.get_identity_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting identity: {e}")
+
+        # --- Mode integration / interaction mode ---
+        if getattr(self, "mode_integration", None):
+            try:
+                if hasattr(self.mode_integration, "get_mode_state"):
+                    state["mode"] = await self.mode_integration.get_mode_state()
+                elif hasattr(self.mode_integration, "current_mode"):
+                    state["mode"] = self.mode_integration.current_mode
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting mode: {e}")
+
+        # --- Causal/concept reasoning state ---
+        if getattr(self, "reasoning_core", None):
+            try:
+                if hasattr(self.reasoning_core, "get_state"):
+                    state["causal_state"] = await self.reasoning_core.get_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting causal_state: {e}")
+
+        # --- Theory of Mind / user model ---
+        if getattr(self, "theory_of_mind", None):
+            try:
+                if hasattr(self.theory_of_mind, "export_state"):
+                    state["user_model"] = await self.theory_of_mind.export_state()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting user_model: {e}")
+
+        # --- Temporal context ---
+        if getattr(self, "temporal_perception", None):
+            try:
+                if hasattr(self.temporal_perception, "current_temporal_context"):
+                    state["temporal_context"] = self.temporal_perception.current_temporal_context
+                elif hasattr(self.temporal_perception, "export_context"):
+                    state["temporal_context"] = await self.temporal_perception.export_context()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting temporal_context: {e}")
+
+        # --- Sensory context/recent perceptions ---
+        if getattr(self, "multimodal_integrator", None):
+            try:
+                if hasattr(self.multimodal_integrator, "get_recent_percepts"):
+                    state["sensory_context"] = await self.multimodal_integrator.get_recent_percepts(limit=5)
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting sensory_context: {e}")
+
+        # --- Action values/habits/history/strategies/bottlenecks ---
+        for field in [
+            "action_values", "action_history", "habits", "action_strategies",
+            "detected_bottlenecks", "mode_adaptation_strength"
+        ]:
+            if hasattr(self, field):
+                state[field] = getattr(self, field)
+
+        # --- Allow passing in extra (ad-hoc) context for agentic reasoning ---
         if extra:
             state.update(extra)
+
         return state
 
     async def llm_agentic_checkpoint(self, event="periodic", extra:dict=None):
