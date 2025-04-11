@@ -578,6 +578,61 @@ async def initialize(self):
         logger.error(f"Error initializing NyxBrain: {str(e)}", exc_info=True)
         raise
 
+    @classmethod
+    async def load_latest_checkpoint(cls):
+        """
+        Fetch and parse the latest LLM- or agentic-generated checkpoint, returning just the checkpoint_data dict.
+        """
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                "SELECT serialized_state FROM nyx_brain_checkpoints ORDER BY checkpoint_time DESC LIMIT 1"
+            )
+        if row and row.get("serialized_state"):
+            try:
+                state = json.loads(row['serialized_state'])
+                return state.get("checkpoint_data", {})  # Only the agent-approved fields
+            except Exception as e:
+                logger.error(f"Checkpoint JSON parse failed: {e}")
+        return {}
+
+    async def restore_from_checkpoint(self, checkpoint_data: dict):
+        """
+        Actually apply saved fields to this NyxBrain instance.
+        Expand this based on your actual state model!
+        """
+        if not checkpoint_data:
+            logger.info("No checkpoint data found for restore. Booting cold.")
+            return False
+
+        # Emotional State
+        if self.emotional_core and "emotional_state" in checkpoint_data:
+            try:
+                await self.emotional_core.set_emotional_state(checkpoint_data["emotional_state"])
+            except Exception as e:
+                logger.warning(f"Failed to restore emotional state: {e}")
+
+        # Hormones
+        if self.hormone_system and "hormones" in checkpoint_data:
+            try:
+                self.hormone_system.set_state(checkpoint_data["hormones"])
+            except Exception as e:
+                logger.warning(f"Failed to restore hormones: {e}")
+
+        # Goals/history
+        if self.goal_manager and "goals" in checkpoint_data:
+            try:
+                await self.goal_manager.restore_goals(checkpoint_data["goals"])
+            except Exception as e:
+                logger.warning(f"Failed to restore goals: {e}")
+
+        # Mood, needs, other state, etc...
+        if self.mood_manager and "mood_state" in checkpoint_data:
+            try:
+                await self.mood_manager.set_current_mood(checkpoint_data["mood_state"])
+            except Exception as e:
+                logger.warning(f"Failed to restore mood state: {e}")
+    
+
     async def publish_event(self, event: Any) -> None:
         """
         Publish an event to the event bus.
