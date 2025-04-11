@@ -19,7 +19,7 @@ from db.connection import get_db_connection_context
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
 # Initialize the agent system when the Flask app starts
-@nyx_agent_bp.before_app_first_request
+@nyx_agent_bp.before_app_request
 async def initialize():
     """Initialize the agent system before the first request"""
     await initialize_agents()
