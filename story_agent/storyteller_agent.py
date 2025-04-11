@@ -2036,23 +2036,48 @@ class StorytellerAgent:
                 time_result
             )
             tracker.end_phase()
+
+            # 9. Apply emergent addiction analysis
+            tracker.start_phase("emergent_addiction")
+            try:
+                # Prepare narrative/events for analysis (choose what to pass: user_input, context, narrative)
+                emergent_events_text = f"{user_input}\n\n{narrative_response.message}"
+        
+                emergent_result = await analyze_and_apply_emergent_addictions(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    player_name=player_name if 'player_name' in locals() else "Chase",
+                    recent_narrative=emergent_events_text,
+                    npcs=comprehensive_context.get("introduced_npcs", [])
+                )
+        
+                # Optionally, add to the response dict (this also allows you to debug or display new addictions in client)
+                if emergent_result.get("applied_suggestions"):
+                    response["addiction_emergence"] = emergent_result["applied_suggestions"]
+                if emergent_result.get("update_results"):
+                    response["addiction_emergence_results"] = emergent_result["update_results"]
+                if emergent_result.get("player_addiction_status"):
+                    response["addiction_status"] = emergent_result["player_addiction_status"]
+            except Exception as e:
+                logger.error(f"Emergent addiction error: {e}")
+            tracker.end_phase()            
             
-            # 9. Store assistant message
+            # 10. Store assistant message
             tracker.start_phase("store_assistant_message")
             await self.store_message(ctx, "Nyx", narrative_response.message)
             tracker.end_phase()
             
-            # 10. Apply universal updates
+            # 11. Apply universal updates
             tracker.start_phase("universal_updates")
             update_result = await self.apply_universal_updates(ctx, narrative_response)
             tracker.end_phase()
             
-            # 11. Generate image if needed
+            # 12. Generate image if needed
             tracker.start_phase("image_generation")
             image_result = await self.generate_image_if_needed(ctx, narrative_response)
             tracker.end_phase()
             
-            # 12. Report action summary to governance
+            # 13. Report action summary to governance
             tracker.start_phase("report_to_governance")
             await self.report_action_to_governance(
                 ctx,
@@ -2068,7 +2093,7 @@ class StorytellerAgent:
             )
             tracker.end_phase()
             
-            # 13. Create a memory about this story beat
+            # 14. Create a memory about this story beat
             tracker.start_phase("create_memory")
             await self.create_memory_for_nyx(
                 ctx,
@@ -2078,7 +2103,7 @@ class StorytellerAgent:
             )
             tracker.end_phase()
             
-            # 14. Build and return the final response
+            # 15. Build and return the final response
             tracker.start_phase("build_response")
             
             # Get performance metrics
