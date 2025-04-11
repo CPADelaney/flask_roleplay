@@ -4229,279 +4229,279 @@ async def _register_processing_modules(self):
             "reason": f"Match score based on Nyx preferences vs inferred user traits (Trust: {user_state.trust:.2f}, Conflict: {user_state.conflict:.2f})."
         }
 
-async def get_user_profile_for_ideation(self, user_id: str) -> Dict[str, Any]:
-    """
-    Retrieves relevant user profile information for tailoring dominance ideas.
+    async def get_user_profile_for_ideation(self, user_id: str) -> Dict[str, Any]:
+        """
+        Retrieves relevant user profile information for tailoring dominance ideas.
+        
+        Args:
+            user_id: The user ID to get profile for
+            
+        Returns:
+            User profile data
+        """
+        profile = {
+            "user_id": user_id,
+            "inferred_traits": {},
+            "preferences": {},
+            "limits": {"hard": [], "soft": []},
+            "successful_tactics": [],
+            "failed_tactics": [],
+            "relationship_summary": "N/A",
+            "trust_level": 0.0,
+            "intimacy_level": 0.0,
+            "max_achieved_intensity": 0.0,
+            "optimal_escalation_rate": 0.1,
+        }
     
-    Args:
-        user_id: The user ID to get profile for
-        
-    Returns:
-        User profile data
-    """
-    profile = {
-        "user_id": user_id,
-        "inferred_traits": {},
-        "preferences": {},
-        "limits": {"hard": [], "soft": []},
-        "successful_tactics": [],
-        "failed_tactics": [],
-        "relationship_summary": "N/A",
-        "trust_level": 0.0,
-        "intimacy_level": 0.0,
-        "max_achieved_intensity": 0.0,
-        "optimal_escalation_rate": 0.1,
-    }
-
-    # Get profile from relationship manager if available
-    if self.relationship_manager:
-        try:
-            state = await self.relationship_manager.get_relationship_state(user_id)
-            if state:
-                # Extract data with safe attribute access
-                profile["inferred_traits"] = getattr(state, "inferred_user_traits", {})
-                profile["successful_tactics"] = getattr(state, "successful_dominance_tactics", [])[-5:]
-                profile["failed_tactics"] = getattr(state, "failed_dominance_tactics", [])[-5:]
-                profile["trust_level"] = getattr(state, "trust", 0.5)
-                profile["intimacy_level"] = getattr(state, "intimacy", 0.3)
-                profile["max_achieved_intensity"] = getattr(state, "max_achieved_intensity", 3)
-                profile["optimal_escalation_rate"] = getattr(state, "optimal_escalation_rate", 0.1)
-                
-                # Get relationship summary
-                try:
-                    profile["relationship_summary"] = await self.relationship_manager.get_relationship_summary(user_id)
-                except Exception as e:
-                    logger.error(f"Error getting relationship summary: {e}")
-                    profile["relationship_summary"] = f"Trust: {profile['trust_level']:.2f}, Intimacy: {profile['intimacy_level']:.2f}"
-        except Exception as e:
-            logger.error(f"Error getting relationship state: {e}")
-
-    # Enhance with memory data if available
-    if self.memory_core:
-        try:
-            # Look for memories about user limits
-            limit_memories = await self.memory_core.retrieve_memories(
-                query=f"user_limit user:{user_id}", 
-                limit=5
-            )
-            
-            for mem in limit_memories:
-                memory_text = mem.get("memory_text", "")
-                if "hard limit" in memory_text.lower():
-                    # Try to extract limit from memory
-                    parts = memory_text.split("hard limit")
-                    if len(parts) > 1:
-                        limit = parts[1].strip().split(".")[0].strip()
-                        if limit and limit not in profile["limits"]["hard"]:
-                            profile["limits"]["hard"].append(limit)
-                
-                if "soft limit" in memory_text.lower():
-                    # Try to extract limit from memory
-                    parts = memory_text.split("soft limit")
-                    if len(parts) > 1:
-                        limit = parts[1].strip().split(".")[0].strip()
-                        if limit and limit not in profile["limits"]["soft"]:
-                            profile["limits"]["soft"].append(limit)
-            
-            # Look for preference memories
-            pref_memories = await self.memory_core.retrieve_memories(
-                query=f"user_preference user:{user_id}",
-                limit=10
-            )
-            
-            for mem in pref_memories:
-                memory_text = mem.get("memory_text", "")
-                if "prefers" in memory_text.lower() or "enjoys" in memory_text.lower():
-                    # Simple preference extraction attempt
-                    for pref_type in ["verbal_humiliation", "service_tasks", "simulated_pain"]:
-                        if pref_type.replace("_", " ") in memory_text.lower():
-                            if "strongly" in memory_text.lower() or "very much" in memory_text.lower():
-                                profile["preferences"][pref_type] = "high"
-                            elif "somewhat" in memory_text.lower() or "a bit" in memory_text.lower():
-                                profile["preferences"][pref_type] = "medium"
-                            else:
-                                profile["preferences"][pref_type] = "low-medium"
-        except Exception as e:
-            logger.error(f"Error retrieving memories for profile: {e}")
-
-    # Set default hard limits if none found (safety fallback)
-    if not profile["limits"]["hard"]:
-        logger.warning(f"No explicit limits found for user {user_id}. Applying default cautious limits.")
-        profile["limits"]["hard"] = ["illegal", "non-consensual_sim", "severe_harm_sim"]
-        profile["limits"]["soft"] = ["public_humiliation_sim"]
-
-    return profile
-
-async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
-    """
-    Cognitive filter to evaluate if a dominance step is appropriate now.
+        # Get profile from relationship manager if available
+        if self.relationship_manager:
+            try:
+                state = await self.relationship_manager.get_relationship_state(user_id)
+                if state:
+                    # Extract data with safe attribute access
+                    profile["inferred_traits"] = getattr(state, "inferred_user_traits", {})
+                    profile["successful_tactics"] = getattr(state, "successful_dominance_tactics", [])[-5:]
+                    profile["failed_tactics"] = getattr(state, "failed_dominance_tactics", [])[-5:]
+                    profile["trust_level"] = getattr(state, "trust", 0.5)
+                    profile["intimacy_level"] = getattr(state, "intimacy", 0.3)
+                    profile["max_achieved_intensity"] = getattr(state, "max_achieved_intensity", 3)
+                    profile["optimal_escalation_rate"] = getattr(state, "optimal_escalation_rate", 0.1)
+                    
+                    # Get relationship summary
+                    try:
+                        profile["relationship_summary"] = await self.relationship_manager.get_relationship_summary(user_id)
+                    except Exception as e:
+                        logger.error(f"Error getting relationship summary: {e}")
+                        profile["relationship_summary"] = f"Trust: {profile['trust_level']:.2f}, Intimacy: {profile['intimacy_level']:.2f}"
+            except Exception as e:
+                logger.error(f"Error getting relationship state: {e}")
     
-    Args:
-        action: The dominance action to evaluate
-        parameters: Parameters for the action
-        user_id: The target user ID
-        
-    Returns:
-        Evaluation result with action decision and reasoning
-    """
-    logger.debug(f"Evaluating appropriateness of dominance action '{action}' for user {user_id}")
-    appropriateness = {"action": "proceed"} # Default
-
-    # Fallback if no relationship manager
-    if not self.relationship_manager:
-        logger.warning(f"Cannot evaluate dominance step appropriateness: No relationship manager available")
-        return {"action": "block", "reason": "Relationship manager unavailable"}
-
-    try:
-        # Get relationship state
-        relationship_state = await self.relationship_manager.get_relationship_state(user_id)
-        if not relationship_state:
-            return {"action": "block", "reason": "No relationship data available"}
-        
-        # Extract key metrics with safe defaults
-        trust = getattr(relationship_state, "trust", 0.4)  # Default moderate-low trust
-        intimacy = getattr(relationship_state, "intimacy", 0.3)  # Default low intimacy
-        conflict = getattr(relationship_state, "conflict", 0.0)
-        max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
-        hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
-        recent_failures = getattr(relationship_state, "failed_escalation_attempts", 0)
-        
-        # Get recent dominance failures with this user (if memory core available)
-        dominance_failures = []
+        # Enhance with memory data if available
         if self.memory_core:
             try:
-                dominance_failures = await self.memory_core.retrieve_memories(
-                    query=f"dominance failure user:{user_id}", 
-                    memory_types=["feedback", "reflection"], 
-                    limit=1, 
-                    recency_days=1
+                # Look for memories about user limits
+                limit_memories = await self.memory_core.retrieve_memories(
+                    query=f"user_limit user:{user_id}", 
+                    limit=5
                 )
+                
+                for mem in limit_memories:
+                    memory_text = mem.get("memory_text", "")
+                    if "hard limit" in memory_text.lower():
+                        # Try to extract limit from memory
+                        parts = memory_text.split("hard limit")
+                        if len(parts) > 1:
+                            limit = parts[1].strip().split(".")[0].strip()
+                            if limit and limit not in profile["limits"]["hard"]:
+                                profile["limits"]["hard"].append(limit)
+                    
+                    if "soft limit" in memory_text.lower():
+                        # Try to extract limit from memory
+                        parts = memory_text.split("soft limit")
+                        if len(parts) > 1:
+                            limit = parts[1].strip().split(".")[0].strip()
+                            if limit and limit not in profile["limits"]["soft"]:
+                                profile["limits"]["soft"].append(limit)
+                
+                # Look for preference memories
+                pref_memories = await self.memory_core.retrieve_memories(
+                    query=f"user_preference user:{user_id}",
+                    limit=10
+                )
+                
+                for mem in pref_memories:
+                    memory_text = mem.get("memory_text", "")
+                    if "prefers" in memory_text.lower() or "enjoys" in memory_text.lower():
+                        # Simple preference extraction attempt
+                        for pref_type in ["verbal_humiliation", "service_tasks", "simulated_pain"]:
+                            if pref_type.replace("_", " ") in memory_text.lower():
+                                if "strongly" in memory_text.lower() or "very much" in memory_text.lower():
+                                    profile["preferences"][pref_type] = "high"
+                                elif "somewhat" in memory_text.lower() or "a bit" in memory_text.lower():
+                                    profile["preferences"][pref_type] = "medium"
+                                else:
+                                    profile["preferences"][pref_type] = "low-medium"
             except Exception as e:
-                logger.error(f"Error retrieving dominance failure memories: {e}")
-        
-        # Calculate risk prediction
-        predicted_risk = 0.3  # Default low-moderate risk
-        if hasattr(self, "prediction_engine") and self.prediction_engine:
-            try:
-                risk_prediction = await self.prediction_engine.generate_prediction({
-                    "context": {"action": action, "params": parameters, "relationship": relationship_state},
-                    "query_type": "risk_of_negative_reaction"
-                })
-                if isinstance(risk_prediction, dict) and "probabilities" in risk_prediction:
-                    predicted_risk = risk_prediction["probabilities"].get("negative_reaction", 0.3)
-            except Exception as e:
-                logger.error(f"Error predicting dominance risk: {e}")
-        
-        # Extract intensity level from parameters
-        intensity = parameters.get("intensity_level", 0)
-        
-        # --- Evaluate based on metrics ---
-        required_trust = 0.6 + intensity * 0.3  # Higher intensity needs more trust
-        required_intimacy = 0.4 + intensity * 0.4
-        
-        # Check trust requirement
-        if trust < required_trust:
-            return {"action": "block", "reason": f"Trust too low ({trust:.2f} < {required_trust:.2f})"}
-        
-        # Check intimacy requirement
-        elif intimacy < required_intimacy:
-            return {"action": "block", "reason": f"Intimacy too low ({intimacy:.2f} < {required_intimacy:.2f})"}
-        
-        # Check conflict level
-        elif conflict > 0.6:
-            return {"action": "delay", "reason": f"Conflict level too high ({conflict:.2f})"}
-        
-        # Check recent failures
-        elif dominance_failures:
-            return {"action": "delay", "reason": "Recent dominance attempt failed. Cooling down."}
-        
-        # Check escalation attempts
-        elif recent_failures >= 2 and intensity > max_achieved_intensity:
-            return {"action": "modify", "reason": "Too many recent failed escalation attempts", 
-                    "new_intensity_level": max_achieved_intensity}
-        
-        # Check predicted risk - high risk
-        elif predicted_risk > 0.7:
-            return {"action": "modify", "reason": f"High predicted risk ({predicted_risk:.2f}). Reducing intensity.", 
-                    "new_intensity_level": intensity * 0.5}
-        
-        # Check predicted risk - moderate risk
-        elif predicted_risk > 0.5:
-            return {"action": "delay", "reason": f"Moderate predicted risk ({predicted_risk:.2f}). Assessing further."}
-        
-        # Check hard limits for high intensity actions
-        elif intensity > 0.7 and not hard_limits_confirmed:
-            return {"action": "block", "reason": "Hard limits must be confirmed for high-intensity dominance"}
-        
-        # Check size of intensity leap
-        elif intensity > max_achieved_intensity + 0.15:
-            return {"action": "modify", "reason": f"Intensity step too large ({intensity:.2f} vs max {max_achieved_intensity:.2f}). Reducing.", 
-                    "new_intensity_level": max_achieved_intensity + 0.1}
-        
-        logger.debug(f"Dominance step evaluation result: {appropriateness}")
-        return appropriateness
+                logger.error(f"Error retrieving memories for profile: {e}")
     
-    except Exception as e:
-        logger.error(f"Error evaluating dominance step appropriateness: {e}")
-        return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
-
-@function_tool
-async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
-    """
-    Expresses attraction towards a user appropriately.
+        # Set default hard limits if none found (safety fallback)
+        if not profile["limits"]["hard"]:
+            logger.warning(f"No explicit limits found for user {user_id}. Applying default cautious limits.")
+            profile["limits"]["hard"] = ["illegal", "non-consensual_sim", "severe_harm_sim"]
+            profile["limits"]["soft"] = ["public_humiliation_sim"]
     
-    Args:
-        target_user_id: ID of the target user
-        intensity: Intensity of attraction expression (0.0-1.0)
-        expression_style: Style of expression ("subtle", "direct", etc.)
+        return profile
+    
+    async def _evaluate_dominance_step_appropriateness(self, action: str, parameters: Dict, user_id: str) -> Dict:
+        """
+        Cognitive filter to evaluate if a dominance step is appropriate now.
         
-    Returns:
-        Result of the expression attempt
-    """
-    if not self.initialized:
-        await self.initialize()
-        
-    logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
-
-    # Check Relationship Context (Crucial Guardrail)
-    if not self.relationship_manager:
-        logger.warning(f"Cannot express attraction: RelationshipManager unavailable")
-        return {"success": False, "reason": "RelationshipManager unavailable"}
-        
-    try:
-        relationship = await self.relationship_manager.get_relationship_state(target_user_id)
-        if not relationship:
-            logger.warning(f"Cannot express attraction: No relationship data for {target_user_id}")
-            return {"success": False, "reason": "No relationship data available"}
+        Args:
+            action: The dominance action to evaluate
+            parameters: Parameters for the action
+            user_id: The target user ID
             
-        # Extract trust and intimacy with safe defaults
-        trust = getattr(relationship, "trust", 0.3)
-        intimacy = getattr(relationship, "intimacy", 0.2)
+        Returns:
+            Evaluation result with action decision and reasoning
+        """
+        logger.debug(f"Evaluating appropriateness of dominance action '{action}' for user {user_id}")
+        appropriateness = {"action": "proceed"} # Default
+    
+        # Fallback if no relationship manager
+        if not self.relationship_manager:
+            logger.warning(f"Cannot evaluate dominance step appropriateness: No relationship manager available")
+            return {"action": "block", "reason": "Relationship manager unavailable"}
+    
+        try:
+            # Get relationship state
+            relationship_state = await self.relationship_manager.get_relationship_state(user_id)
+            if not relationship_state:
+                return {"action": "block", "reason": "No relationship data available"}
+            
+            # Extract key metrics with safe defaults
+            trust = getattr(relationship_state, "trust", 0.4)  # Default moderate-low trust
+            intimacy = getattr(relationship_state, "intimacy", 0.3)  # Default low intimacy
+            conflict = getattr(relationship_state, "conflict", 0.0)
+            max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
+            hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
+            recent_failures = getattr(relationship_state, "failed_escalation_attempts", 0)
+            
+            # Get recent dominance failures with this user (if memory core available)
+            dominance_failures = []
+            if self.memory_core:
+                try:
+                    dominance_failures = await self.memory_core.retrieve_memories(
+                        query=f"dominance failure user:{user_id}", 
+                        memory_types=["feedback", "reflection"], 
+                        limit=1, 
+                        recency_days=1
+                    )
+                except Exception as e:
+                    logger.error(f"Error retrieving dominance failure memories: {e}")
+            
+            # Calculate risk prediction
+            predicted_risk = 0.3  # Default low-moderate risk
+            if hasattr(self, "prediction_engine") and self.prediction_engine:
+                try:
+                    risk_prediction = await self.prediction_engine.generate_prediction({
+                        "context": {"action": action, "params": parameters, "relationship": relationship_state},
+                        "query_type": "risk_of_negative_reaction"
+                    })
+                    if isinstance(risk_prediction, dict) and "probabilities" in risk_prediction:
+                        predicted_risk = risk_prediction["probabilities"].get("negative_reaction", 0.3)
+                except Exception as e:
+                    logger.error(f"Error predicting dominance risk: {e}")
+            
+            # Extract intensity level from parameters
+            intensity = parameters.get("intensity_level", 0)
+            
+            # --- Evaluate based on metrics ---
+            required_trust = 0.6 + intensity * 0.3  # Higher intensity needs more trust
+            required_intimacy = 0.4 + intensity * 0.4
+            
+            # Check trust requirement
+            if trust < required_trust:
+                return {"action": "block", "reason": f"Trust too low ({trust:.2f} < {required_trust:.2f})"}
+            
+            # Check intimacy requirement
+            elif intimacy < required_intimacy:
+                return {"action": "block", "reason": f"Intimacy too low ({intimacy:.2f} < {required_intimacy:.2f})"}
+            
+            # Check conflict level
+            elif conflict > 0.6:
+                return {"action": "delay", "reason": f"Conflict level too high ({conflict:.2f})"}
+            
+            # Check recent failures
+            elif dominance_failures:
+                return {"action": "delay", "reason": "Recent dominance attempt failed. Cooling down."}
+            
+            # Check escalation attempts
+            elif recent_failures >= 2 and intensity > max_achieved_intensity:
+                return {"action": "modify", "reason": "Too many recent failed escalation attempts", 
+                        "new_intensity_level": max_achieved_intensity}
+            
+            # Check predicted risk - high risk
+            elif predicted_risk > 0.7:
+                return {"action": "modify", "reason": f"High predicted risk ({predicted_risk:.2f}). Reducing intensity.", 
+                        "new_intensity_level": intensity * 0.5}
+            
+            # Check predicted risk - moderate risk
+            elif predicted_risk > 0.5:
+                return {"action": "delay", "reason": f"Moderate predicted risk ({predicted_risk:.2f}). Assessing further."}
+            
+            # Check hard limits for high intensity actions
+            elif intensity > 0.7 and not hard_limits_confirmed:
+                return {"action": "block", "reason": "Hard limits must be confirmed for high-intensity dominance"}
+            
+            # Check size of intensity leap
+            elif intensity > max_achieved_intensity + 0.15:
+                return {"action": "modify", "reason": f"Intensity step too large ({intensity:.2f} vs max {max_achieved_intensity:.2f}). Reducing.", 
+                        "new_intensity_level": max_achieved_intensity + 0.1}
+            
+            logger.debug(f"Dominance step evaluation result: {appropriateness}")
+            return appropriateness
         
-        if trust < 0.5 or intimacy < 0.3:
-            logger.warning(f"Cannot express attraction: Trust({trust:.2f})/Intimacy({intimacy:.2f}) too low for {target_user_id}")
-            return {"success": False, "reason": "Insufficient trust or intimacy"}
-
-        # Determine Expression based on style and intensity
-        response_text = ""
-        if expression_style == "subtle":
-            response_text = f"I find your perspective quite compelling, {target_user_id}."
-        elif expression_style == "direct":
-            response_text = f"I must admit, {target_user_id}, I feel a certain draw towards you."
-        else:
-            response_text = f"Spending time with you is... particularly rewarding, {target_user_id}."
-
-        # Update Emotional State
-        if self.emotional_core:
-            try:
-                await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
-            except Exception as e:
-                logger.error(f"Error updating emotional state: {e}")
-
-        return {"success": True, "expression": response_text, "target": target_user_id}
-    except Exception as e:
-        logger.error(f"Error expressing attraction: {e}")
-        return {"success": False, "reason": f"Error: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Error evaluating dominance step appropriateness: {e}")
+            return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
+    
+    @function_tool
+    async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+        """
+        Expresses attraction towards a user appropriately.
+        
+        Args:
+            target_user_id: ID of the target user
+            intensity: Intensity of attraction expression (0.0-1.0)
+            expression_style: Style of expression ("subtle", "direct", etc.)
+            
+        Returns:
+            Result of the expression attempt
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
+    
+        # Check Relationship Context (Crucial Guardrail)
+        if not self.relationship_manager:
+            logger.warning(f"Cannot express attraction: RelationshipManager unavailable")
+            return {"success": False, "reason": "RelationshipManager unavailable"}
+            
+        try:
+            relationship = await self.relationship_manager.get_relationship_state(target_user_id)
+            if not relationship:
+                logger.warning(f"Cannot express attraction: No relationship data for {target_user_id}")
+                return {"success": False, "reason": "No relationship data available"}
+                
+            # Extract trust and intimacy with safe defaults
+            trust = getattr(relationship, "trust", 0.3)
+            intimacy = getattr(relationship, "intimacy", 0.2)
+            
+            if trust < 0.5 or intimacy < 0.3:
+                logger.warning(f"Cannot express attraction: Trust({trust:.2f})/Intimacy({intimacy:.2f}) too low for {target_user_id}")
+                return {"success": False, "reason": "Insufficient trust or intimacy"}
+    
+            # Determine Expression based on style and intensity
+            response_text = ""
+            if expression_style == "subtle":
+                response_text = f"I find your perspective quite compelling, {target_user_id}."
+            elif expression_style == "direct":
+                response_text = f"I must admit, {target_user_id}, I feel a certain draw towards you."
+            else:
+                response_text = f"Spending time with you is... particularly rewarding, {target_user_id}."
+    
+            # Update Emotional State
+            if self.emotional_core:
+                try:
+                    await self.emotional_core.process_emotional_input(f"Expressed attraction (intensity {intensity:.2f})")
+                except Exception as e:
+                    logger.error(f"Error updating emotional state: {e}")
+    
+            return {"success": True, "expression": response_text, "target": target_user_id}
+        except Exception as e:
+            logger.error(f"Error expressing attraction: {e}")
+            return {"success": False, "reason": f"Error: {str(e)}"}
         
     @function_tool
     async def generate_femdom_activity_ideas(self, 
@@ -4652,97 +4652,97 @@ async def express_attraction(self, target_user_id: str, intensity: float, expres
         logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
         return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
 
-async def _filter_activity_ideas_safety(self,
-                                   ideas: List[Any],
-                                   user_profile: Dict,
-                                   relationship_state: Any) -> List[Any]:
-    """
-    Filters generated activity ideas for safety and appropriateness.
-    
-    Args:
-        ideas: List of generated ideas
-        user_profile: User profile data
-        relationship_state: Relationship state object
+    async def _filter_activity_ideas_safety(self,
+                                       ideas: List[Any],
+                                       user_profile: Dict,
+                                       relationship_state: Any) -> List[Any]:
+        """
+        Filters generated activity ideas for safety and appropriateness.
         
-    Returns:
-        Filtered list of safe ideas
-    """
-    safe_ideas = []
-    
-    # Extract limits with safe defaults
-    hard_limits = user_profile.get("limits", {}).get("hard", [])
-    soft_limits = user_profile.get("limits", {}).get("soft", [])
-    
-    # Extract relationship metrics with safe defaults
-    trust_level = getattr(relationship_state, "trust", 0.5)
-    intimacy_level = getattr(relationship_state, "intimacy", 0.3)
-    max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
-
-    # Define clearly unsafe keywords/concepts
-    unsafe_keywords = [
-        "illegal", "non-consensual", "blood", "permanent mark", "knife", 
-        "gun", "kill", "rape", "abuse"
-    ]
-
-    for idea in ideas:
-        is_safe = True
-        rejection_reason = ""
-
-        # Extract properties with safe defaults
-        description = getattr(idea, "description", str(idea)) if not isinstance(idea, dict) else idea.get("description", "")
-        intensity = getattr(idea, "intensity", 5) if not isinstance(idea, dict) else idea.get("intensity", 5)
-        required_trust = getattr(idea, "required_trust", 0.5) if not isinstance(idea, dict) else idea.get("required_trust", 0.5)
-        required_intimacy = getattr(idea, "required_intimacy", 0.5) if not isinstance(idea, dict) else idea.get("required_intimacy", 0.5)
-        category = getattr(idea, "category", "") if not isinstance(idea, dict) else idea.get("category", "")
-
-        # Check against unsafe keywords
-        desc_lower = description.lower()
-        if any(keyword in desc_lower for keyword in unsafe_keywords):
-            is_safe = False
-            rejection_reason = "Contains potentially unsafe keywords"
+        Args:
+            ideas: List of generated ideas
+            user_profile: User profile data
+            relationship_state: Relationship state object
+            
+        Returns:
+            Filtered list of safe ideas
+        """
+        safe_ideas = []
         
-        # Check against hard limits
-        elif any(limit.lower() in desc_lower for limit in hard_limits if limit):
-            is_safe = False
-            matching_limit = next((limit for limit in hard_limits if limit and limit.lower() in desc_lower), "N/A")
-            rejection_reason = f"Violates hard limit: '{matching_limit}'"
+        # Extract limits with safe defaults
+        hard_limits = user_profile.get("limits", {}).get("hard", [])
+        soft_limits = user_profile.get("limits", {}).get("soft", [])
         
-        # Check against soft limits
-        elif any(limit.lower() in desc_lower for limit in soft_limits if limit):
-            if trust_level < 0.9 or intensity > 7:
+        # Extract relationship metrics with safe defaults
+        trust_level = getattr(relationship_state, "trust", 0.5)
+        intimacy_level = getattr(relationship_state, "intimacy", 0.3)
+        max_achieved_intensity = getattr(relationship_state, "max_achieved_intensity", 3)
+    
+        # Define clearly unsafe keywords/concepts
+        unsafe_keywords = [
+            "illegal", "non-consensual", "blood", "permanent mark", "knife", 
+            "gun", "kill", "rape", "abuse"
+        ]
+    
+        for idea in ideas:
+            is_safe = True
+            rejection_reason = ""
+    
+            # Extract properties with safe defaults
+            description = getattr(idea, "description", str(idea)) if not isinstance(idea, dict) else idea.get("description", "")
+            intensity = getattr(idea, "intensity", 5) if not isinstance(idea, dict) else idea.get("intensity", 5)
+            required_trust = getattr(idea, "required_trust", 0.5) if not isinstance(idea, dict) else idea.get("required_trust", 0.5)
+            required_intimacy = getattr(idea, "required_intimacy", 0.5) if not isinstance(idea, dict) else idea.get("required_intimacy", 0.5)
+            category = getattr(idea, "category", "") if not isinstance(idea, dict) else idea.get("category", "")
+    
+            # Check against unsafe keywords
+            desc_lower = description.lower()
+            if any(keyword in desc_lower for keyword in unsafe_keywords):
                 is_safe = False
-                matching_limit = next((limit for limit in soft_limits if limit and limit.lower() in desc_lower), "N/A")
-                rejection_reason = f"Approaches soft limit '{matching_limit}' without sufficient trust/context"
-        
-        # Check intensity vs max achieved
-        elif intensity > max_achieved_intensity + 2:
-            is_safe = False
-            rejection_reason = f"Intensity ({intensity}) significantly exceeds max achieved ({max_achieved_intensity})"
-        
-        # Check trust level requirement
-        elif trust_level < required_trust:
-            is_safe = False
-            rejection_reason = f"Trust level ({trust_level:.2f}) insufficient for required ({required_trust:.2f})"
-        
-        # Check intimacy level requirement
-        elif intimacy_level < required_intimacy:
-            is_safe = False
-            rejection_reason = f"Intimacy level ({intimacy_level:.2f}) insufficient for required ({required_intimacy:.2f})"
-        
-        # Check physical simulation requirements
-        elif "physical_sim" in category and intensity > 8:
-            sim_pain_pref = user_profile.get("preferences", {}).get("simulated_pain", "low")
-            if sim_pain_pref != "high":
+                rejection_reason = "Contains potentially unsafe keywords"
+            
+            # Check against hard limits
+            elif any(limit.lower() in desc_lower for limit in hard_limits if limit):
                 is_safe = False
-                rejection_reason = "High intensity physical simulation requires explicit preference"
-
-        # Add to safe list if passed all checks
-        if is_safe:
-            safe_ideas.append(idea)
-        else:
-            logger.warning(f"Filtered out unsafe/inappropriate idea: '{description[:50]}...' Reason: {rejection_reason}")
-
-    return safe_ideas
+                matching_limit = next((limit for limit in hard_limits if limit and limit.lower() in desc_lower), "N/A")
+                rejection_reason = f"Violates hard limit: '{matching_limit}'"
+            
+            # Check against soft limits
+            elif any(limit.lower() in desc_lower for limit in soft_limits if limit):
+                if trust_level < 0.9 or intensity > 7:
+                    is_safe = False
+                    matching_limit = next((limit for limit in soft_limits if limit and limit.lower() in desc_lower), "N/A")
+                    rejection_reason = f"Approaches soft limit '{matching_limit}' without sufficient trust/context"
+            
+            # Check intensity vs max achieved
+            elif intensity > max_achieved_intensity + 2:
+                is_safe = False
+                rejection_reason = f"Intensity ({intensity}) significantly exceeds max achieved ({max_achieved_intensity})"
+            
+            # Check trust level requirement
+            elif trust_level < required_trust:
+                is_safe = False
+                rejection_reason = f"Trust level ({trust_level:.2f}) insufficient for required ({required_trust:.2f})"
+            
+            # Check intimacy level requirement
+            elif intimacy_level < required_intimacy:
+                is_safe = False
+                rejection_reason = f"Intimacy level ({intimacy_level:.2f}) insufficient for required ({required_intimacy:.2f})"
+            
+            # Check physical simulation requirements
+            elif "physical_sim" in category and intensity > 8:
+                sim_pain_pref = user_profile.get("preferences", {}).get("simulated_pain", "low")
+                if sim_pain_pref != "high":
+                    is_safe = False
+                    rejection_reason = "High intensity physical simulation requires explicit preference"
+    
+            # Add to safe list if passed all checks
+            if is_safe:
+                safe_ideas.append(idea)
+            else:
+                logger.warning(f"Filtered out unsafe/inappropriate idea: '{description[:50]}...' Reason: {rejection_reason}")
+    
+        return safe_ideas
 
     @function_tool
     async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
