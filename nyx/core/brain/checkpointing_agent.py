@@ -39,6 +39,11 @@ class CheckpointingPlannerAgent:
             output_type=None,  # We want raw (LLM) output, not a Pydantic model
         )
 
+  async def llm_periodic_checkpoint(state_input: dict) -> dict:
+      """Wrapper function to handle periodic checkpointing via LLM."""
+      agent = CheckpointingPlannerAgent()
+      return await agent.recommend_checkpoint(state_input)  
+
     async def recommend_checkpoint(self, state_input: dict) -> dict:
         """
         Calls the LLM agent. Returns a dict with "to_save" and "skip_fields".
