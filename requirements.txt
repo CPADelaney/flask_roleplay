@@ -20,6 +20,7 @@ asgiref
 quart
 asyncio-extras
 Tkinter
+smolagents>=1.0.0
 
 # Web framework
 flask==3.0.0
