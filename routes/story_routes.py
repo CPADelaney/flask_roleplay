@@ -29,6 +29,7 @@ from logic.resource_management import ResourceManager
 from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
+from lore.lore_system import LoreSystem
 
 # Import IntegratedNPCSystem
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
@@ -494,6 +495,21 @@ async def fetch_interactions_async():
     AGGREGATOR_CACHE.set("interactions", result, 300)  # TTL: 5 minutes
     
     return result
+
+async def get_lore_system(user_id: int, conversation_id: int):
+    """
+    Get an initialized instance of the LoreSystem.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized LoreSystem instance
+    """
+    lore_system = LoreSystem.get_instance(user_id, conversation_id)
+    await lore_system.initialize()
+    return lore_system
 
 @timed_function(name="get_nearby_npcs")
 @cache.cached(timeout=300)  # 5-minute cache
