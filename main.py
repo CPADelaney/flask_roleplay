@@ -504,6 +504,7 @@ def create_flask_app():
     app.register_blueprint(nyx_agent_bp, url_prefix='/nyx')
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
+    app.before_request(ip_block_middleware)
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
     init_chat_routes(app) # Ensure this uses asyncpg if needed
