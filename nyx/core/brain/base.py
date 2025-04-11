@@ -954,27 +954,38 @@ async def initialize(self):
             self.apply_event(evt["event_type"], evt["event_payload"])
 
     def apply_event(self, event_type, event_payload):
-        # --- Memory/diary events ---
+        """
+        Apply an event to this agent's state. Expand as you add new event types!
+        """
+        # --- Memory and Diary ---
         if event_type == "thought":
-            # Diary-style, likely a string
+            # append string (diary entry)
             self.memory.append(event_payload["diary"])
+    
         elif event_type == "memory_update":
-            # Explicit memory item (could be list or str)
+            # append to memory, avoid duplicates
             item = event_payload.get("memory_item")
             if item and item not in self.memory:
                 self.memory.append(item)
     
-        # --- Emotions, mood, feeling ---
+        elif event_type == "memory_delete":
+            item = event_payload.get("memory_item")
+            if item in self.memory:
+                self.memory.remove(item)
+    
+        # --- Emotions, Mood, Feeling ---
         elif event_type == "emotion":
-            # e.g. {'emotions': [{'label': 'joy', 'intensity': 0.7}]}
+            # extend with list, dedupe by label (latest wins)
             self.current_emotions.extend(event_payload["emotions"])
-            # Optionally: deduplicate
             self.current_emotions = self._dedupe_emotions(self.current_emotions)
     
         elif event_type == "mood_change":
             self.mood = event_payload["to"]
     
-        # --- User/system interaction ---
+        elif event_type == "emotion_reset":
+            self.current_emotions.clear()
+    
+        # --- Messages (User/System) ---
         elif event_type == "user_message":
             msg = event_payload if isinstance(event_payload, dict) else {"raw": event_payload}
             self.message_history.append(msg)
@@ -982,59 +993,83 @@ async def initialize(self):
         elif event_type == "system_message":
             self.system_log.append(event_payload)
     
-        # --- Goals/needs/satisfactions ---
+        # --- Goals ---
         elif event_type == "goal_added":
-            # e.g. {'goal': {'text': "...", ...}}
             self.goals.append(event_payload["goal"])
         elif event_type == "goal_completed":
             goal = event_payload.get("goal")
             if goal in self.goals:
                 self.goals.remove(goal)
             self.completed_goals.append(goal)
+        elif event_type == "goal_failed":
+            goal = event_payload.get("goal")
+            if goal in self.goals:
+                self.goals.remove(goal)
+            self.failed_goals.append(goal)
     
+        # --- Needs/Drives ---
         elif event_type == "need_update":
-            # e.g. {'need': 'sleep', 'delta': -0.2}
             need = event_payload["need"]
             delta = event_payload["delta"]
             self.needs[need] = self.needs.get(need, 0) + delta
+        elif event_type == "need_set":
+            need = event_payload["need"]
+            value = event_payload["value"]
+            self.needs[need] = value
     
-        # --- Stats / settings / personality changes ---
+        # --- Stats/Personality ---
         elif event_type == "stat_update":
-            # e.g. {'stat': 'curiosity', 'new_value': 0.8}
             self.stats[event_payload["stat"]] = event_payload["new_value"]
-    
         elif event_type == "setting_change":
             self.settings[event_payload["setting"]] = event_payload["value"]
     
-        # --- Name, persona, identity ---
+        # --- Agent Name/Identity/Persona ---
         elif event_type == "identity_change":
-            # e.g. {'name': 'Alice', 'persona': 'Cheerful Hacker'}
-            self.name = event_payload.get("name", self.name)
-            self.persona = event_payload.get("persona", self.persona)
+            self.name = event_payload.get("name", getattr(self, "name", None))
+            self.persona = event_payload.get("persona", getattr(self, "persona", None))
+        elif event_type == "trait_update":
+            trait = event_payload.get("trait")
+            value = event_payload.get("value")
+            if trait:
+                self.traits[trait] = value
     
-        # --- Memory deletion (undo/redo style events, rare but advanced) ---
-        elif event_type == "memory_delete":
-            item = event_payload.get("memory_item")
-            if item in self.memory:
-                self.memory.remove(item)
+        # --- Reflections/Self-Insight ---
+        elif event_type == "reflection":
+            self.reflections.append(event_payload["reflection"])
+        elif event_type == "reflection_delete":
+            reflection = event_payload.get("reflection")
+            if reflection in self.reflections:
+                self.reflections.remove(reflection)
     
+        # --- Procedural/Habit Learning ---
+        elif event_type == "habit_learned":
+            habit = event_payload.get("habit")
+            if habit:
+                self.habits.append(habit)
+        elif event_type == "habit_lost":
+            habit = event_payload.get("habit")
+            if habit in self.habits:
+                self.habits.remove(habit)
+    
+        # --- Undo/Redo/Reset (advanced) ---
         elif event_type == "undo":
-            # Custom logic to pop/reverse last event, etc
-            self.undo_last_event()  # you'd need to implement an undo system
+            # If you keep an event stack, pop and re-apply state
+            self.undo_last_event()
+        elif event_type == "redo":
+            self.redo_last_event()
     
-        # --- Arbitrary user/system state ---
+        # --- Custom/Advanced or Arbitrary State blobs ---
         elif event_type == "custom_state":
-            # Allows for entirely generic fields to be set/restored
             for k, v in event_payload.items():
                 setattr(self, k, v)
     
-        # --- Unknown or legacy event (log for debug) ---
+        # --- Unknown/Legacy ---
         else:
-            # You’ll want a logger here in real code!
-            print(f"WARNING: Unrecognized event_type: {event_type} -> {event_payload}")
+            logger.warning(f"[EventReplay] Unrecognized event_type: {event_type} -> {event_payload}")
+
     
     def _dedupe_emotions(self, emotions):
-        # Example dedupe helper: keep only one per label, latest intensity
+        """Latest emotion for each label wins."""
         seen = {}
         for em in emotions:
             seen[em['label']] = em
@@ -1049,8 +1084,6 @@ async def initialize(self):
             since = None
         await self.replay_events(since_time=since)
         
-        
-    
     async def trace_operation(self, source_module: str, operation: str, **kwargs):
         """
         Trace an operation using the integrated tracer.
