@@ -101,6 +101,7 @@ class MemoryNyxBridge:
             await self.governor.register_agent(
                 agent_type=AgentType.MEMORY_MANAGER,
                 agent_instance=self.memory_agent
+                agent_id="memory_manager"
             )
             
             # Issue a general directive for memory management
