@@ -17,6 +17,7 @@ from agents import function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance 
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
+from lore.lore_system import LoreSystem
 from db.connection import get_db_connection_context
 
 from logic.conflict_system.conflict_agents import (
@@ -104,6 +105,21 @@ class ConflictSystemIntegration:
         )
         
         return permission
+
+    async def get_lore_system(user_id: int, conversation_id: int):
+        """
+        Get an initialized instance of the LoreSystem.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Initialized LoreSystem instance
+        """
+        lore_system = LoreSystem.get_instance(user_id, conversation_id)
+        await lore_system.initialize()
+        return lore_system    
     
     async def report_action(self, action: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
         """
