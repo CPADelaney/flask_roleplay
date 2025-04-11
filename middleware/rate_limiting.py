@@ -269,3 +269,177 @@ async def get_rate_limit_stats(key_pattern: str = "*") -> Dict:
     except redis.RedisError as e:
         logger.error(f"Error getting rate limit stats: {e}")
         return {}
+class IPBlockList:
+    """IP address blocklist for explicitly blocking certain IP addresses."""
+    
+    def __init__(self):
+        self.blocked_ips = set()  # Local in-memory blocklist
+        self.redis_client = None
+        self.redis_key_prefix = "ip_blocklist:"
+    
+    async def _get_redis(self) -> Optional[redis.Redis]:
+        """Get or create Redis connection."""
+        try:
+            if not hasattr(g, 'ip_block_redis'):
+                redis_url = current_app.config.get('REDIS_URL', 'redis://localhost:6379/0')
+                g.ip_block_redis = redis.from_url(redis_url)
+            return g.ip_block_redis
+        except Exception as e:
+            logger.error(f"Redis connection error in IPBlockList: {e}")
+            return None
+    
+    async def is_blocked(self, ip_address: str, distributed: bool = True) -> bool:
+        """
+        Check if an IP address is blocked.
+        
+        Args:
+            ip_address: The IP address to check
+            distributed: Whether to use Redis for distributed blocking
+            
+        Returns:
+            bool: True if IP is blocked, False otherwise
+        """
+        # Check local blocklist first
+        if ip_address in self.blocked_ips:
+            logger.debug(f"IP {ip_address} found in local blocklist")
+            return True
+        
+        # Check Redis if distributed mode is enabled
+        if distributed:
+            try:
+                redis_client = await self._get_redis()
+                if redis_client:
+                    key = f"{self.redis_key_prefix}{ip_address}"
+                    return bool(redis_client.exists(key))
+            except redis.RedisError as e:
+                logger.error(f"Redis error checking blocked IP: {e}")
+                # Fall back to local check only
+        
+        return False
+    
+    async def block_ip(self, ip_address: str, reason: str = "Manual block", 
+                      duration: int = 86400, distributed: bool = True) -> bool:
+        """
+        Block an IP address.
+        
+        Args:
+            ip_address: The IP address to block
+            reason: Reason for blocking
+            duration: Duration of block in seconds (default: 24 hours)
+            distributed: Whether to use Redis for distributed blocking
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Always add to local blocklist
+        self.blocked_ips.add(ip_address)
+        
+        # Add to Redis if distributed mode is enabled
+        if distributed:
+            try:
+                redis_client = await self._get_redis()
+                if redis_client:
+                    key = f"{self.redis_key_prefix}{ip_address}"
+                    redis_client.setex(
+                        key,
+                        duration,
+                        json.dumps({
+                            "reason": reason,
+                            "blocked_at": time.time()
+                        })
+                    )
+                    logger.info(f"IP {ip_address} blocked in Redis for {duration}s: {reason}")
+                    return True
+            except redis.RedisError as e:
+                logger.error(f"Redis error blocking IP: {e}")
+                # Continue with local block only
+        
+        logger.info(f"IP {ip_address} blocked locally: {reason}")
+        return True
+    
+    async def unblock_ip(self, ip_address: str, distributed: bool = True) -> bool:
+        """
+        Unblock an IP address.
+        
+        Args:
+            ip_address: The IP address to unblock
+            distributed: Whether to use Redis for distributed blocking
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        # Remove from local blocklist
+        if ip_address in self.blocked_ips:
+            self.blocked_ips.remove(ip_address)
+        
+        # Remove from Redis if distributed mode is enabled
+        if distributed:
+            try:
+                redis_client = await self._get_redis()
+                if redis_client:
+                    key = f"{self.redis_key_prefix}{ip_address}"
+                    redis_client.delete(key)
+                    logger.info(f"IP {ip_address} unblocked in Redis")
+                    return True
+            except redis.RedisError as e:
+                logger.error(f"Redis error unblocking IP: {e}")
+                # Continue with local unblock only
+        
+        logger.info(f"IP {ip_address} unblocked locally")
+        return True
+    
+    async def get_blocked_ips(self, distributed: bool = True) -> Dict[str, Dict]:
+        """
+        Get all blocked IPs with metadata.
+        
+        Args:
+            distributed: Whether to use Redis for distributed blocking
+            
+        Returns:
+            Dict: Dictionary of blocked IPs with metadata
+        """
+        result = {ip: {"reason": "Local block", "blocked_at": 0} for ip in self.blocked_ips}
+        
+        # Get from Redis if distributed mode is enabled
+        if distributed:
+            try:
+                redis_client = await self._get_redis()
+                if redis_client:
+                    for key in redis_client.scan_iter(f"{self.redis_key_prefix}*"):
+                        ip = key.decode('utf-8').replace(self.redis_key_prefix, "")
+                        data = redis_client.get(key)
+                        if data:
+                            try:
+                                info = json.loads(data.decode('utf-8'))
+                                result[ip] = info
+                            except json.JSONDecodeError:
+                                result[ip] = {"reason": "Unknown", "blocked_at": 0}
+            except redis.RedisError as e:
+                logger.error(f"Redis error getting blocked IPs: {e}")
+                # Return local blocklist only
+        
+        return result
+
+# Create global instance
+ip_block_list = IPBlockList()
+
+def ip_block_middleware():
+    """
+    Middleware function for IP blocking.
+    
+    Usage:
+        # In app setup:
+        app.before_request(ip_block_middleware)
+    """
+    async def check_ip():
+        client_ip = request.remote_addr
+        if await ip_block_list.is_blocked(client_ip):
+            logger.warning(f"Blocked request from IP: {client_ip}")
+            abort(403, "Your IP address has been blocked")
+    
+    # Run async function in current event loop
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        loop.create_task(check_ip())
+    else:
+        asyncio.run(check_ip())
