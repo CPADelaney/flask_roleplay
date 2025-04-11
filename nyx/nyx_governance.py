@@ -132,7 +132,7 @@ class NyxUnifiedGovernor:
         }
         
         # Initialize systems
-        await self._initialize_systems()
+        self._initialize_systems()
     
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
