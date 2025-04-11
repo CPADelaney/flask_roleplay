@@ -74,7 +74,7 @@ from db.connection import (
 from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
 
 # Middleware
-from middleware.rate_limiting import rate_limit, ip_block_list
+from middleware.rate_limiting import rate_limit, ip_block_list, ip_block_middleware
 from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons
