@@ -4509,148 +4509,148 @@ async def _register_processing_modules(self):
                                         purpose: str,
                                         desired_intensity_range: Tuple[int, int] = (3, 7),
                                         num_ideas: int = 4) -> Dict:
-    """
-    Generates tailored Femdom activity ideas using the appropriate agent.
-    
-    Args:
-        user_id: The user ID to generate ideas for
-        purpose: The purpose of the ideas
-        desired_intensity_range: Min/max intensity level
-        num_ideas: Number of ideas to generate
-        
-    Returns:
-        Generation results with ideas
-    """
-    if not self.initialized:
-        await self.initialize()
-        
-    logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
-
-    # --- Select Agent Based on Intensity ---
-    min_intensity, max_intensity = desired_intensity_range
-    use_hard_agent = max_intensity >= 7  # Use hard agent if range includes 7+
-
-    # Verify agent availability
-    if use_hard_agent and not hasattr(self, "hard_dominance_ideation_agent"):
-        logger.warning("Hard dominance ideation agent not available, falling back to general agent")
-        use_hard_agent = False
-    
-    if not use_hard_agent and not hasattr(self, "general_dominance_ideation_agent"):
-        logger.error("No dominance ideation agents available")
-        return {
-            "success": False, 
-            "error": "Dominance ideation capability not available", 
-            "ideas": []
-        }
-
-    agent_to_use = self.hard_dominance_ideation_agent if use_hard_agent else self.general_dominance_ideation_agent
-    agent_name = "HardDominanceIdeationAgent" if use_hard_agent else "DominanceIdeationAgent"
-        
-    try:
-        # 1. Gather Context for the agent
-        user_profile = await self.get_user_profile_for_ideation(user_id)
-        
-        # Check relationship state
-        relationship_state = None
-        if self.relationship_manager:
-            try:
-                relationship_state = await self.relationship_manager.get_relationship_state(user_id)
-            except Exception as e:
-                logger.error(f"Error getting relationship state: {e}")
-        
-        if not relationship_state:
-            logger.warning(f"No relationship state available for {user_id}")
-            return {"success": False, "error": "Relationship state unavailable", "ideas": []}
-
-        # 2. Check prerequisites for hard agent
-        if use_hard_agent:
-            hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
-            if not hard_limits_confirmed:
-                logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed")
-                return {
-                    "success": False, 
-                    "error": "Cannot generate high-intensity ideas: Hard limits not confirmed", 
-                    "ideas": []
-                }
-                
-            # Check user's intensity preference
-            user_intensity_pref = user_profile.get("preferences", {}).get("intensity_preference_level", 5)
-            if user_intensity_pref < 7:
-                logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low")
-                return {
-                    "success": False, 
-                    "error": "Cannot generate high-intensity ideas: User intensity preference too low", 
-                    "ideas": []
-                }
-
-        # 3. Get scenario context
-        scenario_context = None
-        if hasattr(self, "get_current_scenario_context"):
-            try:
-                scenario_context = await self.get_current_scenario_context()
-            except Exception as e:
-                logger.error(f"Error getting scenario context: {e}")
-                scenario_context = {"scene_setting": "General interaction"}
-
-        # 4. Construct Prompt for Agent
-        prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
-        Purpose: {purpose}
-        Desired Intensity Range: {min_intensity}-{max_intensity}
-
-        Use the provided user profile and scenario context (available via tools) to tailor the ideas.
-        Ensure ideas align with Nyx's personality.
-        Output ONLY the JSON list of FemdomActivityIdea objects.
         """
-
-        # 5. Run Ideation Agent
-        from agents import Runner
+        Generates tailored Femdom activity ideas using the appropriate agent.
+    
+        Args:
+            user_id: The user ID to generate ideas for
+            purpose: The purpose of the ideas
+            desired_intensity_range: Min/max intensity level
+            num_ideas: Number of ideas to generate
+    
+        Returns:
+            Generation results with ideas
+        """
+        if not self.initialized:
+            await self.initialize()
         
-        try:
-            result = await Runner.run(agent_to_use, prompt)
+        logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
+    
+        # --- Select Agent Based on Intensity ---
+        min_intensity, max_intensity = desired_intensity_range
+        use_hard_agent = max_intensity >= 7  # Use hard agent if range includes 7+
+    
+        # Verify agent availability
+        if use_hard_agent and not hasattr(self, "hard_dominance_ideation_agent"):
+            logger.warning("Hard dominance ideation agent not available, falling back to general agent")
+            use_hard_agent = False
+        
+        if not use_hard_agent and not hasattr(self, "general_dominance_ideation_agent"):
+            logger.error("No dominance ideation agents available")
+            return {
+                "success": False, 
+                "error": "Dominance ideation capability not available", 
+                "ideas": []
+            }
+    
+        agent_to_use = self.hard_dominance_ideation_agent if use_hard_agent else self.general_dominance_ideation_agent
+        agent_name = "HardDominanceIdeationAgent" if use_hard_agent else "DominanceIdeationAgent"
             
-            # 6. Process and validate results
-            if hasattr(result, "final_output") and isinstance(result.final_output, list):
-                generated_ideas = result.final_output
-                
-                # 7. Apply safety filter
-                filtered_ideas = await self._filter_activity_ideas_safety(
-                    generated_ideas, 
-                    user_profile, 
-                    relationship_state
-                )
-                
-                if not filtered_ideas:
-                    logger.warning(f"All generated ideas were filtered out by safety checks")
+        try:
+            # 1. Gather Context for the agent
+            user_profile = await self.get_user_profile_for_ideation(user_id)
+            
+            # Check relationship state
+            relationship_state = None
+            if self.relationship_manager:
+                try:
+                    relationship_state = await self.relationship_manager.get_relationship_state(user_id)
+                except Exception as e:
+                    logger.error(f"Error getting relationship state: {e}")
+            
+            if not relationship_state:
+                logger.warning(f"No relationship state available for {user_id}")
+                return {"success": False, "error": "Relationship state unavailable", "ideas": []}
+    
+            # 2. Check prerequisites for hard agent
+            if use_hard_agent:
+                hard_limits_confirmed = getattr(relationship_state, "hard_limits_confirmed", False)
+                if not hard_limits_confirmed:
+                    logger.error(f"Cannot use Hard Agent for {user_id}: Hard limits not confirmed")
                     return {
                         "success": False, 
-                        "error": "No ideas passed safety filtering", 
+                        "error": "Cannot generate high-intensity ideas: Hard limits not confirmed", 
                         "ideas": []
                     }
+                    
+                # Check user's intensity preference
+                user_intensity_pref = user_profile.get("preferences", {}).get("intensity_preference_level", 5)
+                if user_intensity_pref < 7:
+                    logger.error(f"Cannot use Hard Agent for {user_id}: User intensity preference ({user_intensity_pref}) is too low")
+                    return {
+                        "success": False, 
+                        "error": "Cannot generate high-intensity ideas: User intensity preference too low", 
+                        "ideas": []
+                    }
+    
+            # 3. Get scenario context
+            scenario_context = None
+            if hasattr(self, "get_current_scenario_context"):
+                try:
+                    scenario_context = await self.get_current_scenario_context()
+                except Exception as e:
+                    logger.error(f"Error getting scenario context: {e}")
+                    scenario_context = {"scene_setting": "General interaction"}
+    
+            # 4. Construct Prompt for Agent
+            prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
+            Purpose: {purpose}
+            Desired Intensity Range: {min_intensity}-{max_intensity}
+    
+            Use the provided user profile and scenario context (available via tools) to tailor the ideas.
+            Ensure ideas align with Nyx's personality.
+            Output ONLY the JSON list of FemdomActivityIdea objects.
+            """
+    
+            # 5. Run Ideation Agent
+            from agents import Runner
+            
+            try:
+                result = await Runner.run(agent_to_use, prompt)
                 
-                # Convert ideas to dicts for broader compatibility
-                ideas_as_dicts = []
-                for idea in filtered_ideas:
-                    if hasattr(idea, "model_dump"):
-                        ideas_as_dicts.append(idea.model_dump())
-                    else:
-                        ideas_as_dicts.append(idea)  # Assume already dict
-                
-                return {"success": True, "ideas": ideas_as_dicts}
-            else:
-                logger.error(f"Unexpected output format from ideation agent: {type(result.final_output)}")
-                return {
-                    "success": False, 
-                    "error": "Invalid output from ideation agent", 
-                    "ideas": []
-                }
+                # 6. Process and validate results
+                if hasattr(result, "final_output") and isinstance(result.final_output, list):
+                    generated_ideas = result.final_output
+                    
+                    # 7. Apply safety filter
+                    filtered_ideas = await self._filter_activity_ideas_safety(
+                        generated_ideas, 
+                        user_profile, 
+                        relationship_state
+                    )
+                    
+                    if not filtered_ideas:
+                        logger.warning(f"All generated ideas were filtered out by safety checks")
+                        return {
+                            "success": False, 
+                            "error": "No ideas passed safety filtering", 
+                            "ideas": []
+                        }
+                    
+                    # Convert ideas to dicts for broader compatibility
+                    ideas_as_dicts = []
+                    for idea in filtered_ideas:
+                        if hasattr(idea, "model_dump"):
+                            ideas_as_dicts.append(idea.model_dump())
+                        else:
+                            ideas_as_dicts.append(idea)  # Assume already dict
+                    
+                    return {"success": True, "ideas": ideas_as_dicts}
+                else:
+                    logger.error(f"Unexpected output format from ideation agent: {type(result.final_output)}")
+                    return {
+                        "success": False, 
+                        "error": "Invalid output from ideation agent", 
+                        "ideas": []
+                    }
+                    
+            except Exception as e:
+                logger.exception(f"Error running DominanceIdeationAgent: {e}")
+                return {"success": False, "error": f"Idea generation failed: {e}", "ideas": []}
                 
         except Exception as e:
-            logger.exception(f"Error running DominanceIdeationAgent: {e}")
-            return {"success": False, "error": f"Idea generation failed: {e}", "ideas": []}
-            
-    except Exception as e:
-        logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
-        return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
+            logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
+            return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
 
     async def _filter_activity_ideas_safety(self,
                                        ideas: List[Any],
