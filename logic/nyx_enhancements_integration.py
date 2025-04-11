@@ -6,38 +6,16 @@ from datetime import datetime
 import json
 import os
 from celery_config import celery_app
-from nyx.nyx_agent import NyxAgent
-from logic.aggregator import get_aggregated_roleplay_context
+from nyx.nyx_agent_sdk import NyxAgent
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
-from logic.universal_updater import apply_universal_updates_async
-from logic.nyx_memory import NyxMemoryManager, perform_memory_maintenance
-from nyx.nyx_memory_system import initialize_nyx_memory_tables
-from nyx.nyx_model_manager import initialize_user_model_tables
+from logic.universal_updater_agent import apply_universal_updates_async
+from memory.memory_nyx_integration import MemoryNyxBridge, run_maintenance
 from npcs.npc_learning_adaptation import NPCLearningManager
 from db.connection import get_db_connection_context
 import asyncpg
-
-async def initialize_nyx_memory_system():
-    """
-    Initialize all necessary database tables for the Nyx agent.
-    
-    This should be called during application startup.
-    """
-    try:
-        # Initialize memory tables
-        await initialize_nyx_memory_tables()
-        
-        # Initialize user model tables
-        await initialize_user_model_tables()
-        
-        logging.info("Successfully initialized Nyx memory system")
-    except Exception as e:
-        logging.error(f"Error initializing Nyx memory system: {e}", exc_info=True)
-        raise
-
-logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------
 # Celery Tasks for Background Processing
@@ -67,7 +45,7 @@ def nyx_memory_maintenance_task():
                     conversation_id = row["conversation_id"]
                     
                     try:
-                        await perform_memory_maintenance(user_id, conversation_id)
+                        await run_maintenance(user_id, conversation_id)
                         logger.info(f"Memory maintenance completed for user_id={user_id}, conversation_id={conversation_id}")
                     except Exception as e:
                         logger.error(f"Error in memory maintenance for user_id={user_id}, conversation_id={conversation_id}: {str(e)}")
@@ -254,7 +232,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                 
         # Store memory of the response (asynchronously)
         try:
-            nyx_memory = NyxMemoryManager(user_id, conversation_id)
+            nyx_memory = MemoryNyxBridge(user_id, conversation_id)
             
             memory_task = asyncio.create_task(
                 nyx_memory.add_memory(
@@ -508,7 +486,7 @@ async def nyx_introspection_endpoint(user_id, conversation_id):
     Can be integrated into your API routes.
     """
     try:
-        nyx_memory = NyxMemoryManager(user_id, conversation_id)
+        nyx_memory = MemoryNyxBridge(user_id, conversation_id)
         introspection = await nyx_memory.generate_introspection()
         
         return {
