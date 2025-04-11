@@ -5,6 +5,7 @@ import json
 import logging
 import asyncio
 import asyncpg # Import asyncpg
+import datetime
 from celery_config import celery_app # Import our dedicated Celery app
 
 # Import your helper functions and task logic
@@ -14,6 +15,9 @@ from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
 from db.connection import get_async_db_connection, get_db_connection_context # Import async context manager
+
+from nyx.core.brain.base import NyxBrain  # Adjust import path if needed
+
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +622,56 @@ def nyx_memory_maintenance_task():
     except Exception as e:
         logger.exception("Critical error in nyx_memory_maintenance_task")
         return {"status": "error", "error": str(e)}
+
+async def find_split_brain_nyxes():
+    """
+    Find all nyx_id's with >1 recent checkpoints (i.e., split-brain state).
+    """
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30)
+    async with get_db_connection_context() as conn:
+        rows = await conn.fetch("""
+            SELECT nyx_id, count(*)
+            FROM nyx_brain_checkpoints
+            WHERE checkpoint_time > $1
+            GROUP BY nyx_id
+            HAVING count(distinct instance_id) > 1
+        """, cutoff)
+    return [row["nyx_id"] for row in rows]
+
+async def perform_sweep_and_merge():
+    """
+    For each split-brain Nyx, call the merge/restore logic.
+    """
+    split_nyxes = await find_split_brain_nyxes()
+    if not split_nyxes:
+        logger.info("No splits found.")
+        return
+
+    logger.info(f"Found split-brain Nyxes: {split_nyxes}")
+    for nyx_id in split_nyxes:
+        try:
+            # Modify NyxBrain.get_instance signature as needed for your system!
+            brain = await NyxBrain.get_instance(0, 0, nyx_id=nyx_id)
+            await brain.restore_entity_from_distributed_checkpoints()
+            logger.info(f"Successfully merged split-brain Nyx: {nyx_id}")
+        except Exception as e:
+            logger.error(f"Failed to merge {nyx_id}: {e}", exc_info=True)
+
+@celery_app.task
+def sweep_and_merge_nyx_split_brains():
+    """
+    Celery task for periodically merging split-brain Nyx instances.
+    Use as a periodic/beat-maintenance task!
+    """
+    logger.info("Starting split-brain Nyx sweep-and-merge task")
+    try:
+        asyncio.run(perform_sweep_and_merge())
+        logger.info("Sweep-and-merge task completed successfully.")
+        return {"status": "success"}
+    except Exception as e:
+        logger.exception("Sweep-and-merge task failed")
+        return {"status": "error", "error": str(e)}
+
 
 # Assign celery_app to 'app' if needed for discovery, although explicit -A tasks should work
 app = celery_app
