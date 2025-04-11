@@ -1133,3 +1133,39 @@ async def register_with_governance(user_id: int, conversation_id: int):
     )
     
     logging.info("Universal Updater registered with Nyx governance")
+
+async def initialize_universal_updater(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Initialize the Universal Updater system and register with governance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary containing initialized context and status
+    """
+    try:
+        # Create and initialize the updater context
+        updater_context = UniversalUpdaterContext(user_id, conversation_id)
+        await updater_context.initialize()
+        
+        # Register with governance system
+        await register_with_governance(user_id, conversation_id)
+        
+        logging.info(f"Universal Updater initialized for user {user_id}, conversation {conversation_id}")
+        
+        return {
+            "context": updater_context,
+            "agents": {
+                "extraction_agent": extraction_agent,
+                "universal_updater_agent": universal_updater_agent
+            },
+            "status": "initialized"
+        }
+    except Exception as e:
+        logging.error(f"Error initializing Universal Updater: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "status": "failed"
+        }
