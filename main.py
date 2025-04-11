@@ -346,7 +346,8 @@ async def initialize_systems(app):
         # Universal updater (assuming async)
         try:
             from logic.universal_updater_agent import initialize_universal_updater
-            await initialize_universal_updater() # Assuming async
+            # Use the same system IDs as used for other initializations
+            await initialize_universal_updater(system_user_id, system_conversation_id)
             logger.info("Universal updater initialized.")
         except Exception as e: logger.error(f"Error initializing Universal Updater: {e}", exc_info=True)
 
