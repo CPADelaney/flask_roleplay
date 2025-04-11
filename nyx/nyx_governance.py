@@ -20,6 +20,7 @@ import logging
 import json
 import asyncio
 import inspect
+import time  # If not already imported
 import importlib
 import pkgutil
 import re
@@ -247,6 +248,146 @@ class NyxUnifiedGovernor:
         await self._record_coordination(goal, plan, result)
         
         return result
+
+    async def register_agent(
+        self,
+        agent_type: str,
+        agent_instance: Any,
+        agent_id: str
+    ) -> Dict[str, Any]:
+        """
+        Register an agent with the governance system.
+        
+        Args:
+            agent_type: Type of agent (use AgentType constants)
+            agent_instance: The agent instance to register
+            agent_id: ID to assign to the agent
+            
+        Returns:
+            Dictionary with registration results
+        """
+        # Store in registered_agents
+        if agent_type not in self.registered_agents:
+            self.registered_agents[agent_type] = {}
+        
+        self.registered_agents[agent_type][agent_id] = agent_instance
+        
+        # Log the registration
+        logger.info(f"Agent registered: {agent_type} / {agent_id}")
+        
+        return {
+            "success": True,
+            "agent_type": agent_type,
+            "agent_id": agent_id,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    async def issue_directive(
+        self,
+        agent_type: str,
+        agent_id: str,
+        directive_type: str,
+        directive_data: Dict[str, Any],
+        priority: int = DirectivePriority.MEDIUM,
+        duration_minutes: int = 60
+    ) -> Dict[str, Any]:
+        """
+        Issue a directive to an agent.
+        
+        Args:
+            agent_type: Type of agent to issue directive to
+            agent_id: ID of agent to issue directive to
+            directive_type: Type of directive to issue
+            directive_data: Data for the directive
+            priority: Priority of the directive
+            duration_minutes: How long the directive should remain active
+            
+        Returns:
+            Dictionary with directive results
+        """
+        # Check if the agent is registered
+        if (agent_type not in self.registered_agents or
+            agent_id not in self.registered_agents[agent_type]):
+            return {
+                "success": False,
+                "reason": f"Agent not found: {agent_type} / {agent_id}"
+            }
+        
+        # Create a directive entry
+        directive_id = f"{agent_type}_{agent_id}_{int(datetime.now().timestamp())}"
+        expiration = datetime.now() + timedelta(minutes=duration_minutes)
+        
+        directive = {
+            "id": directive_id,
+            "agent_type": agent_type,
+            "agent_id": agent_id,
+            "type": directive_type,
+            "data": directive_data,
+            "priority": priority,
+            "issued_at": datetime.now().isoformat(),
+            "expires_at": expiration.isoformat(),
+            "status": "active"
+        }
+        
+        # Store the directive
+        if not hasattr(self, "directives"):
+            self.directives = {}
+        
+        self.directives[directive_id] = directive
+        
+        # Log the directive
+        logger.info(f"Directive issued: {directive_id} to {agent_type} / {agent_id}")
+        
+        return {
+            "success": True,
+            "directive_id": directive_id,
+            "expires_at": expiration.isoformat()
+        }
+    
+    async def process_agent_action_report(
+        self,
+        agent_type: str,
+        agent_id: str,
+        action: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process a report of an action taken by an agent.
+        
+        Args:
+            agent_type: Type of agent that took the action
+            agent_id: ID of agent that took the action
+            action: Description of the action
+            result: Result of the action
+            
+        Returns:
+            Dictionary with processing results
+        """
+        # Create an action report
+        report_id = f"{agent_type}_{agent_id}_{int(datetime.now().timestamp())}"
+        
+        report = {
+            "id": report_id,
+            "agent_type": agent_type,
+            "agent_id": agent_id,
+            "action": action,
+            "result": result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Store the report
+        if not hasattr(self, "action_reports"):
+            self.action_reports = {}
+        
+        self.action_reports[report_id] = report
+        
+        # Log the report
+        logger.info(f"Action report processed: {report_id} from {agent_type} / {agent_id}")
+        
+        return {
+            "success": True,
+            "report_id": report_id
+        }    
     
     async def _analyze_goal_requirements(self, goal: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze requirements for achieving a goal."""
