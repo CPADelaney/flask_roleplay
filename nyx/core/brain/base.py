@@ -15,11 +15,13 @@ from agents import (
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
+from nyx_distributed_checkpoint import DistributedCheckpointMixin
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-class NyxBrain:
+class NyxBrain(DistributedCheckpointMixin):
     """
     Central integration point for all Nyx systems.
     Uses composition to delegate to specialized components while managing their coordination.
