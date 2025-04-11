@@ -591,7 +591,7 @@ async def search_entities_tool(
         )
 
 @function_tool
-async def add_memory_tool(
+async def add_vector_memory_tool(
     ctx: RunContextWrapper,
     user_id: int,
     conversation_id: int,
@@ -620,7 +620,7 @@ async def add_memory_tool(
     try:
         return await future
     except Exception as e:
-        logger.error(f"Error in add_memory_tool: {e}")
+        logger.error(f"Error in add_vector_memory_tool: {e}")
         return False
 
 @function_tool
@@ -703,7 +703,7 @@ def create_vector_agent() -> Agent:
         tools=[
             get_embedding_tool,
             search_entities_tool,
-            add_memory_tool,
+            add_vector_memory_tool,
             add_entity_tool,
             get_context_for_input_tool,
         ],
