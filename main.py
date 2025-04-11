@@ -288,28 +288,6 @@ async def initialize_systems(app):
         await initialize_nyx_memory_system() # Ensure this uses asyncpg/DB_DSN if needed
         logger.info("Nyx memory system initialized successfully.")
 
-        # --- Initialize OpenAI Integration ---
-        # Make initialize_openai_integration async if it involves I/O
-        async def initialize_openai_integration():
-            """Initialize the OpenAI integration system."""
-            try:
-                from nyx.nyx_agent_sdk import process_user_input
-
-                api_key = os.environ.get("OPENAI_API_KEY")
-                if not api_key:
-                    logger.warning("OPENAI_API_KEY not set. OpenAI integration might fail.")
-                # Assuming 'initialize' is synchronous or handles its own async loop
-                initialize(
-                    api_key=api_key,
-                    original_processor=process_user_input # Pass the function itself
-                )
-                logger.info("OpenAI integration system initialized successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error initializing OpenAI integration: {e}", exc_info=True)
-                return False
-        await initialize_openai_integration()
-
         # --- Initialize Global NyxBrain Instance ---
         # Ensure NyxBrain.get_instance is async and uses asyncpg if needed
         try:
@@ -389,19 +367,6 @@ async def initialize_systems(app):
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
         raise # Prevent app from starting if critical systems fail
-
-async def initialize_openai_integration():
-    """Initialize the OpenAI integration system."""
-    try:
-        from nyx.nyx_agent_sdk import process_user_input # Assuming this is the correct base processor
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key: logger.warning("OPENAI_API_KEY not set.")
-        initialize(api_key=api_key, original_processor=process_user_input) # Assuming sync call ok
-        logger.info("OpenAI integration system initialized.")
-        return True
-    except Exception as e:
-        logger.error(f"Error initializing OpenAI integration: {e}", exc_info=True)
-        return False
 
 ###############################################################################
 # FLASK APP CREATION
