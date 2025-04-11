@@ -537,6 +537,357 @@ async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, An
         logging.error(f"Error extracting relationship changes: {e}")
         return []
 
+# Add this function to universal_updater_agent.py, before the apply_universal_updates function
+
+async def apply_universal_updates_async(
+    user_id: int,
+    conversation_id: int,
+    updates: Dict[str, Any],
+    conn: asyncpg.Connection
+) -> Dict[str, Any]:
+    """
+    Apply universal updates to the database.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        updates: Dictionary containing all the updates to apply
+        conn: Database connection
+        
+    Returns:
+        Dictionary with update results
+    """
+    try:
+        # Initialize counters and results
+        results = {
+            "success": True,
+            "updates_applied": 0,
+            "details": {}
+        }
+        
+        # Process NPC creations
+        if "npc_creations" in updates and updates["npc_creations"]:
+            npc_creation_count = await process_npc_creations(
+                user_id, conversation_id, updates["npc_creations"], conn
+            )
+            results["details"]["npc_creations"] = npc_creation_count
+            results["updates_applied"] += npc_creation_count
+        
+        # Process NPC updates
+        if "npc_updates" in updates and updates["npc_updates"]:
+            npc_update_count = await process_npc_updates(
+                user_id, conversation_id, updates["npc_updates"], conn
+            )
+            results["details"]["npc_updates"] = npc_update_count
+            results["updates_applied"] += npc_update_count
+        
+        # Process character stat updates
+        if "character_stat_updates" in updates and updates["character_stat_updates"]:
+            stat_update_count = await process_character_stats(
+                user_id, conversation_id, updates["character_stat_updates"], conn
+            )
+            results["details"]["stat_updates"] = stat_update_count
+            results["updates_applied"] += stat_update_count
+        
+        # Process social links
+        if "social_links" in updates and updates["social_links"]:
+            social_link_count = await process_social_links(
+                user_id, conversation_id, updates["social_links"], conn
+            )
+            results["details"]["social_links"] = social_link_count
+            results["updates_applied"] += social_link_count
+        
+        # Process roleplay updates
+        if "roleplay_updates" in updates and updates["roleplay_updates"]:
+            roleplay_update_count = await process_roleplay_updates(
+                user_id, conversation_id, updates["roleplay_updates"], conn
+            )
+            results["details"]["roleplay_updates"] = roleplay_update_count
+            results["updates_applied"] += roleplay_update_count
+        
+        # Return results
+        return results
+    except Exception as e:
+        logger.error(f"Error applying universal updates: {e}")
+        return {"success": False, "error": str(e)}
+
+# Helper functions for specific update types
+
+async def process_npc_creations(
+    user_id: int,
+    conversation_id: int,
+    npc_creations: List[Dict[str, Any]],
+    conn: asyncpg.Connection
+) -> int:
+    """Process NPC creations and return count of NPCs created."""
+    count = 0
+    for npc in npc_creations:
+        # Convert any list/dict fields to JSON strings
+        for field in ["archetypes", "hobbies", "personality_traits", "likes", 
+                      "dislikes", "affiliations", "schedule", "memory"]:
+            if field in npc and npc[field] is not None:
+                if isinstance(npc[field], (list, dict)):
+                    npc[field] = json.dumps(npc[field])
+        
+        # Insert NPC record
+        await conn.execute("""
+            INSERT INTO NPCStats (
+                user_id, conversation_id, npc_name, introduced, sex,
+                dominance, cruelty, closeness, trust, respect, intensity,
+                archetypes, archetype_summary, archetype_extras_summary,
+                physical_description, hobbies, personality_traits,
+                likes, dislikes, affiliations, schedule, memory,
+                monica_level, age, birthdate
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+            )
+        """, user_id, conversation_id, npc["npc_name"], npc.get("introduced", False),
+        npc.get("sex", "female"), npc.get("dominance"), npc.get("cruelty"),
+        npc.get("closeness"), npc.get("trust"), npc.get("respect"),
+        npc.get("intensity"), npc.get("archetypes"), npc.get("archetype_summary"),
+        npc.get("archetype_extras_summary"), npc.get("physical_description"),
+        npc.get("hobbies"), npc.get("personality_traits"), npc.get("likes"),
+        npc.get("dislikes"), npc.get("affiliations"), npc.get("schedule"),
+        npc.get("memory"), npc.get("monica_level"), npc.get("age"),
+        npc.get("birthdate"))
+        
+        count += 1
+    
+    return count
+
+async def process_npc_updates(
+    user_id: int,
+    conversation_id: int,
+    npc_updates: List[Dict[str, Any]],
+    conn: asyncpg.Connection
+) -> int:
+    """Process NPC updates and return count of NPCs updated."""
+    count = 0
+    for npc in npc_updates:
+        # Skip if no npc_id
+        if "npc_id" not in npc:
+            continue
+        
+        # Build update statement dynamically based on provided fields
+        fields = []
+        values = [user_id, conversation_id, npc["npc_id"]]
+        param_index = 4  # Starting after the first 3 parameters
+        
+        update_fields = [
+            "npc_name", "introduced", "archetype_summary", "archetype_extras_summary",
+            "physical_description", "dominance", "cruelty", "closeness", "trust",
+            "respect", "intensity", "sex", "current_location"
+        ]
+        
+        for field in update_fields:
+            if field in npc and npc[field] is not None:
+                fields.append(f"{field} = ${param_index}")
+                values.append(npc[field])
+                param_index += 1
+        
+        # Handle JSON fields separately
+        json_fields = ["hobbies", "personality_traits", "likes", "dislikes", 
+                       "affiliations", "memory", "schedule"]
+        
+        for field in json_fields:
+            if field in npc and npc[field] is not None:
+                fields.append(f"{field} = ${param_index}")
+                values.append(json.dumps(npc[field]) if isinstance(npc[field], (list, dict)) else npc[field])
+                param_index += 1
+        
+        # Skip if no fields to update
+        if not fields:
+            continue
+        
+        # Execute update
+        query = f"""
+            UPDATE NPCStats SET {', '.join(fields)}
+            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+        """
+        await conn.execute(query, *values)
+        count += 1
+    
+    return count
+
+async def process_character_stats(
+    user_id: int,
+    conversation_id: int,
+    stat_updates: Dict[str, Any],
+    conn: asyncpg.Connection
+) -> int:
+    """Process character stat updates and return count of updates."""
+    if not stat_updates or "stats" not in stat_updates:
+        return 0
+    
+    player_name = stat_updates.get("player_name", "Chase")
+    stats = stat_updates["stats"]
+    
+    # Skip if no stats to update
+    if not stats:
+        return 0
+    
+    # First, check if player exists
+    player_exists = await conn.fetchval("""
+        SELECT COUNT(*) FROM PlayerStats
+        WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+    """, user_id, conversation_id, player_name)
+    
+    if not player_exists:
+        # Insert new player stats record with defaults
+        await conn.execute("""
+            INSERT INTO PlayerStats (
+                user_id, conversation_id, player_name,
+                corruption, confidence, willpower, obedience,
+                dependency, lust, mental_resilience, physical_endurance
+            ) VALUES (
+                $1, $2, $3, 0, 0, 0, 0, 0, 0, 0, 0
+            )
+        """, user_id, conversation_id, player_name)
+    
+    # Count updates actually made
+    update_count = 0
+    
+    # Update each stat
+    for stat, value in stats.items():
+        if value is not None:
+            # Get current value
+            current_value = await conn.fetchval(f"""
+                SELECT {stat} FROM PlayerStats
+                WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+            """, user_id, conversation_id, player_name)
+            
+            if current_value is not None:
+                # Calculate new value (ensuring it stays within 0-100 range)
+                new_value = max(0, min(100, current_value + value))
+                
+                # Update the stat
+                await conn.execute(f"""
+                    UPDATE PlayerStats SET {stat} = $4
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = $3
+                """, user_id, conversation_id, player_name, new_value)
+                
+                # Log stat change in history
+                await conn.execute("""
+                    INSERT INTO StatsHistory (
+                        user_id, conversation_id, player_name, stat_name,
+                        old_value, new_value, cause
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, user_id, conversation_id, player_name, stat,
+                current_value, new_value, "Narrative update")
+                
+                update_count += 1
+    
+    return update_count
+
+async def process_social_links(
+    user_id: int,
+    conversation_id: int,
+    social_links: List[Dict[str, Any]],
+    conn: asyncpg.Connection
+) -> int:
+    """Process social link updates and return count of links updated."""
+    count = 0
+    for link in social_links:
+        # Check if link exists
+        existing_link = await conn.fetchrow("""
+            SELECT link_id, link_level FROM SocialLinks
+            WHERE user_id = $1 AND conversation_id = $2 
+            AND entity1_type = $3 AND entity1_id = $4
+            AND entity2_type = $5 AND entity2_id = $6
+        """, user_id, conversation_id, link["entity1_type"], link["entity1_id"],
+        link["entity2_type"], link["entity2_id"])
+        
+        if existing_link:
+            # Update existing link
+            if "level_change" in link and link["level_change"] is not None:
+                current_level = existing_link["link_level"] or 0
+                new_level = current_level + link["level_change"]
+                
+                await conn.execute("""
+                    UPDATE SocialLinks SET link_level = $7
+                    WHERE link_id = $8
+                """, new_level, existing_link["link_id"])
+            
+            # Add new event if provided
+            if "new_event" in link and link["new_event"]:
+                # Get current history
+                current_history = await conn.fetchval("""
+                    SELECT link_history FROM SocialLinks
+                    WHERE link_id = $1
+                """, existing_link["link_id"])
+                
+                # Append new event
+                history = json.loads(current_history or '[]')
+                history.append({
+                    "event": link["new_event"],
+                    "timestamp": str(conn.get_server_timestamp())
+                })
+                
+                await conn.execute("""
+                    UPDATE SocialLinks SET link_history = $1
+                    WHERE link_id = $2
+                """, json.dumps(history), existing_link["link_id"])
+            
+            count += 1
+        else:
+            # Create new link
+            initial_level = link.get("level_change", 0)
+            history = []
+            
+            if "new_event" in link and link["new_event"]:
+                history.append({
+                    "event": link["new_event"],
+                    "timestamp": str(conn.get_server_timestamp())
+                })
+            
+            await conn.execute("""
+                INSERT INTO SocialLinks (
+                    user_id, conversation_id, entity1_type, entity1_id,
+                    entity2_type, entity2_id, link_type, link_level,
+                    link_history, group_interaction
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """, user_id, conversation_id, link["entity1_type"], link["entity1_id"],
+            link["entity2_type"], link["entity2_id"], link.get("link_type"),
+            initial_level, json.dumps(history), link.get("group_context"))
+            
+            count += 1
+    
+    return count
+
+async def process_roleplay_updates(
+    user_id: int,
+    conversation_id: int,
+    roleplay_updates: Dict[str, Any],
+    conn: asyncpg.Connection
+) -> int:
+    """Process roleplay updates and return count of updates."""
+    count = 0
+    for key, value in roleplay_updates.items():
+        if value is not None:
+            # Check if key exists
+            existing = await conn.fetchval("""
+                SELECT COUNT(*) FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = $3
+            """, user_id, conversation_id, key)
+            
+            if existing:
+                # Update existing key
+                await conn.execute("""
+                    UPDATE CurrentRoleplay SET value = $4
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = $3
+                """, user_id, conversation_id, key, str(value))
+            else:
+                # Insert new key
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, $3, $4)
+                """, user_id, conversation_id, key, str(value))
+            
+            count += 1
+    
+    return count
+
 @function_tool
 async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any]:
     """
