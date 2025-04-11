@@ -207,7 +207,7 @@ resolution_agent = Agent[ConflictContext](
 )
 
 # Initialize all agents and set up handoffs
-def initialize_agents():
+async def initialize_agents():
     # Set up handoffs for triage agent
     triage_agent.handoffs = [
         conflict_generation_agent,
