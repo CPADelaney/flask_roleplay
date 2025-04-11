@@ -315,12 +315,26 @@ async def initialize_systems(app):
         # Ensure NyxBrain.get_instance is async and uses asyncpg if needed
         try:
             from nyx.core.brain.base import NyxBrain
+            from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint
+            
             system_user_id = 0
             system_conversation_id = 0
             app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id) # Assuming async
+            await app.nyx_brain.initialize()
             logger.info("Global NyxBrain instance initialized.")
+            
+            # 🔥 Restore from last checkpoint!
+            latest_checkpoint = await app.nyx_brain.load_latest_checkpoint()
+            if latest_checkpoint:
+                await app.nyx_brain.restore_from_checkpoint(latest_checkpoint)
+            else:
+                logger.info("No previous checkpoint to restore for NyxBrain.")     
+                
+            asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))
+            
             # Register processors (ensure handlers are async)
             from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+            
             app.nyx_brain.response_processors = {
                 "default": background_chat_task, # Use the main background task
                 "openai": process_user_input_with_openai, # Assuming async
@@ -330,7 +344,7 @@ async def initialize_systems(app):
         except ImportError as e:
              logger.error(f"Could not import NyxBrain: {e}. Skipping init.")
         except Exception as e:
-             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
+             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)     
 
         # MCP orchestrator (assuming async)
         try:
@@ -506,7 +520,6 @@ def create_flask_app():
     app.before_request(ip_block_middleware)
 
     app.nyx_brain = BrainMemoryCore()
-    await app.nyx_brain.initialize()
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
     init_chat_routes(app) # Ensure this uses asyncpg if needed
