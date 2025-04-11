@@ -52,6 +52,7 @@ from context.unified_cache import context_cache
 
 # Import existing components
 from logic.aggregator_sdk import get_aggregated_roleplay_context, format_context_for_compatibility
+from logic.addiction_emergence import analyze_and_apply_emergent_addictions
 from routes.story_routes import build_aggregator_text
 from logic.universal_updater_agent import apply_universal_updates_async
 from logic.gpt_image_decision import should_generate_image_for_response
