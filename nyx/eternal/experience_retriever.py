@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import numpy as np
 import random
 
-from nyx.core.nyx_brain import NyxBrain
+from nyx.core.brain.base import NyxBrain
 from memory.core import Memory, MemoryType, MemorySignificance
 from memory.emotional import EmotionalMemoryManager
 from memory.integrated import IntegratedMemorySystem
