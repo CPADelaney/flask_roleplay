@@ -4,6 +4,7 @@ Routes for interacting with the conflict system through Nyx governance.
 
 import logging
 import json
+from functools import wraps
 from typing import Dict, Any
 from flask import Blueprint, request, jsonify, session
 
@@ -21,6 +22,7 @@ conflict_bp = Blueprint("conflict", __name__)
 
 def require_login(f):
     """Decorator to require login."""
+    @wraps(f)  # This preserves the original function's name and attributes
     async def decorated(*args, **kwargs):
         user_id = session.get("user_id")
         if not user_id:
