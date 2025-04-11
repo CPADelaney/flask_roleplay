@@ -19,8 +19,6 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from nyx.core.memory_core import BrainMemoryCore  # or from .memory_core import BrainMemoryCore
-
 class NyxBrain:
     """
     Central integration point for all Nyx systems.
@@ -151,6 +149,8 @@ class NyxBrain:
         self.system_context = None
         self.integrated_tracer = None
         self.integration_manager = None
+
+        self.checkpoint_planner = CheckpointingPlannerAgent()
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
@@ -223,6 +223,9 @@ async def initialize(self):
         from nyx.core.context_awareness import ContextAwarenessSystem
         from nyx.core.interaction_mode_manager import InteractionModeManager
         from nyx.core.mode_integration import ModeIntegrationManager
+
+        from nyx.core.memory_core import BrainMemoryCore  # or from .memory_core import BrainMemoryCore
+        from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent        
 
         from nyx.creative.agentic_system import AgenticCreativitySystem, integrate_with_existing_system
                 
@@ -900,6 +903,49 @@ async def initialize(self):
         except Exception as e:
             logger.error(f"Error initializing streaming: {str(e)}")
             return None
+
+    async def gather_checkpoint_state(self, event="periodic", extra:dict=None):
+        state = {
+            "emotional_state": (await self.emotional_core.get_emotional_state()) if self.emotional_core else {},
+            "hormones": self.hormone_system.get_state() if self.hormone_system else {},
+            "goals": (await self.goal_manager.get_all_goals()) if self.goal_manager else [],
+            "needs": self.needs_system.get_needs_state() if self.needs_system else {},
+            "mood_state": (await self.mood_manager.get_current_mood()).dict() if self.mood_manager and hasattr(self.mood_manager.get_current_mood(), "dict") else {},
+            # Add more as relevant
+            "recent_memories": (await self.memory_core.retrieve_memories(query="", limit=5)) if self.memory_core else [],
+            "event": event,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        if extra:
+            state.update(extra)
+        return state
+
+    async def llm_agentic_checkpoint(self, event="periodic", extra:dict=None):
+        state_for_checkpoint = await self.gather_checkpoint_state(event, extra)
+        plan = await self.checkpoint_planner.recommend_checkpoint(state_for_checkpoint)
+        if not plan or "to_save" not in plan or not plan["to_save"]:
+            logger.info("[llm-checkpoint] Nothing chosen to save for this event (%s)", event)
+            return False
+
+        # Gather only those fields the agent picked (unpack 'value')
+        data_to_save = {k: v["value"] for k,v in plan["to_save"].items()}
+        meta_to_save = {k: v["why_saved"] for k,v in plan["to_save"].items()}
+        # Optionally, keep skip_fields/why_saved in a separate meta table if you like
+
+        as_json = json.dumps({
+            "checkpoint_data": data_to_save,
+            "justifications": meta_to_save,
+            "skip_fields": plan.get("skip_fields", []),
+            "checkpoint_time": datetime.datetime.now().isoformat(),
+            "event": event,
+        })
+        async with get_db_connection_context() as conn:
+            await conn.execute(
+                "INSERT INTO nyx_brain_checkpoints (checkpoint_time, serialized_state) VALUES (NOW(), $1)", as_json
+            )
+        logger.info("[llm-checkpoint] Fields: %s | Skipped: %s",
+            list(data_to_save.keys()), plan.get("skip_fields", []))
+        return True    
             
     @function_tool
     async def run_cognitive_cycle(self, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
