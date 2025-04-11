@@ -6,8 +6,8 @@ import logging
 from datetime import datetime, timezone
 
 from nyx.nyx_agent_sdk import add_memory
-from nyx.nyx_model_manager import UserModelManager
-from nyx.nyx_memory_system import NyxMemorySystem
+from nyx.user_model_sdk import UserModelManager
+from memory.memory_nyx_integration import MemoryNyxBridge
 
 logger = logging.getLogger(__name__)
 
