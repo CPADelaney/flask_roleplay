@@ -176,6 +176,125 @@ class NyxUnifiedGovernor:
         
         # Load learning state
         await self._load_learning_state()
+
+    async def initialize_game_state(self):
+        """
+        Initialize and return the game state for this user/conversation.
+        
+        Returns:
+            Dictionary with game state information
+        """
+        logger.info(f"Initializing game state for user {self.user_id}, conversation {self.conversation_id}")
+        
+        game_state = {
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "current_location": None,
+            "current_npcs": [],
+            "current_time": None,
+            "active_quests": [],
+            "player_stats": {},
+            "narrative_state": {},
+            "world_state": {}
+        }
+        
+        try:
+            # Fetch current roleplay state from database
+            async with get_db_connection_context() as conn:
+                # Get current location
+                row = await conn.fetchrow("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    game_state["current_location"] = row["value"]
+                
+                # Get current time
+                row = await conn.fetchrow("""
+                    SELECT value FROM CurrentRoleplay
+                    WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentTime'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    game_state["current_time"] = row["value"]
+                
+                # Get player stats
+                row = await conn.fetchrow("""
+                    SELECT * FROM PlayerStats
+                    WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
+                    LIMIT 1
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    game_state["player_stats"] = dict(row)
+                
+                # Get active NPCs
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    game_state["current_npcs"].append(dict(row))
+                
+                # Get active quests
+                rows = await conn.fetch("""
+                    SELECT * FROM Quests
+                    WHERE user_id = $1 AND conversation_id = $2 AND status = 'In Progress'
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    game_state["active_quests"].append(dict(row))
+            
+            logger.info(f"Game state initialized with {len(game_state['current_npcs'])} NPCs and {len(game_state['active_quests'])} active quests")
+            
+            return game_state
+        except Exception as e:
+            logger.error(f"Error initializing game state: {e}")
+            # Return basic state on error
+            return game_state    
+
+    async def discover_and_register_agents(self):
+        """
+        Discover and register available agents in the system.
+        """
+        logger.info(f"Discovering and registering agents for user {self.user_id}, conversation {self.conversation_id}")
+        
+        # Example of registering some default agents
+        try:
+            # Register story director if available
+            try:
+                from story_agent.story_director_agent import StoryDirector
+                story_director = StoryDirector(self.user_id, self.conversation_id)
+                await self.register_agent(
+                    agent_type=AgentType.STORY_DIRECTOR,
+                    agent_instance=story_director,
+                    agent_id="story_director"
+                )
+                logger.info("Registered story director agent")
+            except (ImportError, Exception) as e:
+                logger.warning(f"Could not register story director: {e}")
+            
+            # Register universal updater if available
+            try:
+                from logic.universal_updater_agent import UniversalUpdaterAgent
+                universal_updater = UniversalUpdaterAgent(self.user_id, self.conversation_id)
+                await self.register_agent(
+                    agent_type=AgentType.UNIVERSAL_UPDATER,
+                    agent_instance=universal_updater,
+                    agent_id="universal_updater"
+                )
+                logger.info("Registered universal updater agent")
+            except (ImportError, Exception) as e:
+                logger.warning(f"Could not register universal updater: {e}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error during agent discovery and registration: {e}")
+            return False    
     
     async def _update_performance_metrics(self):
         """Update performance tracking for all agents."""
