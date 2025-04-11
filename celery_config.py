@@ -1,3 +1,5 @@
+# celery_config.py
+
 from celery import Celery
 import os
 from celery.schedules import crontab
@@ -44,6 +46,10 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour=4, minute=30),  # Run at 4:30 AM daily
         'options': {'queue': 'low'}
     },
+    "sweep-and-merge-nyx-split-brains-every-5min": {
+        "task": "tasks.sweep_and_merge_nyx_split_brains",  # Adjust module if needed!
+        "schedule": crontab(minute="*/5"),
+    },    
     
     # Memory embedding consolidation
     'memory-embedding-consolidation-weekly': {
