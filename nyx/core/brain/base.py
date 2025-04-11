@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+from nyx.core.memory_core import BrainMemoryCore  # or from .memory_core import BrainMemoryCore
 
 class NyxBrain:
     """
@@ -525,6 +526,11 @@ async def initialize(self):
             from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
             logger.debug("Agent enhanced memory initialized")
+
+        nyx_brain = BrainMemoryCore()
+        
+        # (Optional but recommended in async systems)
+        await nyx_brain.initialize()        
         
         # Find or create the agentic action generator
         if not hasattr(self, "agentic_action_generator") or not self.agentic_action_generator:
