@@ -1186,8 +1186,56 @@ class MCPOrchestrator:
             Registration results
         """
         try:
+            # Validate and sanitize agent data
+            if not agent_data.get("name"):
+                return {
+                    "success": False,
+                    "error": "Agent name is required"
+                }
+                
+            # Ensure name is a string
+            if not isinstance(agent_data.get("name"), str):
+                agent_data["name"] = str(agent_data.get("name", "Unknown Agent"))
+            
+            # Ensure description is a string
+            if not isinstance(agent_data.get("description"), str):
+                agent_data["description"] = f"Agent {agent_data['name']}"
+            
+            # Ensure capabilities is a list of strings
+            if not isinstance(agent_data.get("capabilities"), list):
+                agent_data["capabilities"] = []
+            agent_data["capabilities"] = [str(cap) for cap in agent_data["capabilities"] if cap]
+            
+            # Ensure specializations are valid TaskPurpose values
+            if not isinstance(agent_data.get("specializations"), list):
+                agent_data["specializations"] = []
+            else:
+                valid_specs = []
+                for spec in agent_data["specializations"]:
+                    if isinstance(spec, str) and spec in [p.value for p in TaskPurpose]:
+                        valid_specs.append(spec)
+                    elif hasattr(spec, 'value') and spec.value in [p.value for p in TaskPurpose]:
+                        valid_specs.append(spec.value)
+                agent_data["specializations"] = valid_specs
+            
+            # Ensure assigned_tools is a list of strings
+            if not isinstance(agent_data.get("assigned_tools"), list):
+                agent_data["assigned_tools"] = []
+            agent_data["assigned_tools"] = [str(tool) for tool in agent_data["assigned_tools"] if tool]
+            
+            # Ensure system_prompt is a string if present
+            if "system_prompt" in agent_data and agent_data["system_prompt"] is not None:
+                if not isinstance(agent_data["system_prompt"], str):
+                    agent_data["system_prompt"] = str(agent_data["system_prompt"])
+            
             # Create agent object
-            agent = Agent(**agent_data)
+            try:
+                agent = Agent(**agent_data)
+            except Exception as validation_error:
+                return {
+                    "success": False,
+                    "error": f"Validation error: {str(validation_error)}"
+                }
             
             # Register the agent
             success = self.agent_registry.register_agent(agent)
@@ -1545,16 +1593,59 @@ class AgentDiscoveryService:
             return False
         
         try:
+            # Validate and sanitize agent info
+            if not agent_info.get("name"):
+                logger.warning(f"Skipping agent without name: {agent_id}")
+                return False
+                
+            # Ensure name is a string
+            if not isinstance(agent_info.get("name"), str):
+                agent_info["name"] = str(agent_info.get("name", f"Agent {agent_id}"))
+            
+            # Ensure description is a string
+            if not isinstance(agent_info.get("description"), str):
+                agent_info["description"] = f"Automatically discovered agent {agent_id}"
+            
+            # Ensure capabilities is a list of strings
+            if not isinstance(agent_info.get("capabilities"), list):
+                agent_info["capabilities"] = []
+            agent_info["capabilities"] = [str(cap) for cap in agent_info["capabilities"] if cap]
+            
+            # Ensure specializations are valid TaskPurpose values
+            if not isinstance(agent_info.get("specializations"), list):
+                agent_info["specializations"] = []
+            else:
+                valid_specs = []
+                for spec in agent_info["specializations"]:
+                    if isinstance(spec, str) and spec in [p.value for p in TaskPurpose]:
+                        valid_specs.append(spec)
+                    elif hasattr(spec, 'value') and spec.value in [p.value for p in TaskPurpose]:
+                        valid_specs.append(spec.value)
+                agent_info["specializations"] = valid_specs
+            
+            # Ensure assigned_tools is a list of strings
+            if not isinstance(agent_info.get("assigned_tools"), list):
+                agent_info["assigned_tools"] = []
+            agent_info["assigned_tools"] = [str(tool) for tool in agent_info["assigned_tools"] if tool]
+            
+            # Ensure system_prompt is a string if present
+            if "system_prompt" in agent_info and agent_info["system_prompt"] is not None:
+                if not isinstance(agent_info["system_prompt"], str):
+                    agent_info["system_prompt"] = str(agent_info["system_prompt"])
+            
             # Create agent data for registration
             agent_data = {
-                "name": agent_info.get("name", agent_id),
-                "description": agent_info.get("description", "Automatically discovered agent"),
-                "capabilities": agent_info.get("capabilities", []),
-                "specializations": agent_info.get("specializations", []),
+                "name": agent_info["name"],
+                "description": agent_info["description"],
+                "capabilities": agent_info["capabilities"],
+                "specializations": agent_info["specializations"],
                 "assigned_tools": agent_info.get("assigned_tools", []),
-                "system_prompt": agent_info.get("system_prompt"),
                 "is_active": True
             }
+            
+            # Add system_prompt if available
+            if "system_prompt" in agent_info and agent_info["system_prompt"] is not None:
+                agent_data["system_prompt"] = agent_info["system_prompt"]
             
             # Register with orchestrator
             result = await self.orchestrator.register_new_agent(agent_data)
@@ -1650,34 +1741,93 @@ class ModuleAgentDiscovery(DiscoveryMethod):
                 if hasattr(obj, '__abstractmethods__') and obj.__abstractmethods__:
                     return None
                 
+                # Ensure we have valid values for required fields
+                agent_name = getattr(obj, 'agent_name', name)
+                if not isinstance(agent_name, str):
+                    agent_name = str(name)
+                    
+                description = getattr(obj, 'description', f"Discovered {name} class")
+                if not isinstance(description, str):
+                    description = f"Discovered {name} class"
+                    
+                # Ensure capabilities is a list of strings
+                capabilities = getattr(obj, 'capabilities', [])
+                if not isinstance(capabilities, list):
+                    capabilities = []
+                capabilities = [str(cap) for cap in capabilities if cap]
+                    
+                # Convert specializations to valid enum values
+                raw_specializations = getattr(obj, 'specializations', [])
+                specializations = []
+                if isinstance(raw_specializations, list):
+                    for spec in raw_specializations:
+                        if isinstance(spec, str) and spec in [p.value for p in TaskPurpose]:
+                            specializations.append(spec)
+                        elif hasattr(spec, 'value') and spec.value in [p.value for p in TaskPurpose]:
+                            specializations.append(spec.value)
+                
                 # Basic agent information
                 agent_info = {
-                    "name": getattr(obj, 'agent_name', name),
-                    "description": getattr(obj, 'description', f"Discovered {name} class"),
+                    "name": agent_name,
+                    "description": description,
                     "id": f"module_{name}_{id(obj)}",
-                    "capabilities": getattr(obj, 'capabilities', []),
-                    "specializations": getattr(obj, 'specializations', [])
+                    "capabilities": capabilities,
+                    "specializations": specializations
                 }
                 
                 return agent_info
             
-            # For instances, we can check instance attributes
+            # For instances, similar validation and conversion
             else:
+                # Validate and convert to appropriate types
+                agent_name = getattr(obj, 'name', name)
+                if not isinstance(agent_name, str):
+                    agent_name = str(name)
+                    
+                description = getattr(obj, 'description', f"Discovered {name} instance")
+                if not isinstance(description, str):
+                    description = f"Discovered {name} instance"
+                    
+                # Ensure capabilities is a list of strings
+                capabilities = getattr(obj, 'capabilities', [])
+                if not isinstance(capabilities, list):
+                    capabilities = []
+                capabilities = [str(cap) for cap in capabilities if cap]
+                    
+                # Convert specializations to valid enum values
+                raw_specializations = getattr(obj, 'specializations', [])
+                specializations = []
+                if isinstance(raw_specializations, list):
+                    for spec in raw_specializations:
+                        if isinstance(spec, str) and spec in [p.value for p in TaskPurpose]:
+                            specializations.append(spec)
+                        elif hasattr(spec, 'value') and spec.value in [p.value for p in TaskPurpose]:
+                            specializations.append(spec.value)
+                
                 # Basic agent information
                 agent_info = {
-                    "name": getattr(obj, 'name', name),
-                    "description": getattr(obj, 'description', f"Discovered {name} instance"),
+                    "name": agent_name,
+                    "description": description,
                     "id": f"module_{name}_{id(obj)}",
-                    "capabilities": getattr(obj, 'capabilities', []),
-                    "specializations": getattr(obj, 'specializations', [])
+                    "capabilities": capabilities,
+                    "specializations": specializations
                 }
                 
                 # Check for additional attributes
                 if hasattr(obj, 'system_prompt'):
-                    agent_info["system_prompt"] = obj.system_prompt
+                    system_prompt = obj.system_prompt
+                    if system_prompt is None or not isinstance(system_prompt, str):
+                        system_prompt = str(system_prompt) if system_prompt is not None else None
+                    if system_prompt is not None:
+                        agent_info["system_prompt"] = system_prompt
                 
                 if hasattr(obj, 'assigned_tools'):
-                    agent_info["assigned_tools"] = obj.assigned_tools
+                    assigned_tools = obj.assigned_tools
+                    if not isinstance(assigned_tools, list):
+                        assigned_tools = []
+                    # Ensure all tools are strings
+                    assigned_tools = [str(tool) for tool in assigned_tools if tool]
+                    agent_info["assigned_tools"] = assigned_tools
                 
                 return agent_info
         
@@ -1742,14 +1892,14 @@ class ProcessAgentDiscovery(DiscoveryMethod):
             if "llm" in name or "gpt" in name:
                 capabilities.append("text_generation")
             
-            # Extract specializations from name
+            # Extract specializations from name as string values from enum
             specializations = []
             if "code" in name:
-                specializations.append(TaskPurpose.CODE)
+                specializations.append(TaskPurpose.CODE.value)
             if "web" in name or "browser" in name:
-                specializations.append(TaskPurpose.SEARCH)
+                specializations.append(TaskPurpose.SEARCH.value)
             if "write" in name:
-                specializations.append(TaskPurpose.WRITE)
+                specializations.append(TaskPurpose.WRITE.value)
             
             # Basic agent information
             agent_info = {
@@ -1854,15 +2004,48 @@ class NetworkAgentDiscovery(DiscoveryMethod):
             else:
                 agent_data = data
             
+            # Ensure basic fields have proper types
+            name = agent_data.get("name", f"Network Agent {host}:{port}")
+            if not isinstance(name, str):
+                name = f"Network Agent {host}:{port}"
+                
+            description = agent_data.get("description", f"Agent discovered at {host}:{port}")
+            if not isinstance(description, str):
+                description = f"Agent discovered at {host}:{port}"
+                
+            # Ensure capabilities is a list of strings
+            capabilities = agent_data.get("capabilities", [])
+            if not isinstance(capabilities, list):
+                capabilities = []
+            capabilities = [str(cap) for cap in capabilities if cap]
+                
+            # Process specializations to ensure they match enum values
+            raw_specializations = agent_data.get("specializations", [])
+            specializations = []
+            if isinstance(raw_specializations, list):
+                for spec in raw_specializations:
+                    if isinstance(spec, str) and spec in [p.value for p in TaskPurpose]:
+                        specializations.append(spec)
+                    elif hasattr(spec, 'value') and spec.value in [p.value for p in TaskPurpose]:
+                        specializations.append(spec.value)
+            
+            # Get system_prompt if available
+            system_prompt = agent_data.get("system_prompt")
+            if system_prompt is not None and not isinstance(system_prompt, str):
+                system_prompt = str(system_prompt)
+            
             # Basic agent information
             agent_info = {
-                "name": agent_data.get("name", f"Network Agent {host}:{port}"),
-                "description": agent_data.get("description", f"Agent discovered at {host}:{port}"),
+                "name": name,
+                "description": description,
                 "id": f"network_{host}_{port}",
-                "capabilities": agent_data.get("capabilities", []),
-                "specializations": agent_data.get("specializations", []),
-                "system_prompt": agent_data.get("system_prompt")
+                "capabilities": capabilities,
+                "specializations": specializations
             }
+            
+            # Add system_prompt if available
+            if system_prompt is not None:
+                agent_info["system_prompt"] = system_prompt
             
             # If the endpoint is an MCP server, mark it accordingly
             if host != "localhost" and host != "127.0.0.1":
