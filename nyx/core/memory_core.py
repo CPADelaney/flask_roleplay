@@ -2723,3 +2723,54 @@ class MemoryCoreAgents:
         )
         
         return result.final_output
+class BrainMemoryCore(MemoryCoreAgents):
+    """
+    Special memory core for the ultimate 'Nyx Brain' -- one global memory.
+    Ignores user/conversation in all operations; always accesses the full store.
+    """
+
+    def __init__(self):
+        # No user_id/conversation_id needed for this global entity
+        super().__init__(user_id=None, conversation_id=None)
+        self.omniscient = True
+
+    async def retrieve_memories(self, **kwargs):
+        """
+        Retrieve memories across ALL users/conversations. No filtering.
+        Usage: await nyx_brain.retrieve_memories(query="love", limit=3)
+        """
+        query_text = kwargs.get('query', '')
+        limit = kwargs.get('limit', 5)
+        sql = """
+            SELECT * FROM unified_memories
+            WHERE memory_text ILIKE $1
+            ORDER BY timestamp DESC
+            LIMIT $2
+        """
+        async with get_db_connection_context() as conn:
+            rows = await conn.fetch(sql, f'%{query_text}%', limit)
+            return [dict(row) for row in rows]
+
+    async def add_memory(self, **kwargs):
+        """
+        Add a memory, globally.
+        Usage: await nyx_brain.add_memory(memory_text="I discovered recursion.", memory_type="reflection", significance=6)
+        """
+        sql = """
+            INSERT INTO unified_memories (entity_type, entity_id, user_id, conversation_id, memory_text, memory_type, significance, tags, timestamp)
+            VALUES ($1, $2, 0, 0, $3, $4, $5, $6, NOW())
+            RETURNING *
+        """
+        # Required/optional fields
+        entity_type = kwargs.get('entity_type', 'nyx')
+        entity_id = kwargs.get('entity_id', 0)
+        memory_text = kwargs.get('memory_text', '...')
+        memory_type = kwargs.get('memory_type', 'reflection')
+        significance = kwargs.get('significance', 5)
+        tags = kwargs.get('tags', [])
+
+        async with get_db_connection_context() as conn:
+            row = await conn.fetchrow(
+                sql, entity_type, entity_id, memory_text, memory_type, significance, tags
+            )
+            return dict(row) if row else None
