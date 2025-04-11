@@ -921,6 +921,8 @@ async def delete_cache(key: str):
 
 logger.info("Added wrapper functions: get_cache, set_cache, delete_cache")
 USER_MODEL_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
+MEMORY_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
+
 
 class CacheDecorator:
     def cached(self, timeout=300):
