@@ -18,6 +18,7 @@ gunicorn
 eventlet>=0.24.1
 asgiref
 quart
+asyncio-extras
 
 # Web framework
 flask==3.0.0
