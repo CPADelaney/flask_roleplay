@@ -131,9 +131,7 @@ class NyxUnifiedGovernor:
             "world_integrity": 0.9,
             "player_experience": 0.6
         }
-        
-        # Initialize systems
-        self._initialize_systems()
+    
     
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
@@ -1888,3 +1886,13 @@ class NyxUnifiedGovernor:
             return True
             
         return True
+        
+async def initialize(self):
+    """Initialize the governance system asynchronously.
+    This must be called after creating a new NyxUnifiedGovernor instance.
+    
+    Returns:
+        self for method chaining
+    """
+    await self._initialize_systems()
+    return self
