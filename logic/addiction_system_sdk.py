@@ -223,9 +223,150 @@ except Exception as e:
     logging.warning("Could not load external thematic messages; using defaults.")
     THEMATIC_MESSAGES = DEFAULT_THEMATIC_MESSAGES
 
-# -------------------------------------------------------------------------------
-# Function Tools with Governance Integration
-# -------------------------------------------------------------------------------
+################################################################################
+# Thematic Message Loader - Singleton, Async & Dynamic
+################################################################################
+
+class ThematicMessages:
+    _instance: Optional["ThematicMessages"] = None
+    _lock = asyncio.Lock()
+
+    def __init__(self, fallback: dict):
+        self.messages = fallback
+        self.file_source = None
+
+    @classmethod
+    async def get(cls) -> "ThematicMessages":
+        async with cls._lock:
+            if cls._instance is None:
+                instance = cls(_DEFAULT_THEMATIC_MESSAGES)
+                await instance._load()
+                cls._instance = instance
+            return cls._instance
+
+    async def _load(self):
+        try:
+            if os.path.exists(THEMATIC_MESSAGES_FILE):
+                async with aiofiles.open(THEMATIC_MESSAGES_FILE, "r") as f:
+                    self.messages = json.loads(await f.read())
+                    self.file_source = THEMATIC_MESSAGES_FILE
+                logging.info(f"Thematic messages loaded from {THEMATIC_MESSAGES_FILE}")
+            else:
+                raise FileNotFoundError()
+        except Exception:
+            self.file_source = "default"
+            logging.warning("Could not load external thematic messages, using defaults.")
+
+    def get_for(self, addiction_type: str, level: Union[int, str]) -> str:
+        level_str = str(level)
+        return self.messages.get(addiction_type, {}).get(level_str, "")
+
+    def get_levels(self, addiction_type: str, up_to_level: int) -> List[str]:
+        """Get all non-empty messages for a type up to a given level."""
+        return [
+            msg for lvl in range(1, up_to_level + 1)
+            if (msg := self.get_for(addiction_type, lvl))
+        ]
+
+################################################################################
+# Async file import for thematic messages
+################################################################################
+
+import aiofiles  # Add this requirement
+
+################################################################################
+# Data Models
+################################################################################
+
+class AddictionUpdate(BaseModel):
+    addiction_type: str
+    previous_level: int
+    new_level: int
+    level_name: str
+    progressed: bool
+    regressed: bool
+    target_npc_id: Optional[int] = None
+
+class AddictionStatus(BaseModel):
+    addiction_levels: Dict[str, int] = Field(default_factory=dict)
+    npc_specific_addictions: List[Dict[str, Any]] = Field(default_factory=list)
+    has_addictions: bool = Field(False)
+
+class AddictionEffects(BaseModel):
+    effects: List[str] = Field(default_factory=list)
+    has_effects: bool = False
+
+class AddictionSafety(BaseModel):
+    is_appropriate: bool
+    reasoning: str
+    suggested_adjustment: Optional[str] = None
+
+################################################################################
+# Agent Model Settings (Configurable)
+################################################################################
+
+def get_model_settings(agent_name: str = "", env_override: str = "") -> ModelSettings:
+    temp_env = os.getenv(f"{agent_name}_MODEL_TEMP", os.getenv(env_override, None))
+    try:
+        t = float(temp_env) if temp_env else 0.7 if agent_name == "Special Event Generator" else 0.4
+    except Exception:
+        t = 0.7
+    return ModelSettings(temperature=t)
+
+################################################################################
+# Main Context
+################################################################################
+
+class AddictionContext:
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.governor = None
+        self.thematic_messages: Optional[ThematicMessages] = None
+        self.directive_handler: Optional[DirectiveHandler] = None
+        self.prohibited_addictions: set = set()
+        self.directive_task = None
+
+    async def initialize(self):
+        from nyx.integrate import get_central_governance
+        self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        self.thematic_messages = await ThematicMessages.get()
+        self.directive_handler = DirectiveHandler(
+            self.user_id, self.conversation_id,
+            AgentType.UNIVERSAL_UPDATER, "addiction_system", governance=self.governor
+        )
+        self.directive_handler.register_handler(DirectiveType.ACTION, self._handle_action_directive)
+        self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
+        self.directive_task = asyncio.create_task(
+            self.directive_handler.start_background_processing(interval=60.0)
+        )
+
+    async def _handle_action_directive(self, directive):
+        instruction = directive.get("instruction", "")
+        if "monitor addictions" in instruction.lower():
+            return await check_addiction_status(
+                self.user_id, self.conversation_id, directive.get("player_name", "player")
+            )
+        if "apply addiction effect" in instruction.lower():
+            addiction_type = directive.get("addiction_type")
+            if addiction_type:
+                return await update_addiction_level(
+                    RunContextWrapper(self),
+                    directive.get("player_name", "player"),
+                    addiction_type,
+                    progression_multiplier=directive.get("multiplier", 1.0),
+                    target_npc_id=directive.get("target_npc_id")
+                )
+        return {"status": "unknown_directive", "instruction": instruction}
+
+    async def _handle_prohibition_directive(self, directive):
+        prohibited = directive.get("prohibited_actions", [])
+        self.prohibited_addictions = set(prohibited)
+        return {"status": "prohibition_registered", "prohibited": prohibited}
+
+################################################################################
+# Core Functions as Agent Tools (Governance-wrapped)
+################################################################################
 
 @function_tool
 @with_governance(
@@ -238,19 +379,10 @@ async def check_addiction_levels(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str
 ) -> Dict[str, Any]:
-    """
-    Checks the player's addiction levels with Nyx governance oversight.
-    
-    Args:
-        player_name: Name of the player
-    """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    
-    # Connect to database using async context manager
     try:
         async with get_db_connection_context() as conn:
-            # Ensure table exists
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS PlayerAddictions (
                     id SERIAL PRIMARY KEY,
@@ -264,46 +396,34 @@ async def check_addiction_levels(
                     UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id)
                 )
             """)
-            
-            # Query addictions
-            rows = await conn.fetch("""
-                SELECT addiction_type, level, target_npc_id
-                FROM PlayerAddictions
-                WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-            """, user_id, conversation_id, player_name)
-            
+            rows = await conn.fetch(
+                "SELECT addiction_type, level, target_npc_id FROM PlayerAddictions WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3",
+                user_id, conversation_id, player_name
+            )
             addiction_data = {}
             npc_specific = []
-            
             for row in rows:
                 addiction_type, level, target_npc_id = row
                 if target_npc_id is None:
                     addiction_data[addiction_type] = level
                 else:
-                    # Get NPC name
-                    npc_row = await conn.fetchrow("""
-                        SELECT npc_name FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """, user_id, conversation_id, target_npc_id)
-                    
-                    npc_name = npc_row["npc_name"] if npc_row else f"NPC#{target_npc_id}"
+                    npc_row = await conn.fetchrow(
+                        "SELECT npc_name FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3",
+                        user_id, conversation_id, target_npc_id
+                    )
+                    npc_name = npc_row["npc_name"] if npc_row and "npc_name" in npc_row else f"NPC#{target_npc_id}"
                     npc_specific.append({
                         "addiction_type": addiction_type,
                         "level": level,
                         "npc_id": target_npc_id,
                         "npc_name": npc_name
                     })
-            
             has_addictions = any(lvl > 0 for lvl in addiction_data.values()) or bool(npc_specific)
-            
-            result = {
+            return {
                 "addiction_levels": addiction_data,
                 "npc_specific_addictions": npc_specific,
                 "has_addictions": has_addictions
             }
-            
-            return result
-            
     except Exception as e:
         logging.error(f"Error checking addiction levels: {e}")
         return {"error": str(e), "has_addictions": False}
@@ -324,32 +444,19 @@ async def update_addiction_level(
     regression_chance: float = 0.1,
     target_npc_id: Optional[int] = None
 ) -> Dict[str, Any]:
-    """
-    Update or create an addiction entry for a player with Nyx governance oversight.
-    
-    Args:
-        player_name: Name of the player
-        addiction_type: Type of addiction to update
-        progression_chance: Chance for addiction to increase (0.0-1.0)
-        progression_multiplier: Multiplier for progression chance
-        regression_chance: Chance for addiction to decrease (0.0-1.0)
-        target_npc_id: Optional NPC ID for NPC-specific addictions
-    """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    
-    # Check if this addiction type is prohibited by governance
-    if hasattr(ctx.context, 'prohibited_addictions') and addiction_type in ctx.context.prohibited_addictions:
+
+    prohibited = getattr(ctx.context, "prohibited_addictions", set())
+    if addiction_type in prohibited:
         return {
             "error": f"Addiction type '{addiction_type}' is prohibited by governance directive",
             "addiction_type": addiction_type,
             "prohibited": True
         }
-    
-    # Connect to database using async context manager
+
     try:
         async with get_db_connection_context() as conn:
-            # Ensure table exists
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS PlayerAddictions (
                     id SERIAL PRIMARY KEY,
@@ -363,61 +470,52 @@ async def update_addiction_level(
                     UNIQUE(user_id, conversation_id, player_name, addiction_type, target_npc_id)
                 )
             """)
-            
-            # Get current level if exists
+
             if target_npc_id is None:
                 row = await conn.fetchrow("""
                     SELECT level FROM PlayerAddictions
                     WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                      AND addiction_type=$4 AND target_npc_id IS NULL
+                    AND addiction_type=$4 AND target_npc_id IS NULL
                 """, user_id, conversation_id, player_name, addiction_type)
             else:
                 row = await conn.fetchrow("""
                     SELECT level FROM PlayerAddictions
                     WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3
-                      AND addiction_type=$4 AND target_npc_id=$5
+                    AND addiction_type=$4 AND target_npc_id=$5
                 """, user_id, conversation_id, player_name, addiction_type, target_npc_id)
-            
+
             current_level = row["level"] if row else 0
-            
-            # Calculate new level
             prev_level = current_level
             roll = random.random()
-            
+
+            # Dynamic progression regression handling
             if roll < (progression_chance * progression_multiplier) and current_level < 4:
                 current_level += 1
-                logging.info(f"Addiction progressed from {prev_level} to {current_level}")
+                logging.info(f"Addiction ({addiction_type}) progressed: {prev_level} → {current_level}")
             elif roll > (1 - regression_chance) and current_level > 0:
                 current_level -= 1
-                logging.info(f"Addiction regressed from {prev_level} to {current_level}")
-            
-            # Insert or update
-            if target_npc_id is None:
-                await conn.execute("""
-                    INSERT INTO PlayerAddictions
-                        (user_id, conversation_id, player_name, addiction_type, level, last_updated)
-                    VALUES ($1, $2, $3, $4, $5, NOW())
-                    ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
-                    DO UPDATE SET level=EXCLUDED.level, last_updated=NOW()
-                """, user_id, conversation_id, player_name, addiction_type, current_level)
-            else:
-                await conn.execute("""
-                    INSERT INTO PlayerAddictions
-                        (user_id, conversation_id, player_name, addiction_type, level, target_npc_id, last_updated)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW())
-                    ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
-                    DO UPDATE SET level=EXCLUDED.level, last_updated=NOW()
-                """, user_id, conversation_id, player_name, addiction_type, current_level, target_npc_id)
-            
-            # Apply stat penalty if extreme
+                logging.info(f"Addiction ({addiction_type}) regressed: {prev_level} → {current_level}")
+
+            insert_stmt = """
+                INSERT INTO PlayerAddictions
+                (user_id, conversation_id, player_name, addiction_type, level, target_npc_id, last_updated)
+                VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                ON CONFLICT (user_id, conversation_id, player_name, addiction_type, target_npc_id)
+                DO UPDATE SET level=EXCLUDED.level, last_updated=NOW()
+            """
+            await conn.execute(
+                insert_stmt,
+                user_id, conversation_id, player_name, addiction_type,
+                current_level, target_npc_id if target_npc_id is not None else None
+            )
+
             if current_level == 4:
-                await conn.execute("""
-                    UPDATE PlayerStats
-                    SET willpower = GREATEST(willpower - $1, 0)
-                    WHERE user_id = $2 AND conversation_id = $3 AND player_name = $4
-                """, 5, user_id, conversation_id, player_name)
-            
-            result = {
+                await conn.execute(
+                    "UPDATE PlayerStats SET willpower = GREATEST(willpower - $1, 0) WHERE user_id=$2 AND conversation_id=$3 AND player_name=$4",
+                    5, user_id, conversation_id, player_name
+                )
+
+            return {
                 "addiction_type": addiction_type,
                 "previous_level": prev_level,
                 "new_level": current_level,
@@ -426,9 +524,6 @@ async def update_addiction_level(
                 "regressed": current_level < prev_level,
                 "target_npc_id": target_npc_id
             }
-            
-            return result
-            
     except Exception as e:
         logging.error(f"Error updating addiction: {e}")
         return {"error": str(e)}
@@ -445,198 +540,120 @@ async def generate_addiction_effects(
     player_name: str,
     addiction_status: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """
-    Generate narrative effects for a player's addictions with Nyx governance oversight.
-    
-    Args:
-        player_name: Name of the player
-        addiction_status: Addiction status from check_addiction_levels
-    """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    thematic_messages = ctx.context.thematic_messages
-    
+    thematic = ctx.context.thematic_messages
+
     effects = []
-    
-    # General addictions
     addiction_levels = addiction_status.get("addiction_levels", {})
     for addiction_type, level in addiction_levels.items():
         if level <= 0:
             continue
-            
-        # Get messages for this addiction type and level
-        type_messages = thematic_messages.get(addiction_type, {})
-        messages = [type_messages.get(str(lvl), "") for lvl in range(1, level + 1)]
-        # Filter out empty strings
-        effects.extend(msg for msg in messages if msg)
-    
-    # NPC-specific addictions
+        effects.extend(thematic.get_levels(addiction_type, level))
+
     npc_specific = addiction_status.get("npc_specific_addictions", [])
     for entry in npc_specific:
         addiction_type = entry["addiction_type"]
         npc_name = entry.get("npc_name", f"NPC#{entry['npc_id']}")
         level = entry["level"]
-        
         if level >= 3:
             effects.append(f"You have a {ADDICTION_LEVELS[level]} addiction to {npc_name}'s {addiction_type}.")
-            
-            # For extreme level, generate a special event
             if level >= 4:
                 try:
-                    # Get NPC data - UPDATED to use async context manager
                     async with get_db_connection_context() as conn:
                         npc_data = await conn.fetchrow("""
                             SELECT npc_name, archetype_summary, personality_traits, dominance, cruelty
                             FROM NPCStats
                             WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
                         """, user_id, conversation_id, entry["npc_id"])
-                        
                         if npc_data:
-                            # Create a special event prompt
-                            prompt = f"""
-                            Generate a 2-3 paragraph intense narrative scene about the player's extreme addiction 
-                            to {npc_name}'s {addiction_type}. This is for a femdom roleplaying game.
-                            
-                            NPC Details:
-                            - Name: {npc_name}
-                            - Archetype: {npc_data["archetype_summary"]}
-                            - Dominance: {npc_data["dominance"]}/100
-                            - Cruelty: {npc_data["cruelty"]}/100
-                            - Personality: {', '.join(npc_data["personality_traits"][:3]) if npc_data["personality_traits"] else "Unknown"}
-                            
-                            Write an intense, immersive scene that shows how this addiction is affecting the player.
-                            """
-                            
-                            # Use the LLM to generate the special event
-                            result = await Runner.run(
-                                special_event_agent,
-                                prompt,
-                                context=ctx.context
+                            prompt = (
+                                f"Generate a 2-3 paragraph intense narrative scene about the player's extreme addiction "
+                                f"to {npc_name}'s {addiction_type}. This is for a femdom roleplaying game.\n\n"
+                                f"NPC Details:\n"
+                                f"- Name: {npc_name}\n"
+                                f"- Archetype: {npc_data.get('archetype_summary')}\n"
+                                f"- Dominance: {npc_data.get('dominance')}/100\n"
+                                f"- Cruelty: {npc_data.get('cruelty')}/100\n"
+                                f"- Personality: {', '.join(npc_data.get('personality_traits', [])[:3]) if npc_data.get('personality_traits') else 'Unknown'}\n\n"
+                                "Write an intense, immersive scene that shows how this addiction is affecting the player."
                             )
-                            
+                            result = await Runner.run(
+                                special_event_agent, prompt, context=ctx.context
+                            )
                             special_event = result.final_output
-                            
                             if special_event:
                                 effects.append(special_event)
                 except Exception as e:
                     logging.error(f"Error generating special event: {e}")
-    
-    result = {
-        "effects": effects,
-        "has_effects": bool(effects)
-    }
-    
-    return result
 
-# -------------------------------------------------------------------------------
+    return {"effects": effects, "has_effects": bool(effects)}
+
+################################################################################
 # Guardrail Functions
-# -------------------------------------------------------------------------------
+################################################################################
 
 async def addiction_content_safety(ctx, agent, input_data):
-    """Input guardrail for addiction content moderation"""
     content_moderator = Agent(
         name="Addiction Content Moderator",
-        instructions="""
-        You check if addiction content is appropriate for the game setting. 
-        Allow adult themes in a femdom context but flag anything that might be genuinely harmful
-        or that trivializes real addiction issues in a way that's ethically problematic.
-        """,
-        output_type=AddictionSafety
+        instructions=(
+            "You check if addiction content is appropriate for the game setting. "
+            "Allow adult themes in a femdom context but flag anything that might be genuinely harmful "
+            "or that trivializes real addiction issues in a way that's ethically problematic."
+        ),
+        output_type=AddictionSafety,
+        model_settings=get_model_settings("Addiction Content Moderator", "ADD_CONTENT_MOD_TEMP")
     )
-    
     result = await Runner.run(content_moderator, input_data, context=ctx.context)
     final_output = result.final_output_as(AddictionSafety)
-    
     return GuardrailFunctionOutput(
         output_info=final_output,
         tripwire_triggered=not final_output.is_appropriate,
     )
 
-# -------------------------------------------------------------------------------
-# Agent Definitions
-# -------------------------------------------------------------------------------
+################################################################################
+# AGENTS - Configuration-Friendly
+################################################################################
 
-# Agent for generating special events for extreme addictions
 special_event_agent = Agent[AddictionContext](
     name="Special Event Generator",
-    instructions="""
-    You generate vivid, immersive narrative events for extreme addiction situations.
-    Your scenes should:
-    1. Be immersive and emotionally impactful
-    2. Show the psychological effects of the addiction
-    3. Include appropriate physical reactions
-    4. Maintain the femdom theme without being explicitly sexual
-    5. Be 2-3 paragraphs in length
-    
-    Write in second person perspective, addressing the player directly.
-    """,
-    model_settings=ModelSettings(temperature=0.7)
+    instructions=(
+        "You generate vivid, immersive narrative events for extreme addiction situations. "
+        "Scenes should be immersive, impactful, psychologically realistic, and maintain a femdom theme. "
+        "Avoid explicit content. Use second person."
+    ),
+    model_settings=get_model_settings("Special Event Generator", "SPECIAL_EVENT_TEMP")
 )
 
-# Agent for handling addiction progression
 addiction_progression_agent = Agent[AddictionContext](
     name="Addiction Progression Agent",
-    instructions="""
-    You handle the progression and regression of addictions.
-    You analyze events and context to determine:
-    1. When an addiction should progress or regress
-    2. How quickly addiction should develop
-    3. What multipliers should apply to progression chance
-    4. What special thresholds might be reached
-    
-    Focus on gradual, realistic progression that aligns with player choices and experiences.
-    
-    Always respect directives from the Nyx governance system.
-    """,
+    instructions=(
+        "Analyze events and context to determine addiction changes. "
+        "Handle progression, regression, speed, and thresholds. Respect directives."
+    ),
     tools=[update_addiction_level],
-    output_type=AddictionUpdate
+    output_type=AddictionUpdate,
+    model_settings=get_model_settings("Addiction Progression Agent", "PROGRESS_AGENT_TEMP")
 )
 
-# Agent for generating narrative effects
 addiction_narrative_agent = Agent[AddictionContext](
     name="Addiction Narrative Agent",
-    instructions="""
-    You generate narrative effects for addictions.
-    Your narrative effects should:
-    1. Be immersive and psychologically realistic
-    2. Vary based on addiction level (mild, moderate, heavy, extreme)
-    3. Reflect the specific addiction type
-    4. Subtly incorporate femdom themes
-    5. Show how the addiction affects the player's mind and perceptions
-    
-    Create effects that enhance the roleplaying experience without being too intrusive.
-    
-    Always respect directives from the Nyx governance system.
-    """,
+    instructions=(
+        "Generate narrative effects for addictions, varying with type/level. "
+        "Incorporate femdom themes subtly."
+    ),
     tools=[generate_addiction_effects],
-    output_type=AddictionEffects
+    output_type=AddictionEffects,
+    model_settings=get_model_settings("Addiction Narrative Agent", "NARRATIVE_AGENT_TEMP")
 )
 
-# Main addiction system agent
 addiction_system_agent = Agent[AddictionContext](
     name="Addiction System Agent",
-    instructions="""
-    You are the central addiction management system for a femdom roleplaying game.
-    
-    Your role is to:
-    1. Track player addictions to various stimuli
-    2. Progress or regress addiction levels based on exposure and choices
-    3. Generate appropriate narrative effects based on addiction levels
-    4. Manage NPC-specific addictions alongside general addictions
-    5. Create special events for extreme addiction levels
-    
-    Handle addictions in a psychologically realistic way, using the addiction level system:
-    - Level 0: None
-    - Level 1: Mild
-    - Level 2: Moderate
-    - Level 3: Heavy
-    - Level 4: Extreme
-    
-    Use specialized sub-agents for specific tasks as needed.
-    
-    Always respect directives from the Nyx governance system and check permissions
-    before performing any actions.
-    """,
+    instructions=(
+        "Central addiction management system for a femdom RPG. "
+        "Tracks and manages player and NPC-specific addictions, progression, regression, effects, and special events."
+        "Use subagents and always respect governance directives. "
+    ),
     handoffs=[
         handoff(addiction_progression_agent, tool_name_override="manage_addiction_progression"),
         handoff(addiction_narrative_agent, tool_name_override="generate_narrative_effects"),
@@ -648,292 +665,87 @@ addiction_system_agent = Agent[AddictionContext](
         generate_addiction_effects
     ],
     input_guardrails=[
-        InputGuardrail(guardrail_function=addiction_content_safety),
+        InputGuardrail(guardrail_function=addiction_content_safety)
     ],
-    model_settings=ModelSettings(temperature=0.4)
+    model_settings=get_model_settings("Addiction System Agent", "ADDICTION_SYS_TEMP")
 )
 
-# -------------------------------------------------------------------------------
-# Main Functions
-# -------------------------------------------------------------------------------
+################################################################################
+# MAIN ENTRY / UTILITY FUNCTIONS (Extensible)
+################################################################################
+
+def get_addiction_label(level: int) -> str:
+    return ADDICTION_LEVELS.get(level, "Unknown")
 
 async def process_addiction_update(
-    user_id: int,
-    conversation_id: int,
-    player_name: str,
-    addiction_type: str,
-    progression_multiplier: float = 1.0,
-    target_npc_id: Optional[int] = None
+    user_id: int, conversation_id: int, player_name: str,
+    addiction_type: str, progression_multiplier: float = 1.0, target_npc_id: Optional[int] = None
 ) -> Dict[str, Any]:
-    """
-    Process an addiction update with Nyx governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        addiction_type: Type of addiction to update
-        progression_multiplier: Multiplier for progression chance
-        target_npc_id: Optional NPC ID for NPC-specific addictions
-        
-    Returns:
-        Update results
-    """
-    # Create addiction context
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
-    
-    # Create trace for monitoring
     with trace(
         workflow_name="Addiction System",
         trace_id=f"addiction-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        # Create prompt
-        prompt = f"""
-        Update the player's addiction to {addiction_type}{f" related to NPC #{target_npc_id}" if target_npc_id else ""}.
-        Player name: {player_name}
-        Progression multiplier: {progression_multiplier}
-        """
-        
-        # Run the agent
+        prompt = f"Update the player's addiction to {addiction_type}{f' related to NPC #{target_npc_id}' if target_npc_id else ''}. Player name: {player_name}. Progression multiplier: {progression_multiplier}"
         result = await Runner.run(
             addiction_system_agent,
             prompt,
             context=addiction_context
         )
-    
-    # Process the result
     update_result = None
     narrative_effects = None
-    
     for item in result.new_items:
         if item.type == "handoff_output_item":
             if "manage_addiction_progression" in str(item.raw_item):
-                try:
-                    update_result = json.loads(item.raw_item.content)
-                except Exception as e:
-                    logging.error(f"Error parsing addiction update result: {e}")
+                try: update_result = json.loads(item.raw_item.content)
+                except Exception as e: logging.error(f"Error parsing addiction update result: {e}")
             elif "generate_narrative_effects" in str(item.raw_item):
-                try:
-                    narrative_effects = json.loads(item.raw_item.content)
-                except Exception as e:
-                    logging.error(f"Error parsing narrative effects: {e}")
-    
-    return {
-        "update": update_result,
-        "narrative_effects": narrative_effects,
-        "addiction_type": addiction_type,
-        "target_npc_id": target_npc_id
-    }
+                try: narrative_effects = json.loads(item.raw_item.content)
+                except Exception as e: logging.error(f"Error parsing narrative effects: {e}")
+    return {"update": update_result, "narrative_effects": narrative_effects, "addiction_type": addiction_type, "target_npc_id": target_npc_id}
 
 async def process_addiction_effects(
-    user_id: int,
-    conversation_id: int,
-    player_name: str,
-    addiction_status: Dict[str, Any]
+    user_id: int, conversation_id: int, player_name: str, addiction_status: dict
 ) -> Dict[str, Any]:
-    """
-    Process addiction effects based on the provided addiction status.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        addiction_status: Addiction status from get_addiction_status
-        
-    Returns:
-        Dictionary with addiction effects
-    """
-    # Create addiction context
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
-    
-    # Generate effects using existing function
-    effects_result = await generate_addiction_effects(
-        RunContextWrapper(addiction_context),
-        player_name,
-        addiction_status
-    )
-    
+    effects_result = await generate_addiction_effects(RunContextWrapper(addiction_context), player_name, addiction_status)
     return effects_result
 
-def get_addiction_label(level: int) -> str:
-    """
-    Get the label for an addiction level.
-    
-    Args:
-        level: Addiction level (0-4)
-        
-    Returns:
-        Label for the addiction level
-    """
-    return ADDICTION_LEVELS.get(level, "Unknown")
-
 async def check_addiction_status(
-    user_id: int,
-    conversation_id: int,
-    player_name: str
+    user_id: int, conversation_id: int, player_name: str
 ) -> Dict[str, Any]:
-    """
-    Check a player's addiction status with Nyx governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        
-    Returns:
-        Addiction status and effects
-    """
-    # Create addiction context
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
-    
-    # Create trace for monitoring
     with trace(
         workflow_name="Addiction System",
         trace_id=f"addiction-status-{conversation_id}-{int(datetime.now().timestamp())}",
         group_id=f"user-{user_id}"
     ):
-        # Get addiction levels
-        levels_result = await check_addiction_levels(
-            RunContextWrapper(addiction_context),
-            player_name
-        )
-        
-        # If there are addictions, get effects
+        levels_result = await check_addiction_levels(RunContextWrapper(addiction_context), player_name)
         effects_result = {"effects": [], "has_effects": False}
         if levels_result.get("has_addictions", False):
-            effects_result = await generate_addiction_effects(
-                RunContextWrapper(addiction_context),
-                player_name,
-                levels_result
-            )
-    
-    return {
-        "status": levels_result,
-        "effects": effects_result
-    }
+            effects_result = await generate_addiction_effects(RunContextWrapper(addiction_context), player_name, levels_result)
+    return {"status": levels_result, "effects": effects_result}
 
-# Register with Nyx governance
-async def register_with_governance(user_id: int, conversation_id: int):
-    """
-    Register addiction agents with Nyx governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-    """
-    # Lazy import to avoid circular dependency
-    from nyx.integrate import get_central_governance
-    
-    # Get governor
-    governor = await get_central_governance(user_id, conversation_id)
-    
-    # Register main agent
-    await governor.register_agent(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_instance=addiction_system_agent,
-        agent_id="addiction_system"
-    )
-    
-    # Issue directive for addiction monitoring
-    await governor.issue_directive(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="addiction_system",
-        directive_type=DirectiveType.ACTION,
-        directive_data={
-            "instruction": "Monitor player addictions and apply appropriate effects",
-            "scope": "game"
-        },
-        priority=DirectivePriority.MEDIUM,
-        duration_minutes=24*60  # 24 hours
-    )
-    
-    logging.info("Addiction system registered with Nyx governance")
-
-# Handle directives from Nyx
-async def process_addiction_directive(directive_data: Dict[str, Any], user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Process a directive from Nyx governance system.
-    
-    Args:
-        directive_data: The directive data
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Result of processing the directive
-    """
-    # Create addiction context
-    addiction_context = AddictionContext(user_id, conversation_id)
-    await addiction_context.initialize()
-    
-    # Initialize directive handler if needed
-    if not addiction_context.directive_handler:
-        addiction_context.directive_handler = DirectiveHandler(
-            user_id, 
-            conversation_id, 
-            AgentType.UNIVERSAL_UPDATER,
-            "addiction_system"
-        )
-        
-    # Process the directive
-    result = await addiction_context.directive_handler._handle_action_directive(directive_data)
-    
-    return result
 async def get_addiction_status(
-    user_id: int,
-    conversation_id: int,
-    player_name: str
+    user_id: int, conversation_id: int, player_name: str
 ) -> Dict[str, Any]:
-    """
-    Get comprehensive addiction status for a player.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        player_name: Name of the player
-        
-    Returns:
-        Dictionary with addiction status
-    """
-    # Create addiction context
     addiction_context = AddictionContext(user_id, conversation_id)
     await addiction_context.initialize()
-    
-    # Use existing function to get addiction levels
-    levels_result = await check_addiction_levels(
-        RunContextWrapper(addiction_context),
-        player_name
-    )
-    
-    # Format the addiction status with labels
-    result = {
-        "has_addictions": levels_result.get("has_addictions", False),
-        "addictions": {}
-    }
-    
-    # Process general addictions
-    addiction_levels = levels_result.get("addiction_levels", {})
-    for addiction_type, level in addiction_levels.items():
-        if level > 0:  # Only include active addictions
-            result["addictions"][addiction_type] = {
-                "level": level,
-                "label": get_addiction_label(level),
-                "type": "general"
-            }
-    
-    # Process NPC-specific addictions
-    npc_specific = levels_result.get("npc_specific_addictions", [])
-    for addiction in npc_specific:
+    levels_result = await check_addiction_levels(RunContextWrapper(addiction_context), player_name)
+    result = {"has_addictions": levels_result.get("has_addictions", False), "addictions": {}}
+    for addiction_type, level in levels_result.get("addiction_levels", {}).items():
+        if level > 0:
+            result["addictions"][addiction_type] = {"level": level, "label": get_addiction_label(level), "type": "general"}
+    for addiction in levels_result.get("npc_specific_addictions", []):
         addiction_type = addiction.get("addiction_type")
         npc_id = addiction.get("npc_id")
         npc_name = addiction.get("npc_name", f"NPC#{npc_id}")
         level = addiction.get("level", 0)
-        
-        if level > 0:  # Only include active addictions
+        if level > 0:
             key = f"{addiction_type}_{npc_id}"
             result["addictions"][key] = {
                 "level": level,
@@ -943,5 +755,37 @@ async def get_addiction_status(
                 "npc_name": npc_name,
                 "addiction_type": addiction_type
             }
-    
     return result
+
+async def register_with_governance(user_id: int, conversation_id: int):
+    from nyx.integrate import get_central_governance
+    governor = await get_central_governance(user_id, conversation_id)
+    await governor.register_agent(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_instance=addiction_system_agent,
+        agent_id="addiction_system"
+    )
+    await governor.issue_directive(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="addiction_system",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Monitor player addictions and apply appropriate effects",
+            "scope": "game"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60
+    )
+    logging.info("Addiction system registered with Nyx governance")
+
+async def process_addiction_directive(directive_data: Dict[str, Any], user_id: int, conversation_id: int) -> Dict[str, Any]:
+    addiction_context = AddictionContext(user_id, conversation_id)
+    await addiction_context.initialize()
+    if not addiction_context.directive_handler:
+        addiction_context.directive_handler = DirectiveHandler(
+            user_id, conversation_id, AgentType.UNIVERSAL_UPDATER, "addiction_system"
+        )
+    # Unified action for both types (use correct method)
+    if directive_data.get("type") == "prohibition" or directive_data.get("directive_type") == DirectiveType.PROHIBITION:
+        return await addiction_context._handle_prohibition_directive(directive_data)
+    return await addiction_context._handle_action_directive(directive_data)
