@@ -479,7 +479,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
 
             # Spawn NPCs using your new approach
             # Ensure spawn_multiple_npcs_through_nyx is async and handles its own DB or accepts conn
-            npc_ids = await spawn_multiple_npcs
+            npc_ids = await spawn_multiple_npcs(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 environment_desc=environment_desc,
@@ -501,6 +501,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
     except Exception as e:
         logger.exception(f"Error in create_npcs_task for user={user_id}, conv={conversation_id}")
         return {"status": "failed", "error": str(e)}
+
 
 
 @celery_app.task
