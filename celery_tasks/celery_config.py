@@ -1,3 +1,5 @@
+# celery_tasks/celery_config.py
+
 """
 Enhanced Celery configuration with task prioritization, monitoring, and dead letter queues.
 """
