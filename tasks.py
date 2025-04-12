@@ -14,7 +14,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
-from db.connection import get_async_db_connection, get_db_connection_context # Import async context manager
+from db.connection import get_db_connection_context # Import async context manager
 
 from nyx.core.brain.base import NyxBrain  # Adjust import path if needed
 
