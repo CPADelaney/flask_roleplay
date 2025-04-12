@@ -9,7 +9,7 @@ import datetime
 from celery_config import celery_app # Import our dedicated Celery app
 
 # Import your helper functions and task logic
-from npcs.new_npc_creation import spawn_multiple_npcs_enhanced, spawn_multiple_npcs_through_nyx
+from npcs.new_npc_creation import spawn_multiple_npcs
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
@@ -479,7 +479,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
 
             # Spawn NPCs using your new approach
             # Ensure spawn_multiple_npcs_through_nyx is async and handles its own DB or accepts conn
-            npc_ids = await spawn_multiple_npcs_through_nyx(
+            npc_ids = await spawn_multiple_npcs
                 user_id=user_id,
                 conversation_id=conversation_id,
                 environment_desc=environment_desc,
