@@ -81,8 +81,6 @@ from middleware.validation import validate_request
 
 from logic.aggregator_sdk import init_singletons
 
-from nyx.core.memory_core import 
-
 logger = logging.getLogger(__name__)
 
 # Global placeholder for SocketIO instance
