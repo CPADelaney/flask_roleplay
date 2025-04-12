@@ -238,6 +238,8 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
 async def initialize_systems(app):
     """Initialize systems required for the application AFTER app creation."""
     logger.info("Starting asynchronous system initializations...")
+    from nyx.core.brain.base import NyxBrain
+    from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint    
     try:
         # --- Database Schema/Seed ---
         # !! IMPORTANT !!: Schema creation/migration and seeding should ideally
@@ -290,10 +292,13 @@ async def initialize_systems(app):
 
         # --- Initialize Global NyxBrain Instance ---
         # Ensure NyxBrain.get_instance is async and uses asyncpg if needed
+        print(">>> NyxBrain module:", NyxBrain.__module__)
+        print(">>> NyxBrain class file:", NyxBrain.__dict__.get('__module__', None))
+        print(">>> NyxBrain has get_instance?", hasattr(NyxBrain, "get_instance"))
+        print(">>> NyxBrain dir:", dir(NyxBrain))
+        print(">>> NyxBrain MRO:", NyxBrain.__mro__)
+
         try:
-            from nyx.core.brain.base import NyxBrain
-            from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint
-        
             system_user_id = 0
             system_conversation_id = 0
             
