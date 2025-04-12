@@ -9,7 +9,7 @@ import datetime
 from celery_config import celery_app # Import our dedicated Celery app
 
 # Import your helper functions and task logic
-from npcs.new_npc_creation import spawn_multiple_npcs
+from npcs.new_npc_creation import NPCCreationHandler
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
