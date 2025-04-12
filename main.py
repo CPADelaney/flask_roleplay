@@ -370,6 +370,13 @@ async def initialize_systems(app):
         await init_singletons()  # Initialize aggregator_sdk singletons here
         logger.info("Aggregator SDK singletons are ready.")
 
+        from nyx.core.brain import base as nyx_base
+        print('Dir on NyxBrain:', dir(nyx_base.NyxBrain))
+        print('NyxBrain.__dict__:', nyx_base.NyxBrain.__dict__.keys())
+        print('Any get_instance global?', hasattr(nyx_base, "get_instance"))
+        print('get_instance:', getattr(nyx_base, "get_instance", None))
+    
+
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
         raise # Prevent app from starting if critical systems fail
