@@ -299,9 +299,6 @@ async def initialize_systems(app):
         print(">>> NyxBrain MRO:", NyxBrain.__mro__)
 
         try:
-            system_user_id = 0
-            system_conversation_id = 0
-            
             # In main.py, right before the line causing the error
             print(f"NyxBrain dir: {dir(NyxBrain)}")
             print(f"Does NyxBrain have get_instance? {'get_instance' in dir(NyxBrain)}") 
