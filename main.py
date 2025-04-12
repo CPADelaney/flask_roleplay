@@ -296,6 +296,11 @@ async def initialize_systems(app):
         
             system_user_id = 0
             system_conversation_id = 0
+            
+            # In main.py, right before the line causing the error
+            print(f"NyxBrain dir: {dir(NyxBrain)}")
+            print(f"Does NyxBrain have get_instance? {'get_instance' in dir(NyxBrain)}") 
+            
             app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
             await app.nyx_brain.initialize()
             logger.info("Global NyxBrain instance initialized.")
