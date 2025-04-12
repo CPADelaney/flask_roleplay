@@ -1085,6 +1085,44 @@ async def initialize(self):
         else:
             since = None
         await self.replay_events(since_time=since)
+
+    @classmethod
+    async def get_instance(cls, user_id: int, conversation_id: int) -> NyxBrain:
+        """
+        Get or create a singleton instance for the specified user and conversation.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Brain instance
+        """
+        # Use a key for the specific user/conversation
+        key = f"brain_{user_id}_{conversation_id}"
+        
+        # Check if instance exists in a global registry
+        if not hasattr(cls, '_instances'):
+            cls._instances = {}
+            
+        if key not in cls._instances:
+            instance = cls(user_id, conversation_id)
+            await instance.initialize()
+            cls._instances[key] = instance
+            
+            # Register in cross-conversation registry by user
+            if not hasattr(cls, '_user_instances'):
+                cls._user_instances = {}
+                
+            if user_id not in cls._user_instances:
+                cls._user_instances[user_id] = []
+                
+            cls._user_instances[user_id].append(instance)
+            
+            # Store reference to registry
+            instance.instance_registry = cls._user_instances
+        
+        return cls._instances[key]    
         
     async def trace_operation(self, source_module: str, operation: str, **kwargs):
         """
@@ -3625,44 +3663,6 @@ async def _register_processing_modules(self):
             self.error_registry["unhandled_errors"] = self.error_registry["unhandled_errors"][-1000:]
         if len(self.error_registry["handled_errors"]) > 1000:
             self.error_registry["handled_errors"] = self.error_registry["handled_errors"][-1000:]
-
-    @classmethod
-    async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
-        """
-        Get or create a singleton instance for the specified user and conversation.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            
-        Returns:
-            Brain instance
-        """
-        # Use a key for the specific user/conversation
-        key = f"brain_{user_id}_{conversation_id}"
-        
-        # Check if instance exists in a global registry
-        if not hasattr(cls, '_instances'):
-            cls._instances = {}
-            
-        if key not in cls._instances:
-            instance = cls(user_id, conversation_id)
-            await instance.initialize()
-            cls._instances[key] = instance
-            
-            # Register in cross-conversation registry by user
-            if not hasattr(cls, '_user_instances'):
-                cls._user_instances = {}
-                
-            if user_id not in cls._user_instances:
-                cls._user_instances[user_id] = []
-                
-            cls._user_instances[user_id].append(instance)
-            
-            # Store reference to registry
-            instance.instance_registry = cls._user_instances
-        
-        return cls._instances[key]
 
     @function_tool
     async def analyze_user_state_for_dominance(self, user_id: str, user_input_analysis: Dict) -> Dict:
