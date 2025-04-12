@@ -3,24 +3,25 @@ services:
   app:
     environment:
       - DB_DSN=${DB_DSN}
-      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     build: .
     ports:
       - "8080:8080"
     depends_on:
-      - rabbitmq
+      - redis
 
-  rabbitmq:
-    image: rabbitmq:3-management
+  redis:
+    image: redis:7
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "6379:6379"
 
   celery_worker:
     environment:
       - DB_DSN=${DB_DSN}
-      - RABBITMQ_URL=${RABBITMQ_URL}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     build: .
     command: celery -A tasks.celery_app worker --loglevel=info
     depends_on:
-      - rabbitmq
+      - redis
