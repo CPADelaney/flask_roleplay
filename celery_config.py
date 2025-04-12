@@ -4,17 +4,20 @@ from celery import Celery
 import os
 from celery.schedules import crontab
 
-# Use RabbitMQ as the broker (or override via environment variable)
-# Ensure robust default handling if env var isn't set
-broker_url = os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//")
-result_backend_url = os.getenv("CELERY_RESULT_BACKEND", "rpc://") # Or use redis: "redis://localhost:6379/0"
+from celery import Celery
+import os
+from celery.schedules import crontab
 
-# Create the Celery app with an RPC result backend (or another backend of your choice)
+# Use REDIS as the default broker and result backend!
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+
+# Create the Celery app
 celery_app = Celery(
     'tasks',
-    broker=broker_url,
-    backend=result_backend_url,
-    include=['tasks'] # Explicitly include the tasks module
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND,
+    include=['tasks']  # Explicitly include the tasks module
 )
 
 celery_app.conf.update(
@@ -23,7 +26,7 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    # Consider adding task tracking settings if needed
+    # Uncomment if you want to track task start times
     # task_track_started=True,
 )
 
@@ -31,33 +34,29 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     # Run NPC learning cycle every 15 minutes
     'npc-learning-cycle-every-15-mins': {
-        'task': 'tasks.run_npc_learning_cycle_task', # Task defined in tasks.py
-        'schedule': crontab(minute='*/15'), # Run every 15 minutes
-        # 'args': (some_arg, another_arg), # Add args if the task needs them
+        'task': 'tasks.run_npc_learning_cycle_task',
+        'schedule': crontab(minute='*/15'),
+        # 'args': ()  # Add args if needed
     },
-    # Add the memory maintenance task to run daily at 3am
     'nyx-memory-maintenance-daily': {
         'task': 'tasks.nyx_memory_maintenance_task',
-        'schedule': crontab(hour=3, minute=0),  # Run at 3 AM daily
+        'schedule': crontab(hour=3, minute=0),
     },
-    # Memory system maintenance task
     'memory-system-maintenance-daily': {
         'task': 'tasks.memory_maintenance_task',
-        'schedule': crontab(hour=4, minute=30),  # Run at 4:30 AM daily
+        'schedule': crontab(hour=4, minute=30),
         'options': {'queue': 'low'}
     },
     "sweep-and-merge-nyx-split-brains-every-5min": {
-        "task": "tasks.sweep_and_merge_nyx_split_brains",  # Adjust module if needed!
+        "task": "tasks.sweep_and_merge_nyx_split_brains",
         "schedule": crontab(minute="*/5"),
-    },    
-    
-    # Memory embedding consolidation
+    },
     'memory-embedding-consolidation-weekly': {
         'task': 'tasks.memory_embedding_consolidation_task',
-        'schedule': crontab(day_of_week='sun', hour=5, minute=0),  # Run weekly on Sundays at 5 AM
+        'schedule': crontab(day_of_week='sun', hour=5, minute=0),
         'options': {'queue': 'low'}
     }
-    # Add other periodic tasks here
+    # Add other periodic tasks here as needed
 }
 
 # Optional: If using Django for Celery Beat Scheduler persistence
