@@ -1,3 +1,6 @@
+
+# render_config.py
+
 """
 Render-specific configuration settings.
 Handles environment setup and vector database configuration for Render deployment.
