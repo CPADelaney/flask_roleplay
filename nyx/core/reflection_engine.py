@@ -8,7 +8,8 @@ import math
 import re
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 
-from agents import Agent, Runner, trace, function_tool, custom_span, trace_id, handoff, RunContextWrapper, ModelSettings, RunConfig
+from agents import Agent, Runner, trace, function_tool, custom_span, handoff, RunContextWrapper, ModelSettings, RunConfig
+from agents.tracing.util import gen_trace_id
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
 
