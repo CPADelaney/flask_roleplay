@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_system import MemoryCore
+from nyx.core.memory_system import MemoryCoreAgents
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class MemoryOrchestrator:
         self.conversation_id = conversation_id
         
         # Create memory core
-        self.memory_core = MemoryCore(user_id, conversation_id)
+        self.memory_core = MemoryCoreAgents(user_id, conversation_id)
         
         # Trace group ID for connecting traces
         self.trace_group_id = f"nyx-memory-{user_id}-{conversation_id}"
