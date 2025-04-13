@@ -132,7 +132,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.integrated_tracer = None
         self.integration_manager = None
 
-        self.checkpoint_planner = CheckpointingPlannerAgent()
+        self.checkpoint_planner = None
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
@@ -291,6 +291,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             
             self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
             logger.debug("Emotional core initialized")
+
+            self.checkpoint_planner = CheckpointingPlannerAgent()           
             
             self.memory_core = MemoryCore(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
