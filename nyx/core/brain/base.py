@@ -122,26 +122,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             }
         }
 
-        self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
-        self.mode_manager = InteractionModeManager(
-            context_system=self.context_system,
-            emotional_core=self.emotional_core,
-            reward_system=self.reward_system,
-            goal_manager=self.goal_manager
-        )
-        self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+        self.context_system = None
+        self.mode_manager = None
 
-        self.thoughts_manager = InternalThoughtsManager(
-            passive_observation_system=self.passive_observation_system,
-            reflection_engine=self.reflection_engine,
-            imagination_simulator=self.imagination_simulator,
-            theory_of_mind=self.theory_of_mind,
-            relationship_reflection=self.relationship_manager,  # Using relationship_manager
-            proactive_communication=self.proactive_communication_engine,
-            emotional_core=self.emotional_core,
-            memory_core=self.memory_core
-        )
-        logger.debug("Internal thoughts manager initialized")        
+        self.thoughts_manager = None    
 
         self.event_bus = None
         self.system_context = None
@@ -331,6 +315,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 experience_interface=self.experience_interface
             )
             logger.debug("Experience consolidation initialized")
+
+            self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
             
             self.cross_user_manager = CrossUserExperienceManager(
                 memory_core=self.memory_core,
@@ -513,6 +499,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 logger.debug("Reflexive system initialized")
             except ImportError:
                 logger.info("Reflexive system module not found, skipping initialization")
+
+            self.mode_manager = InteractionModeManager(
+                context_system=self.context_system,
+                emotional_core=self.emotional_core,
+                reward_system=self.reward_system,
+                goal_manager=self.goal_manager
+            )
+            self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+    
+            self.thoughts_manager = InternalThoughtsManager(
+                passive_observation_system=self.passive_observation_system,
+                reflection_engine=self.reflection_engine,
+                imagination_simulator=self.imagination_simulator,
+                theory_of_mind=self.theory_of_mind,
+                relationship_reflection=self.relationship_manager,  # Using relationship_manager
+                proactive_communication=self.proactive_communication_engine,
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core
+            )
+            logger.debug("Internal thoughts manager initialized")                
     
             # 17. Create main orchestration agent
             self.brain_agent = self._create_brain_agent()
