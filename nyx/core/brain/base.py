@@ -2741,63 +2741,65 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Process user input based on current processing mode.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context information
-                
-        Returns:
-            Processing results
+        Process user input, generate thoughts, run gaslight-defense, and set epistemic tags.
         """
-        if hasattr(self, 'thoughts_manager'):
-            internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, user_id)
-        else:
-            logger.warning("Thoughts manager not available for input processing")
-            internal_thoughts = []
-        
-        mode_results = await self.mode_integration.process_input(user_input)
-
-        response_guidance = self.mode_integration.get_response_guidance()
-
-
         if not self.initialized:
             await self.initialize()
-    
         context = context or {}
-        
-        # Add current somatic state to context for processing
-        if self.digital_somatosensory_system:
-            context['somatic_state'] = await self.digital_somatosensory_system.get_body_state()
-        
-        # Process input through conditioning system if available
-        conditioning_results = None
-        if self.conditioned_input_processor:
+    
+        # -- Gaslighting defense --
+        challenge_response = None
+        contradictory_claim = await self.gaslight_defense_check(user_input)
+        if contradictory_claim:
+            challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), contradictory_claim)
+            # Add an InternalThought for developer tracking
             try:
-                conditioning_results = await self.process_conditioned_input(
-                    text=user_input,
-                    context=context
-                )
-                
-                # Add conditioning results to context
-                context['conditioning_results'] = conditioning_results
-            except Exception as e:
-                logger.error(f"Error in conditioned input processing: {e}")
-        
-        # Use processing manager if available
-        if self.processing_manager:
-            processing_result = await self.processing_manager.process_input(user_input, context)
-            # Add conditioning results to processing result
-            if conditioning_results:
-                processing_result['conditioning_results'] = conditioning_results
-            return processing_result
-        
-        # Fallback to direct serial processing
-        result = await self._process_input_serial(user_input, context)
-        # Add conditioning results to processing result
-        if conditioning_results:
-            result['conditioning_results'] = conditioning_results
+                from nyx.core.internal_thoughts import InternalThought, ThoughtPriority, ThoughtSource
+                if hasattr(self, "thoughts_manager"):
+                    self.thoughts_manager._add_thought(InternalThought(
+                        content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
+                        source=ThoughtSource.PERCEPTION,
+                        priority=ThoughtPriority.HIGH,
+                        epistemic_status="confident"
+                    ))
+            except ImportError:
+                pass
+    
+        # -- Internal thoughts pre-processing --
+        internal_thoughts = []
+        epistemic_status = "confident"
+        try:
+            if hasattr(self, "thoughts_manager"):
+                from nyx.core.internal_thoughts import pre_process_input
+                internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
+        except ImportError:
+            pass
+    
+        if internal_thoughts:
+            epistemic_status = internal_thoughts[-1].epistemic_status if hasattr(internal_thoughts[-1], 'epistemic_status') else "confident"
+    
+        context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
+        context["internal_epistemic_status"] = epistemic_status
+    
+        # -- Workhorse: processing_manager or serial fallback --
+        if hasattr(self, "mode_integration") and self.mode_integration:
+            # update context with mode if necessary
+            context['mode_results'] = await self.mode_integration.process_input(user_input)
+    
+        if hasattr(self, "processing_manager") and self.processing_manager:
+            result = await self.processing_manager.process_input(user_input, context)
+        else:
+            result = await self._process_input_serial(user_input, context)
+    
+        # -- Gaslighting challenge becomes planned insert under the key 'planned_challenge' --
+        if challenge_response:
+            result['planned_challenge'] = challenge_response
+    
+        result['epistemic_status'] = epistemic_status
+        result['internal_thoughts'] = context["internal_thoughts"]
         return result
+
+        
         async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
             """
             Process input through conditioning system
@@ -2870,129 +2872,137 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate a response to user input.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context information
-                
-        Returns:
-            Response data
+        Generate a user-facing response, using epistemic hedging and handling gaslighting/false claim defense.
         """
-        if not self.initialized:
+        if not getattr(self, "initialized", False):
             await self.initialize()
-    
         context = context or {}
-        
-        # Add current somatic/emotional state to context for response generation
-        if self.digital_somatosensory_system:
-            context['somatic_state'] = await self.digital_somatosensory_system.get_body_state()
-        if self.emotional_core and hasattr(self.emotional_core, 'get_emotional_state'):
-            context['emotional_state'] = self.emotional_core.get_emotional_state()
-        
-        # Process the input first (includes conditioning processing)
-        processing_result = await self.process_input(user_input, context)
-        
-        # Use processing manager if available
-        if self.processing_manager:
-            # Generate response from the processing result
-            response = await self.processing_manager.generate_response(user_input, processing_result, context)
+    
+        # ---------- Input Preprocessing ----------
+        # Run input processing (tracks internal thoughts, epistemic status, gaslight check)
+        input_result = await self.process_input(user_input, context)
+        epistemic_status = input_result.get('epistemic_status', "confident")
+        internal_thoughts = input_result.get("internal_thoughts", [])
+    
+        # ---------- Challenge User (Gaslighting) ----------
+        # If process_input planned a challenge, output that in preference to a regular message
+        if "planned_challenge" in input_result:
+            main_message = input_result["planned_challenge"]
+            epistemic_status = "confident"  # confident she remembers her own claims
         else:
-            # Simple response generation fallback
-            response = {
-                "message": f"I've processed your input: {user_input[:30]}...",
-                "response_type": "basic",
-                "emotional_state": processing_result.get("emotional_state", {})
-            }
-        
-        # Apply conditioning modifications if available
-        if (self.conditioned_input_processor and 
-            'conditioning_results' in processing_result and 
-            'message' in response):
+            # Otherwise, generate a standard reply via processing_manager if available
+            if hasattr(self, "processing_manager") and self.processing_manager and hasattr(self.processing_manager, "generate_response"):
+                core_resp = await self.processing_manager.generate_response(user_input, input_result, context)
+                # core_resp may be dict or str; normalize
+                if isinstance(core_resp, dict):
+                    main_message = core_resp.get("message", "") or core_resp.get("response", "")
+                else:
+                    main_message = str(core_resp)
+            else:
+                # Fallback to a default bland reply
+                main_message = f"I've processed your input: {user_input[:40]}..."
+    
+        # ---------- Epistemic Hedging ----------
+        # Format message with hedging, based on epistemic_status from thoughts
+        msg = self._format_response_with_epistemic_tags(main_message, epistemic_status)
+    
+        # ---------- Output Filtering (Leakage/Sanity Check) ----------
+        if hasattr(self, "thoughts_manager"):
             try:
-                modified_message = await self.modify_response_with_conditioning(
-                    response_text=response["message"],
-                    processing_results=processing_result["conditioning_results"]
-                )
-                
-                # Update response with modified message
-                response["message"] = modified_message
-                response["conditioning_applied"] = True
-            except Exception as e:
-                logger.error(f"Error applying conditioning to response: {e}")
+                from nyx.core.internal_thoughts import pre_process_output
+                # If pre_process_output returns a tuple (filtered, thoughts), take first
+                filtered_output = await pre_process_output(self.thoughts_manager, msg, context)
+                if isinstance(filtered_output, tuple):
+                    msg = filtered_output[0]
+                else:
+                    msg = filtered_output
+            except Exception:
+                pass
+    
+        # ---------- Assemble Output ----------
+        return {
+            "message": msg,
+            "epistemic_status": epistemic_status,
+            "internal_thoughts": internal_thoughts,
+        }
 
-        if hasattr(self, 'thoughts_manager'):
-            filtered_response = await pre_process_output(self.thoughts_manager, response, context)
-        else:
-            logger.warning("Thoughts manager not available for output processing")
-            filtered_response = response
-        
-        return filtered_response
+
+    async def gaslight_defense_check(self, user_input: str) -> Optional[str]:
+        import re
+        claim_match = re.search(r'you (said|told me|taught me|promised) ([^\.!?]*)', user_input.lower())
+        if claim_match:
+            claim_text = claim_match.group(2)
+            # Query memory for direct assertions matching this
+            memories = await self.memory_core.retrieve_memories(query=claim_text, limit=1)
+            if not memories:
+                return claim_text
+        return None
+    
         
     async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Basic input processing fallback if no processing manager is available.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context information
-            
-        Returns:
-            Processing results
+        A simple fallback input processor if no processing_manager is set.
+        Includes memory logging, emotional state updates, and interaction tracking.
         """
-        with trace(workflow_name="process_input_fallback", group_id=self.trace_group_id):
-            start_time = datetime.datetime.now()
-            
-            # Initialize context
-            context = context or {}
-            
-            # Update emotional state if available
-            emotional_state = {}
-            if self.emotional_core and hasattr(self.emotional_core, 'analyze_text_sentiment'):
+        from datetime import datetime
+    
+        start_time = datetime.now()
+        context = context or {}
+    
+        # Emotional state
+        emotional_state = {}
+        if hasattr(self, "emotional_core") and hasattr(self.emotional_core, 'analyze_text_sentiment'):
+            try:
                 emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
                 if hasattr(self.emotional_core, 'update_from_stimuli'):
                     emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
-            
-            # Retrieve memories if available
-            memories = []
-            if self.memory_orchestrator:
+            except Exception:
+                pass
+    
+        # Memory retrieval
+        memories = []
+        if hasattr(self, "memory_orchestrator"):
+            try:
                 memories = await self.memory_orchestrator.retrieve_memories(
                     query=user_input,
                     memory_types=["observation", "reflection", "abstraction", "experience"],
                     limit=5
                 )
-            
-            # Add memory of this interaction
-            memory_id = None
-            if self.memory_core:
+            except Exception:
+                pass
+    
+        # Add this interaction to memory
+        memory_id = None
+        if hasattr(self, "memory_core"):
+            try:
                 memory_id = await self.memory_core.add_memory(
                     memory_text=f"User said: {user_input}",
                     memory_type="observation",
                     significance=5,
                     tags=["interaction", "user_input"],
                     metadata={
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "user_id": str(self.user_id)
+                        "timestamp": datetime.now().isoformat(),
+                        "user_id": str(getattr(self, "user_id", "unknown"))
                     }
                 )
-            
-            # Update interaction tracking
-            self.last_interaction = datetime.datetime.now()
-            self.interaction_count += 1
-            
-            # Calculate response time
-            end_time = datetime.datetime.now()
-            response_time = (end_time - start_time).total_seconds()
-            
-            return {
-                "user_input": user_input,
-                "emotional_state": emotional_state,
-                "memories": memories,
-                "memory_count": len(memories),
-                "has_experience": False,
-                "memory_id": memory_id,
-                "response_time": response_time
-            }
+            except Exception:
+                pass
+    
+        self.last_interaction = datetime.now()
+        self.interaction_count = getattr(self, "interaction_count", 0) + 1
+        end_time = datetime.now()
+        response_time = (end_time - start_time).total_seconds()
+    
+        return {
+            "user_input": user_input,
+            "emotional_state": emotional_state,
+            "memories": memories,
+            "memory_count": len(memories),
+            "has_experience": False,
+            "memory_id": memory_id,
+            "response_time": response_time
+        }
+
 
     async def run_maintenance(self) -> Dict[str, Any]:
         """
@@ -4389,123 +4399,132 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
     async def process_input_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Process user input with optional thinking phase
-        
-        Args:
-            user_input: User's input text
-            context: Additional context
-            
-        Returns:
-            Processing results with thinking if used
+        Like process_input, but adds an optional explicit 'thinking' phase.
         """
         if not self.initialized:
             await self.initialize()
-        
-        with trace(workflow_name="process_input_with_thinking", group_id=self.trace_group_id):
-            start_time = datetime.datetime.now()
-            
-            # Initialize context if needed
-            context = context or {}
-            
-            # Check if thinking should be used
-            thinking_decision = {"should_think": False}
-            if self.thinking_config["thinking_enabled"] and hasattr(self.thinking_tools, "should_use_extended_thinking"):
-                # Determine if this query needs thinking
-                thinking_decision = await self.thinking_tools.should_use_extended_thinking(
-                    RunContextWrapper(context=self),
-                    user_input, 
-                    context
-                )
-            
-            # Perform thinking if needed
-            if thinking_decision.get("should_think", False):
-                thinking_level = thinking_decision.get("thinking_level", 1)
-                thinking_result = await self.thinking_tools.think_before_responding(
-                    RunContextWrapper(context=self),
-                    user_input,
-                    thinking_level,
-                    context
-                )
-                
-                # Update thinking stats
-                self.thinking_config["last_thinking_interaction"] = self.interaction_count
-                self.thinking_config["thinking_stats"]["total_thinking_used"] += 1
-                
-                if thinking_level == 1:
-                    self.thinking_config["thinking_stats"]["basic_thinking_used"] += 1
-                elif thinking_level == 2:
-                    self.thinking_config["thinking_stats"]["moderate_thinking_used"] += 1
-                else:  # thinking_level == 3
-                    self.thinking_config["thinking_stats"]["deep_thinking_used"] += 1
-                
-                # Add thinking result to context
-                context["thinking_result"] = thinking_result
-                context["thinking_applied"] = True
-            else:
-                # No thinking needed
-                context["thinking_applied"] = False
-            
-            # Process the input (with or without thinking)
-            result = await self.process_input(user_input, context)
-            
-            # Add thinking information to result if applicable
-            if context.get("thinking_applied", False):
-                result["thinking_applied"] = True
-                result["thinking_level"] = context["thinking_result"].get("thinking_level", 1)
-                result["thinking_steps"] = context["thinking_result"].get("thinking_steps", [])
-                
-                # Track thinking time
-                thinking_time = (datetime.datetime.now() - start_time).total_seconds()
-                
-                # Update average thinking time
-                current_avg = self.thinking_config["thinking_stats"]["thinking_time_avg"]
-                total_thinking = self.thinking_config["thinking_stats"]["total_thinking_used"]
-                
-                if total_thinking > 1:  # Not the first time
-                    self.thinking_config["thinking_stats"]["thinking_time_avg"] = (
-                        (current_avg * (total_thinking - 1) + thinking_time) / total_thinking
-                    )
-                else:  # First time using thinking
-                    self.thinking_config["thinking_stats"]["thinking_time_avg"] = thinking_time
-            else:
-                result["thinking_applied"] = False
-            
-            return result
+        context = context or {}
     
+        challenge_response = None
+        contradictory_claim = await self.gaslight_defense_check(user_input)
+        if contradictory_claim:
+            challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), contradictory_claim)
+            try:
+                from nyx.core.internal_thoughts import InternalThought, ThoughtPriority, ThoughtSource
+                if hasattr(self, "thoughts_manager"):
+                    self.thoughts_manager._add_thought(InternalThought(
+                        content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
+                        source=ThoughtSource.PERCEPTION,
+                        priority=ThoughtPriority.HIGH,
+                        epistemic_status="confident"
+                    ))
+            except ImportError:
+                pass
+    
+        internal_thoughts = []
+        epistemic_status = "confident"
+        try:
+            if hasattr(self, "thoughts_manager"):
+                from nyx.core.internal_thoughts import pre_process_input
+                internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
+        except ImportError:
+            pass
+    
+        if internal_thoughts:
+            epistemic_status = internal_thoughts[-1].epistemic_status if hasattr(internal_thoughts[-1], 'epistemic_status') else "confident"
+    
+        context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
+        context["internal_epistemic_status"] = epistemic_status
+    
+        # -- "Thinking" phase --
+        thinking_applied = False
+        thinking_result = None
+    
+        use_thinking = False
+        if hasattr(self, "thinking_config") and self.thinking_config.get("thinking_enabled", False) and hasattr(self, "thinking_tools"):
+            if hasattr(self.thinking_tools, "should_use_extended_thinking"):
+                decision = await self.thinking_tools.should_use_extended_thinking(
+                    RunContextWrapper(context=self), user_input, context)
+                use_thinking = decision.get("should_think", False)
+    
+        if use_thinking and hasattr(self.thinking_tools, "think_before_responding"):
+            thinking_result = await self.thinking_tools.think_before_responding(
+                RunContextWrapper(context=self), user_input, 2, context)
+            thinking_applied = True
+            context["thinking_result"] = thinking_result
+            context["thinking_applied"] = True
+    
+        # After thinking phase, process actual input
+        if hasattr(self, "processing_manager") and self.processing_manager:
+            result = await self.processing_manager.process_input(user_input, context)
+        else:
+            result = await self._process_input_serial(user_input, context)
+    
+        if challenge_response:
+            result['planned_challenge'] = challenge_response
+        result['epistemic_status'] = epistemic_status
+        result['internal_thoughts'] = context["internal_thoughts"]
+        result['thinking_applied'] = thinking_applied
+        if thinking_result:
+            result['thinking_result'] = thinking_result
+        return result
+
+        
     async def generate_response_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate a response with thinking when appropriate
-        
-        Args:
-            user_input: User's input text
-            context: Additional context
-            
-        Returns:
-            Response with reasoning if applicable
+        Generate a response, using explicit internal 'thinking' phase plus epistemic hedging and false claim defense.
         """
-        if not self.initialized:
+        if not getattr(self, "initialized", False):
             await self.initialize()
-        
-        with trace(workflow_name="generate_response_with_thinking", group_id=self.trace_group_id):
-            # Process the input first, which handles thinking decision
-            processing_result = await self.process_input_with_thinking(user_input, context)
-            
-            # If thinking was applied, generate reasoned response
-            if processing_result.get("thinking_applied", False) and "thinking_result" in (context or {}):
-                thinking_result = context["thinking_result"]
-                
-                # Generate reasoned response
-                if hasattr(self.thinking_tools, "generate_reasoned_response"):
-                    response = await self.thinking_tools.generate_reasoned_response(
-                        RunContextWrapper(context=self),
-                        user_input,
-                        thinking_result,
-                        context
-                    )
-                    return response
-            
-            # Use standard response generation
-            return await self.generate_response(user_input, context)
+        context = context or {}
+    
+        # ---------- Input + Thinking Processing ----------
+        # Use specialized function with thinking, which wraps all epistemic stuff already
+        input_result = await self.process_input_with_thinking(user_input, context)
+        epistemic_status = input_result.get('epistemic_status', "confident")
+        internal_thoughts = input_result.get("internal_thoughts", [])
+        thinking_steps = input_result.get("thinking_result", {})  # may be None or thinking context
+    
+        # ---------- Challenge User (Gaslighting) ----------
+        if "planned_challenge" in input_result:
+            main_message = input_result["planned_challenge"]
+            epistemic_status = "confident"
+        else:
+            if hasattr(self, "processing_manager") and self.processing_manager and hasattr(self.processing_manager, "generate_response"):
+                core_resp = await self.processing_manager.generate_response(user_input, input_result, context)
+                if isinstance(core_resp, dict):
+                    main_message = core_resp.get("message", "") or core_resp.get("response", "")
+                else:
+                    main_message = str(core_resp)
+            else:
+                main_message = f"I've processed your input: {user_input[:40]}..."
+    
+        # ---------- Epistemic Hedging ----------
+        msg = self._format_response_with_epistemic_tags(main_message, epistemic_status)
+        # Optionally include some signal that "thinking" was used, if you wish:
+        if input_result.get("thinking_applied"):
+            msg = f"(thoughtful reply) {msg}"
+    
+        # ---------- Output Filtering ----------
+        if hasattr(self, "thoughts_manager"):
+            try:
+                from nyx.core.internal_thoughts import pre_process_output
+                filtered_output = await pre_process_output(self.thoughts_manager, msg, context)
+                if isinstance(filtered_output, tuple):
+                    msg = filtered_output[0]
+                else:
+                    msg = filtered_output
+            except Exception:
+                pass
+    
+        # ---------- Assemble Output ----------
+        return {
+            "message": msg,
+            "epistemic_status": epistemic_status,
+            "internal_thoughts": internal_thoughts,
+            "thinking_steps": thinking_steps,
+        }
+
 
     
     async def register_recovery_strategy(self, error_type: str, strategy: Dict[str, Any]) -> Dict[str, Any]:
