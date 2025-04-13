@@ -228,7 +228,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.mood_manager import MoodManager
             from nyx.core.theory_of_mind import TheoryOfMind
             from nyx.core.imagination_simulator import ImaginationSimulator
-            from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+            from nyx.core.internal_thoughts import InternalThoughtsManager, pre_prt, pre_process_output
     
             from nyx.core.femdom.body_service_system import BodyServiceSystem
             from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
@@ -1655,11 +1655,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             list(data_to_save.keys()), plan.get("skip_fields", []))
         return True    
 
+    @staticmethod
     @function_tool
-    async def challenge_user_claim(self, ctx: RunContextWrapper, claim: str, evidence: str = None) -> str:
+    async def challenge_user_claim(ctx: RunContextWrapper, instance, claim: str, evidence: str = None) -> str:
         """
         Challenge or seek clarification for user-provided information that appears false or inaccurate.
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             claim: The user statement to challenge
             evidence: Optionally, the memory/knowledge that contradicts it
         Returns:
@@ -1670,72 +1673,85 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         else:
             return f"I'm not certain that's correct: '{claim}'. Can you explain?"
     
+    @staticmethod
     @function_tool
-    async def intentionally_lie(self, ctx: RunContextWrapper, fact: str, motivation: str = "unspecified") -> str:
+    async def intentionally_lie(ctx: RunContextWrapper, instance, fact: str, motivation: str = "unspecified") -> str:
         """
         Purposely state something untrue if there is a reason to (e.g., tactical, playful, manipulative).
         Records the lie and motivation in internal state for potential later confession or consistency management.
+        
+        Args:
+            ctx: Run context wrapper
+            instance: The class instance
+            fact: The false statement to make
+            motivation: Reason for the lie
+            
+        Returns:
+            The false statement
         """
         # Store lie and why in internal state for traceability
-        if not hasattr(self, "lie_log"):
-            self.lie_log = []
-        self.lie_log.append({"fact": fact, "motivation": motivation, "timestamp": datetime.datetime.now().isoformat()})
+        if not hasattr(instance, "lie_log"):
+            instance.lie_log = []
+        instance.lie_log.append({"fact": fact, "motivation": motivation, "timestamp": datetime.datetime.now().isoformat()})
         return fact    
             
+    @staticmethod
     @function_tool
-    async def run_cognitive_cycle(self, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def run_cognitive_cycle(ctx: RunContextWrapper, instance, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Runs a single cognitive cycle: updating needs, selecting/executing goals,
         and potentially running meta-cognitive processes.
-
+    
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             context_data: Optional external context (e.g., from user input processing)
-
+    
         Returns:
             Dictionary summarizing the cycle's activities and results
         """
-        if not self.initialized:
+        if not instance.initialized:
             logger.warning("Attempted to run cognitive cycle before initialization.")
             return {"error": "Brain not initialized"}
-
-        self.cognitive_cycles_executed += 1
+    
+        instance.cognitive_cycles_executed += 1
         cycle_results = {
-            "cycle_number": self.cognitive_cycles_executed,
+            "cycle_number": instance.cognitive_cycles_executed,
             "timestamp": datetime.datetime.now().isoformat()
         }
-        logger.debug(f"--- Starting Cognitive Cycle {self.cognitive_cycles_executed} ---")
-
-        with trace(workflow_name="NyxCognitiveCycle", group_id=self.trace_group_id):
+        logger.debug(f"--- Starting Cognitive Cycle {instance.cognitive_cycles_executed} ---")
+    
+        with trace(workflow_name="NyxCognitiveCycle", group_id=instance.trace_group_id):
             # 1. Update Needs & Check for Goal Triggers
-            if self.needs_system:
+            if instance.needs_system:
                 try:
-                    drive_strengths = await self.needs_system.update_needs()
+                    drive_strengths = await instance.needs_system.update_needs()
                     cycle_results["needs_update"] = {"drive_strengths": drive_strengths}
                     logger.debug(f"Needs updated. Drives: {drive_strengths}")
                 except Exception as e:
                     logger.error(f"Error updating needs: {e}")
                     cycle_results["needs_update"] = {"error": str(e)}
-
+    
             # 2. Goal Management: Select & Execute Step
-            if self.goal_manager:
+            if instance.goal_manager:
                 try:
-                    execution_result = await self.goal_manager.execute_next_step()
+                    execution_result = await instance.goal_manager.execute_next_step()
                     if execution_result:
                         cycle_results["goal_execution"] = execution_result
                         # Update performance metrics
                         step_info = execution_result.get("executed_step", {})
                         if step_info.get("status") == "completed":
-                            self.performance_metrics["steps_executed"] += 1
+                            instance.performance_metrics["steps_executed"] += 1
                         if step_info.get("status") == "failed":
                             # Potentially log error or trigger meta-core review
                             pass
-                        goal_status = await self.goal_manager.get_goal_status(execution_result.get("goal_id"))
+                        goal_status = await instance.goal_manager.get_goal_status(execution_result.get("goal_id"))
                         if goal_status:
                              if goal_status.get("status") == "completed": 
-                                 self.performance_metrics["goals_completed"] += 1
+                                 instance.performance_metrics["goals_completed"] += 1
                              if goal_status.get("status") == "failed": 
-                                 self.performance_metrics["goals_failed"] += 1
-
+                                 instance.performance_metrics["goals_failed"] += 1
+    
                         logger.debug(f"Goal execution step result: {execution_result}")
                     else:
                         cycle_results["goal_execution"] = {"status": "no_action_taken"}
@@ -1743,26 +1759,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 except Exception as e:
                     logger.exception(f"Error during goal execution: {e}")
                     cycle_results["goal_execution"] = {"error": str(e)}
-
+    
             # 3. Meta-Cognitive Loop (Can be run less frequently)
-            if self.meta_core and hasattr(self.meta_core.context, "meta_parameters"):
-                eval_interval = self.meta_core.context.meta_parameters.get("evaluation_interval", 5)
-                if self.cognitive_cycles_executed % eval_interval == 0:
+            if instance.meta_core and hasattr(instance.meta_core.context, "meta_parameters"):
+                eval_interval = instance.meta_core.context.meta_parameters.get("evaluation_interval", 5)
+                if instance.cognitive_cycles_executed % eval_interval == 0:
                     try:
                         logger.debug("Running MetaCore cycle...")
                         # Prepare context for MetaCore
                         meta_context = context_data or {}
-                        if self.needs_system:
-                            meta_context['needs_state'] = self.needs_system.get_needs_state()
-                        if self.goal_manager:
-                            meta_context['active_goals'] = await self.goal_manager.get_all_goals(
+                        if instance.needs_system:
+                            meta_context['needs_state'] = instance.needs_system.get_needs_state()
+                        if instance.goal_manager:
+                            meta_context['active_goals'] = await instance.goal_manager.get_all_goals(
                                 status_filter=["active"]
                             )
-                        meta_context['performance_metrics'] = await self.get_system_stats()
-
+                        meta_context['performance_metrics'] = await instance.get_system_stats()
+    
                         # Run meta-cognitive cycle
-                        if hasattr(self.meta_core, 'cognitive_cycle'):
-                            meta_results = await self.meta_core.cognitive_cycle(meta_context)
+                        if hasattr(instance.meta_core, 'cognitive_cycle'):
+                            meta_results = await instance.meta_core.cognitive_cycle(meta_context)
                             cycle_results["meta_core_cycle"] = meta_results
                             logger.debug("MetaCore cycle completed.")
                         else:
@@ -1770,8 +1786,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     except Exception as e:
                         logger.error(f"Error running MetaCore cycle: {e}")
                         cycle_results["meta_core_cycle"] = {"error": str(e)}
-
-            logger.debug(f"--- Finished Cognitive Cycle {self.cognitive_cycles_executed} ---")
+    
+            logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
         return cycle_results
 
     def _register_creative_actions(self):
@@ -2738,6 +2754,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
         logger.debug(f"Dominance step evaluation result: {appropriateness}")
         return appropriateness
+
+    def _get_main_epistemic_status(self, thoughts: List[InternalThought]):
+        """Finds the most serious epistemic status among the thoughts."""
+        status_order = ["lied", "unknown", "uncertain", "self-justified", "confident"]
+        for status in status_order:
+            for th in thoughts:
+                if getattr(th, "epistemic_status", "confident") == status:
+                    return status
+        return "confident"
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -2752,7 +2777,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         contradictory_claim = await self.gaslight_defense_check(user_input)
         if contradictory_claim:
             challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), contradictory_claim)
-            # Add an InternalThought for developer tracking
             try:
                 from nyx.core.internal_thoughts import InternalThought, ThoughtPriority, ThoughtSource
                 if hasattr(self, "thoughts_manager"):
@@ -2767,7 +2791,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
         # -- Internal thoughts pre-processing --
         internal_thoughts = []
-        epistemic_status = "confident"
         try:
             if hasattr(self, "thoughts_manager"):
                 from nyx.core.internal_thoughts import pre_process_input
@@ -2775,15 +2798,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         except ImportError:
             pass
     
+        # ---- Epistemic status selection: always use object robustly ----
         if internal_thoughts:
-            epistemic_status = internal_thoughts[-1].epistemic_status if hasattr(internal_thoughts[-1], 'epistemic_status') else "confident"
+            epistemic_status = self._get_main_epistemic_status([
+                self._ensure_internalthought(t) for t in internal_thoughts
+            ])
+        else:
+            epistemic_status = "confident"
     
         context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
         context["internal_epistemic_status"] = epistemic_status
+        context["epistemic_status"] = epistemic_status
     
-        # -- Workhorse: processing_manager or serial fallback --
+        # -- Continue to main processing --
         if hasattr(self, "mode_integration") and self.mode_integration:
-            # update context with mode if necessary
             context['mode_results'] = await self.mode_integration.process_input(user_input)
     
         if hasattr(self, "processing_manager") and self.processing_manager:
@@ -2791,7 +2819,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         else:
             result = await self._process_input_serial(user_input, context)
     
-        # -- Gaslighting challenge becomes planned insert under the key 'planned_challenge' --
         if challenge_response:
             result['planned_challenge'] = challenge_response
     
@@ -2799,46 +2826,47 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         result['internal_thoughts'] = context["internal_thoughts"]
         return result
 
+
         
-        async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
-            """
-            Process input through conditioning system
+    async def process_conditioned_input(self, text: str, user_id: str = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process input through conditioning system
             
-            Args:
-                text: Input text
-                user_id: User ID for personalization (defaults to self.user_id if None)
-                context: Additional context information
+        Args:
+            text: Input text
+            user_id: User ID for personalization (defaults to self.user_id if None)
+            context: Additional context information
                 
-            Returns:
-                Processing results
-            """
-            if not self.initialized:
-                await self.initialize()
+        Returns:
+            Processing results
+        """
+        if not self.initialized:
+            await self.initialize()
             
-            if not self.conditioned_input_processor:
-                return {"error": "Conditioned input processor not initialized"}
-            
-            # Convert user_id to string if needed
-            if user_id is None:
-                user_id = str(self.user_id)
-            elif isinstance(user_id, int):
-                user_id = str(user_id)
+        if not self.conditioned_input_processor:
+            return {"error": "Conditioned input processor not initialized"}
+        
+        # Convert user_id to string if needed
+        if user_id is None:
+            user_id = str(self.user_id)
+        elif isinstance(user_id, int):
+            user_id = str(user_id)
 
-            response = await self.mode_integration.modify_response_for_mode(response)
-            
-            # Optionally record feedback
-            await self.mode_integration.record_mode_feedback(True)  # Assuming success
+        response = await self.mode_integration.modify_response_for_mode(response)
+        
+        # Optionally record feedback
+        await self.mode_integration.record_mode_feedback(True)  # Assuming success
 
-            if thoughts_manager.config["debug_mode"]:
-                print(f"Generated {len(internal_thoughts)} internal thoughts")            
-            
-            
-            return await self.conditioned_input_processor.process_input(
-                text=text,
-                user_id=user_id,
-                context=context
-            )
-            return response
+        if thoughts_manager.config["debug_mode"]:
+            print(f"Generated {len(internal_thoughts)} internal thoughts")            
+        
+        
+        return await self.conditioned_input_processor.process_input(
+            text=text,
+            user_id=user_id,
+            context=context
+        )
+        return response
 
     async def _scheduled_identity_update(self):
         # Run every 24 hours or after significant interactions
@@ -2869,6 +2897,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             response_text=response_text,
             input_processing_results=processing_results
         )
+
+    def _ensure_internalthought(self, th):
+        """Converts a dict to a dummy object with attribute access, for epistemic_status lookups."""
+        if hasattr(th, "epistemic_status"):
+            return th
+        else:
+            # Turn dict into object with attributes
+            dummy = type("InternalThoughtDummy", (), {})()
+            for k, v in th.items():
+                setattr(dummy, k, v)
+            return dummy
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -2878,39 +2917,38 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             await self.initialize()
         context = context or {}
     
-        # ---------- Input Preprocessing ----------
-        # Run input processing (tracks internal thoughts, epistemic status, gaslight check)
         input_result = await self.process_input(user_input, context)
-        epistemic_status = input_result.get('epistemic_status', "confident")
         internal_thoughts = input_result.get("internal_thoughts", [])
     
+        # -- Robustly get epistemic_status from thoughts (regardless of dict/object) --
+        if hasattr(self, '_get_main_epistemic_status') and internal_thoughts:
+            epistemic_status = self._get_main_epistemic_status([
+                self._ensure_internalthought(t) for t in internal_thoughts
+            ])
+        else:
+            epistemic_status = input_result.get('epistemic_status', "confident")
+    
         # ---------- Challenge User (Gaslighting) ----------
-        # If process_input planned a challenge, output that in preference to a regular message
         if "planned_challenge" in input_result:
             main_message = input_result["planned_challenge"]
-            epistemic_status = "confident"  # confident she remembers her own claims
+            epistemic_status = "confident"
         else:
-            # Otherwise, generate a standard reply via processing_manager if available
             if hasattr(self, "processing_manager") and self.processing_manager and hasattr(self.processing_manager, "generate_response"):
                 core_resp = await self.processing_manager.generate_response(user_input, input_result, context)
-                # core_resp may be dict or str; normalize
                 if isinstance(core_resp, dict):
                     main_message = core_resp.get("message", "") or core_resp.get("response", "")
                 else:
                     main_message = str(core_resp)
             else:
-                # Fallback to a default bland reply
                 main_message = f"I've processed your input: {user_input[:40]}..."
     
         # ---------- Epistemic Hedging ----------
-        # Format message with hedging, based on epistemic_status from thoughts
         msg = self._format_response_with_epistemic_tags(main_message, epistemic_status)
     
         # ---------- Output Filtering (Leakage/Sanity Check) ----------
         if hasattr(self, "thoughts_manager"):
             try:
                 from nyx.core.internal_thoughts import pre_process_output
-                # If pre_process_output returns a tuple (filtered, thoughts), take first
                 filtered_output = await pre_process_output(self.thoughts_manager, msg, context)
                 if isinstance(filtered_output, tuple):
                     msg = filtered_output[0]
@@ -2919,7 +2957,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             except Exception:
                 pass
     
-        # ---------- Assemble Output ----------
         return {
             "message": msg,
             "epistemic_status": epistemic_status,
@@ -4422,7 +4459,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 pass
     
         internal_thoughts = []
-        epistemic_status = "confident"
         try:
             if hasattr(self, "thoughts_manager"):
                 from nyx.core.internal_thoughts import pre_process_input
@@ -4430,8 +4466,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         except ImportError:
             pass
     
+        # 🩹 Robust main epistemic selection:
         if internal_thoughts:
-            epistemic_status = internal_thoughts[-1].epistemic_status if hasattr(internal_thoughts[-1], 'epistemic_status') else "confident"
+            epistemic_status = self._get_main_epistemic_status(
+                [self._ensure_internalthought(t) for t in internal_thoughts])
+        else:
+            epistemic_status = "confident"
     
         context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
         context["internal_epistemic_status"] = epistemic_status
@@ -4469,6 +4509,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             result['thinking_result'] = thinking_result
         return result
 
+
         
     async def generate_response_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -4479,11 +4520,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         context = context or {}
     
         # ---------- Input + Thinking Processing ----------
-        # Use specialized function with thinking, which wraps all epistemic stuff already
         input_result = await self.process_input_with_thinking(user_input, context)
-        epistemic_status = input_result.get('epistemic_status', "confident")
         internal_thoughts = input_result.get("internal_thoughts", [])
-        thinking_steps = input_result.get("thinking_result", {})  # may be None or thinking context
+        thinking_steps = input_result.get("thinking_result", {})
+        if hasattr(self, '_get_main_epistemic_status') and internal_thoughts:
+            epistemic_status = self._get_main_epistemic_status([
+                self._ensure_internalthought(t) for t in internal_thoughts
+            ])
+        else:
+            epistemic_status = input_result.get('epistemic_status', "confident")
     
         # ---------- Challenge User (Gaslighting) ----------
         if "planned_challenge" in input_result:
