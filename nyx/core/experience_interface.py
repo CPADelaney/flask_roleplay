@@ -415,29 +415,25 @@ class ExperienceInterface:
     
     # Vector search functions with Pydantic model
     
+    @staticmethod
     @function_tool
-    async def _generate_experience_vector(self, ctx: RunContextWrapper,
-                                      experience_text: str) -> List[float]:
+    async def _generate_experience_vector(ctx: RunContextWrapper, instance, experience_text: str) -> List[float]:
         """
         Generate a vector embedding for an experience text
         
         Args:
+            instance: The class instance
             experience_text: Text of the experience to embed
             
         Returns:
             Vector embedding of the experience
         """
-        # In a real implementation, this would use a proper embedding model
-        # For this example, we'll use a simple mock embedding
-        
-        # Mock embedding generation - in real code, this would call an embedding API
-        # Use hash of text to generate a deterministic but unique vector
-        # This is just for demonstration - real code would use a proper embedding model
+        # Use instance instead of self
         text_hash = hash(experience_text)
         random.seed(text_hash)
         
         # Generate a random vector of the specified dimension
-        vector = [random.uniform(-1.0, 1.0) for _ in range(self.vector_dimension)]
+        vector = [random.uniform(-1.0, 1.0) for _ in range(instance.vector_dimension)]
         
         # Normalize the vector to unit length
         norm = np.linalg.norm(vector)
@@ -446,13 +442,15 @@ class ExperienceInterface:
         
         return vector
     
+    @staticmethod
     @function_tool
-    async def _vector_search_experiences(self, ctx: RunContextWrapper,
-                                     params: VectorSearchParams) -> List[Dict[str, Any]]:
+    async def _vector_search_experiences(ctx: RunContextWrapper, instance, params: VectorSearchParams) -> List[Dict[str, Any]]:
         """
         Perform vector search for experiences similar to the query
         
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             params: Parameters for vector search
             
         Returns:
@@ -464,67 +462,51 @@ class ExperienceInterface:
         user_id = params.user_id
         include_cross_user = params.include_cross_user
         
-        # Generate vector for the query
-        query_vector = await self._generate_experience_vector(ctx, query)
+        # Generate vector for the query (note we pass instance)
+        query_vector = await instance._generate_experience_vector(ctx, instance, query)
         
-        # Get all experience vectors
+        # Rest of the function is the same but replace self with instance
         results = []
-        
-        # Determine which experience vectors to search
         search_vectors = {}
         
         if not include_cross_user and user_id:
-            # Only include experiences from this user
-            if user_id in self.user_experience_map:
-                for exp_id in self.user_experience_map[user_id]:
-                    if exp_id in self.experience_vectors:
-                        search_vectors[exp_id] = self.experience_vectors[exp_id]
+            if user_id in instance.user_experience_map:
+                for exp_id in instance.user_experience_map[user_id]:
+                    if exp_id in instance.experience_vectors:
+                        search_vectors[exp_id] = instance.experience_vectors[exp_id]
         else:
-            # Include all experiences (or filter by permitted cross-user sharing)
             if include_cross_user:
-                # Get sharable experiences from all users
-                sharable_experiences = await self._filter_sharable_experiences(
+                sharable_experiences = await instance._filter_sharable_experiences(
                     ctx, 
                     user_id=user_id if user_id else "default"
                 )
                 
                 for exp_id in sharable_experiences:
-                    if exp_id in self.experience_vectors:
-                        search_vectors[exp_id] = self.experience_vectors[exp_id]
+                    if exp_id in instance.experience_vectors:
+                        search_vectors[exp_id] = instance.experience_vectors[exp_id]
             else:
-                # Use all experience vectors
-                search_vectors = self.experience_vectors
+                search_vectors = instance.experience_vectors
         
         # Calculate similarities
         for exp_id, exp_vector_data in search_vectors.items():
             exp_vector = exp_vector_data.get("vector", [])
-            
-            # Calculate cosine similarity
-            similarity = self._calculate_cosine_similarity(query_vector, exp_vector)
-            
-            # Add to results if similarity is good enough
-            if similarity > 0.5:  # Threshold for minimum similarity
+            similarity = instance._calculate_cosine_similarity(query_vector, exp_vector)
+            if similarity > 0.5:
                 results.append({
                     "experience_id": exp_id,
                     "similarity": similarity,
                     "metadata": exp_vector_data.get("metadata", {})
                 })
         
-        # Sort by similarity (descending)
         results.sort(key=lambda x: x["similarity"], reverse=True)
-        
-        # Get top k results
         top_results = results[:top_k]
         
-        # Fetch the actual experiences
         experiences = []
         for result in top_results:
             exp_id = result["experience_id"]
             try:
-                # Fetch the experience from memory core
-                memory = await self.memory_core.get_memory_by_id(exp_id)
+                memory = await instance.memory_core.get_memory_by_id(exp_id)
                 if memory:
-                    # Add similarity score to memory
                     memory["similarity"] = result["similarity"]
                     experiences.append(memory)
             except Exception as e:
