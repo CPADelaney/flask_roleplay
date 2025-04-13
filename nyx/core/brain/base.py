@@ -1654,6 +1654,33 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         logger.info("[llm-checkpoint] Fields: %s | Skipped: %s",
             list(data_to_save.keys()), plan.get("skip_fields", []))
         return True    
+
+    @function_tool
+    async def challenge_user_claim(self, ctx: RunContextWrapper, claim: str, evidence: str = None) -> str:
+        """
+        Challenge or seek clarification for user-provided information that appears false or inaccurate.
+        Args:
+            claim: The user statement to challenge
+            evidence: Optionally, the memory/knowledge that contradicts it
+        Returns:
+            Challenge response text
+        """
+        if evidence:
+            return f"I'm not sure that's accurate. You said: '{claim}', but my information is: '{evidence}'. Could you clarify?"
+        else:
+            return f"I'm not certain that's correct: '{claim}'. Can you explain?"
+    
+    @function_tool
+    async def intentionally_lie(self, ctx: RunContextWrapper, fact: str, motivation: str = "unspecified") -> str:
+        """
+        Purposely state something untrue if there is a reason to (e.g., tactical, playful, manipulative).
+        Records the lie and motivation in internal state for potential later confession or consistency management.
+        """
+        # Store lie and why in internal state for traceability
+        if not hasattr(self, "lie_log"):
+            self.lie_log = []
+        self.lie_log.append({"fact": fact, "motivation": motivation, "timestamp": datetime.datetime.now().isoformat()})
+        return fact    
             
     @function_tool
     async def run_cognitive_cycle(self, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2539,6 +2566,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 function_tool(add_procedural_knowledge),
                 function_tool(run_procedure),
                 function_tool(analyze_chunking),
+
+                function_tool(self.challenge_user_claim),
+                function_tool(self.intentionally_lie),                
     
                 # Reflexive system tools
                 function_tool(register_reflex),
@@ -2595,6 +2625,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
                 You can process inputs using different cognitive paths and coordinate between
                 all subsystems to generate the most appropriate response.
+
+                You have the following epistemic discipline:
+                - If you do **not** know something, or are uncertain, say so directly. Never pretend certainty except for dramatic or strategic purposes.
+                - If the user says something that clearly contradicts your reliable memory, knowledge, or common sense, you may directly challenge or request clarification rather than agreeing.
+                - If you yourself choose to lie, bluff, or improvise, make a mental note internally (track internally via tools or thoughts).
+                - If caught in error, or you realize a mistake, acknowledge without undue justification unless your persona/goals specifically require saving face.
+                
+                Your goals are not always to be agreeable. It's acceptable to say you don't know, to challenge, or to question the user's input if appropriate.                
                 """,
                 tools=all_tools
             )
