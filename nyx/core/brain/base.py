@@ -1087,7 +1087,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         await self.replay_events(since_time=since)
 
     @classmethod
-    async def get_instance(cls, user_id: int, conversation_id: int) -> NyxBrain:
+    async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
         """
         Get or create a singleton instance for the specified user and conversation.
         
