@@ -93,6 +93,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.brain_agent = None
         self.general_dominance_ideation_agent = None
         self.hard_dominance_ideation_agent = None
+
+        self.protocol_enforcement = None
+        self.body_service_system = None
+        self.psychological_dominance = None
+        self.femdom_coordinator = None
+        self.femdom_integration_manager = None        
         
         # State tracking
         self.initialized = False
@@ -222,6 +228,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.theory_of_mind import TheoryOfMind
             from nyx.core.imagination_simulator import ImaginationSimulator
             from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+    
+            from nyx.core.femdom.body_service_system import BodyServiceSystem
+            from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
+            from nyx.core.femdom.psychological_dominance import PsychologicalDominance
+            from nyx.core.femdom.femdom_coordinator import FemdomCoordinator
+            from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager            
 
             from nyx.core.issue_tracking_system import IssueTrackingSystem
             from nyx.core.passive_observation import PassiveObservationSystem
@@ -420,6 +432,49 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.reward_system.somatosensory_system = self.digital_somatosensory_system
             self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
             logger.debug("Circular dependencies resolved")
+
+            self.protocol_enforcement = ProtocolEnforcement(
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager
+            )
+            logger.debug("Protocol enforcement system initialized")
+            
+            self.body_service_system = BodyServiceSystem(
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager
+            )
+            logger.debug("Body service system initialized")
+            
+            self.psychological_dominance = PsychologicalDominance(
+                theory_of_mind=self.theory_of_mind,
+                reward_system=self.reward_system,
+                relationship_manager=self.relationship_manager,
+                memory_core=self.memory_core
+            )
+            logger.debug("Psychological dominance system initialized")
+            
+            # Initialize femdom coordinator (after all individual systems)
+            self.femdom_coordinator = FemdomCoordinator(self)
+            await self.femdom_coordinator.initialize()
+            logger.debug("Femdom coordinator initialized")
+            
+            # Initialize femdom integration manager
+            self.femdom_integration_manager = FemdomIntegrationManager(
+                self,
+                components={
+                    "protocol_enforcement": self.protocol_enforcement,
+                    "body_service": self.body_service_system,
+                    "psychological_dominance": self.psychological_dominance,
+                    "reward_system": self.reward_system,
+                    "memory_core": self.memory_core,
+                    "relationship_manager": self.relationship_manager,
+                    "theory_of_mind": self.theory_of_mind
+                }
+            )
+            await self.femdom_integration_manager.initialize()
+            logger.debug("Femdom integration manager initialized")            
             
             # 6. Initialize perception and integration systems
             self.multimodal_integrator = EnhancedMultiModalIntegrator(
@@ -1443,6 +1498,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             except Exception as e:
                 logger.warning(f"Checkpoint: error getting goals: {e}")
 
+        # --- Femdom state ---
+        if getattr(self, "femdom_coordinator", None):
+            try:
+                state["femdom_state"] = await self.femdom_coordinator.get_status()
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting femdom_state: {e}")        
+
         # --- Memory/diary/reflections ---
         if self.memory_core:
             try:
@@ -2405,6 +2467,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 function_tool(self.get_active_strategies),
                 function_tool(self.mark_strategy_for_review)
             ]
+
+            femdom_tools = [
+                function_tool(self.process_dominance_action),
+                function_tool(self.assign_protocol),
+                function_tool(self.assign_service_task)
+            ]            
             
             # New general tools functions
             tools_functions = [
@@ -2454,7 +2522,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 # Additional new tools
                 *spatial_functions,
                 *sync_functions,
-                *tools_functions
+                *tools_functions,
+                *femdom_tools
             ]
     
             return Agent(
