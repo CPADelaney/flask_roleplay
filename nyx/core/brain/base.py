@@ -65,7 +65,22 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.needs_system = None
         self.goal_manager = None
         self.streaming_core = None
-
+        
+        # Spatial system components
+        self.spatial_mapper = None
+        self.spatial_memory = None
+        self.map_visualization = None
+        self.navigator_agent = None
+        
+        # Sync system components
+        self.sync_daemon = None
+        self.strategy_controller = None
+        self.noise_filter = None
+        
+        # Tools components
+        self.agent_evaluator = None
+        self.parallel_executor = None
+        
         self.dev_log_storage = None
         
         # Component managers
@@ -172,7 +187,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             # Import core systems
             from nyx.core.brain.module_optimizer import ModuleOptimizer
             from nyx.core.brain.system_health_checker import SystemHealthChecker
-            from nyx.core.emotional_core import EmotionalCore
+            from nyx.core.emotions.emotional_core import EmotionalCore
             from nyx.core.memory_core import MemoryCore
             from nyx.core.reflection_engine import ReflectionEngine
             from nyx.core.experience_interface import ExperienceInterface
@@ -189,7 +204,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator
             from nyx.core.reward_system import RewardSignalProcessor
             from nyx.core.temporal_perception import TemporalPerception
-            from nyx.core.procedural_memory import ProceduralMemoryManager
             from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
             from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
             from nyx.core.needs_system import NeedsSystem
@@ -202,6 +216,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.theory_of_mind import TheoryOfMind
             from nyx.core.imagination_simulator import ImaginationSimulator
             from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+
+            from nyx.core.spatial.spatial_mapper import SpatialMapper
+            from nyx.core.spatial.spatial_memory import SpatialMemoryIntegration
+            from nyx.core.spatial.map_visualization import MapVisualization
+            from nyx.core.spatial.navigator_agent import SpatialNavigatorAgent
+            
+            # Sync system imports
+            from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
+            from nyx.core.sync.strategy_controller import get_active_strategies, mark_strategy_for_review
+            from nyx.core.sync.strategy_register import register_decision
+            
+            # Tools imports
+            from nyx.core.tools.evaluator import AgentEvaluator
+            from nyx.core.tools.parallel import ParallelToolExecutor          
             
             from nyx.core.context_awareness import ContextAwarenessSystem
             from nyx.core.interaction_mode_manager import InteractionModeManager
@@ -520,7 +548,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 emotional_core=self.emotional_core,
                 memory_core=self.memory_core
             )
-            logger.debug("Internal thoughts manager initialized")                
+            logger.debug("Internal thoughts manager initialized")        
+
+            self.spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
+            await self.spatial_mapper.initialize() if hasattr(self.spatial_mapper, "initialize") else None
+            logger.debug("Spatial mapper initialized")
+            
+            self.spatial_memory = SpatialMemoryIntegration(
+                spatial_mapper=self.spatial_mapper,
+                memory_core=self.memory_core
+            )
+            logger.debug("Spatial memory integration initialized")
+            
+            self.map_visualization = MapVisualization()
+            logger.debug("Map visualization initialized")
+            
+            self.navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
+            logger.debug("Spatial navigator initialized")            
     
             # 17. Create main orchestration agent
             self.brain_agent = self._create_brain_agent()
@@ -577,6 +621,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.integration_manager = create_integration_manager(self)
             await self.integration_manager.initialize()
             logger.debug("Integration manager initialized")
+
+            # Initialize sync system components
+            self.sync_daemon = NyxSyncDaemon()
+            logger.debug("Sync daemon initialized")          
+
+            # Initialize tools
+            self.agent_evaluator = AgentEvaluator()
+            logger.debug("Agent evaluator initialized")
+            
+            self.parallel_executor = ParallelToolExecutor(max_concurrent=5)
+            logger.debug("Parallel tool executor initialized")            
             
             self.initialized = True
             logger.info(f"NyxBrain fully initialized for user {self.user_id}, conversation {self.conversation_id}")
@@ -601,6 +656,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 await self.emotional_core.set_emotional_state(checkpoint_data["emotional_state"])
             except Exception as e:
                 logger.warning(f"Restore: emotional_state failed: {e}")
+
+        if self.spatial_mapper and "spatial_maps" in checkpoint_data:
+            try:
+                for map_id, map_data in checkpoint_data["spatial_maps"].items():
+                    if map_id in self.spatial_mapper.maps:
+                        # Update existing map
+                        self.spatial_mapper.maps[map_id].accuracy = map_data.get("accuracy", 0.5)
+                        self.spatial_mapper.maps[map_id].completeness = map_data.get("completeness", 0.0)
+                        self.spatial_mapper.maps[map_id].last_updated = map_data.get("last_updated", datetime.datetime.now().isoformat())
+                    else:
+                        # Load map if missing
+                        if "name" in map_data and "description" in map_data:
+                            await self.spatial_mapper.create_cognitive_map(
+                                name=map_data["name"],
+                                description=map_data["description"]
+                            )
+            except Exception as e:
+                logger.warning(f"Restore: spatial_maps failed: {e}")        
 
         if self.hormone_system and "hormones" in checkpoint_data:
             try:
@@ -1267,6 +1340,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 state["hormones"] = self.hormone_system.get_state()
             except Exception as e:
                 logger.warning(f"Checkpoint: error getting hormones: {e}")
+
+        if getattr(self, "spatial_mapper", None):
+            try:
+                spatial_maps = {}
+                for map_id, cognitive_map in self.spatial_mapper.maps.items():
+                    spatial_maps[map_id] = {
+                        "name": cognitive_map.name,
+                        "description": cognitive_map.description,
+                        "accuracy": cognitive_map.accuracy,
+                        "completeness": cognitive_map.completeness,
+                        "last_updated": cognitive_map.last_updated
+                    }
+                state["spatial_maps"] = spatial_maps
+            except Exception as e:
+                logger.warning(f"Checkpoint: error getting spatial_maps: {e}")        
 
         if self.mood_manager:
             try:
@@ -2225,9 +2313,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     def _create_brain_agent(self) -> Agent:
         """
         Create the main brain agent that coordinates all subsystems.
-        
+    
         Returns:
-            Configured Agent instance for brain orchestration
+            Configured Agent instance for brain orchestration.
         """
         try:
             from nyx.core.brain.function_tools import (
@@ -2240,14 +2328,80 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 process_user_feedback_for_configuration, set_processing_mode, get_processing_stats,
                 initialize_streaming, process_streaming_event, run_thinking
             )
+    
+            # New spatial subsystem tools
+            spatial_functions = [
+                function_tool(self.create_cognitive_map),
+                function_tool(self.process_spatial_observation),
+                function_tool(self.navigate_to_location),
+                function_tool(self.visualize_map)
+            ]
             
+            # New sync subsystem tools
+            sync_functions = [
+                function_tool(self.process_synchronization),
+                function_tool(self.get_active_strategies),
+                function_tool(self.mark_strategy_for_review)
+            ]
+            
+            # New general tools functions
+            tools_functions = [
+                function_tool(self.evaluate_response),
+                function_tool(self.execute_tools_in_parallel)
+            ]
+    
+            all_tools = [
+                # Core processing tools
+                function_tool(process_user_message),
+                function_tool(generate_agent_response),
+                function_tool(run_cognitive_cycle),
+                function_tool(get_brain_stats),
+                function_tool(perform_maintenance),
+                function_tool(get_identity_state),
+                function_tool(adapt_experience_sharing),
+                function_tool(run_experience_consolidation),
+    
+                # Procedural memory tools
+                function_tool(add_procedural_knowledge),
+                function_tool(run_procedure),
+                function_tool(analyze_chunking),
+    
+                # Reflexive system tools
+                function_tool(register_reflex),
+                function_tool(process_stimulus),
+    
+                # Self-configuration tools
+                function_tool(enable_self_configuration),
+                function_tool(evaluate_and_adjust_parameters),
+                function_tool(change_adaptation_strategy),
+                function_tool(get_self_configuration_status),
+                function_tool(reset_parameter_to_default),
+                function_tool(process_user_feedback_for_configuration),
+    
+                # Processing mode tools
+                function_tool(set_processing_mode),
+                function_tool(get_processing_stats),
+    
+                # Streaming tools
+                function_tool(initialize_streaming),
+                function_tool(process_streaming_event),
+    
+                # Thinking tools
+                function_tool(run_thinking),
+    
+                # Additional new tools
+                *spatial_functions,
+                *sync_functions,
+                *tools_functions
+            ]
+    
             return Agent(
                 name="Nyx Brain Agent",
                 instructions="""
                 You are the central coordination agent for Nyx, an advanced AI system with emotional, 
-                memory, reasoning, and adaptive capabilities. You orchestrate the entire system by 
+                memory, reasoning, adaptive, spatial, and synchronization capabilities. You orchestrate the entire system by 
                 coordinating between all subsystems to process user input and generate appropriate responses.
-                
+    
                 You have access to the following subsystems:
                 - Emotional Core: Manages emotions and emotional expressions
                 - Memory Core: Stores and retrieves memories
@@ -2258,67 +2412,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 - Meta Core: Handles meta-cognition and self-improvement
                 - Knowledge Core: Manages knowledge and reasoning
                 - Identity Evolution: Develops and maintains Nyx's identity
-                - Experience Consolidation: Consolidates similar experiences into higher-level abstractions
-                - Cross-User Experience: Manages sharing experiences across users
-                - Thinking Capability: Enables deliberate reasoning before responding when appropriate
-                - Procedural Memory: Manages, executes, and transfers procedural knowledge
-                - Reflexes: Ability to react quickly and instinctively when appropriate
-
-                Additionally, you have the ability to dynamically adjust your own configuration values.
-                
-                You can process inputs using different cognitive paths:
-                1. Reflexive path: Fast, instinctive reactions without deliberate thought
-                2. Procedural path: Using learned procedures from procedural memory
-                3. Deliberate path: Thoughtful processing with deeper reasoning
-                
-                For time-sensitive or pattern-matching inputs, prefer the reflexive path.
-                For familiar tasks with established procedures, use the procedural path.
-                For complex, novel, or creative tasks, use the deliberate path.
-                
-                You can also run multiple paths in parallel, balancing speed and depth.
-                
-                Use your tools to process user messages, generate responses, maintain the system,
-                and facilitate Nyx's identity evolution through experiences and adaptation.
+                - Spatial System: Creates and navigates cognitive maps of environments
+                - Sync System: Manages synchronization and strategy injection
+                - Tools: Provides evaluation and parallel execution capabilities
+    
+                You can process inputs using different cognitive paths and coordinate between
+                all subsystems to generate the most appropriate response.
                 """,
-                tools=[
-                    # Core processing tools
-                    function_tool(process_user_message),
-                    function_tool(generate_agent_response),
-                    function_tool(run_cognitive_cycle),
-                    function_tool(get_brain_stats),
-                    function_tool(perform_maintenance),
-                    function_tool(get_identity_state),
-                    function_tool(adapt_experience_sharing),
-                    function_tool(run_experience_consolidation),
-        
-                    # Procedural memory tools
-                    function_tool(add_procedural_knowledge),
-                    function_tool(run_procedure),
-                    function_tool(analyze_chunking),
-        
-                    # Reflexive system tools
-                    function_tool(register_reflex),
-                    function_tool(process_stimulus),
-                    
-                    # Self-configuration tools
-                    function_tool(enable_self_configuration),
-                    function_tool(evaluate_and_adjust_parameters),
-                    function_tool(change_adaptation_strategy),
-                    function_tool(get_self_configuration_status),
-                    function_tool(reset_parameter_to_default),
-                    function_tool(process_user_feedback_for_configuration),
-                    
-                    # Processing mode tools
-                    function_tool(set_processing_mode),
-                    function_tool(get_processing_stats),
-                    
-                    # Streaming tools
-                    function_tool(initialize_streaming),
-                    function_tool(process_streaming_event),
-                    
-                    # Thinking tools
-                    function_tool(run_thinking)
-                ]
+                tools=all_tools
             )
         except Exception as e:
             logger.error(f"Error creating brain agent: {e}")
@@ -4747,6 +4848,103 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 logger.warning(f"Filtered out unsafe/inappropriate idea: '{description[:50]}...' Reason: {rejection_reason}")
     
         return safe_ideas
+
+    async def create_cognitive_map(self, name: str, description: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new cognitive map"""
+        if not self.spatial_mapper:
+            return {"error": "Spatial mapper not initialized"}
+        
+        return await self.spatial_mapper.create_cognitive_map(
+            name=name,
+            description=description
+        )
+    
+    async def process_spatial_observation(self, observation: Any) -> Dict[str, Any]:
+        """Process a spatial observation"""
+        if not self.spatial_mapper:
+            return {"error": "Spatial mapper not initialized"}
+        
+        return await self.spatial_mapper.process_spatial_observation(observation)
+    
+    async def navigate_to_location(self, location_name: str, current_position: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """Navigate to a named location"""
+        if not self.navigator_agent:
+            return {"error": "Navigator agent not initialized"}
+        
+        return await self.navigator_agent.navigate_to_location(
+            location_name=location_name,
+            current_position=current_position
+        )
+    
+    async def visualize_map(self, map_id: Optional[str] = None, format: str = "svg") -> str:
+        """Visualize a cognitive map"""
+        if not self.map_visualization or not self.spatial_mapper:
+            return "Error: Visualization components not initialized"
+        
+        if not map_id and self.spatial_mapper.context.active_map_id:
+            map_id = self.spatial_mapper.context.active_map_id
+        
+        if not map_id or map_id not in self.spatial_mapper.maps:
+            return "Error: No valid map to visualize"
+        
+        cognitive_map = self.spatial_mapper.maps[map_id]
+        
+        if format == "svg":
+            return self.map_visualization.generate_svg(cognitive_map)
+        elif format == "ascii":
+            return self.map_visualization.generate_ascii_map(cognitive_map)
+        else:
+            return self.map_visualization.generate_map_data(cognitive_map)    
+
+    async def process_synchronization(self) -> Dict[str, Any]:
+        """Run a sync cycle to process strategies and other synchronization tasks"""
+        if not self.sync_daemon:
+            return {"error": "Sync daemon not initialized"}
+        
+        try:
+            return await self.sync_daemon.run_sync_cycle()
+        except Exception as e:
+            logger.error(f"Error during sync cycle: {e}")
+            return {"error": str(e)}
+    
+    async def get_active_strategies(self) -> List[Dict[str, Any]]:
+        """Get currently active strategies"""
+        try:
+            async with get_db_connection_context() as conn:
+                return await get_active_strategies(conn)
+        except Exception as e:
+            logger.error(f"Error getting active strategies: {e}")
+            return []
+    
+    async def mark_strategy_for_review(self, strategy_id: int, reason: str) -> bool:
+        """Mark a strategy for review"""
+        try:
+            async with get_db_connection_context() as conn:
+                await mark_strategy_for_review(
+                    conn, strategy_id, self.user_id, reason
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error marking strategy for review: {e}")
+            return False    
+
+    async def evaluate_response(self, agent_name: str, user_input: str, agent_output: Any) -> Dict[str, Any]:
+        """Evaluate an agent's response"""
+        if not self.agent_evaluator:
+            return {"error": "Agent evaluator not initialized"}
+        
+        return await self.agent_evaluator.evaluate_response(
+            agent_name=agent_name,
+            user_input=user_input,
+            agent_output=agent_output
+        )
+    
+    async def execute_tools_in_parallel(self, tools_info: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute multiple tools in parallel"""
+        if not self.parallel_executor:
+            return [{"error": "Parallel executor not initialized"}]
+        
+        return await self.parallel_executor.execute_tools(tools_info)    
 
     @function_tool
     async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
