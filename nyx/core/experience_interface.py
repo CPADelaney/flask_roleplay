@@ -1146,11 +1146,11 @@ class ExperienceInterface:
         except Exception as e:
             logger.error(f"Error generating vector for experience {memory_id}: {e}")
         
-        # Calculate potential identity impact
         try:
             # Determine impact on identity
-            identity_impact = self._calculate_identity_impact(memory_text, scenario_type, emotional
-            
+            identity_impact = self._calculate_identity_impact(
+                memory_text, scenario_type, emotional_context
+            )
             # Update identity if impact is significant
             if identity_impact:
                 await self._update_identity_from_experience(
@@ -1160,7 +1160,7 @@ class ExperienceInterface:
                 )
         except Exception as e:
             logger.error(f"Error updating identity from experience: {e}")
-        
+    
         return {
             "memory_id": memory_id,
             "memory_text": memory_text,
