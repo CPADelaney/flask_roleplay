@@ -1359,7 +1359,7 @@ class ReflectionEngine:
                 # Configure the run with proper tracing
                 run_config = RunConfig(
                     workflow_name="Emotional Reflection Generation",
-                    trace_id=f"reflection-{trace_id()}",
+                    trace_id=f"reflection-{gen_trace_id()}",
                     trace_metadata={
                         "topic": topic,
                         "memory_count": len(memories),
@@ -1484,7 +1484,7 @@ class ReflectionEngine:
                 # Configure the run
                 run_config = RunConfig(
                     workflow_name="Observation Pattern Reflection",
-                    trace_id=f"observation-reflection-{trace_id()}",
+                    trace_id=f"observation-reflection-{gen_trace_id()}",
                     trace_metadata={
                         "topic": topic,
                         "observation_count": len(observations)
@@ -1619,7 +1619,7 @@ class ReflectionEngine:
                 # Configure the run
                 run_config = RunConfig(
                     workflow_name="Communication Pattern Reflection",
-                    trace_id=f"communication-reflection-{trace_id()}",
+                    trace_id=f"communication-reflection-{gen_trace_id()}",
                     trace_metadata={
                         "topic": topic,
                         "intent_count": len(intents)
@@ -1881,7 +1881,7 @@ class ReflectionEngine:
                 # Configure the run with proper tracing
                 run_config = RunConfig(
                     workflow_name="Neurochemical Abstraction Creation",
-                    trace_id=f"abstraction-{trace_id()}",
+                    trace_id=f"abstraction-{gen_trace_id()}",
                     trace_metadata={
                         "pattern_type": pattern_type,
                         "memory_count": len(memories),
@@ -2012,7 +2012,7 @@ class ReflectionEngine:
                 # Configure the run with proper tracing
                 run_config = RunConfig(
                     workflow_name="System Introspection",
-                    trace_id=f"introspection-{trace_id()}",
+                    trace_id=f"introspection-{gen_trace_id()}",
                     trace_metadata={
                         "memory_count": memory_stats.get("total_memories", 0),
                         "primary_emotion": emotional_processing.get("primary_emotion"),
@@ -2121,7 +2121,7 @@ class ReflectionEngine:
                 # Configure the run with proper tracing
                 run_config = RunConfig(
                     workflow_name="Emotional Processing",
-                    trace_id=f"emotional-processing-{trace_id()}",
+                    trace_id=f"emotional-processing-{gen_trace_id()}",
                     trace_metadata={
                         "primary_emotion": emotional_processing.get("primary_emotion"),
                         "dominant_chemical": emotional_processing.get("dominant_chemical"),
