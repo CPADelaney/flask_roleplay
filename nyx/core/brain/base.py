@@ -207,6 +207,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
             from nyx.core.internal_feedback_system import InternalFeedbackSystem
             from nyx.core.meta_core import MetaCore
+            from nyx.core.internal_thoughts import InternalThought
             from nyx.core.knowledge_core import KnowledgeCoreAgents
             from nyx.core.memory_orchestrator import MemoryOrchestrator
             from nyx.core.identity_evolution import IdentityEvolutionSystem
