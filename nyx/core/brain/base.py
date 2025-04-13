@@ -98,7 +98,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.body_service_system = None
         self.psychological_dominance = None
         self.femdom_coordinator = None
-        self.femdom_integration_manager = None        
+        self.femdom_integration_manager = None   
+        self.orgasm_control_system = None
+        self.dominance_persona_manager = None
+        self.sadistic_response_system = None        
         
         # State tracking
         self.initialized = False
@@ -233,7 +236,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
             from nyx.core.femdom.psychological_dominance import PsychologicalDominance
             from nyx.core.femdom.femdom_coordinator import FemdomCoordinator
-            from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager            
+            from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager    
+            from nyx.core.femdom.orgasm_control import OrgasmControlSystem
+            from nyx.core.femdom.persona_manager import DominancePersonaManager
+            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem          
 
             from nyx.core.issue_tracking_system import IssueTrackingSystem
             from nyx.core.passive_observation import PassiveObservationSystem
@@ -470,11 +476,43 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     "reward_system": self.reward_system,
                     "memory_core": self.memory_core,
                     "relationship_manager": self.relationship_manager,
-                    "theory_of_mind": self.theory_of_mind
+                    "theory_of_mind": self.theory_of_mind,
+                    # Add new components
+                    "orgasm_control_system": self.orgasm_control_system,
+                    "dominance_persona_manager": self.dominance_persona_manager,
+                    "sadistic_response_system": self.sadistic_response_system
                 }
             )
             await self.femdom_integration_manager.initialize()
-            logger.debug("Femdom integration manager initialized")            
+            logger.debug("Femdom integration manager initialized")           
+
+             # Initialize orgasm control system
+            self.orgasm_control_system = OrgasmControlSystem(
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                somatosensory_system=self.digital_somatosensory_system
+            )
+            logger.debug("Orgasm control system initialized")
+            
+            # Initialize dominance persona manager
+            self.dominance_persona_manager = DominancePersonaManager(
+                relationship_manager=self.relationship_manager,
+                reward_system=self.reward_system,
+                memory_core=self.memory_core,
+                emotional_core=self.emotional_core
+            )
+            logger.debug("Dominance persona manager initialized")
+            
+            # Initialize sadistic response system
+            self.sadistic_response_system = SadisticResponseSystem(
+                theory_of_mind=self.theory_of_mind,
+                protocol_enforcement=self.protocol_enforcement,
+                reward_system=self.reward_system,
+                relationship_manager=self.relationship_manager,
+                memory_core=self.memory_core
+            )
+            logger.debug("Sadistic response system initialized")           
             
             # 6. Initialize perception and integration systems
             self.multimodal_integrator = EnhancedMultiModalIntegrator(
@@ -2471,7 +2509,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             femdom_tools = [
                 function_tool(self.process_dominance_action),
                 function_tool(self.assign_protocol),
-                function_tool(self.assign_service_task)
+                function_tool(self.assign_service_task),
+                function_tool(self.process_orgasm_permission_request),
+                function_tool(self.recommend_dominance_persona),
+                function_tool(self.activate_dominance_persona),
+                function_tool(self.generate_sadistic_response)          
             ]            
             
             # New general tools functions
@@ -2518,6 +2560,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
                 # Thinking tools
                 function_tool(run_thinking),
+
+                
     
                 # Additional new tools
                 *spatial_functions,
@@ -5239,6 +5283,54 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             return [{"error": "Parallel executor not initialized"}]
         
         return await self.parallel_executor.execute_tools(tools_info)    
+
+    @function_tool
+    async def process_orgasm_permission_request(self, user_id: str, request_text: str) -> Dict[str, Any]:
+        """Process a request for permission to orgasm."""
+        if not self.orgasm_control_system:
+            return {"success": False, "message": "Orgasm control system not initialized"}
+        
+        # Process the request through the orgasm control system
+        return await self.orgasm_control_system.process_permission_request(
+            RunContextWrapper(context=self.orgasm_control_system.context),
+            user_id,
+            request_text
+        )
+    
+    @function_tool
+    async def recommend_dominance_persona(self, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
+        """Recommend an appropriate dominance persona based on user traits and scenario."""
+        if not self.dominance_persona_manager:
+            return {"success": False, "message": "Dominance persona manager not initialized"}
+        
+        return await self.dominance_persona_manager.recommend_persona(user_id, scenario)
+    
+    @function_tool
+    async def activate_dominance_persona(self, 
+                                     user_id: str, 
+                                     persona_id: str, 
+                                     intensity: float = 0.7,
+                                     duration_minutes: Optional[int] = None) -> Dict[str, Any]:
+        """Activate a specific dominance persona for a user."""
+        if not self.dominance_persona_manager:
+            return {"success": False, "message": "Dominance persona manager not initialized"}
+        
+        return await self.dominance_persona_manager.activate_persona(
+            user_id, persona_id, intensity, duration_minutes
+        )
+    
+    @function_tool
+    async def generate_sadistic_response(self, 
+                                     user_id: str, 
+                                     humiliation_level: Optional[float] = None,
+                                     category: str = "amusement") -> Dict[str, Any]:
+        """Generate a sadistic response based on detected humiliation level."""
+        if not self.sadistic_response_system:
+            return {"success": False, "message": "Sadistic response system not initialized"}
+        
+        return await self.sadistic_response_system.generate_sadistic_amusement_response(
+            user_id, humiliation_level, category=category
+        )
 
     @function_tool
     async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
