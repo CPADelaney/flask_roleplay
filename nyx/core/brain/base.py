@@ -65,6 +65,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.needs_system = None
         self.goal_manager = None
         self.streaming_core = None
+
+        
         
         # Spatial system components
         self.spatial_mapper = None
@@ -139,6 +141,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
         self.context_system = None
         self.mode_manager = None
+
+        self.issue_tracking_system = None
+        self.passive_observation_system = None
+        self.proactive_communication_engine = None        
 
         self.thoughts_manager = None    
 
@@ -216,6 +222,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.theory_of_mind import TheoryOfMind
             from nyx.core.imagination_simulator import ImaginationSimulator
             from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
+
+            from nyx.core.issue_tracking_system import IssueTrackingSystem
+            from nyx.core.passive_observation import PassiveObservationSystem
+            from nyx.core.proactive_communication import ProactiveCommunicationEngine            
 
             from nyx.core.spatial.spatial_mapper import SpatialMapper
             from nyx.core.spatial.spatial_memory import SpatialMemoryIntegration
@@ -537,6 +547,56 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 goal_manager=self.goal_manager
             )
             self.mode_integration = ModeIntegrationManager(nyx_brain=self)
+
+            self.passive_observation_system = PassiveObservationSystem(
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                temporal_perception=self.temporal_perception,
+                multimodal_integrator=self.multimodal_integrator,
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system,
+                identity_evolution=self.identity_evolution,
+                attention_controller=self.attention_controller,
+                action_generator=self.agentic_action_generator
+            )
+            await self.passive_observation_system.start()
+            logger.debug("Passive observation system initialized")
+            
+            # Initialize Proactive Communication Engine
+            self.proactive_communication_engine = ProactiveCommunicationEngine(
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                temporal_perception=self.temporal_perception,
+                reasoning_core=self.reasoning_core,
+                reflection_engine=self.reflection_engine,
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system,
+                identity_evolution=self.identity_evolution,
+                action_generator=self.agentic_action_generator
+            )
+            await self.proactive_communication_engine.start()
+            logger.debug("Proactive communication engine initialized")
+            
+            # Initialize Issue Tracking System
+            self.issue_tracking_system = IssueTrackingSystem(
+                db_path=f"issues_db_{user_id}_{conversation_id}.json"
+            )
+            logger.debug("Issue tracking system initialized")
+            
+            # Now initialize thoughts_manager with the proper references
+            self.thoughts_manager = InternalThoughtsManager(
+                passive_observation_system=self.passive_observation_system,
+                reflection_engine=self.reflection_engine,
+                imagination_simulator=self.imagination_simulator,
+                theory_of_mind=self.theory_of_mind,
+                relationship_reflection=self.relationship_manager,  # Using relationship_manager
+                proactive_communication=self.proactive_communication_engine,
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core
+            )
+            logger.debug("Internal thoughts manager initialized")            
     
             self.thoughts_manager = InternalThoughtsManager(
                 passive_observation_system=self.passive_observation_system,
@@ -3172,6 +3232,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.error(f"Error running experience consolidation: {str(e)}")
             return {"error": str(e)}
 
+    async def stop(self):
+        """Stop all background processes and perform cleanup"""
+        logger.info(f"Stopping NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
+        
+        # Stop background processes
+        if self.passive_observation_system:
+            await self.passive_observation_system.stop()
+        
+        if self.proactive_communication_engine:
+            await self.proactive_communication_engine.stop()
+        
+        # Save issue database if needed
+        if self.issue_tracking_system and hasattr(self.issue_tracking_system.db, 'save_db'):
+            self.issue_tracking_system.db.save_db()    
+
     async def process_sensory_input_wrapper(self, input_data, expectations=None):
         """
         Process input AND handle post-integration reactions.
@@ -3338,6 +3413,154 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                         self.emotional_core.update_neurochemical("cortanyx", abs(reward_value) * 0.4)
         except Exception as e:
             logger.exception(f"Error handling percept reaction: {e}")
+
+    async def process_observation(self, observation: str, context: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Process an observation through the issue tracking system
+        
+        Args:
+            observation: The observation text
+            context: Optional context about what the bot was doing
+            
+        Returns:
+            Processing results with issue information
+        """
+        if not self.issue_tracking_system:
+            logger.warning("Issue tracking system not initialized")
+            return {"error": "Issue tracking system not initialized"}
+        
+        return await self.issue_tracking_system.process_observation(observation, context)
+    
+    async def get_relevant_observations(self, 
+                                   filter_criteria=None, 
+                                   limit: int = 3) -> List[Any]:
+        """
+        Get relevant observations based on filter criteria
+        
+        Args:
+            filter_criteria: Criteria to filter observations
+            limit: Maximum number of observations to return
+            
+        Returns:
+            List of matching observations
+        """
+        if not self.passive_observation_system:
+            logger.warning("Passive observation system not initialized")
+            return []
+        
+        return await self.passive_observation_system.get_relevant_observations(
+            filter_criteria=filter_criteria,
+            limit=limit
+        )
+    
+    async def create_contextual_observation(self, context_hint: str, user_id: Optional[str] = None) -> Optional[str]:
+        """
+        Create a new observation based on a context hint
+        
+        Args:
+            context_hint: Hint for the observation context
+            user_id: Optional user ID
+            
+        Returns:
+            Observation ID if successful
+        """
+        if not self.passive_observation_system:
+            logger.warning("Passive observation system not initialized")
+            return None
+        
+        return await self.passive_observation_system.create_contextual_observation(
+            context_hint=context_hint,
+            user_id=user_id
+        )
+    
+    async def generate_observation_from_action(self, action: Dict[str, Any]) -> Any:
+        """
+        Generate an observation based on an action
+        
+        Args:
+            action: Action data
+            
+        Returns:
+            Generated observation
+        """
+        if not self.passive_observation_system:
+            logger.warning("Passive observation system not initialized")
+            return None
+        
+        return await self.passive_observation_system.generate_observation_from_action(action)
+    
+    async def create_proactive_intent(self, 
+                                 intent_type: str, 
+                                 user_id: str,
+                                 content_guidelines: Dict[str, Any] = None,
+                                 context_data: Dict[str, Any] = None,
+                                 urgency: float = 0.7) -> Optional[str]:
+        """
+        Create a proactive communication intent
+        
+        Args:
+            intent_type: Type of intent
+            user_id: Target user ID
+            content_guidelines: Optional guidelines for content generation
+            context_data: Optional context data
+            urgency: Intent urgency (0.0-1.0)
+            
+        Returns:
+            Intent ID if successful
+        """
+        if not self.proactive_communication_engine:
+            logger.warning("Proactive communication engine not initialized")
+            return None
+        
+        return await self.proactive_communication_engine.add_proactive_intent(
+            intent_type=intent_type,
+            user_id=user_id,
+            content_guidelines=content_guidelines,
+            context_data=context_data,
+            urgency=urgency
+        )
+    
+    async def create_intent_from_action(self, action: Dict[str, Any], user_id: str) -> Optional[str]:
+        """
+        Create a communication intent based on an action
+        
+        Args:
+            action: Action data
+            user_id: Target user ID
+            
+        Returns:
+            Intent ID if successful
+        """
+        if not self.proactive_communication_engine:
+            logger.warning("Proactive communication engine not initialized")
+            return None
+        
+        return await self.proactive_communication_engine.create_intent_from_action(
+            action=action,
+            user_id=user_id
+        )
+    
+    async def add_issue(self, title: str, description: str, category: str) -> Dict[str, Any]:
+        """
+        Add a new issue to the issue tracking system
+        
+        Args:
+            title: Issue title
+            description: Issue description
+            category: Issue category
+            
+        Returns:
+            Result of the add operation
+        """
+        if not self.issue_tracking_system:
+            logger.warning("Issue tracking system not initialized")
+            return {"success": False, "error": "Issue tracking system not initialized"}
+        
+        return await self.issue_tracking_system.add_issue_directly(
+            title=title,
+            description=description,
+            category=category
+        )    
 
     async def _extract_text_features(self, text_data):
         """
