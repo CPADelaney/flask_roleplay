@@ -2625,6 +2625,27 @@ class MemoryCoreAgents:
             ]
         )
     
+    async def load_recent_memories(self, memories_data):
+        """Compatibility method for checkpoint restoration"""
+        for memory_data in memories_data:
+            # Extract required fields with defaults
+            memory_text = memory_data.get('memory_text', 'Restored memory')
+            memory_type = memory_data.get('memory_type', 'observation')
+            memory_scope = memory_data.get('memory_scope', 'game')
+            significance = memory_data.get('significance', 5)
+            tags = memory_data.get('tags', [])
+            metadata = memory_data.get('metadata', {})
+            
+            # Add memory
+            await self.add_memory(
+                memory_text=memory_text,
+                memory_type=memory_type,
+                memory_scope=memory_scope,
+                significance=significance,
+                tags=tags,
+                metadata=metadata
+            )        
+    
     async def initialize(self):
         """Initialize memory system"""
         with trace(workflow_name="Memory System Initialization"):
