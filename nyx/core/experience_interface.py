@@ -546,8 +546,10 @@ class ExperienceInterface:
     
     # Cross-user experience functions
     
+    @staticmethod
     @function_tool
-    async def _get_cross_user_experiences(self, ctx: RunContextWrapper,
+    async def _get_cross_user_experiences(ctx: RunContextWrapper,
+                                      instance,
                                       query: str,
                                       user_id: str,
                                       limit: int = 3) -> List[Dict[str, Any]]:
@@ -555,6 +557,8 @@ class ExperienceInterface:
         Get experiences from other users that are relevant to the query
         
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             query: Search query
             user_id: Current user ID
             limit: Maximum number of experiences to return
@@ -563,7 +567,7 @@ class ExperienceInterface:
             List of relevant cross-user experiences
         """
         # First, get experiences that are sharable
-        sharable_experiences = await self._filter_sharable_experiences(ctx, user_id=user_id)
+        sharable_experiences = await instance._filter_sharable_experiences(ctx, instance, user_id=user_id)
         
         # Perform vector search with these experiences
         search_params = VectorSearchParams(
@@ -572,7 +576,7 @@ class ExperienceInterface:
             include_cross_user=True
         )
         
-        experiences = await self._vector_search_experiences(ctx, search_params)
+        experiences = await instance._vector_search_experiences(ctx, instance, search_params)
         
         # Filter to only include sharable experiences
         experiences = [exp for exp in experiences if exp.get("id") in sharable_experiences]
@@ -583,13 +587,17 @@ class ExperienceInterface:
         
         return experiences
     
+    @staticmethod
     @function_tool
-    async def _filter_sharable_experiences(self, ctx: RunContextWrapper,
+    async def _filter_sharable_experiences(ctx: RunContextWrapper,
+                                      instance,
                                       user_id: str) -> List[str]:
         """
         Filter experiences that can be shared across users
         
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             user_id: Current user ID
             
         Returns:
@@ -598,16 +606,13 @@ class ExperienceInterface:
         # Get all experiences
         sharable_ids = []
         
-        # In a real implementation, this would check privacy settings, user preferences, etc.
-        # For this example, we'll use a simple rule: experiences with significance > 5 are sharable
-        
         # Check all user experience maps except the current user
-        for other_user_id, exp_ids in self.user_experience_map.items():
+        for other_user_id, exp_ids in instance.user_experience_map.items():
             if other_user_id != user_id:
                 for exp_id in exp_ids:
                     try:
                         # Get the experience from memory core
-                        memory = await self.memory_core.get_memory_by_id(exp_id)
+                        memory = await instance.memory_core.get_memory_by_id(exp_id)
                         
                         if memory:
                             # Check if it's sharable
@@ -629,14 +634,18 @@ class ExperienceInterface:
         
         return sharable_ids
     
+    @staticmethod
     @function_tool
-    async def _personalize_cross_user_experience(self, ctx: RunContextWrapper,
+    async def _personalize_cross_user_experience(ctx: RunContextWrapper,
+                                           instance,
                                            experience: Dict[str, Any],
                                            user_id: str) -> Dict[str, Any]:
         """
         Personalize a cross-user experience for the current user
         
         Args:
+            ctx: Run context wrapper
+            instance: The class instance
             experience: The experience to personalize
             user_id: Current user ID
             
@@ -644,7 +653,7 @@ class ExperienceInterface:
             Personalized experience
         """
         # Get user preference profile
-        profile = self._get_user_preference_profile(user_id)
+        profile = instance._get_user_preference_profile(user_id)
         
         # Make a copy of the experience to modify
         personalized = experience.copy()
