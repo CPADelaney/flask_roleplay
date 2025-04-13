@@ -7,8 +7,8 @@ import math
 import random
 from typing import Dict, List, Any, Optional, Union, Tuple
 
-from agents import Agent, Runner, trace, function_tool, ModelSettings, RunConfig, custom_span, RunContextWrapper
-from agents.tracing import trace_id
+from agents import Agent, Runner, trace, function_tool, custom_span, handoff, RunContextWrapper, ModelSettings, RunConfig
+from agents.tracing.util import gen_trace_id
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
