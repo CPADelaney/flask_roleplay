@@ -1061,17 +1061,20 @@ class ExperienceInterface:
         return emotional_state
     
     @function_tool
-    async def _store_experience(self, ctx: RunContextWrapper,
-                            memory_text: str,
-                            scenario_type: str = "general",
-                            entities: List[str] = None,
-                            emotional_context: Dict[str, Any] = None,
-                            significance: int = 5,
-                            tags: List[str] = None,
-                            user_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _store_experience(
+        self,
+        ctx: RunContextWrapper,
+        memory_text: str,
+        scenario_type: str = "general",
+        entities: Optional[List[str]] = None,
+        emotional_context: Optional[Dict[str, Any]] = None,
+        significance: int = 5,
+        tags: Optional[List[str]] = None,
+        user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Store a new experience in the memory system
-        
+    
         Args:
             memory_text: The memory text
             scenario_type: Type of scenario
@@ -1080,40 +1083,31 @@ class ExperienceInterface:
             significance: Memory significance
             tags: Additional tags
             user_id: User ID for cross-user functionality
-            
+    
         Returns:
             Stored experience information
         """
-        # Set default tags if not provided
         tags = tags or []
-        
-        # Add scenario type to tags if not already present
+    
         if scenario_type not in tags:
             tags.append(scenario_type)
-        
-        # Add experience tag
         if "experience" not in tags:
             tags.append("experience")
-            
-        # Prepare metadata
+    
         metadata = {
             "scenario_type": scenario_type,
             "entities": entities or [],
             "is_experience": True
         }
-        
-        # Add user_id to metadata if provided
         if user_id:
             metadata["user_id"] = user_id
-        
-        # Add emotional context to metadata if provided
+    
         if emotional_context:
             metadata["emotional_context"] = emotional_context
         elif self.emotional_core:
-            # If no emotional context is provided, get current emotional state
             emotional_context = self.emotional_core.get_formatted_emotional_state()
             metadata["emotional_context"] = emotional_context
-        
+    
         # Store memory using the memory core
         memory_id = await self.memory_core.add_memory(
             memory_text=memory_text,
@@ -1123,29 +1117,33 @@ class ExperienceInterface:
             tags=tags,
             metadata=metadata
         )
-        
+    
         # Store in user experience map
         if user_id:
+            if not hasattr(self, "user_experience_map"):
+                self.user_experience_map = dict()
             if user_id not in self.user_experience_map:
                 self.user_experience_map[user_id] = set()
             self.user_experience_map[user_id].add(memory_id)
-        
+    
         # Generate and store vector embedding
         try:
             vector = await self._generate_experience_vector(ctx, memory_text)
-            
+            if not hasattr(self, "experience_vectors"):
+                self.experience_vectors = dict()
             self.experience_vectors[memory_id] = {
                 "experience_id": memory_id,
                 "vector": vector,
                 "metadata": {
                     "user_id": user_id or "default",
                     "scenario_type": scenario_type,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.datetime.now().isoformat()
                 }
             }
         except Exception as e:
             logger.error(f"Error generating vector for experience {memory_id}: {e}")
-        
+    
+        # Calculate potential identity impact
         try:
             # Determine impact on identity
             identity_impact = self._calculate_identity_impact(
@@ -1169,7 +1167,6 @@ class ExperienceInterface:
             "significance": significance,
             "user_id": user_id
         }
-    
     def _calculate_identity_impact(self, 
                                  memory_text: str, 
                                  scenario_type: str, 
