@@ -546,38 +546,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 reward_system=self.reward_system,
                 goal_manager=self.goal_manager
             )
-            self.mode_integration = ModeIntegrationManager(nyx_brain=self)
-
-            self.passive_observation_system = PassiveObservationSystem(
-                emotional_core=self.emotional_core,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception,
-                multimodal_integrator=self.multimodal_integrator,
-                mood_manager=self.mood_manager,
-                needs_system=self.needs_system,
-                identity_evolution=self.identity_evolution,
-                attention_controller=self.attention_controller,
-                action_generator=self.agentic_action_generator
-            )
-            await self.passive_observation_system.start()
-            logger.debug("Passive observation system initialized")
-            
-            # Initialize Proactive Communication Engine
-            self.proactive_communication_engine = ProactiveCommunicationEngine(
-                emotional_core=self.emotional_core,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception,
-                reasoning_core=self.reasoning_core,
-                reflection_engine=self.reflection_engine,
-                mood_manager=self.mood_manager,
-                needs_system=self.needs_system,
-                identity_evolution=self.identity_evolution,
-                action_generator=self.agentic_action_generator
-            )
-            await self.proactive_communication_engine.start()
-            logger.debug("Proactive communication engine initialized")
+            self.mode_integration = ModeIntegrationManager(nyx_brain=self)     
             
             # Initialize Issue Tracking System
             self.issue_tracking_system = IssueTrackingSystem(
@@ -591,24 +560,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 reflection_engine=self.reflection_engine,
                 imagination_simulator=self.imagination_simulator,
                 theory_of_mind=self.theory_of_mind,
-                relationship_reflection=self.relationship_manager,  # Using relationship_manager
+                relationship_reflection=self.relationship_manager,
                 proactive_communication=self.proactive_communication_engine,
                 emotional_core=self.emotional_core,
                 memory_core=self.memory_core
             )
-            logger.debug("Internal thoughts manager initialized")            
-    
-            self.thoughts_manager = InternalThoughtsManager(
-                passive_observation_system=self.passive_observation_system,
-                reflection_engine=self.reflection_engine,
-                imagination_simulator=self.imagination_simulator,
-                theory_of_mind=self.theory_of_mind,
-                relationship_reflection=self.relationship_manager,  # Using relationship_manager
-                proactive_communication=self.proactive_communication_engine,
-                emotional_core=self.emotional_core,
-                memory_core=self.memory_core
-            )
-            logger.debug("Internal thoughts manager initialized")        
+            logger.debug("Internal thoughts manager initialized")             
 
             self.spatial_mapper = SpatialMapper(memory_integration=self.memory_core)
             await self.spatial_mapper.initialize() if hasattr(self.spatial_mapper, "initialize") else None
@@ -661,9 +618,49 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     identity_evolution=self.identity_evolution,
                     knowledge_core=self.knowledge_core,
                     input_processor=getattr(self, "conditioned_input_processor", None),
-                    internal_feedback=self.internal_feedback
+                    internal_feedback=self.internal_feedback,
+                    # Add the following references:
+                    attentional_controller=self.attentional_controller,  # Add attentional controller
+                    reasoning_core=self.reasoning_core,  # Add reasoning core
+                    reflection_engine=self.reflection_engine,  # Add reflection engine
+                    # New system integrations
+                    mood_manager=self.mood_manager,
+                    needs_system=self.needs_system,
+                    mode_integration=self.mode_integration,
+                    multimodal_integrator=self.multimodal_integrator
                 )
                 logger.debug("Agentic action generator initialized")
+
+            self.passive_observation_system = PassiveObservationSystem(
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                temporal_perception=self.temporal_perception,
+                multimodal_integrator=self.multimodal_integrator,
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system,
+                identity_evolution=self.identity_evolution,
+                attention_controller=self.attentional_controller,
+                action_generator=self.agentic_action_generator  # Now available
+            )
+            await self.passive_observation_system.start()
+            logger.debug("Passive observation system initialized")            
+
+            # Initialize Proactive Communication Engine
+            self.proactive_communication_engine = ProactiveCommunicationEngine(
+                emotional_core=self.emotional_core,
+                memory_core=self.memory_core,
+                relationship_manager=self.relationship_manager,
+                temporal_perception=self.temporal_perception,
+                reasoning_core=self.reasoning_core,
+                reflection_engine=self.reflection_engine,
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system,
+                identity_evolution=self.identity_evolution,
+                action_generator=self.agentic_action_generator
+            )
+            await self.proactive_communication_engine.start()
+            logger.debug("Proactive communication engine initialized")
             
             # Integrate procedural memory with action generator
             await self.integrate_procedural_memory_with_actions()
@@ -689,6 +686,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             # Initialize tools
             self.agent_evaluator = AgentEvaluator()
             logger.debug("Agent evaluator initialized")
+
+            # After both systems are initialized
+            if self.agent_enhanced_memory and self.agentic_action_generator:
+                await self.integrate_procedural_memory_with_actions()
+                logger.debug("Procedural memory integrated with action generator")            
             
             self.parallel_executor = ParallelToolExecutor(max_concurrent=5)
             logger.debug("Parallel tool executor initialized")            
