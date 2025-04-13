@@ -400,6 +400,8 @@ class EnhancedAgenticActionGenerator:
                      
         # Lock for thread safety
         self._lock = asyncio.Lock()
+
+        self.assign_core_activities()
         
         # Initialize the agent system
         self._initialize_agents()
@@ -872,6 +874,7 @@ class EnhancedAgenticActionGenerator:
         Returns:
             Optimal action
         """
+        self.assign_core_activities()
         try:
             # Update motivations and temporal context
             await self.update_motivations()
@@ -2116,6 +2119,33 @@ class EnhancedAgenticActionGenerator:
                 "timestamp": datetime.datetime.now().isoformat()
             }
 
+    def assign_core_activities(self):
+        core_activities = [
+            "roleplaying",
+            "domination",
+            "femdom",
+            "video_games",
+            "streaming",
+            "influencing",
+            "social_media",
+        ]
+        activities = self.identity_evolution.identity_profile["preferences"]["activities"]
+        for activity in core_activities:
+            if activity not in activities:
+                activities[activity] = {
+                    "score": 0.0,
+                    "confidence": 1.0,
+                    "is_hobby": True,
+                    "last_done": datetime.datetime.now(),
+                    "history": [],
+                    "core": True
+                }
+            else:
+                activities[activity]["core"] = True
+                activities[activity]["confidence"] = max(activities[activity].get("confidence", 0.0), 1.0)
+                activities[activity]["is_hobby"] = True
+
+
     async def periodic_hobby_meta_loop(self, interval=3600):
         """
         Periodically update and consolidate hobby/preference/activities emergence/decay.
@@ -2123,6 +2153,7 @@ class EnhancedAgenticActionGenerator:
         """
         while True:
             try:
+                self.assign_core_activities()
                 # -- You can tune these thresholds or expose as parameters --
                 min_to_hobby = 3.0
                 min_proficiency = 0.7
@@ -2139,6 +2170,10 @@ class EnhancedAgenticActionGenerator:
                 procedural_manager = getattr(self, "procedural_memory_manager", None)
                 async with self._activities_lock:
                     for proc_name, p in activities.items():
+                        if p.get("core"):
+                            p["is_hobby"] = True
+                            p["confidence"] = max(p.get("confidence", 0.0), 1.0)
+                            continue
                         proficiency = min_proficiency
                         last_done = p.get("last_done")
                         # If using procedural manager, get proficiency
