@@ -1,3 +1,5 @@
+# nyx/core/goal_system.py
+
 """
 Goal Management System for Nyx AI - Leverages advanced agent architecture for planning and execution.
 Features improved concurrency, persistence, conflict resolution, and integration with other systems.
