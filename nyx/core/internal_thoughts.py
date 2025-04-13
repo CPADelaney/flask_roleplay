@@ -67,6 +67,8 @@ class InternalThought(BaseModel):
     critique: Optional[str] = None  # Self-critique of the thought
     related_thoughts: List[str] = Field(default_factory=list, description="IDs of related thoughts")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    epistemic_status: str = Field("asserted", description="Level of knowledge: 'confident', 'uncertain', 'unknown', 'lied', 'self-justified'")
+    originated_as_lie: bool = False    
 
 
 class ThoughtFilter(BaseModel):
@@ -338,7 +340,8 @@ class InternalThoughtsManager:
                     source=thought_output.source,
                     priority=thought_output.priority,
                     context=thought_output.related_context or context,
-                    critique=thought_output.critique
+                    critique=thought_output.critique,
+                    thought.epistemic_status = self._infer_epistemic_status(thought_output)
                 )
                 
                 # Perform self-critique if enabled and not already provided
@@ -370,6 +373,21 @@ class InternalThoughtsManager:
                 self._add_thought(fallback_thought)
             
             return fallback_thought
+
+    def _infer_epistemic_status(self, thought_output):
+        # Rules: change these as needed based on your logic!
+        if hasattr(thought_output, 'epistemic_status'):
+            return thought_output.epistemic_status
+        # Keyword or tag based
+        if "guess" in (thought_output.thought_text or "").lower():
+            return "uncertain"
+        if "i don't know" in (thought_output.thought_text or "").lower():
+            return "unknown"
+        # If this was called as part of an intentional lie pipeline
+        if getattr(thought_output, 'originated_as_lie', False):
+            return "lied"
+        return "confident"
+        
     
     async def _critique_thought(self, thought: InternalThought) -> Optional[str]:
         """Generate a self-critique for a thought."""
