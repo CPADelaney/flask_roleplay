@@ -2128,6 +2128,7 @@ class EnhancedAgenticActionGenerator:
             "streaming",
             "influencing",
             "social_media",
+            "socializing"
         ]
         activities = self.identity_evolution.identity_profile["preferences"]["activities"]
         for activity in core_activities:
