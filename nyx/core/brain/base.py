@@ -4069,7 +4069,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         # Max retries reached
         return {"success": False, "message": f"Max retries reached ({max_retries})"}
-    
+
+    def _format_response_with_epistemic_tags(self, main_content: str, epistemic_status: str) -> str:
+        # See table below for more detailed mapping
+        if epistemic_status == "confident":
+            return main_content
+        elif epistemic_status == "uncertain":
+            return f"I'm not entirely certain, but I think: {main_content}"
+        elif epistemic_status == "unknown":
+            return f"I'm sorry, I don't actually know. My best guess: {main_content}"
+        elif epistemic_status == "lied":
+            # Optionally reveal, or just output as normal
+            return f"{main_content}"  # Don't reveal (could log elsewhere)
+        elif epistemic_status == "self-justified":
+            return f"In my view: {main_content}"
+        else:
+            return main_content    
+        
     async def _execute_fallback_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a fallback strategy for an error."""
         fallback_component = strategy.get("fallback_component")
