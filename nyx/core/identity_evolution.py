@@ -843,6 +843,19 @@ class IdentityEvolutionSystem:
                     "explicit": 0.5,
                     "subtle": 0.4
                 }
+                },
+                # === ADD THIS NEW BLOCK! ===
+                "activities": {
+                    # Will be filled at runtime, e.g.
+                    # "make_coffee": {
+                    #     "score": 0.0,
+                    #     "confidence": 0.0,
+                    #     "is_hobby": False,
+                    #     "last_done": None,
+                    #     "history": [],
+                    # }
+                }
+                # ============================
             },
             "traits": {
                 "dominance": 0.8,
@@ -874,12 +887,28 @@ class IdentityEvolutionSystem:
         self.last_update = datetime.datetime.now().isoformat()
         self.evolution_rate = 0.2
         self.coherence_score = 0.8
+
+        if "preferences" not in self.identity_profile:
+            self.identity_profile["preferences"] = {}
+        if "activities" not in self.identity_profile["preferences"]:
+            self.identity_profile["preferences"]["activities"] = {}        
         
         # Initialize the agent system
         self._initialize_agents()
         
         logger.info("Enhanced Identity Evolution System initialized with OpenAI Agent SDK")
-    
+
+    def update_activity_stats(self, activity, reward):
+        activities = self.identity_profile["preferences"]["activities"]
+        a = activities.setdefault(activity, {
+            "score": 0.0, "confidence": 0.0, "is_hobby": False, "last_done": None, "history": [],
+        })
+        a["score"] += reward
+        a["confidence"] = min(1.0, a["confidence"] + 0.1)
+        a["last_done"] = datetime.datetime.now()
+        a["history"].append({"timestamp": datetime.datetime.now().isoformat(), "reward": reward})
+        
+        
     def _initialize_agents(self):
         """Initialize the agent system with OpenAI Agent SDK"""
         # Create the main Agent
