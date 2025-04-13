@@ -375,18 +375,47 @@ class InternalThoughtsManager:
             return fallback_thought
 
     def _infer_epistemic_status(self, thought_output):
-        # Rules: change these as needed based on your logic!
+        """
+        Infer epistemic status from the text content of the thought.
+        """
+        text = (getattr(thought_output, 'thought_text', None) or
+                getattr(thought_output, 'content', None) or
+                "").lower()
+    
+        # Direct field if set
         if hasattr(thought_output, 'epistemic_status'):
-            return thought_output.epistemic_status
-        # Keyword or tag based
-        if "guess" in (thought_output.thought_text or "").lower():
-            return "uncertain"
-        if "i don't know" in (thought_output.thought_text or "").lower():
-            return "unknown"
-        # If this was called as part of an intentional lie pipeline
+            value = thought_output.epistemic_status
+            if value in {'confident','uncertain','unknown','lied','self-justified'}:
+                return value
+    
+        # Check for explicit lying marker field
         if getattr(thought_output, 'originated_as_lie', False):
             return "lied"
+    
+        # Uncertainty/unknown word patterns (add as needed)
+        uncertain_words = [
+            "maybe", "i think", "i believe", "possibly", "i guess", "probably",
+            "uncertain", "unsure", "i'm not sure", "i'm not certain", "could be", "might be",
+            "i'm guessing", "perhaps"
+        ]
+        unknown_words = [
+            "i don't know", "no idea", "can't recall", "unknown to me", "not familiar"
+        ]
+    
+        for word in unknown_words:
+            if word in text:
+                return "unknown"
+        for word in uncertain_words:
+            if word in text:
+                return "uncertain"
+    
+        # Self-justification
+        if any(x in text for x in ["i was right", "technically", "to clarify", "in my view", "as i explained"]):
+            return "self-justified"
+    
+        # Default fallback
         return "confident"
+
         
     
     async def _critique_thought(self, thought: InternalThought) -> Optional[str]:
