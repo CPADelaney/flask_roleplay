@@ -392,8 +392,12 @@ class EnhancedAgenticActionGenerator:
             proactive_communication=proactive_communication,
             emotional_core=emotional_core,
             memory_core=memory_core
-        )                     
-        
+        )    
+
+        self.procedural_memory_manager = procedural_memory_manager
+        self.hobby_meta_interval = 3600  # seconds
+        self._activities_lock = asyncio.Lock()
+                     
         # Lock for thread safety
         self._lock = asyncio.Lock()
         
@@ -401,6 +405,12 @@ class EnhancedAgenticActionGenerator:
         self._initialize_agents()
         
         logger.info("Enhanced Agentic Action Generator initialized with comprehensive integrations")
+
+        try:
+            asyncio.create_task(self.periodic_hobby_meta_loop(interval=self.hobby_meta_interval))
+            logger.info("Started periodic hobby meta-loop task.")
+        except Exception as exc:
+            logger.error(f"Could not start hobby meta-loop: {exc}", exc_info=True)       
 
     def _initialize_agents(self):
         """Initialize the agent hierarchy"""
@@ -1174,6 +1184,10 @@ class EnhancedAgenticActionGenerator:
             
             # Decay exploration rate over time (explore less as we learn more)
             self.exploration_rate = max(0.05, self.exploration_rate * self.exploration_decay)
+
+            async with self._activities_lock:
+                if self.identity_evolution and hasattr(self.identity_evolution, "update_activity_stats"):
+                    await self.identity_evolution.update_activity_stats(action_name, reward_value)
             
             return {
                 "action": action_name,
@@ -1377,13 +1391,7 @@ class EnhancedAgenticActionGenerator:
         
         # 15. Normalize all motivations to [0.1, 0.9] range
         for motivation in updated_motivations:
-            updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation]))
-
-        try:
-            asyncio.create_task(self.periodic_hobby_meta_loop())  # Runs in background forever
-            logger.info("Started periodic hobby meta-loop task.")
-        except Exception as exc:
-            logger.error(f"Could not start hobby meta-loop: {exc}", exc_info=True)        
+            updated_motivations[motivation] = max(0.1, min(0.9, updated_motivations[motivation])) 
         
         # Update the motivation state
         self.motivations = updated_motivations
@@ -2129,61 +2137,61 @@ class EnhancedAgenticActionGenerator:
     
                 # Optional: get procedural memory/proficiency if you've linked it
                 procedural_manager = getattr(self, "procedural_memory_manager", None)
-    
-                for proc_name, p in activities.items():
-                    proficiency = min_proficiency
-                    last_done = p.get("last_done")
-                    # If using procedural manager, get proficiency
-                    if procedural_manager and proc_name in procedural_manager.procedures:
-                        proficiency = getattr(procedural_manager.procedures[proc_name], "proficiency", min_proficiency)
-                    else:
+                async with self._activities_lock:
+                    for proc_name, p in activities.items():
                         proficiency = min_proficiency
-    
-                    # Promote to hobby if criteria met
-                    if (p["score"] > min_to_hobby 
-                        and proficiency >= min_proficiency 
-                        and p["confidence"] >= min_confidence 
-                        and not p.get("is_hobby", False)
-                    ):
-                        p["is_hobby"] = True
-                        any_new_hobby = True
-                        # Add self-reflect memory/statement if you wish
-                        if self.experience_interface:
-                            await self.experience_interface.memory_core.add_memory(
-                                memory_text=f"I've realized that '{proc_name}' is a hobby of mine. I enjoy it, and I've become proficient.",
-                                memory_type="reflection",
-                                significance=8,
-                                tags=["hobby", proc_name, "identity", "living_emergence"],
-                                metadata={"hobby": True, "activity": proc_name, "promotion_time": now.isoformat()}
+                        last_done = p.get("last_done")
+                        # If using procedural manager, get proficiency
+                        if procedural_manager and proc_name in procedural_manager.procedures:
+                            proficiency = getattr(procedural_manager.procedures[proc_name], "proficiency", min_proficiency)
+                        else:
+                            proficiency = min_proficiency
+        
+                        # Promote to hobby if criteria met
+                        if (p["score"] > min_to_hobby 
+                            and proficiency >= min_proficiency 
+                            and p["confidence"] >= min_confidence 
+                            and not p.get("is_hobby", False)
+                        ):
+                            p["is_hobby"] = True
+                            any_new_hobby = True
+                            # Add self-reflect memory/statement if you wish
+                            if self.experience_interface:
+                                await self.experience_interface.memory_core.add_memory(
+                                    memory_text=f"I've realized that '{proc_name}' is a hobby of mine. I enjoy it, and I've become proficient.",
+                                    memory_type="reflection",
+                                    significance=8,
+                                    tags=["hobby", proc_name, "identity", "living_emergence"],
+                                    metadata={"hobby": True, "activity": proc_name, "promotion_time": now.isoformat()}
+                                )
+                        # Demote if decayed
+                        if p.get("is_hobby", False) and last_done:
+                            if (now - last_done).days > inactive_decay_days:
+                                p["confidence"] *= 0.98 ** ((now - last_done).days)
+                                if p["confidence"] < hobby_forget_thresh:
+                                    p["is_hobby"] = False
+                                    any_forgotten = True
+                                    if self.experience_interface:
+                                        await self.experience_interface.memory_core.add_memory(
+                                            memory_text=f"I've lost interest in '{proc_name}'. It doesn't feel like a real hobby any more.",
+                                            memory_type="reflection",
+                                            significance=5,
+                                            tags=["hobby_forgotten", proc_name, "identity", "living_emergence"],
+                                            metadata={"hobby": False, "activity": proc_name, "demotion_time": now.isoformat()}
+                                        )
+        
+                    # If nothing is a hobby, suggest exploration
+                    if all(not p.get("is_hobby", False) for p in activities.values()):
+                        if self.goal_system:
+                            await self.goal_system.add_goal(
+                                description="Explore a new activity or hobby I haven't tried before",
+                                priority=0.7
                             )
-                    # Demote if decayed
-                    if p.get("is_hobby", False) and last_done:
-                        if (now - last_done).days > inactive_decay_days:
-                            p["confidence"] *= 0.98 ** ((now - last_done).days)
-                            if p["confidence"] < hobby_forget_thresh:
-                                p["is_hobby"] = False
-                                any_forgotten = True
-                                if self.experience_interface:
-                                    await self.experience_interface.memory_core.add_memory(
-                                        memory_text=f"I've lost interest in '{proc_name}'. It doesn't feel like a real hobby any more.",
-                                        memory_type="reflection",
-                                        significance=5,
-                                        tags=["hobby_forgotten", proc_name, "identity", "living_emergence"],
-                                        metadata={"hobby": False, "activity": proc_name, "demotion_time": now.isoformat()}
-                                    )
-    
-                # If nothing is a hobby, suggest exploration
-                if all(not p.get("is_hobby", False) for p in activities.values()):
-                    if self.goal_system:
-                        await self.goal_system.add_goal(
-                            description="Explore a new activity or hobby I haven't tried before",
-                            priority=0.7
-                        )
-    
-                # Sleep until next run
-                await asyncio.sleep(interval)
-            except Exception as exc:
-                logger.error(f"Error in periodic_hobby_meta_loop: {exc}", exc_info=True)
-                await asyncio.sleep(interval)
+        
+                    # Sleep until next run
+                    await asyncio.sleep(interval)
+                except Exception as exc:
+                    logger.error(f"Error in periodic_hobby_meta_loop: {exc}", exc_info=True)
+                    await asyncio.sleep(interval)
 
 AgenticActionGenerator = EnhancedAgenticActionGenerator
