@@ -66,8 +66,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.goal_manager = None
         self.streaming_core = None
 
-        
-        
         # Spatial system components
         self.spatial_mapper = None
         self.spatial_memory = None
@@ -101,9 +99,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.femdom_integration_manager = None   
         self.orgasm_control_system = None
         self.dominance_persona_manager = None
-        self.sadistic_response_system = None 
-        self.submission_progression = None  
-        self.task_assignment_system = None         
+        self.sadistic_response_system = None        
         
         # State tracking
         self.initialized = False
@@ -205,7 +201,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.brain.module_optimizer import ModuleOptimizer
             from nyx.core.brain.system_health_checker import SystemHealthChecker
             from nyx.core.emotions.emotional_core import EmotionalCore
-            from nyx.core.memory_core import MemoryCore
+            from nyx.core.memory_core import MemoryCoreAgents
             from nyx.core.reflection_engine import ReflectionEngine
             from nyx.core.experience_interface import ExperienceInterface
             from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
@@ -241,9 +237,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.femdom.femdom_integration_manager import FemdomIntegrationManager    
             from nyx.core.femdom.orgasm_control import OrgasmControlSystem
             from nyx.core.femdom.persona_manager import DominancePersonaManager
-            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem    
-            from nyx.core.femdom.submission_progression import SubmissionProgression
-            from nyx.core.femdom.task_assignment_system import TaskAssignmentSystem            
+            from nyx.core.femdom.sadistic_responses import SadisticResponseSystem          
 
             from nyx.core.issue_tracking_system import IssueTrackingSystem
             from nyx.core.passive_observation import PassiveObservationSystem
@@ -354,7 +348,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
             self.checkpoint_planner = CheckpointingPlannerAgent()           
             
-            self.memory_core = MemoryCore(self.user_id, self.conversation_id)
+            self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
             logger.debug("Memory core initialized")
             
@@ -481,36 +475,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     "memory_core": self.memory_core,
                     "relationship_manager": self.relationship_manager,
                     "theory_of_mind": self.theory_of_mind,
+                    # Add new components
                     "orgasm_control_system": self.orgasm_control_system,
                     "dominance_persona_manager": self.dominance_persona_manager,
-                    "sadistic_response_system": self.sadistic_response_system,
-                    "submission_progression": self.submission_progression,  # Add this line
-                    "task_assignment_system": self.task_assignment_system  # Add this line
+                    "sadistic_response_system": self.sadistic_response_system
                 }
             )
             await self.femdom_integration_manager.initialize()
-            logger.debug("Femdom integration manager initialized")         
-
-            # Initialize submission progression
-            self.submission_progression = SubmissionProgression(
-                reward_system=self.reward_system,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager
-            )
-            logger.debug("Submission progression system initialized")
-            
-            # Initialize task assignment system
-            self.task_assignment_system = TaskAssignmentSystem(
-                reward_system=self.reward_system,
-                memory_core=self.memory_core,
-                relationship_manager=self.relationship_manager,
-                submission_progression=self.submission_progression,
-                dominance_system=None,  # This can be set to an appropriate system if available
-                psychological_dominance=self.psychological_dominance,
-                protocol_enforcement=self.protocol_enforcement,
-                sadistic_responses=self.sadistic_response_system
-            )
-            logger.debug("Task assignment system initialized")            
+            logger.debug("Femdom integration manager initialized")           
 
              # Initialize orgasm control system
             self.orgasm_control_system = OrgasmControlSystem(
@@ -2539,29 +2511,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 function_tool(self.process_orgasm_permission_request),
                 function_tool(self.recommend_dominance_persona),
                 function_tool(self.activate_dominance_persona),
-                function_tool(self.generate_sadistic_response),
-                
-                # Submission Progression tools
-                function_tool(self.initialize_user),
-                function_tool(self.record_compliance),
-                function_tool(self.recommend_dominance_path),
-                function_tool(self.assign_dominance_path),
-                function_tool(self.check_milestone_progress),
-                function_tool(self.update_submission_metric),
-                function_tool(self.get_user_submission_data),
-                function_tool(self.generate_progression_report),
-                
-                # Task Assignment tools
-                function_tool(self.assign_task),
-                function_tool(self.complete_task),
-                function_tool(self.extend_task_deadline),
-                function_tool(self.cancel_task),
-                function_tool(self.update_user_task_settings),
-                function_tool(self.create_task_template),
-                function_tool(self.get_available_task_templates),
-                function_tool(self.get_active_tasks),
-                function_tool(self.process_expired_tasks)
-            ]
+                function_tool(self.generate_sadistic_response)          
+            ]            
             
             # New general tools functions
             tools_functions = [
@@ -5377,201 +5328,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         return await self.sadistic_response_system.generate_sadistic_amusement_response(
             user_id, humiliation_level, category=category
-        )
-
-    @function_tool
-    async def initialize_user(self, user_id: str, initial_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Initialize or get user submission data."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.initialize_user(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id, initial_data
-        )
-    
-    @function_tool
-    async def record_compliance(self, user_id: str, instruction: str, complied: bool, 
-                              difficulty: float = 0.5, context_info: Optional[Dict[str, Any]] = None,
-                              defiance_reason: Optional[str] = None) -> Dict[str, Any]:
-        """Record compliance or defiance for a specific instruction."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.record_compliance(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id, instruction, complied, difficulty, context_info, defiance_reason
-        )
-    
-    @function_tool
-    async def recommend_dominance_path(self, user_id: str) -> Dict[str, Any]:
-        """Recommends the most suitable dominance path based on user traits."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.recommend_dominance_path(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id
-        )
-    
-    @function_tool
-    async def assign_dominance_path(self, user_id: str, path_id: str) -> Dict[str, Any]:
-        """Assigns a specific dominance path to a user."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.assign_dominance_path(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id, path_id
-        )
-    
-    @function_tool
-    async def check_milestone_progress(self, user_id: str) -> Dict[str, Any]:
-        """Checks user progress against assigned path milestones."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.check_milestone_progress(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id
-        )
-    
-    @function_tool
-    async def update_submission_metric(self, user_id: str, metric_name: str, 
-                                    value_change: float, reason: str = "general") -> Dict[str, Any]:
-        """Update a specific submission metric."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.update_submission_metric(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id, metric_name, value_change, reason
-        )
-    
-    @function_tool
-    async def get_user_submission_data(self, user_id: str, include_history: bool = False) -> Dict[str, Any]:
-        """Get the current submission data for a user."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.get_user_submission_data(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id, include_history
-        )
-    
-    @function_tool
-    async def generate_progression_report(self, user_id: str) -> Dict[str, Any]:
-        """Generate a detailed report on user's submission progression."""
-        if not self.submission_progression:
-            return {"success": False, "message": "Submission progression system not initialized"}
-        
-        return await self.submission_progression.generate_progression_report(
-            RunContextWrapper(context=self.submission_progression.context),
-            user_id
-        )
-
-    @function_tool
-    async def assign_task(self, user_id: str, template_id: Optional[str] = None,
-                        custom_task: Optional[Dict[str, Any]] = None,
-                        due_in_hours: Optional[int] = 24,
-                        difficulty_override: Optional[str] = None,
-                        verification_override: Optional[str] = None,
-                        custom_reward: Optional[Dict[str, Any]] = None,
-                        custom_punishment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Assign a task to a user based on template or custom definition."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.assign_task(
-            user_id, template_id, custom_task, due_in_hours, 
-            difficulty_override, verification_override, 
-            custom_reward, custom_punishment
-        )
-    
-    @function_tool
-    async def complete_task(self, task_id: str, verification_data: Dict[str, Any],
-                          completion_notes: Optional[str] = None) -> Dict[str, Any]:
-        """Mark a task as completed with verification data."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.complete_task(
-            task_id, verification_data, completion_notes
-        )
-    
-    @function_tool
-    async def extend_task_deadline(self, task_id: str, additional_hours: int = 24,
-                                 reason: Optional[str] = None) -> Dict[str, Any]:
-        """Extend the deadline for a task."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.extend_task_deadline(
-            task_id, additional_hours, reason
-        )
-    
-    @function_tool
-    async def cancel_task(self, task_id: str, reason: str = "cancelled",
-                        apply_punishment: bool = False) -> Dict[str, Any]:
-        """Cancel an assigned task."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.cancel_task(
-            task_id, reason, apply_punishment
-        )
-    
-    @function_tool
-    async def update_user_task_settings(self, user_id: str, 
-                                     settings_update: Dict[str, Any]) -> Dict[str, Any]:
-        """Update task settings for a user with validation."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.update_user_settings(
-            user_id, settings_update
-        )
-    
-    @function_tool
-    async def create_task_template(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a custom task template with agent validation."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.create_task_template(
-            template_data
-        )
-    
-    @function_tool
-    async def get_available_task_templates(self, category: Optional[str] = None,
-                                        difficulty: Optional[str] = None,
-                                        user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Get available task templates with agent recommendations."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.get_available_task_templates(
-            category, difficulty, user_id
-        )
-    
-    @function_tool
-    async def get_active_tasks(self, user_id: str) -> Dict[str, Any]:
-        """Get all active tasks for a user."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.get_active_tasks(
-            user_id
-        )
-    
-    @function_tool
-    async def process_expired_tasks(self, auto_fail_hours: int = 12) -> Dict[str, Any]:
-        """Process expired tasks using agent-based decision making."""
-        if not self.task_assignment_system:
-            return {"success": False, "message": "Task assignment system not initialized"}
-        
-        return await self.task_assignment_system.process_expired_tasks(
-            auto_fail_hours
         )
 
     @function_tool
