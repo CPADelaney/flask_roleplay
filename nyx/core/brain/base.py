@@ -862,10 +862,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         # --- Memory [recent or special memories, diary] ---
         if self.memory_core and "recent_memories" in checkpoint_data:
             try:
-                if hasattr(self.memory_core, "load_recent_memories"):
+                # Check which method is available and use appropriate one
+                if hasattr(self.memory_core, 'load_recent_memories'):
                     await self.memory_core.load_recent_memories(checkpoint_data["recent_memories"])
-                elif hasattr(self.memory_core, "import_memories"):
+                elif hasattr(self.memory_core, 'import_memories'):
                     await self.memory_core.import_memories(checkpoint_data["recent_memories"])
+                elif hasattr(self.memory_core, 'add_memories_batch'):
+                    # Add fallback for newer API
+                    await self.memory_core.add_memories_batch(checkpoint_data["recent_memories"])
                 # else: skip—they should be re-encoded by the brain loop
             except Exception as e:
                 logger.warning(f"Restore: recent_memories failed: {e}")
