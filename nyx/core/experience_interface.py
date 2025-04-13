@@ -1258,38 +1258,38 @@ class ExperienceInterface:
         return impact
     
     @function_tool
-        async def _get_emotional_tone(self, ctx: RunContextWrapper, 
+    async def _get_emotional_tone(self, ctx: RunContextWrapper, 
                                  emotional_context: Dict[str, Any]) -> str:
-            """
-            Determine the emotional tone for recall based on emotions
+        """
+        Determine the emotional tone for recall based on emotions
             
-            Args:
-                emotional_context: Emotional context data
+        Args:
+            emotional_context: Emotional context data
                 
-            Returns:
-                Emotional tone string
-            """
-            if not emotional_context:
-                return "standard"
-                
-            primary = emotional_context.get("primary_emotion", "neutral")
-            intensity = emotional_context.get("primary_intensity", 0.5)
-            valence = emotional_context.get("valence", 0.0)
-            
-            # High intensity experiences
-            if intensity > 0.8:
-                return "intense"
-                
-            # Positive emotions
-            if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
-                return "positive"
-                
-            # Negative emotions
-            if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
-                return "negative"
-                
-            # Default to standard
+        Returns:
+            Emotional tone string
+        """
+        if not emotional_context:
             return "standard"
+                
+        primary = emotional_context.get("primary_emotion", "neutral")
+        intensity = emotional_context.get("primary_intensity", 0.5)
+        valence = emotional_context.get("valence", 0.0)
+            
+        # High intensity experiences
+        if intensity > 0.8:
+            return "intense"
+                
+        # Positive emotions
+        if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
+            return "positive"
+                
+        # Negative emotions
+        if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
+            return "negative"
+                
+        # Default to standard
+        return "standard"
     
     @function_tool
     async def _get_scenario_tone(self, ctx: RunContextWrapper, 
