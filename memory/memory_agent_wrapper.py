@@ -21,6 +21,7 @@ class MemoryAgentWrapper:
         self.name = agent.name if hasattr(agent, 'name') else "MemoryAgent"
         self.instructions = agent.instructions if hasattr(agent, 'instructions') else ""
         self.tools = agent.tools if hasattr(agent, 'tools') else []
+        self.input_guardrails = []
     
     async def recall(
         self,
