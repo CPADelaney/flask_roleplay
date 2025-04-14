@@ -291,7 +291,7 @@ class ConditioningSystem:
         )
     
     # Function tools for agents
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_association(ctx: RunContextWrapper, key: str, association_type: str = "classical") -> Dict[str, Any]:
         """
@@ -311,7 +311,7 @@ class ConditioningSystem:
         else:
             return None
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _create_or_update_classical_association(ctx: RunContextWrapper,
                                                unconditioned_stimulus: str,
@@ -399,7 +399,7 @@ class ConditioningSystem:
                 "valence": association.valence
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _create_or_update_operant_association(ctx: RunContextWrapper,
                                              behavior: str,
@@ -504,7 +504,7 @@ class ConditioningSystem:
                 "valence": association.valence
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_association_strength(ctx: RunContextWrapper,
                                         base_strength: float,
@@ -536,7 +536,7 @@ class ConditioningSystem:
         # Ensure strength is within bounds
         return max(0.0, min(1.0, strength))
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _check_similar_associations(ctx: RunContextWrapper,
                                     stimulus: str,
@@ -572,7 +572,7 @@ class ConditioningSystem:
         
         return similar_associations
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_valence_and_reward(ctx: RunContextWrapper,
                                       consequence_type: str,
@@ -601,7 +601,7 @@ class ConditioningSystem:
             "reward_value": reward_value
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _generate_reward_signal(ctx: RunContextWrapper,
                                behavior: str,
@@ -643,7 +643,7 @@ class ConditioningSystem:
             logger.error(f"Error generating reward signal: {e}")
             return False
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_behavior_associations(ctx: RunContextWrapper,
                                    behavior: str,
@@ -692,7 +692,7 @@ class ConditioningSystem:
         
         return behavior_associations
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_expected_valence(ctx: RunContextWrapper,
                                     associations: List[Dict[str, Any]]) -> Dict[str, float]:
@@ -731,7 +731,7 @@ class ConditioningSystem:
             "total_reinforcements": total_reinforcements
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _check_context_relevance(ctx: RunContextWrapper,
                                  context: Dict[str, Any],
@@ -775,7 +775,7 @@ class ConditioningSystem:
             "average_relevance": sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_reinforcement_history(ctx: RunContextWrapper, behavior: str) -> Dict[str, Any]:
         """
@@ -833,7 +833,7 @@ class ConditioningSystem:
         
         return history
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _identify_trait_behaviors(ctx: RunContextWrapper, trait: str) -> List[str]:
         """
@@ -860,7 +860,7 @@ class ConditioningSystem:
         
         return trait_behaviors.get(trait.lower(), default_behaviors)
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_trait_adjustment(ctx: RunContextWrapper,
                                     current_value: float,
@@ -892,7 +892,7 @@ class ConditioningSystem:
         max_adjustment = 0.2
         return max(-max_adjustment, min(max_adjustment, adjustment))
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _update_identity_trait(ctx: RunContextWrapper,
                               trait: str,
@@ -934,7 +934,7 @@ class ConditioningSystem:
                 "reason": str(e)
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _check_trait_balance(ctx: RunContextWrapper, traits: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -994,7 +994,7 @@ class ConditioningSystem:
             "average_value": sum(traits.values()) / len(traits) if traits else 0.0
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _determine_conditioning_type(ctx: RunContextWrapper,
                                      stimulus: Optional[str] = None,
@@ -1028,7 +1028,7 @@ class ConditioningSystem:
         # Default to unknown
         return "unknown"
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _prepare_conditioning_data(ctx: RunContextWrapper,
                                    conditioning_type: str,
@@ -1111,7 +1111,7 @@ class ConditioningSystem:
         
         return prepared_data
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _apply_association_effects(ctx: RunContextWrapper, 
                                    association: Dict[str, Any]) -> Dict[str, Any]:
