@@ -219,7 +219,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.attentional_controller import AttentionalController
             from nyx.core.multimodal_integrator import MultimodalIntegrator, MultimodalIntegratorContext
             from nyx.core.reward_system import RewardSignalProcessor
-            from nyx.core.temporal_perception import TemporalPerception
+            from nyx.core.temporal_perception import TemporalPerceptionSystem
             from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
             from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
             from nyx.core.needs_system import NeedsSystem
