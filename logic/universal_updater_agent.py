@@ -1146,9 +1146,9 @@ async def initialize_universal_updater(user_id: int, conversation_id: int) -> Di
         Dictionary containing initialized context and status
     """
     try:
-        # Create and initialize the updater context
-        updater_context = UniversalUpdaterContext(user_id, conversation_id)
-        await updater_context.initialize()
+        # Create the wrapper agent class for governance compatibility
+        updater_agent = UniversalUpdaterAgent(user_id, conversation_id)
+        await updater_agent.initialize()
         
         # Register with governance system
         await register_with_governance(user_id, conversation_id)
@@ -1156,11 +1156,8 @@ async def initialize_universal_updater(user_id: int, conversation_id: int) -> Di
         logging.info(f"Universal Updater initialized for user {user_id}, conversation {conversation_id}")
         
         return {
-            "context": updater_context,
-            "agents": {
-                "extraction_agent": extraction_agent,
-                "universal_updater_agent": universal_updater_agent
-            },
+            "agent": updater_agent,
+            "context": updater_agent.context,
             "status": "initialized"
         }
     except Exception as e:
@@ -1168,4 +1165,83 @@ async def initialize_universal_updater(user_id: int, conversation_id: int) -> Di
         return {
             "error": str(e),
             "status": "failed"
+        }
+        
+# Add this class to provide compatibility with existing governance code
+class UniversalUpdaterAgent:
+    """
+    Compatibility wrapper for the OpenAI Agents SDK implementation of Universal Updater.
+    This class serves as an adapter between the SDK implementation and the
+    governance system which expects a class-based approach.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        """Initialize the Universal Updater Agent with user context."""
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.context = None
+        self.initialized = False
+    
+    async def initialize(self):
+        """Initialize the updater agent and context."""
+        if not self.initialized:
+            # Create and initialize the updater context
+            self.context = UniversalUpdaterContext(self.user_id, self.conversation_id)
+            await self.context.initialize()
+            self.initialized = True
+        return self
+    
+    async def process_update(self, narrative: str, context: Dict[str, Any] = None):
+        """Process a universal update based on narrative text."""
+        # Ensure initialization
+        if not self.initialized:
+            await self.initialize()
+            
+        # Use the SDK-based function for processing
+        return await process_universal_update(
+            self.user_id, 
+            self.conversation_id, 
+            narrative, 
+            context
+        )
+    
+    async def handle_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle a directive from the governance system."""
+        # Ensure initialization
+        if not self.initialized:
+            await self.initialize()
+            
+        # Process different directive types
+        directive_type = directive.get("type")
+        directive_data = directive.get("data", {})
+        
+        if directive_type == "process_narrative":
+            return await self.process_update(
+                directive_data.get("narrative", ""),
+                directive_data.get("context")
+            )
+        
+        return {
+            "success": False,
+            "error": f"Unsupported directive type: {directive_type}"
+        }
+    
+    async def get_capabilities(self) -> List[str]:
+        """Return agent capabilities for coordination."""
+        return ["narrative_analysis", "state_extraction", "state_updating"]
+    
+    async def get_performance_metrics(self) -> Dict[str, Any]:
+        """Return performance metrics for the agent."""
+        return {
+            "updates_processed": 0,  # You would track this in a real implementation
+            "success_rate": 0.0,
+            "average_processing_time": 0.0,
+            "strategies": {}
+        }
+    
+    async def get_learning_state(self) -> Dict[str, Any]:
+        """Return learning state for the agent."""
+        return {
+            "patterns": {},
+            "adaptations": []
         }
