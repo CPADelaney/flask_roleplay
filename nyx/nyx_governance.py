@@ -102,57 +102,49 @@ class NyxUnifiedGovernor:
     """
 
     def __init__(self, user_id: int, conversation_id: int):
-        """Initialize the enhanced unified governance system."""
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
-        # Core systems
+
+        # Core systems and state
         self.memory_system = None
         self.game_state = None
-        self.registered_agents = {}
-        
-        # Agentic state
-        self.active_goals = []
-        self.agent_goals = {}
-        self.agent_performance = {}
-        self.agent_learning = {}
-        self.coordination_history = []
-        
+        self.registered_agents: Dict[str, Dict[str, Any]] = {}     # {agent_type: {agent_id: instance}}
+
+        # Multi-agent analytics
+        self.active_goals: List[Dict[str, Any]] = []
+        self.agent_goals: Dict[str, Dict[str, Any]] = {}           # {agent_type: {agent_id: ...}}
+        self.agent_performance: Dict[str, Dict[str, Any]] = {}     # {agent_type: {agent_id: ...}}
+        self.agent_learning: Dict[str, Dict[str, Any]] = {}        # {agent_type: {agent_id: ...}}
+        self.coordination_history: List[Dict[str, Any]] = []
+
         # Learning state
-        self.strategy_effectiveness = {}
-        self.adaptation_patterns = {}
-        self.collaboration_success = {}
-        
-        # Disagreement state
-        self.disagreement_history = {}
-        self.disagreement_thresholds = {
+        self.strategy_effectiveness: Dict[str, Any] = {}
+        self.adaptation_patterns: Dict[str, Any] = {}
+        self.collaboration_success: Dict[str, Dict[str, Any]] = {}
+
+        # Disagreement history
+        self.disagreement_history: Dict[str, List[Dict[str, Any]]] = {}
+        self.disagreement_thresholds: Dict[str, float] = {
             "narrative_impact": 0.7,
             "character_consistency": 0.8,
             "world_integrity": 0.9,
             "player_experience": 0.6
         }
-    
+
+        # Directive/action reports
+        self.directives: Dict[str, Dict[str, Any]] = {}
+        self.action_reports: Dict[str, Dict[str, Any]] = {}
+
     
     async def _initialize_systems(self):
-        """Initialize core systems and load initial state."""
-        # Initialize memory system using the correct function
-        self.memory_system = await get_memory_nyx_bridge(
-            self.user_id,
-            self.conversation_id
-        )
-        
-        # Initialize game state
+        """Initialize memory system, game state, and discover agents."""
+        self.memory_system = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
         self.game_state = await self.initialize_game_state()
-        
-        # Discover and register agents
         await self.discover_and_register_agents()
-        
-        # Load initial state
         await self._load_initial_state()
-    
+
     async def _load_initial_state(self):
-        """Load initial state and goals."""
-        # Use recall to get goal-related memories instead of a non-existent get_active_goals method
+        """Load goals and agent state from memory."""
         goal_memories = await self.memory_system.recall(
             entity_type="nyx",
             entity_id=self.conversation_id,
@@ -160,43 +152,34 @@ class NyxUnifiedGovernor:
             context="system goals",
             limit=10
         )
-        
-        # Extract goals from memories
         self.active_goals = self._extract_goals_from_memories(goal_memories.get("memories", []))
-        
-        # Load agent-specific goals
-        for agent_type, agent in self.registered_agents.items():
-            if hasattr(agent, "get_active_goals"):
-                self.agent_goals[agent_type] = await agent.get_active_goals()
-            else:
-                self.agent_goals[agent_type] = []
-        
-        # Load performance metrics
+
+        # Load all agents' goals
+        for agent_type, agents_dict in self.registered_agents.items():
+            for agent_id, agent in agents_dict.items():
+                if hasattr(agent, "get_active_goals"):
+                    self.agent_goals.setdefault(agent_type, {})[agent_id] = await agent.get_active_goals()
+                else:
+                    self.agent_goals.setdefault(agent_type, {})[agent_id] = []
+
         await self._update_performance_metrics()
-        
-        # Load learning state
         await self._load_learning_state()
 
-    async def initialize_game_state(self):
-        """
-        Initialize and return the game state for this user/conversation.
-        
-        Returns:
-            Dictionary with game state information
-        """
+    async def initialize_game_state(self) -> Dict[str, Any]:
+        """Fetch and return the game state for current user/conversation."""
         logger.info(f"Initializing game state for user {self.user_id}, conversation {self.conversation_id}")
-        
-        game_state = {
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "current_location": None,
-            "current_npcs": [],
-            "current_time": None,
-            "active_quests": [],
-            "player_stats": {},
-            "narrative_state": {},
-            "world_state": {}
-        }
+
+        game_state = dict(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            current_location=None,
+            current_npcs=[],
+            current_time=None,
+            active_quests=[],
+            player_stats={},
+            narrative_state={},
+            world_state={},
+        )
         
         try:
             # Fetch current roleplay state from database
@@ -207,9 +190,7 @@ class NyxUnifiedGovernor:
                     WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
                     LIMIT 1
                 """, self.user_id, self.conversation_id)
-                
-                if row:
-                    game_state["current_location"] = row["value"]
+                if row: game_state["current_location"] = row["value"]
                 
                 # Get current time
                 row = await conn.fetchrow("""
@@ -217,45 +198,32 @@ class NyxUnifiedGovernor:
                     WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentTime'
                     LIMIT 1
                 """, self.user_id, self.conversation_id)
-                
-                if row:
-                    game_state["current_time"] = row["value"]
-                
-                # Get player stats
+                if row: game_state["current_time"] = row["value"]
+
                 row = await conn.fetchrow("""
                     SELECT * FROM PlayerStats
                     WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'
                     LIMIT 1
                 """, self.user_id, self.conversation_id)
-                
-                if row:
-                    game_state["player_stats"] = dict(row)
-                
-                # Get active NPCs
+                if row: game_state["player_stats"] = dict(row)
+
                 rows = await conn.fetch("""
                     SELECT npc_id, npc_name, current_location FROM NPCStats
                     WHERE user_id = $1 AND conversation_id = $2
                 """, self.user_id, self.conversation_id)
-                
-                for row in rows:
-                    game_state["current_npcs"].append(dict(row))
-                
-                # Get active quests
+                game_state["current_npcs"] = [dict(r) for r in rows]
+
                 rows = await conn.fetch("""
                     SELECT * FROM Quests
                     WHERE user_id = $1 AND conversation_id = $2 AND status = 'In Progress'
                 """, self.user_id, self.conversation_id)
-                
-                for row in rows:
-                    game_state["active_quests"].append(dict(row))
-            
-            logger.info(f"Game state initialized with {len(game_state['current_npcs'])} NPCs and {len(game_state['active_quests'])} active quests")
-            
+                game_state["active_quests"] = [dict(r) for r in rows]
+
+            logger.info(f"Game state initialized with {len(game_state['current_npcs'])} NPCs and {len(game_state['active_quests'])} quests.")
             return game_state
         except Exception as e:
             logger.error(f"Error initializing game state: {e}")
-            # Return basic state on error
-            return game_state    
+            return game_state
 
     async def discover_and_register_agents(self):
         """
@@ -297,17 +265,14 @@ class NyxUnifiedGovernor:
             return False    
     
     async def _update_performance_metrics(self):
-        """Update performance tracking for all agents."""
+        """Update per-agent performance metrics."""
         for agent_type, agents_dict in self.registered_agents.items():
             if agent_type not in self.agent_performance:
                 self.agent_performance[agent_type] = {}
-                
             for agent_id, agent in agents_dict.items():
                 if hasattr(agent, 'get_performance_metrics'):
                     metrics = await agent.get_performance_metrics()
                     self.agent_performance[agent_type][agent_id] = metrics
-                    
-                    # Update strategy effectiveness with nested structure
                     for strategy, data in metrics.get("strategies", {}).items():
                         if strategy not in self.strategy_effectiveness:
                             self.strategy_effectiveness[strategy] = {
@@ -318,24 +283,28 @@ class NyxUnifiedGovernor:
                         self.strategy_effectiveness[strategy]["success"] += data["success"]
                         self.strategy_effectiveness[strategy]["total"] += data["total"]
                         self.strategy_effectiveness[strategy]["agents"][f"{agent_type}:{agent_id}"] = data
-    
+
     async def _load_learning_state(self):
-        """Load and analyze learning state across agents."""
-        for agent_type, agent in self.registered_agents.items():
-            learning_data = await agent.get_learning_state()
-            self.agent_learning[agent_type] = learning_data
-            
-            # Update adaptation patterns
-            for pattern, data in learning_data.get("patterns", {}).items():
-                if pattern not in self.adaptation_patterns:
-                    self.adaptation_patterns[pattern] = {
-                        "success": 0,
-                        "total": 0,
-                        "agents": {}
-                    }
-                self.adaptation_patterns[pattern]["success"] += data["success"]
-                self.adaptation_patterns[pattern]["total"] += data["total"]
-                self.adaptation_patterns[pattern]["agents"][agent_type] = data
+        """Load and aggregate learning/adaptation patterns for all agents."""
+        for agent_type, agents_dict in self.registered_agents.items():
+            if agent_type not in self.agent_learning:
+                self.agent_learning[agent_type] = {}
+            for agent_id, agent in agents_dict.items():
+                if hasattr(agent, "get_learning_state"):
+                    learning_data = await agent.get_learning_state()
+                    self.agent_learning[agent_type][agent_id] = learning_data
+
+                    for pattern, data in learning_data.get("patterns", {}).items():
+                        if pattern not in self.adaptation_patterns:
+                            self.adaptation_patterns[pattern] = {
+                                "success": 0,
+                                "total": 0,
+                                "agents": {}
+                            }
+                        self.adaptation_patterns[pattern]["success"] += data["success"]
+                        self.adaptation_patterns[pattern]["total"] += data["total"]
+                        self.adaptation_patterns[pattern]["agents"][f"{agent_type}:{agent_id}"] = data
+
     
     async def coordinate_agents_for_goal(
         self,
@@ -371,32 +340,12 @@ class NyxUnifiedGovernor:
         
         return result
 
-    async def register_agent(
-        self,
-        agent_type: str,
-        agent_instance: Any,
-        agent_id: str
-    ) -> Dict[str, Any]:
-        """
-        Register an agent with the governance system.
-        
-        Args:
-            agent_type: Type of agent (use AgentType constants)
-            agent_instance: The agent instance to register
-            agent_id: ID to assign to the agent
-            
-        Returns:
-            Dictionary with registration results
-        """
-        # Store in registered_agents
+    async def register_agent(self, agent_type: str, agent_instance: Any, agent_id: str) -> Dict[str, Any]:
+        """Register an agent instance under (type, id)."""
         if agent_type not in self.registered_agents:
             self.registered_agents[agent_type] = {}
-        
         self.registered_agents[agent_type][agent_id] = agent_instance
-        
-        # Log the registration
-        logger.info(f"Agent registered: {agent_type} / {agent_id}")
-        
+        logger.info(f"Agent registered: {agent_type}/{agent_id}")
         return {
             "success": True,
             "agent_type": agent_type,
@@ -404,42 +353,16 @@ class NyxUnifiedGovernor:
             "timestamp": datetime.now().isoformat()
         }
     
-    async def issue_directive(
-        self,
-        agent_type: str,
-        agent_id: str,
-        directive_type: str,
-        directive_data: Dict[str, Any],
-        priority: int = DirectivePriority.MEDIUM,
-        duration_minutes: int = 60
-    ) -> Dict[str, Any]:
-        """
-        Issue a directive to an agent.
-        
-        Args:
-            agent_type: Type of agent to issue directive to
-            agent_id: ID of agent to issue directive to
-            directive_type: Type of directive to issue
-            directive_data: Data for the directive
-            priority: Priority of the directive
-            duration_minutes: How long the directive should remain active
-            
-        Returns:
-            Dictionary with directive results
-        """
-        # Check if the agent is registered
+    async def issue_directive(self, agent_type: str, agent_id: str, directive_type: str, directive_data: Dict[str, Any],
+                             priority: int = DirectivePriority.MEDIUM, duration_minutes: int = 60) -> Dict[str, Any]:
+        """Issue a time-limited directive to an agent."""
         if (agent_type not in self.registered_agents or
             agent_id not in self.registered_agents[agent_type]):
-            return {
-                "success": False,
-                "reason": f"Agent not found: {agent_type} / {agent_id}"
-            }
-        
-        # Create a directive entry
+            return {"success": False, "reason": f"Agent not found: {agent_type} / {agent_id}"}
         directive_id = f"{agent_type}_{agent_id}_{int(datetime.now().timestamp())}"
         expiration = datetime.now() + timedelta(minutes=duration_minutes)
-        
-        directive = {
+
+        self.directives[directive_id] = {
             "id": directive_id,
             "agent_type": agent_type,
             "agent_id": agent_id,
@@ -450,45 +373,14 @@ class NyxUnifiedGovernor:
             "expires_at": expiration.isoformat(),
             "status": "active"
         }
-        
-        # Store the directive
-        if not hasattr(self, "directives"):
-            self.directives = {}
-        
-        self.directives[directive_id] = directive
-        
-        # Log the directive
-        logger.info(f"Directive issued: {directive_id} to {agent_type} / {agent_id}")
-        
-        return {
-            "success": True,
-            "directive_id": directive_id,
-            "expires_at": expiration.isoformat()
-        }
+        logger.info(f"Directive issued: {directive_id} to {agent_type}/{agent_id}")
+        return {"success": True, "directive_id": directive_id, "expires_at": expiration.isoformat()}
+
     
-    async def process_agent_action_report(
-        self,
-        agent_type: str,
-        agent_id: str,
-        action: Dict[str, Any],
-        result: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Process a report of an action taken by an agent.
-        
-        Args:
-            agent_type: Type of agent that took the action
-            agent_id: ID of agent that took the action
-            action: Description of the action
-            result: Result of the action
-            
-        Returns:
-            Dictionary with processing results
-        """
-        # Create an action report
+    async def process_agent_action_report(self, agent_type: str, agent_id: str, action: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        """Store a report of an action taken by an agent."""
         report_id = f"{agent_type}_{agent_id}_{int(datetime.now().timestamp())}"
-        
-        report = {
+        self.action_reports[report_id] = {
             "id": report_id,
             "agent_type": agent_type,
             "agent_id": agent_id,
@@ -496,21 +388,9 @@ class NyxUnifiedGovernor:
             "result": result,
             "timestamp": datetime.now().isoformat()
         }
-        
-        # Store the report
-        if not hasattr(self, "action_reports"):
-            self.action_reports = {}
-        
-        self.action_reports[report_id] = report
-        
-        # Log the report
         logger.info(f"Action report processed: {report_id} from {agent_type} / {agent_id}")
+        return {"success": True, "report_id": report_id}
         
-        return {
-            "success": True,
-            "report_id": report_id
-        }    
-    
     async def _analyze_goal_requirements(self, goal: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze requirements for achieving a goal."""
         requirements = {
@@ -555,40 +435,36 @@ class NyxUnifiedGovernor:
         
         return requirements
     
-    async def _identify_relevant_agents(
-        self,
-        requirements: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    async def _identify_relevant_agents(self, requirements: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Identify agents relevant to goal requirements."""
         relevant_agents = []
-        
-        for agent_type, agent in self.registered_agents.items():
-            # Check if agent type is required
-            if agent_type in requirements["agent_types"]:
-                relevant_agents.append({
-                    "type": agent_type,
-                    "instance": agent,
-                    "relevance": 1.0
-                })
-                continue
-            
-            # Check capabilities
-            capabilities = await agent.get_capabilities()
-            capability_match = sum(
-                1 for cap in requirements["capabilities"]
-                if cap in capabilities
-            ) / len(requirements["capabilities"]) if requirements["capabilities"] else 0
-            
-            if capability_match > 0.5:
-                relevant_agents.append({
-                    "type": agent_type,
-                    "instance": agent,
-                    "relevance": capability_match
-                })
-        
-        # Sort by relevance
+        for agent_type, agents_dict in self.registered_agents.items():
+            for agent_id, agent in agents_dict.items():
+                # Check if agent type is required
+                if agent_type in requirements["agent_types"]:
+                    relevant_agents.append({
+                        "type": agent_type,
+                        "id": agent_id,
+                        "instance": agent,
+                        "relevance": 1.0
+                    })
+                    continue
+                # Capabilities match
+                capabilities = []
+                if hasattr(agent, 'get_capabilities'):
+                    capabilities = await agent.get_capabilities()
+                capability_match = sum(
+                    1 for cap in requirements["capabilities"]
+                    if cap in capabilities
+                ) / len(requirements["capabilities"]) if requirements["capabilities"] else 0
+                if capability_match > 0.5:
+                    relevant_agents.append({
+                        "type": agent_type,
+                        "id": agent_id,
+                        "instance": agent,
+                        "relevance": capability_match
+                    })
         relevant_agents.sort(key=lambda x: x["relevance"], reverse=True)
-        
         return relevant_agents
     
     async def _generate_coordination_plan(
@@ -840,49 +716,31 @@ class NyxUnifiedGovernor:
         
         return result
     
-    async def _execute_task(
-        self,
-        task: Dict[str, Any],
-        phase: Dict[str, Any],
-        plan: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Execute a single task within a phase."""
+    async def _execute_task(self, task: Dict[str, Any], phase: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a single task within a phase.
+        Select agents by agent_type (task['agents']) and run the appropriate method.
+        """
         result = {
             "task": task["type"],
             "success": False,
             "output": None,
             "metrics": {}
         }
-        
         try:
-            # Get assigned agents
-            agents = [
-                self.registered_agents[agent_type]
-                for agent_type in task["agents"]
-            ]
+            # Gather all agent instances listed by type in task["agents"]
+            agents = []
+            for agent_type in task["agents"]:
+                agents.extend(self.registered_agents.get(agent_type, {}).values())
             
             # Execute task with agents
-            task_output = await self._execute_with_agents(
-                task,
-                agents,
-                phase,
-                plan
-            )
-            
+            task_output = await self._execute_with_agents(task, agents, phase, plan)
             result["output"] = task_output
             result["success"] = True
-            
-            # Calculate task metrics
-            result["metrics"] = await self._calculate_task_metrics(
-                task,
-                task_output,
-                agents
-            )
-            
+            result["metrics"] = await self._calculate_task_metrics(task, task_output, agents)
         except Exception as e:
             logger.error(f"Task execution failed: {str(e)}")
             result["success"] = False
-        
         return result
     
     async def _execute_with_agents(
