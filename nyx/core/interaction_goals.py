@@ -793,9 +793,10 @@ class GoalSelector:
             ],
             output_type=GoalRankingOutput
         )
-    
+
+    @static_method
     @function_tool
-    async def _get_current_mode_distribution(self, ctx: RunContextWrapper[GoalSelectorContext]) -> Dict[str, Any]:
+    async def _get_current_mode_distribution(ctx: RunContextWrapper[GoalSelectorContext]) -> Dict[str, Any]:
         """
         Get the current mode distribution from the mode manager
         
@@ -821,9 +822,10 @@ class GoalSelector:
             "primary_mode": "default",
             "overall_confidence": 0.5
         }
-    
+
+    @static_method
     @function_tool
-    async def _get_goals_for_mode(self, ctx: RunContextWrapper[GoalSelectorContext], mode: str) -> List[Dict[str, Any]]:
+    async def _get_goals_for_mode(ctx: RunContextWrapper[GoalSelectorContext], mode: str) -> List[Dict[str, Any]]:
         """
         Get appropriate goals for a specific interaction mode
         
