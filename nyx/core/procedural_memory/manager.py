@@ -268,10 +268,10 @@ class ProceduralMemoryManager:
                 "count": len(procedures_list),
                 "procedures": procedures_list
             }
-    
+
+    @staticmethod
     @function_tool
     async def add_procedure(
-        self,
         ctx: RunContextWrapper,
         name: str,
         steps: List[Dict[str, Any]],
@@ -313,11 +313,10 @@ class ProceduralMemoryManager:
                 "steps_count": len(steps),
                 "status": "created"
             }
-    
+            
+    @staticmethod
     @function_tool
-    async def get_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def get_procedure(ctx: RunContextWrapper,
         name: str
     ) -> Dict[str, Any]:
         """
@@ -393,11 +392,10 @@ class ProceduralMemoryManager:
                 "status": "updated",
                 "steps_count": len(procedure.steps)
             }
-    
+            
+    @staticmethod
     @function_tool
-    async def delete_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def delete_procedure(ctx: RunContextWrapper,
         name: str
     ) -> Dict[str, Any]:
         """
@@ -424,11 +422,10 @@ class ProceduralMemoryManager:
                 "name": name,
                 "status": "deleted"
             }
-    
+            
+    @staticmethod
     @function_tool
-    async def execute_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_procedure(ctx: RunContextWrapper,
         name: str,
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -601,11 +598,10 @@ class ProceduralMemoryManager:
             "automatic": not conscious_execution and procedure.proficiency >= 0.8,
             "chunked": procedure.is_chunked
         }
-    
+
+    @staticmethod
     @function_tool
-    async def execute_step(
-        self, 
-        ctx: RunContextWrapper,
+    async def execute_step(ctx: RunContextWrapper,
         step: Dict[str, Any], 
         context: Dict[str, Any], 
         minimal_monitoring: bool = False
@@ -772,11 +768,10 @@ class ProceduralMemoryManager:
         
         # Return steps not in chunks
         return [step for step in procedure.steps if step["id"] not in chunked_step_ids]
-    
+
+    @staticmethod
     @function_tool
-    async def get_procedure_proficiency(
-        self,
-        ctx: RunContextWrapper,
+    async def get_procedure_proficiency(ctx: RunContextWrapper,
         name: str
     ) -> Dict[str, Any]:
         """
@@ -821,11 +816,10 @@ class ProceduralMemoryManager:
                 "domain": procedure.domain,
                 "last_execution": procedure.last_execution
             }
-    
+
+    @staticmethod
     @function_tool
-    async def find_similar_procedures(
-        self,
-        ctx: RunContextWrapper,
+    async def find_similar_procedures(ctx: RunContextWrapper,
         name: str,
         similarity_threshold: float = 0.6
     ) -> Dict[str, Any]:
@@ -908,11 +902,10 @@ class ProceduralMemoryManager:
         
         # Calculate final similarity
         return 0.3 * domain_similarity + 0.4 * func_similarity + 0.3 * step_similarity
-    
+
+    @staticmethod
     @function_tool
-    async def identify_chunking_opportunities(
-        self,
-        ctx: RunContextWrapper,
+    async def identify_chunking_opportunities(ctx: RunContextWrapper,
         procedure_name: str
     ) -> Dict[str, Any]:
         """
@@ -1011,11 +1004,10 @@ class ProceduralMemoryManager:
             return 0.8
         
         return 0.5  # Default moderate co-occurrence
-    
+
+    @staticmethod
     @function_tool
-    async def apply_chunking(
-        self,
-        ctx: RunContextWrapper,
+    async def apply_chunking(ctx: RunContextWrapper,
         procedure_name: str,
         chunks: Optional[List[List[str]]] = None
     ) -> Dict[str, Any]:
@@ -1156,11 +1148,10 @@ class ProceduralMemoryManager:
                 # Store reference to template
                 procedure.generalized_chunks[chunk_id] = template.id
                 logger.info(f"Created generalized template {template.id} from chunk {chunk_id}")
-    
+
+    @staticmethod
     @function_tool
-    async def generalize_chunk_from_steps(
-        self,
-        ctx: RunContextWrapper,
+    async def generalize_chunk_from_steps(ctx: RunContextWrapper,
         chunk_name: str,
         procedure_name: str,
         step_ids: List[str],
@@ -1233,11 +1224,10 @@ class ProceduralMemoryManager:
                 "steps_count": len(steps),
                 "template_created": True
             }
-    
+            
+    @staticmethod
     @function_tool
-    async def transfer_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def transfer_procedure(ctx: RunContextWrapper,
         source_name: str,
         target_name: str,
         target_domain: str
@@ -1357,11 +1347,10 @@ class ProceduralMemoryManager:
         }
         
         return mapped_step
-    
+        
+    @staticmethod 
     @function_tool
-    async def analyze_execution_history(
-        self,
-        ctx: RunContextWrapper,
+    async def analyze_execution_history(ctx: RunContextWrapper,
         procedure_name: str
     ) -> Dict[str, Any]:
         """
@@ -1488,11 +1477,10 @@ class ProceduralMemoryManager:
                 "chunk_patterns": chunk_patterns,
                 "refinement_opportunities": len(procedure.refinement_opportunities) if hasattr(procedure, "refinement_opportunities") else 0
             }
-    
+
+    @staticmethod
     @function_tool
-    async def get_transfer_statistics(
-        self,
-        ctx: RunContextWrapper
+    async def get_transfer_statistics(ctx: RunContextWrapper
     ) -> Dict[str, Any]:
         """
         Get statistics about procedure transfers
@@ -1530,11 +1518,10 @@ class ProceduralMemoryManager:
                 "domain_mappings": domain_mappings,
                 "template_count": len(self.chunk_library.templates) if hasattr(self.chunk_library, "templates") else 0
             }
-    
+
+    @staticmethod
     @function_tool
-    async def optimize_procedure_parameters(
-        self,
-        ctx: RunContextWrapper,
+    async def optimize_procedure_parameters(ctx: RunContextWrapper,
         procedure_name: str,
         iterations: int = 10
     ) -> Dict[str, Any]:
@@ -1588,11 +1575,10 @@ class ProceduralMemoryManager:
             )
             
             return optimization_result
-    
+
+    @staticmethod
     @function_tool
-    async def optimize_procedural_memory(
-        self,
-        ctx: RunContextWrapper
+    async def optimize_procedural_memory(ctx: RunContextWrapper
     ) -> Dict[str, Any]:
         """
         Optimize procedural memory by consolidating and cleaning up
@@ -1644,11 +1630,10 @@ class ProceduralMemoryManager:
     async def get_analysis_agent(self) -> Agent:
         """Get the procedure analysis agent"""
         return self._proc_analysis_agent
-    
+
+    @staticmethod
     @function_tool
-    async def execute_hierarchical_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_hierarchical_procedure(ctx: RunContextWrapper,
         name: str,
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -1664,11 +1649,10 @@ class ProceduralMemoryManager:
         """
         # Placeholder implementation since the EnhancedProceduralMemoryManager handles this
         return {"error": "Hierarchical procedure execution requires the EnhancedProceduralMemoryManager"}
-    
+
+    @staticmethod 
     @function_tool
-    async def execute_temporal_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_temporal_procedure(ctx: RunContextWrapper,
         name: str, 
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -1684,11 +1668,10 @@ class ProceduralMemoryManager:
         """
         # Placeholder implementation since the EnhancedProceduralMemoryManager handles this
         return {"error": "Temporal procedure execution requires the EnhancedProceduralMemoryManager"}
-    
+
+    @staticmethod
     @function_tool
-    async def execute_graph_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_graph_procedure(ctx: RunContextWrapper,
         procedure_name: str,
         context: Dict[str, Any] = None,
         goal: Dict[str, Any] = None
@@ -1938,11 +1921,9 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
         # Additional templates could be added here...
     
     # Implement enhanced agent function tools
-    
+    @staticmethod
     @function_tool
-    async def learn_from_demonstration(
-        self, 
-        ctx: RunContextWrapper,
+    async def learn_from_demonstration(ctx: RunContextWrapper,
         observation_sequence: List[Dict[str, Any]], 
         domain: str,
         name: Optional[str] = None
@@ -1984,11 +1965,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
             procedure_result["observation_count"] = procedure_data["observation_count"]
             
             return procedure_result
-    
+
+    @staticmethod
     @function_tool
-    async def create_hierarchical_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def create_hierarchical_procedure(ctx: RunContextWrapper,
         name: str,
         description: str,
         domain: str,
@@ -2060,11 +2040,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "hierarchical": True,
                 "parent_id": parent_id
             }
-    
+
+    @staticmethod
     @function_tool
-    async def execute_hierarchical_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_hierarchical_procedure(ctx: RunContextWrapper,
         name: str,
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -2166,11 +2145,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
         # Update timestamps
         procedure.last_execution = datetime.datetime.now().isoformat()
         procedure.last_updated = datetime.datetime.now().isoformat()
-    
+
+    @staticmethod
     @function_tool
-    async def create_temporal_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def create_temporal_procedure(ctx: RunContextWrapper,
         name: str,
         steps: List[Dict[str, Any]],
         temporal_constraints: List[Dict[str, Any]],
@@ -2258,11 +2236,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "constraints_count": len(temporal_constraints),
                 "is_temporal": True
             }
-    
+            
+    @staticmethod
     @function_tool
-    async def execute_temporal_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_temporal_procedure(ctx: RunContextWrapper,
         name: str,
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -2358,11 +2335,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "is_temporal": True,
                 "nodes_executed": len(execution_context["execution_history"])
             }
-    
+
+    @staticmethod
     @function_tool
-    async def create_procedure_graph(
-        self,
-        ctx: RunContextWrapper,
+    async def create_procedure_graph(ctx: RunContextWrapper,
         procedure_name: str
     ) -> Dict[str, Any]:
         """
@@ -2400,11 +2376,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "entry_points": len(graph.entry_points),
                 "exit_points": len(graph.exit_points)
             }
-    
+
+    @staticmethod
     @function_tool
-    async def execute_graph_procedure(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_graph_procedure(ctx: RunContextWrapper,
         procedure_name: str,
         context: Dict[str, Any] = None,
         goal: Dict[str, Any] = None
@@ -2499,11 +2474,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "path_length": len(path),
                 "goal_achieved": goal_achieved
             }
-    
+
+    @staticmethod
     @function_tool
-    async def optimize_procedure_transfer(
-        self,
-        ctx: RunContextWrapper,
+    async def optimize_procedure_transfer(ctx: RunContextWrapper,
         source_procedure: str,
         target_domain: str
     ) -> Dict[str, Any]:
@@ -2534,10 +2508,9 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
     
 # Continuing EnhancedProceduralMemoryManager class implementation
 
+    @staticmethod
     @function_tool
-    async def execute_transfer_plan(
-        self,
-        ctx: RunContextWrapper,
+    async def execute_transfer_plan(ctx: RunContextWrapper,
         transfer_plan: Dict[str, Any],
         target_name: str
     ) -> Dict[str, Any]:
@@ -2637,11 +2610,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "steps_count": len(new_steps),
                 "transfer_strategy": transfer_plan.get("transfer_strategy")
             }
-    
+
+    @staticmethod
     @function_tool
-    async def handle_execution_error(
-        self,
-        ctx: RunContextWrapper,
+    async def handle_execution_error(ctx: RunContextWrapper,
         error: Dict[str, Any],
         context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -2668,11 +2640,10 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
                 "interventions": interventions,
                 "context": context
             }
-    
+
+    @staticmethod
     @function_tool
-    async def share_domain_knowledge(
-        self,
-        ctx: RunContextWrapper,
+    async def share_domain_knowledge(ctx: RunContextWrapper,
         domain: str
     ) -> Dict[str, Any]:
         """
