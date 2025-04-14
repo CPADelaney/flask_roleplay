@@ -2,6 +2,7 @@
 Enhanced rate limiting middleware with token bucket algorithm and user-based limits.
 """
 
+import asyncio
 import time
 import threading
 import logging
@@ -505,12 +506,12 @@ def ip_block_middleware():
     """
     # This function runs synchronously before each request
     client_ip = request.remote_addr
-    if client_ip: # Ensure we have an IP address
-        # Call the synchronous is_blocked method
+    if client_ip:  # Ensure we have an IP address
+        # Call the synchronous is_blocked method directly - no asyncio needed
         if ip_block_list.is_blocked(client_ip):
             logger.warning(f"Blocked request from IP: {client_ip}")
             # Use Flask's abort to stop request processing
-            abort(403, description="Your IP address has been blocked.") # Use description kwarg
+            abort(403, description="Your IP address has been blocked.")
     else:
         logger.warning("Could not determine client IP address for blocking check.")
 
