@@ -794,7 +794,7 @@ class GoalSelector:
             output_type=GoalRankingOutput
         )
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_current_mode_distribution(ctx: RunContextWrapper[GoalSelectorContext]) -> Dict[str, Any]:
         """
@@ -823,7 +823,7 @@ class GoalSelector:
             "overall_confidence": 0.5
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_goals_for_mode(ctx: RunContextWrapper[GoalSelectorContext], mode: str) -> List[Dict[str, Any]]:
         """
