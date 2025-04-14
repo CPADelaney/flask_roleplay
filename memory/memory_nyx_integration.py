@@ -419,20 +419,20 @@ class MemoryNyxBridge:
             limit=memory_query.limit
         )
             
-            # Report action back to Nyx
-            await self.governor.process_agent_action_report(
-                agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
-                action={
-                    "type": "memory_operation",
-                    "operation": "recall",
-                    "description": f"Recalled memories for {entity_type} {entity_id}" +
-                                 (f" with query: {query}" if query else "")
-                },
-                result={"memory_count": len(result.get("memories", []))}
-            )
-            
-            return result
+        # Report action back to Nyx
+        await self.governor.process_agent_action_report(
+            agent_type=AgentType.MEMORY_MANAGER,
+            agent_id="memory_manager",
+            action={
+                "type": "memory_operation",
+                "operation": "recall",
+                "description": f"Recalled memories for {entity_type} {entity_id}" +
+                             (f" with query: {query}" if query else "")
+            },
+            result={"memory_count": len(result.get("memories", []))}
+        )
+        
+        return result
     
     async def create_belief(
         self,
