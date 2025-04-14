@@ -17,6 +17,7 @@ class MemoryAgentWrapper:
         self.context = context
         # Copy required Agent attributes
         self.handoffs = agent.handoffs if hasattr(agent, 'handoffs') else []
+        self.output_type = agent.output_type if hasattr(agent, 'output_type') else None
         self.name = agent.name if hasattr(agent, 'name') else "MemoryAgent"
         self.instructions = agent.instructions if hasattr(agent, 'instructions') else ""
         self.tools = agent.tools if hasattr(agent, 'tools') else []
