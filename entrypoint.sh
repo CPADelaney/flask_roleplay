@@ -1,9 +1,11 @@
 #!/bin/sh
 set -e
+
+# In entrypoint.sh
 if [ "$SERVICE_TYPE" = "worker" ]; then
     echo "Starting Celery Worker with concurrency=1..."
-    # Use just 'tasks' instead of 'tasks.celery_app'
-    exec celery -A tasks worker --loglevel=INFO --concurrency=1
+    exec celery -A tasks.celery_app worker --loglevel=INFO --concurrency=1
+
 else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
