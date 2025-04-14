@@ -842,7 +842,6 @@ class IdentityEvolutionSystem:
                     "metaphorical": 0.6,
                     "explicit": 0.5,
                     "subtle": 0.4
-                }
                 },
                 # === ADD THIS NEW BLOCK! ===
                 "activities": {
@@ -856,19 +855,19 @@ class IdentityEvolutionSystem:
                     # }
                 }
                 # ============================
-                },
-                "traits": {
-                    "dominance": 0.8,
-                    "playfulness": 0.6,
-                    "strictness": 0.5,
-                    "creativity": 0.7,
-                    "intensity": 0.6,
-                    "patience": 0.4,
-                    "cruelty": 0.5,
-                    "sadism": 0.65
-                },
-                "evolution_history": []
-            }
+            },
+            "traits": {
+                "dominance": 0.8,
+                "playfulness": 0.6,
+                "strictness": 0.5,
+                "creativity": 0.7,
+                "intensity": 0.6,
+                "patience": 0.4,
+                "cruelty": 0.5,
+                "sadism": 0.65
+            },
+            "evolution_history": []
+        }
         
         self.last_hormone_identity_update = datetime.datetime.now() - datetime.timedelta(days=1)
         
