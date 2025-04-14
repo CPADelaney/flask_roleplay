@@ -1086,8 +1086,9 @@ class GoalManager:
         return descriptions.get(action_name, "Perform a system action")
 
     # Agent SDK tools for goal validation agent
+    @static_method
     @function_tool
-    async def _get_active_goals(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_active_goals(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get currently active and pending goals
         
@@ -1126,9 +1127,10 @@ class GoalManager:
             "pending_count": len([g for g in goals if g["status"] == "pending"]),
             "goals": goals
         }
-    
+
+    @static_method
     @function_tool
-    async def _check_goal_conflicts(self, ctx: RunContextWrapper, goal_description: str) -> Dict[str, Any]:
+    async def _check_goal_conflicts(ctx: RunContextWrapper, goal_description: str) -> Dict[str, Any]:
         """
         Check if a proposed goal conflicts with existing goals
         
@@ -1212,9 +1214,10 @@ class GoalManager:
             "conflict_count": len(conflicts),
             "conflicts": conflicts
         }
-    
+
+    @static_method
     @function_tool
-    async def _verify_capabilities(self, ctx: RunContextWrapper, required_actions: List[str]) -> Dict[str, Any]:
+    async def _verify_capabilities(ctx: RunContextWrapper, required_actions: List[str]) -> Dict[str, Any]:
         """
         Verify if required actions are available in Nyx's capabilities
         
@@ -1236,8 +1239,9 @@ class GoalManager:
         }
     
     # Agent SDK tools for plan validation agent
+    @static_method
     @function_tool
-    async def _validate_action_sequence(self, ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _validate_action_sequence(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Validate that actions are sequenced correctly with proper dependencies
         
@@ -1279,9 +1283,10 @@ class GoalManager:
             "issue_count": len(issues),
             "issues": issues
         }
-    
+
+    @static_method
     @function_tool
-    async def _check_parameter_references(self, ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _check_parameter_references(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Check if parameter references between steps are valid
         
@@ -1359,9 +1364,10 @@ class GoalManager:
             
         top_field = field_path.split('.')[0]
         return top_field in available_fields or "result" in available_fields
-    
+
+    @static_method
     @function_tool
-    async def _estimate_plan_efficiency(self, ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _estimate_plan_efficiency(ctx: RunContextWrapper, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Estimate the efficiency of a plan
         
@@ -1410,8 +1416,9 @@ class GoalManager:
         }
     
     # Agent SDK tools for step execution agent
+    @static_method
     @function_tool
-    async def _resolve_step_parameters_tool(self, ctx: RunContextWrapper, goal_id: str, step_parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _resolve_step_parameters_tool(ctx: RunContextWrapper, goal_id: str, step_parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Resolves parameter placeholders for a step
         
@@ -1442,9 +1449,10 @@ class GoalManager:
             "resolution_status": resolution_status,
             "all_resolved": all(status["resolved"] for status in resolution_status.values()) if resolution_status else True
         }
-    
+
+    @static_method
     @function_tool
-    async def _execute_action(self, ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_action(ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute an action with the given parameters
         
@@ -1487,9 +1495,10 @@ class GoalManager:
                 "error": str(e),
                 "exception_type": type(e).__name__
             }
-    
+
+    @static_method
     @function_tool
-    async def _check_dominance_appropriateness(self, ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def _check_dominance_appropriateness(ctx: RunContextWrapper, action: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Check if a dominance-related action is appropriate
         
@@ -1549,9 +1558,10 @@ class GoalManager:
             "action": "block",
             "reason": "No dominance evaluation method available"
         }
-    
+
+    @static_method
     @function_tool
-    async def _log_execution_result(self, ctx: RunContextWrapper, goal_id: str, step_id: str, execution_result: Dict[str, Any]) -> Dict[str, Any]:
+    async def _log_execution_result(ctx: RunContextWrapper, goal_id: str, step_id: str, execution_result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Log the result of step execution
         
@@ -1620,8 +1630,9 @@ class GoalManager:
             }
     
     # Agent SDK tools for orchestration agent
+    @static_method
     @function_tool
-    async def _get_prioritized_goals_tool(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_prioritized_goals_tool(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get prioritized goals for execution
         
@@ -1638,9 +1649,10 @@ class GoalManager:
             # Return summaries for the tool, excluding large fields
             "goals": [g.model_dump(exclude={'plan', 'execution_history', 'checksum', 'emotional_state_snapshots', 'external_feedback'}) for g in goals[:5]]
         }
-    
+
+    @static_method
     @function_tool
-    async def _update_goal_status_tool(self, ctx: RunContextWrapper, goal_id: str, status: str, 
+    async def _update_goal_status_tool(ctx: RunContextWrapper, goal_id: str, status: str, 
                                     result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
         """
         Update the status of a goal
@@ -1671,8 +1683,9 @@ class GoalManager:
             "notifications": result.get("notifications", {})
         }
     
+    @static_method
     @function_tool
-    async def _notify_systems(self, ctx: RunContextWrapper, goal_id: str, status: str, 
+    async def _notify_systems(ctx: RunContextWrapper, goal_id: str, status: str, 
                            result: Optional[Any] = None, error: Optional[str] = None) -> Dict[str, Any]:
         """
         Notify relevant systems about goal status changes
@@ -1815,8 +1828,9 @@ class GoalManager:
             "notifications": notifications
         }
 
+    @static_method
     @function_tool
-    async def _check_concurrency_limits(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _check_concurrency_limits(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Check if more goals can be activated based on concurrency limits
         
@@ -1849,8 +1863,9 @@ class GoalManager:
         }
     
     # Additional tools used by multiple agents
+    @static_method
     @function_tool
-    async def _get_available_actions(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_available_actions(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get available actions that can be used in plans
         
@@ -1901,9 +1916,10 @@ class GoalManager:
             "count": len(actions_with_descriptions),
             "actions": actions_with_descriptions
         }
-    
+
+    @static_method
     @function_tool
-    async def _get_action_description(self, ctx: RunContextWrapper, action: str) -> Dict[str, Any]:
+    async def _get_action_description(ctx: RunContextWrapper, action: str) -> Dict[str, Any]:
         """
         Get a description for a specific action
         
@@ -1922,9 +1938,10 @@ class GoalManager:
             "description": description,
             "is_available": action in available_action_names
         }
-    
+
+    @static_method
     @function_tool
-    async def _get_goal_details(self, ctx: RunContextWrapper, goal_id: str) -> Dict[str, Any]:
+    async def _get_goal_details(ctx: RunContextWrapper, goal_id: str) -> Dict[str, Any]:
         """
         Get details about a specific goal
         
@@ -1963,9 +1980,10 @@ class GoalManager:
             "last_modified": goal.last_modified.isoformat(),
             "has_conflicts": len(goal.conflict_data) > 0 if goal.conflict_data else False
         }
-    
+
+    @static_method
     @function_tool
-    async def _get_recent_goals(self, ctx: RunContextWrapper, limit: int = 3) -> Dict[str, Any]:
+    async def _get_recent_goals(ctx: RunContextWrapper, limit: int = 3) -> Dict[str, Any]:
         """
         Get recently completed goals
         
@@ -2025,8 +2043,9 @@ class GoalManager:
         }
     
     # Conflict resolution tools
+    @static_method
     @function_tool
-    async def _analyze_goal_similarity(self, ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
+    async def _analyze_goal_similarity(ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
         """
         Analyze the similarity between two goals
         
@@ -2113,9 +2132,10 @@ class GoalManager:
             "conflict_potential": conflict_potential,
             "is_duplicate": weighted_similarity > 0.85
         }
-    
+
+    @static_method
     @function_tool
-    async def _analyze_resource_conflicts(self, ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
+    async def _analyze_resource_conflicts(ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
         """
         Analyze resource conflicts between two goals
         
@@ -2205,9 +2225,10 @@ class GoalManager:
             "time_horizon_conflict": time_horizon_conflict,
             "total_conflict_severity": "high" if len(conflicts) > 2 or time_conflict else "medium" if conflicts else "low"
         }
-    
+
+    @static_method
     @function_tool
-    async def _propose_goal_modifications(self, ctx: RunContextWrapper, goal_id: str, 
+    async def _propose_goal_modifications(ctx: RunContextWrapper, goal_id: str, 
                                        conflict_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """
         Propose modifications to a goal to resolve conflicts
@@ -2304,9 +2325,10 @@ class GoalManager:
             "modification_count": len(modifications),
             "requires_user_input": any(mod.get("requires_user_input", False) for mod in modifications)
         }
-    
+
+    @static_method
     @function_tool
-    async def _evaluate_modification_impact(self, ctx: RunContextWrapper, goal_id: str, 
+    async def _evaluate_modification_impact(ctx: RunContextWrapper, goal_id: str, 
                                          modifications: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Evaluate the impact of proposed goal modifications
@@ -2395,9 +2417,10 @@ class GoalManager:
             "requires_user_approval": requires_user_approval,
             "recommendation": "proceed" if acceptable else "seek_approval"
         }
-    
+
+    @static_method
     @function_tool
-    async def _get_shared_subgoals(self, ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
+    async def _get_shared_subgoals(ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
         """
         Identify shared subgoals between two goals for optimization
         
@@ -2480,9 +2503,10 @@ class GoalManager:
             "coordination_points": coordination_points,
             "can_optimize": len(coordination_points) > 0
         }
-        
+
+    @static_method
     @function_tool
-    async def _get_goal_common_elements(self, ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
+    async def _get_goal_common_elements(ctx: RunContextWrapper, goal_id1: str, goal_id2: str) -> Dict[str, Any]:
         """
         Identify common elements between two goals for merging
         
@@ -2559,9 +2583,10 @@ class GoalManager:
             "merged_priority": merged_priority,
             "merge_suitability": "high" if len(common_words) > 3 and len(common_actions) > 1 else "medium"
         }
-    
+
+    @static_method
     @function_tool
-    async def _generate_merged_goal_description(self, ctx: RunContextWrapper, goal_id1: str, goal_id2: str, 
+    async def _generate_merged_goal_description(ctx: RunContextWrapper, goal_id1: str, goal_id2: str, 
                                              common_elements: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate a description for a merged goal
@@ -2613,9 +2638,10 @@ class GoalManager:
             "original_goal2": goal2.description,
             "merged_description": merged_description
         }
-    
+
+    @static_method
     @function_tool
-    async def _validate_merged_goal_coverage(self, ctx: RunContextWrapper, merged_goal_data: Dict[str, Any], 
+    async def _validate_merged_goal_coverage(ctx: RunContextWrapper, merged_goal_data: Dict[str, Any], 
                                           goal_id1: str, goal_id2: str) -> Dict[str, Any]:
         """
         Validate that a merged goal adequately covers the original goals
