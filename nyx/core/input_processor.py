@@ -321,7 +321,7 @@ class BlendedInputProcessor:
             output_type=BlendedResponseModification
         )
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _detect_patterns(ctx: RunContextWrapper[ProcessingContext], text: str) -> List[Dict[str, Any]]:
         """
