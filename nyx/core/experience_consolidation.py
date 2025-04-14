@@ -293,9 +293,9 @@ class ExperienceConsolidationSystem:
         )
         
     # Tool functions with pydantic models for parameters
-    
+    @staticmethod  
     @function_tool
-    async def _get_experience_details(self, ctx: RunContextWrapper, experience_id: str) -> Dict[str, Any]:
+    async def _get_experience_details(ctx: RunContextWrapper, experience_id: str) -> Dict[str, Any]:
         """
         Get details for a specific experience
         
@@ -330,9 +330,10 @@ class ExperienceConsolidationSystem:
         except Exception as e:
             logger.error(f"Error getting experience details: {e}")
             return {"error": str(e)}
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_similarity_score(self, ctx: RunContextWrapper, 
+    async def _calculate_similarity_score(ctx: RunContextWrapper, 
                                      experience_id1: str, 
                                      experience_id2: str) -> float:
         """
@@ -385,9 +386,10 @@ class ExperienceConsolidationSystem:
         except Exception as e:
             logger.error(f"Error calculating similarity: {e}")
             return 0.0
-    
+
+    @staticmethod  
     @function_tool
-    async def _find_common_theme(self, ctx: RunContextWrapper, experience_ids: List[str]) -> str:
+    async def _find_common_theme(ctx: RunContextWrapper, experience_ids: List[str]) -> str:
         """
         Find common theme across multiple experiences
         
@@ -460,9 +462,10 @@ class ExperienceConsolidationSystem:
         except Exception as e:
             logger.error(f"Error finding common theme: {e}")
             return "Unknown theme"
-    
+
+    @staticmethod  
     @function_tool
-    async def _sort_candidate_groups(self, ctx: RunContextWrapper, 
+    async def _sort_candidate_groups(ctx: RunContextWrapper, 
                                 groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Sort candidate groups by quality for consolidation
@@ -503,9 +506,10 @@ class ExperienceConsolidationSystem:
         sorted_groups = [group for group, _ in sorted(scored_groups, key=lambda x: x[1], reverse=True)]
         
         return sorted_groups
-    
+
+    @staticmethod  
     @function_tool
-    async def _extract_common_emotional_context(self, ctx: RunContextWrapper, 
+    async def _extract_common_emotional_context(ctx: RunContextWrapper, 
                                           experience_ids: List[str]) -> Dict[str, Any]:
         """
         Extract common emotional context from multiple experiences
@@ -565,9 +569,10 @@ class ExperienceConsolidationSystem:
         except Exception as e:
             logger.error(f"Error extracting emotional context: {e}")
             return {}
-    
+
+    @staticmethod  
     @function_tool
-    async def _generate_consolidation_type(self, ctx: RunContextWrapper, experiences: List[Dict[str, Any]]) -> str:
+    async def _generate_consolidation_type(ctx: RunContextWrapper, experiences: List[Dict[str, Any]]) -> str:
         """
         Determine appropriate consolidation type based on experiences
         
@@ -612,9 +617,10 @@ class ExperienceConsolidationSystem:
         
         # Default to pattern
         return "pattern"
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_significance_score(self, ctx: RunContextWrapper, 
+    async def _calculate_significance_score(ctx: RunContextWrapper, 
                                       experiences: List[Dict[str, Any]]) -> float:
         """
         Calculate significance score for consolidated experience
@@ -645,9 +651,10 @@ class ExperienceConsolidationSystem:
         
         # Cap at 10.0
         return min(10.0, significance)
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_coverage_score(self, ctx: RunContextWrapper,
+    async def _calculate_coverage_score(ctx: RunContextWrapper,
                                   consolidated: Dict[str, Any],
                                   source_experiences: List[Dict[str, Any]]) -> float:
         """
@@ -692,9 +699,10 @@ class ExperienceConsolidationSystem:
         
         # Overall coverage is average of individual coverages
         return sum(coverage_scores) / len(coverage_scores)
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_coherence_score(self, ctx: RunContextWrapper, consolidated: Dict[str, Any]) -> float:
+    async def _calculate_coherence_score(ctx: RunContextWrapper, consolidated: Dict[str, Any]) -> float:
         """
         Calculate coherence of the consolidated experience
         
@@ -730,9 +738,10 @@ class ExperienceConsolidationSystem:
         coherence = structure_score * 0.7 + length_score * 0.3
         
         return coherence
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_information_gain(self, ctx: RunContextWrapper,
+    async def _calculate_information_gain(ctx: RunContextWrapper,
                                     consolidated: Dict[str, Any],
                                     source_experiences: List[Dict[str, Any]]) -> float:
         """
@@ -778,9 +787,10 @@ class ExperienceConsolidationSystem:
         return information_gain
     
     # New helper functions for orchestration
-    
+
+    @staticmethod  
     @function_tool
-    async def _update_consolidation_history(self, ctx: RunContextWrapper,
+    async def _update_consolidation_history(ctx: RunContextWrapper,
                                        consolidated_id: str,
                                        source_ids: List[str],
                                        quality_score: float,
@@ -812,9 +822,10 @@ class ExperienceConsolidationSystem:
             self.consolidation_history = self.consolidation_history[-self.max_history_size:]
         
         return True
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_consolidation_statistics(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_consolidation_statistics(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get statistics about consolidation activities
         
@@ -853,9 +864,10 @@ class ExperienceConsolidationSystem:
         }
     
     # New implementation of find_similar_experiences with Pydantic model
-    
+
+    @staticmethod  
     @function_tool
-    async def _find_similar_experiences(self, ctx: RunContextWrapper,
+    async def _find_similar_experiences(ctx: RunContextWrapper,
                                    params: SimilarExperiencesParams) -> List[Dict[str, Any]]:
         """
         Find experiences similar to the given one
