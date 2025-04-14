@@ -298,21 +298,26 @@ class NyxUnifiedGovernor:
     
     async def _update_performance_metrics(self):
         """Update performance tracking for all agents."""
-        for agent_type, agent in self.registered_agents.items():
-            metrics = await agent.get_performance_metrics()
-            self.agent_performance[agent_type] = metrics
-            
-            # Update strategy effectiveness
-            for strategy, data in metrics.get("strategies", {}).items():
-                if strategy not in self.strategy_effectiveness:
-                    self.strategy_effectiveness[strategy] = {
-                        "success": 0,
-                        "total": 0,
-                        "agents": {}
-                    }
-                self.strategy_effectiveness[strategy]["success"] += data["success"]
-                self.strategy_effectiveness[strategy]["total"] += data["total"]
-                self.strategy_effectiveness[strategy]["agents"][agent_type] = data
+        for agent_type, agents_dict in self.registered_agents.items():
+            if agent_type not in self.agent_performance:
+                self.agent_performance[agent_type] = {}
+                
+            for agent_id, agent in agents_dict.items():
+                if hasattr(agent, 'get_performance_metrics'):
+                    metrics = await agent.get_performance_metrics()
+                    self.agent_performance[agent_type][agent_id] = metrics
+                    
+                    # Update strategy effectiveness - needs to be adjusted for nested structure
+                    for strategy, data in metrics.get("strategies", {}).items():
+                        if strategy not in self.strategy_effectiveness:
+                            self.strategy_effectiveness[strategy] = {
+                                "success": 0,
+                                "total": 0,
+                                "agents": {}
+                            }
+                        self.strategy_effectiveness[strategy]["success"] += data["success"]
+                        self.strategy_effectiveness[strategy]["total"] += data["total"]
+                        self.strategy_effectiveness[strategy]["agents"][f"{agent_type}:{agent_id}"] = data
     
     async def _load_learning_state(self):
         """Load and analyze learning state across agents."""
