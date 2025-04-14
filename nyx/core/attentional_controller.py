@@ -394,10 +394,10 @@ class AttentionalController:
         # Add to request queue
         self.control_requests.append(signal)
         return True
-    
+
+    @staticmethod
     @function_tool
-    async def _focus_attention(self, 
-                            ctx: RunContextWrapper[AttentionContext],
+    async def _focus_attention(ctx: RunContextWrapper[AttentionContext],
                             target: str, 
                             strength: float, 
                             duration_ms: int,
@@ -491,10 +491,10 @@ class AttentionalController:
                 "target": target,
                 "strength": strength
             }
-    
+
+    @staticmethod
     @function_tool
-    async def _inhibit_attention(self, 
-                              ctx: RunContextWrapper[AttentionContext], 
+    async def _inhibit_attention(ctx: RunContextWrapper[AttentionContext], 
                               target: str, 
                               duration_ms: int) -> Dict[str, Any]:
         """
@@ -524,10 +524,10 @@ class AttentionalController:
             "focus_removed": removed,
             "inhibited_until": expiry_time
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _maintain_attention(self, 
-                               ctx: RunContextWrapper[AttentionContext], 
+    async def _maintain_attention(ctx: RunContextWrapper[AttentionContext], 
                                target: str, 
                                duration_ms: int) -> Dict[str, Any]:
         """
@@ -589,10 +589,10 @@ class AttentionalController:
         # Remove expired inhibitions
         for target in to_remove:
             del self.inhibited_targets[target]
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_saliency(self, 
-                               ctx: RunContextWrapper[AttentionContext], 
+    async def _calculate_saliency(ctx: RunContextWrapper[AttentionContext], 
                                item: Dict[str, Any]) -> float:
         """
         Calculate saliency score for an item
@@ -648,10 +648,10 @@ class AttentionalController:
         return max(0.0, min(1.0, saliency))
     
     # New helper functions to support specialized agents
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_emotional_impact(self, 
-                                      ctx: RunContextWrapper[AttentionContext], 
+    async def _calculate_emotional_impact(ctx: RunContextWrapper[AttentionContext], 
                                       item: Dict[str, Any]) -> float:
         """
         Calculate emotional impact of an item
@@ -688,10 +688,10 @@ class AttentionalController:
         
         # Ensure result is in valid range
         return max(0.0, min(1.0, impact))
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_goal_relevance(self, 
-                                    ctx: RunContextWrapper[AttentionContext], 
+    async def _calculate_goal_relevance(ctx: RunContextWrapper[AttentionContext], 
                                     item: Dict[str, Any]) -> float:
         """
         Calculate goal relevance of an item
@@ -734,10 +734,10 @@ class AttentionalController:
         """Request attention focus, inhibition, or maintenance"""
         self.control_requests.append(control)
         return True
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_attention_weight(self, 
-                                     ctx: RunContextWrapper[AttentionContext],
+    async def _calculate_attention_weight(ctx: RunContextWrapper[AttentionContext],
                                      item: Any, 
                                      modality: str = None) -> float:
         """
