@@ -15,6 +15,11 @@ class MemoryAgentWrapper:
     def __init__(self, agent: Agent, context=None):
         self.agent = agent
         self.context = context
+        # Copy required Agent attributes
+        self.handoffs = agent.handoffs if hasattr(agent, 'handoffs') else []
+        self.name = agent.name if hasattr(agent, 'name') else "MemoryAgent"
+        self.instructions = agent.instructions if hasattr(agent, 'instructions') else ""
+        self.tools = agent.tools if hasattr(agent, 'tools') else []
     
     async def recall(
         self,
