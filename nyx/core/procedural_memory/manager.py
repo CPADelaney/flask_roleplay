@@ -1,5 +1,6 @@
 # nyx/core/procedural_memory/manager.py
 
+# Standard library
 import asyncio
 import datetime
 import logging
@@ -12,28 +13,23 @@ from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapp
 from agents.exceptions import ModelBehaviorError, UserError
 from agents.tracing import agent_span, function_span, generation_span, trace as agents_trace
 
-# Import core components 
-from .models import (
+# Core procedural memory components
+from nyx.core.procedural_memory.models import (
     ActionTemplate, ChunkTemplate, ContextPattern, ChunkPrediction,
     ControlMapping, ProcedureTransferRecord, Procedure, StepResult,
-    ProcedureStats, TransferStats, HierarchicalProcedure
+    ProcedureStats, TransferStats, HierarchicalProcedure, CausalModel,
+    WorkingMemoryController, ParameterOptimizer, TransferLearningOptimizer
 )
-from .chunk_selection import ContextAwareChunkSelector
-from .generalization import ProceduralChunkLibrary
-
-# Import enhanced components
-from .models import (
-    CausalModel, TemporalNode, TemporalProcedureGraph, 
-    ProcedureGraph, WorkingMemoryController,
-    ParameterOptimizer, TransferLearningOptimizer
-)
-from .learning import ObservationLearner, ProceduralMemoryConsolidator
-from .execution import (
+from nyx.core.procedural_memory.chunk_selection import ContextAwareChunkSelector
+from nyx.core.procedural_memory.generalization import ProceduralChunkLibrary
+from nyx.core.procedural_memory.learning import ObservationLearner, ProceduralMemoryConsolidator
+from nyx.core.procedural_memory.execution import (
     ExecutionStrategy, DeliberateExecutionStrategy, 
     AutomaticExecutionStrategy, AdaptiveExecutionStrategy,
     StrategySelector
 )
-from .temporal import TemporalProcedureGraph, ProcedureGraph
+from nyx.core.procedural_memory.temporal import TemporalNode, TemporalProcedureGraph, ProcedureGraph
+
 
 # Set up logging
 logger = logging.getLogger(__name__)
