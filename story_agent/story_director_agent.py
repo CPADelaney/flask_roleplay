@@ -800,3 +800,50 @@ async def check_narrative_opportunities(user_id: int, conversation_id: int) -> D
             "error": str(e),
             "opportunities_found": False
         }
+class StoryDirector:
+    """Class that encapsulates Story Director functionality"""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.agent = None
+        self.context = None
+        self.initialized = False
+        
+    async def initialize(self):
+        """Initialize the agent and context"""
+        if not self.initialized:
+            self.agent, self.context = await initialize_story_director(
+                self.user_id, self.conversation_id
+            )
+            self.initialized = True
+        return self
+        
+    async def get_current_state(self):
+        """Get the current story state"""
+        if not self.initialized:
+            await self.initialize()
+        return await get_current_story_state(self.agent, self.context)
+    
+    async def process_input(self, narrative_text: str):
+        """Process narrative input"""
+        if not self.initialized:
+            await self.initialize()
+        return await process_narrative_input(self.agent, self.context, narrative_text)
+    
+    async def advance_story(self, player_actions: str):
+        """Advance the story based on player actions"""
+        if not self.initialized:
+            await self.initialize()
+        return await advance_story(self.agent, self.context, player_actions)
+    
+    async def reset(self):
+        """Reset the story director state"""
+        if self.initialized and self.context:
+            await reset_story_director(self.context)
+        
+    def get_metrics(self):
+        """Get story director metrics"""
+        if self.context:
+            return get_story_director_metrics(self.context)
+        return {}
