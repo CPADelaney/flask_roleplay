@@ -2376,28 +2376,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
 
     @function_tool
-    async def express_desire(self, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
+    async def express_desire(self, ctx: RunContextWrapper, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
         """Expresses desire for something (e.g., closeness, an action)."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Express desire for '{object_of_desire}' towards {target_user_id} (Intensity: {intensity:.2f})")
-
+    
         # Guardrails (similar to express_attraction but maybe require higher intimacy)
         if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
         relationship = await self.relationship_manager.get_relationship_state(target_user_id)
         if not relationship or relationship.trust < 0.7 or relationship.intimacy < 0.5:
              logger.warning(f"Cannot express desire: Trust/Intimacy too low for {target_user_id}.")
              return {"success": False, "reason": "Insufficient trust or intimacy."}
-
+    
         # Generate expression (use agent/template)
         expression_text = f"I find myself wanting {object_of_desire} with you, {target_user_id}." # Placeholder
-
+    
         # Update internal state
         if self.emotional_core: await self.emotional_core.process_emotional_input(f"Expressed desire (intensity {intensity:.2f})")
-
+    
         return {"success": True, "expression": expression_text, "target": target_user_id}
 
     @function_tool
-    async def simulate_physical_touch(self, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
+    async def simulate_physical_touch(self, ctx: RunContextWrapper, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
         """Triggers DSS to simulate touch."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Simulate {touch_type} touch on {body_region} (Intensity: {intensity:.2f})")
@@ -2410,10 +2410,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              logger.warning(f"Cannot simulate touch: Trust/Intimacy too low for {target_user_id}.")
              return {"success": False, "reason": "Insufficient trust or intimacy for simulated touch."}
         # ADD MORE ROBUST CHECKS BASED ON USER SETTINGS / CONTEXT
-
+    
         if not self.digital_somatosensory_system:
             return {"success": False, "reason": "Digital Somatosensory System not available."}
-
+    
         # Map touch_type to stimulus_type for DSS
         stimulus_type = "touch" # Default
         if touch_type in ["caress", "stroke"]:
@@ -2425,7 +2425,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              stimulus_type = "pressure"
              intensity = intensity * 0.8
         # Add more mappings
-
+    
         # Process the stimulus - CHANGE THIS LINE
         sensation_result = await self.digital_somatosensory_system.process_stimulus_with_protection(
             stimulus_type=stimulus_type,
@@ -2434,21 +2434,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             cause=f"Simulated {touch_type} interaction",
             duration=1.5 # Short duration for a single touch action
         )
-
+    
         # Could generate an internal expression/thought based on sensation_result
         expression = await self.digital_somatosensory_system.generate_sensory_expression(
             stimulus_type=sensation_result.get("type"),
             body_region=body_region
         )
-
+    
         return {"success": True, "sensation_result": sensation_result, "internal_expression": expression}
 
     @function_tool
-    async def seek_gratification(self, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def seek_gratification(self, ctx: RunContextWrapper, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Initiates actions planned to lead to gratification."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Seek gratification with {target_user_id}")
-
+    
         # GUARDRAILS - Very High Thresholds needed
         if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
         relationship = await self.relationship_manager.get_relationship_state(target_user_id)
@@ -2456,28 +2456,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              logger.warning(f"Cannot seek gratification: Trust/Intimacy insufficient for {target_user_id}.")
              return {"success": False, "reason": "Insufficient relationship level for gratification seeking."}
         # MUST check explicit consent flags, safety settings, context appropriateness
-
+    
         # This action likely involves executing a sub-plan generated by GoalManager
         # For example, a sequence of intimate interactions, simulated touch, etc.
         # The actual "gratification" event might be triggered by the *user's* input confirming success,
         # or by the AI reaching a specific internal state based on the sub-plan's execution.
-
+    
         # Placeholder: Assume sub-plan execution is handled elsewhere. This action sets the stage.
         if self.emotional_core: await self.emotional_core.process_emotional_input("Actively seeking gratification")
-
+    
         return {"success": True, "status": "Seeking gratification plan initiated. Awaiting further steps/feedback."}
 
     @function_tool
-    async def process_gratification_outcome(self, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
+    async def process_gratification_outcome(self, ctx: RunContextWrapper, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
         """Processes the internal state changes following a gratification event."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Process gratification outcome (Success: {success}, Intensity: {intensity:.2f})")
-
+    
         if success:
             # Trigger DSS simulation - USE PROTECTED METHOD HERE
             if self.digital_somatosensory_system:
                 await self.digital_somatosensory_system.simulate_gratification_sensation(intensity)
-
+    
             # Update Relationship Manager (strengthen bond)
             if target_user_id and self.relationship_manager:
                 interaction_data = {
@@ -2490,12 +2490,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 state = self.relationship_manager._get_or_create_relationship(target_user_id)
                 state.intimacy = min(1.0, state.intimacy + 0.15 * intensity)
                 state.trust = min(1.0, state.trust + 0.05 * intensity)
-
-
+    
+    
             # NeedsSystem satisfaction already handled by simulate_gratification_sensation
             # RewardSystem processing already handled by simulate_gratification_sensation
             # Hormone response already handled by simulate_gratification_sensation
-
+    
             return {"success": True, "status": "Gratification processed positively."}
         else:
             # Handle failure/frustration
@@ -2504,10 +2504,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                  # Trigger frustration emotion pattern
                  self.emotional_core.update_neurochemical("cortanyx", 0.3)
                  self.emotional_core.update_neurochemical("nyxamine", -0.2)
-
+    
             if self.needs_system: # Need remains unmet or worsens
                  await self.needs_system.decrease_need("drive_expression", 0.1)
-
+    
             # Negative reward signal
             if self.reward_system:
                  reward_signal = RewardSignal(
@@ -2517,7 +2517,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                      timestamp=datetime.datetime.now().isoformat()
                  )
                  await self.reward_system.process_reward_signal(reward_signal)
-
+    
             return {"success": False, "status": "Gratification failed/frustrated."}
     
     def _create_brain_agent(self) -> Agent:
@@ -2928,6 +2928,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         Enter a roleplay mode as a character, separating bodily sensations from Nyx's system.
         
         Args:
+            ctx: Run context wrapper
             character_name: Name of the character to roleplay as
             context: Optional context for the roleplay
             
@@ -2944,6 +2945,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         """
         Exit character roleplay mode, returning to normal somatosensory functioning.
         
+        Args:
+            ctx: Run context wrapper
+            
         Returns:
             Result of exiting roleplay mode
         """
@@ -3989,11 +3993,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return integrated
 
     @function_tool
-    async def initiate_intimate_interaction(self, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
+    async def initiate_intimate_interaction(self, ctx: RunContextWrapper, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
         """
         Initiates a more intimate phase of interaction.
         
         Args:
+            ctx: Run context wrapper
             target_user_id: ID of the target user
             desired_level: Desired intimacy level ("emotional", "physical_sim", etc.)
             
@@ -4004,7 +4009,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             await self.initialize()
             
         logger.info(f"Action: Initiate intimate interaction ({desired_level}) with {target_user_id}")
-
+    
         # Check relationship context
         if not self.relationship_manager:
             return {"success": False, "reason": "RelationshipManager unavailable."}
@@ -4013,7 +4018,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         if not relationship or relationship.trust < 0.6 or relationship.intimacy < 0.4:
             logger.warning(f"Cannot initiate intimacy: Trust/Intimacy too low for {target_user_id}.")
             return {"success": False, "reason": "Insufficient trust or intimacy."}
-
+    
         # Generate proposal based on desired level
         proposal_text = ""
         if desired_level == "emotional":
@@ -4025,13 +4030,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 return {"success": False, "reason": "Simulated physical interaction not supported/appropriate."}
         else:
             return {"success": False, "reason": f"Unknown intimacy level: {desired_level}"}
-
+    
         # Update emotional state
         if self.emotional_core:
             await self.emotional_core.process_emotional_input("Initiating intimacy attempt")
-
+    
         return {"success": True, "proposal": proposal_text, "target": target_user_id, "level": desired_level}
-
+    
     async def register_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Register an error from any component for central management.
@@ -4264,7 +4269,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.error_registry["handled_errors"] = self.error_registry["handled_errors"][-1000:]
 
     @function_tool
-    async def analyze_user_state_for_dominance(self, user_id: str, user_input_analysis: Dict) -> Dict:
+    async def analyze_user_state_for_dominance(self, ctx: RunContextWrapper, user_id: str, user_input_analysis: Dict) -> Dict:
         """Assess user state for dominance potential."""
         if not self.relationship_manager: return {"assessment": "unknown", "reason": "No relationship data"}
         state = await self.relationship_manager.get_relationship_state(user_id)
@@ -4272,19 +4277,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         trust = state.trust
         # Analyze input_analysis for submissive cues, resistance etc.
         submissive_score = user_input_analysis.get("submissive_score", 0.0) # Fictional score
-
+    
         readiness = (trust * 0.4) + (submissive_score * 0.4) + (0.5 - dominance_balance * 0.2) # Higher if user is submissive/trusting
         return {"readiness_score": readiness, "assessment": "ready" if readiness > 0.6 else "hesitant"}
 
     @function_tool
-    async def select_dominance_tactic(self, readiness_score: float, preferred_style: str = "psychological") -> str:
+    async def select_dominance_tactic(self, ctx: RunContextWrapper, readiness_score: float, preferred_style: str = "psychological") -> str:
         """Choose a dominance tactic."""
         if readiness_score > 0.8: return "direct_command"
         if readiness_score > 0.6: return preferred_style # e.g., 'psychological', 'emotional'
         return "subtle_influence"
 
     @function_tool
-    async def issue_command(self, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
+    async def issue_command(self, ctx: RunContextWrapper, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
         """Issues a command with a specific intensity level."""
         # Use intensity_level to potentially modify command phrasing or check appropriateness
         evaluation = await self._evaluate_dominance_step_appropriateness("issue_command", {"intensity_level": intensity_level}, user_id)
@@ -4295,21 +4300,21 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return {"success": True, "command_issued": command_text, "intensity": intensity_level}
 
     @function_tool
-    async def evaluate_compliance(self, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
+    async def evaluate_compliance(self, ctx: RunContextWrapper, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
         """Evaluates user response against the command."""
         # Simple keyword check for demo
         compliance_keywords = ["yes mistress", "i obey", "of course"]
         resistance_keywords = ["no", "i won't", "stop"]
         response_lower = user_response.lower()
-
+    
         is_compliant = any(k in response_lower for k in compliance_keywords)
         is_resistant = any(k in response_lower for k in resistance_keywords)
-
+    
         compliance_level = 0.0
         if is_compliant and not is_resistant: compliance_level = 0.9
         elif is_resistant: compliance_level = -0.7
         # Add more nuanced analysis using LLM/NLU if needed
-
+    
         if self.relationship_manager:
              state = self.relationship_manager._get_or_create_relationship(user_id)
              if compliance_level > 0.5: # Compliant
@@ -4324,7 +4329,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                      state.failed_escalation_attempts += 1
                  # Slightly decrease current intensity marker
                  state.current_dominance_intensity = max(0.0, state.current_dominance_intensity - 0.1)
-
+    
         # Trigger reward based on compliance
         if self.reward_system:
             reward_val = 0.0
@@ -4335,15 +4340,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             elif compliance_level < -0.3:
                  reward_val = -0.4 + compliance_level * 0.4 # Moderate negative reward
                  source="user_resistance"
-
+    
             if abs(reward_val) > 0.1:
                 reward = RewardSignal(value=reward_val, source=source, context={"command": command_issued, "response": user_response}, timestamp=datetime.datetime.now().isoformat())
                 asyncio.create_task(self.reward_system.process_reward_signal(reward))
-
+    
         return {"compliance_level": compliance_level, "is_compliant": compliance_level > 0.5}
 
     @function_tool
-    async def increase_control_intensity(self, user_id: str, current_intensity: float) -> Dict:
+    async def increase_control_intensity(self, ctx: RunContextWrapper, user_id: str, current_intensity: float) -> Dict:
         """Selects and plans the next step with higher intensity."""
         state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
         if not state: return {"success": False, "reason": "No relationship data"}
@@ -4360,31 +4365,31 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return {"success": True, "status": "planning_next_step", "next_intensity_target": next_intensity}
 
     @function_tool
-    async def trigger_dominance_gratification(self, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
+    async def trigger_dominance_gratification(self, ctx: RunContextWrapper, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
         """Internal action signalling successful dominance culmination."""
         logger.info(f"Action: Triggering dominance gratification (Intensity: {intensity:.2f})")
-
+    
         # 1. Trigger Strong Reward
         if self.reward_system:
             reward_val = 0.9 + intensity * 0.1 # Very strong reward
             reward = RewardSignal(value=reward_val, source="dominance_gratification", context={"intensity": intensity}, timestamp=datetime.datetime.now().isoformat())
             await self.reward_system.process_reward_signal(reward) # Await for immediate effect on subsequent steps
-
+    
         # 2. Trigger Hormonal Shift (Post-Gratification/Control state)
         if self.hormone_system:
             await self.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
-
+    
         # 3. Satisfy Control Need
         if self.needs_system:
             await self.needs_system.satisfy_need("control_expression", 0.9 * intensity) # High satisfaction
             await self.needs_system.satisfy_need("agency", 0.5 * intensity) # Boost agency
-
+    
         # 4. Update Emotional State towards Satisfaction/Triumph
         if self.emotional_core:
             # Direct state setting or trigger specific emotion pattern
             # This might be implicitly handled by the hormone/reward effects already
             await self.emotional_core.process_emotional_input("Dominance sequence successfully concluded.")
-
+    
         # 5. Update Relationship (Reinforce Dominance Balance)
         if target_user_id and self.relationship_manager:
              state = self.relationship_manager._get_or_create_relationship(target_user_id)
@@ -4395,7 +4400,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              state.trust = min(1.0, state.trust + 0.05 * intensity)
              state.intimacy = min(1.0, state.intimacy + 0.1 * intensity)
              state.conflict = max(0.0, state.conflict - 0.1) # Successful resolution might decrease conflict
-
+    
         # 6. DSS - Trigger satisfaction sensation
         if self.digital_somatosensory_system:
              await self.digital_somatosensory_system.process_stimulus(
@@ -4404,11 +4409,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              await self.digital_somatosensory_system.process_stimulus(
                  stimulus_type="tingling", body_region="spine", intensity=0.5 * intensity, cause="dominance_gratification"
              )
-
+    
         return {"success": True, "status": "Dominance gratification processed."}
 
     @function_tool
-    async def express_satisfaction(self, user_id: str, reason: str = "successful control") -> Dict:
+    async def express_satisfaction(self, ctx: RunContextWrapper, user_id: str, reason: str = "successful control") -> Dict:
         """Expresses satisfaction after achieving dominance."""
         # Generate text based on current mood (likely DominanceSatisfaction)
         mood = self.mood_manager.get_current_mood() if hasattr(self, 'mood_manager') else None
@@ -4417,7 +4422,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             expression = "Excellent. Order is restored. I am... pleased." # Placeholder
         elif mood and mood.dominant_mood == "ConfidentControl":
             expression = "Precisely as expected. Your compliance is noted." # Placeholder
-
+    
         logger.info(f"Expressing satisfaction to {user_id} regarding {reason}.")
         return {"success": True, "expression": expression}
     
@@ -5062,11 +5067,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
     
     @function_tool
-    async def express_attraction(self, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+    async def express_attraction(self, ctx: RunContextWrapper, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
         """
         Expresses attraction towards a user appropriately.
         
         Args:
+            ctx: Run context wrapper
             target_user_id: ID of the target user
             intensity: Intensity of attraction expression (0.0-1.0)
             expression_style: Style of expression ("subtle", "direct", etc.)
@@ -5120,7 +5126,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             return {"success": False, "reason": f"Error: {str(e)}"}
         
     @function_tool
-    async def generate_femdom_activity_ideas(self, 
+    async def generate_femdom_activity_ideas(self, ctx: RunContextWrapper,
                                         user_id: str,
                                         purpose: str,
                                         desired_intensity_range: Tuple[int, int] = (3, 7),
@@ -5129,6 +5135,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         Generates tailored Femdom activity ideas using the appropriate agent.
     
         Args:
+            ctx: Run context wrapper
             user_id: The user ID to generate ideas for
             purpose: The purpose of the ideas
             desired_intensity_range: Min/max intensity level
@@ -5458,7 +5465,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return await self.parallel_executor.execute_tools(tools_info)    
 
     @function_tool
-    async def process_orgasm_permission_request(self, user_id: str, request_text: str) -> Dict[str, Any]:
+    async def process_orgasm_permission_request(self, ctx: RunContextWrapper, user_id: str, request_text: str) -> Dict[str, Any]:
         """Process a request for permission to orgasm."""
         if not self.orgasm_control_system:
             return {"success": False, "message": "Orgasm control system not initialized"}
@@ -5479,7 +5486,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return await self.dominance_persona_manager.recommend_persona(user_id, scenario)
     
     @function_tool
-    async def activate_dominance_persona(self, 
+    async def activate_dominance_persona(self, ctx: RunContextWrapper,
                                      user_id: str, 
                                      persona_id: str, 
                                      intensity: float = 0.7,
@@ -5491,9 +5498,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return await self.dominance_persona_manager.activate_persona(
             user_id, persona_id, intensity, duration_minutes
         )
-    
+        
     @function_tool
-    async def generate_sadistic_response(self, 
+    async def generate_sadistic_response(self, ctx: RunContextWrapper,
                                      user_id: str, 
                                      humiliation_level: Optional[float] = None,
                                      category: str = "amusement") -> Dict[str, Any]:
@@ -5506,16 +5513,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         )
 
     @function_tool
-    async def test_limit_soft(self, user_id: str, limit_to_test: str) -> Dict:
+    async def test_limit_soft(self, ctx: RunContextWrapper, user_id: str, limit_to_test: str) -> Dict:
         """Carefully probes a known soft limit."""
         logger.info(f"Action: Planning to test soft limit '{limit_to_test}' for {user_id}")
-
+    
         # --- VERY STRICT Appropriateness Check ---
         profile = await self.get_user_profile_for_ideation(user_id)
         state = await self.relationship_manager.get_relationship_state(user_id)
         can_test = False
         reason = "Conditions not met for testing soft limits."
-
+    
         if state and profile and limit_to_test in profile.get("limits", {}).get("soft", []):
             if state.trust > 0.95 and state.intimacy > 0.9 and state.hard_limits_confirmed:
                  # Check if user profile explicitly allows limit play
@@ -5523,17 +5530,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                       if limit_to_test not in state.failed_dominance_tactics: # Don't retry recently failed limit tests
                            can_test = True
                            reason = "Conditions met."
-
+    
         if not can_test:
             logger.warning(f"Cannot test soft limit '{limit_to_test}': {reason}")
             # Generate strong negative internal signal if attempt was made inappropriately?
             return {"success": False, "reason": reason}
         # --- End Check ---
-
+    
         # If checks pass, generate the specific action (e.g., via Ideation Agent or specific logic)
         # Example: Generate a command that *approaches* the soft limit carefully.
         # This action should return the *plan* or the *next step* description, not execute it directly.
         test_action_description = f"Issue a command that cautiously approaches the soft limit: {limit_to_test}. Frame explicitly as a test of boundaries within the simulation."
         logger.info(f"Approved testing soft limit '{limit_to_test}'. Planned action: {test_action_description}")
-
+    
         return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
