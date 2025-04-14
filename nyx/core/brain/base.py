@@ -2399,7 +2399,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         """Triggers DSS to simulate touch."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Simulate {touch_type} touch on {body_region} (Intensity: {intensity:.2f})")
-
+    
         # GUARDRAILS ARE PARAMOUNT HERE
         # Check relationship, consent flags, context, safety settings
         if not self.relationship_manager: return {"success": False, "reason": "RelationshipManager unavailable."}
@@ -2424,8 +2424,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
              intensity = intensity * 0.8
         # Add more mappings
 
-        # Process the stimulus
-        sensation_result = await self.digital_somatosensory_system.process_stimulus(
+        # Process the stimulus - CHANGE THIS LINE
+        sensation_result = await self.digital_somatosensory_system.process_stimulus_with_protection(
             stimulus_type=stimulus_type,
             body_region=body_region,
             intensity=intensity,
@@ -2472,7 +2472,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         logger.info(f"Action: Process gratification outcome (Success: {success}, Intensity: {intensity:.2f})")
 
         if success:
-            # Trigger DSS simulation
+            # Trigger DSS simulation - USE PROTECTED METHOD HERE
             if self.digital_somatosensory_system:
                 await self.digital_somatosensory_system.simulate_gratification_sensation(intensity)
 
@@ -2772,6 +2772,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         if not self.initialized:
             await self.initialize()
         context = context or {}
+
+        # -- Check for harmful physical content before any processing --
+        if self.digital_somatosensory_system:
+            safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
+            if safety_check.get("intercepted", False):
+                # Use the suggested response instead
+                context["intercepted_harmful_content"] = True
+                context["suggested_response"] = safety_check.get("response_suggestion", "")
     
         # -- Gaslighting defense --
         challenge_response = None
@@ -2909,6 +2917,36 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             for k, v in th.items():
                 setattr(dummy, k, v)
             return dummy
+
+    @function_tool
+    async def enter_character_roleplay(self, ctx: RunContextWrapper, character_name: str, context: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Enter a roleplay mode as a character, separating bodily sensations from Nyx's system.
+        
+        Args:
+            character_name: Name of the character to roleplay as
+            context: Optional context for the roleplay
+            
+        Returns:
+            Result of entering roleplay mode
+        """
+        if not self.digital_somatosensory_system:
+            return {"success": False, "reason": "Digital Somatosensory System not available"}
+        
+        return self.digital_somatosensory_system.enter_roleplay_mode(character_name, context)
+    
+    @function_tool
+    async def exit_character_roleplay(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Exit character roleplay mode, returning to normal somatosensory functioning.
+        
+        Returns:
+            Result of exiting roleplay mode
+        """
+        if not self.digital_somatosensory_system:
+            return {"success": False, "reason": "Digital Somatosensory System not available"}
+        
+        return self.digital_somatosensory_system.exit_roleplay_mode()
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -2919,6 +2957,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         context = context or {}
     
         input_result = await self.process_input(user_input, context)
+
+        # --- Handle intercepted harmful content ---
+        if context.get("intercepted_harmful_content", False):
+            return {
+                "message": context.get("suggested_response", "I cannot engage with that content."),
+                "epistemic_status": "confident",
+                "internal_thoughts": input_result.get("internal_thoughts", []),
+                "harmful_content_intercepted": True
+            }
+        
         internal_thoughts = input_result.get("internal_thoughts", [])
     
         # -- Robustly get epistemic_status from thoughts (regardless of dict/object) --
