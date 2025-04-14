@@ -252,7 +252,7 @@ class InternalThoughtsManager:
             output_type=ThoughtGenerationOutput
         )
 
-    async def pre_process_input(thoughts_manager: InternalThoughtsManager, user_input: str, user_id: str = None) -> List[InternalThought]:
+    async def pre_process_input(thoughts_manager: "InternalThoughtsManager", user_input: str, user_id: str = None) -> List[InternalThought]:
         if thoughts_manager is None:
             return []
         return await thoughts_manager.process_input(user_input, user_id)
