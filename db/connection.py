@@ -60,6 +60,7 @@ async def initialize_connection_pool():
             dsn=dsn,
             min_size=min_connections,
             max_size=max_connections,
+            statement_cache_size=0,
             # command_timeout=60, # Optional: Set a default command timeout
             # Add setup/init functions if needed:
             # init=async def init(conn): logger.info(f"Pool init connection {id(conn)}")
