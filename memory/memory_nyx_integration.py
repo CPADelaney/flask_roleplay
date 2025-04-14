@@ -15,6 +15,8 @@ from memory.core import Memory
 
 from agents import trace, Runner
 
+from memory.memory_agent_wrapper import MemoryAgentWrapper
+
 from memory.memory_agent_sdk import (
     create_memory_agent, 
     MemorySystemContext, 
@@ -88,8 +90,11 @@ class MemoryNyxBridge:
     async def initialize(self):
         """Initialize the bridge with proper error handling."""
         try:
-            # Create the memory agent
-            self.memory_agent = create_memory_agent(self.user_id, self.conversation_id)
+            # Create the base memory agent using the OpenAI Agents SDK
+            base_agent = create_memory_agent(self.user_id, self.conversation_id)
+            
+            # Wrap it with our compatibility layer
+            self.memory_agent = MemoryAgentWrapper(base_agent, self.memory_context)
             
             # Initialize memory system
             self.memory_system = MemorySystem.get_instance(
