@@ -202,8 +202,9 @@ class CrossUserExperienceManager:
         )
     
     # Tool functions for agents
+    @staticmethod  
     @function_tool
-    async def get_user_preference(self, ctx: RunContextWrapper, user_id: str) -> Dict[str, Any]:
+    async def get_user_preference(ctx: RunContextWrapper, user_id: str) -> Dict[str, Any]:
         """
         Get user preference profile for experience sharing
         
@@ -244,9 +245,10 @@ class CrossUserExperienceManager:
         # Store and return
         self.user_preference_profiles[user_id] = default_profile
         return default_profile
-    
+
+    @staticmethod  
     @function_tool
-    async def calculate_sharing_permission(self, ctx: RunContextWrapper,
+    async def calculate_sharing_permission(ctx: RunContextWrapper,
                                      source_user_id: str,
                                      target_user_id: str) -> Dict[str, Any]:
         """
@@ -290,9 +292,10 @@ class CrossUserExperienceManager:
                 (entry.get("source_user_id") == user_id2 and entry.get("target_user_id") == user_id1)):
                 history.append(entry)
         return history
-    
+
+    @staticmethod  
     @function_tool
-    async def retrieve_experiences(self, ctx: RunContextWrapper,
+    async def retrieve_experiences(ctx: RunContextWrapper,
                              source_user_id: str,
                              query: str,
                              scenario_type: Optional[str] = None,
@@ -329,9 +332,10 @@ class CrossUserExperienceManager:
             return results or []
         
         return []
-    
+
+    @staticmethod  
     @function_tool
-    async def filter_experiences_by_permission(self, ctx: RunContextWrapper,
+    async def filter_experiences_by_permission(ctx: RunContextWrapper,
                                         experiences: List[Dict[str, Any]],
                                         source_user_id: str,
                                         target_user_id: str) -> List[Dict[str, Any]]:
@@ -401,9 +405,10 @@ class CrossUserExperienceManager:
             privacy_level += 0.2
         
         return min(1.0, privacy_level)
-    
+
+    @staticmethod  
     @function_tool
-    async def personalize_experience(self, ctx: RunContextWrapper,
+    async def personalize_experience(ctx: RunContextWrapper,
                                experience: Dict[str, Any],
                                target_user_id: str) -> Dict[str, Any]:
         """
@@ -470,9 +475,10 @@ class CrossUserExperienceManager:
         # Limit history size
         if len(self.sharing_history) > self.max_history_size:
             self.sharing_history = self.sharing_history[-self.max_history_size:]
-    
+
+    @staticmethod  
     @function_tool
-    async def get_potential_source_users(self, ctx: RunContextWrapper,
+    async def get_potential_source_users(ctx: RunContextWrapper,
                                    target_user_id: str,
                                    min_compatibility: float = 0.6,
                                    source_user_ids: Optional[List[str]] = None) -> List[str]:
