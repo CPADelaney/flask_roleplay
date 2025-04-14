@@ -217,7 +217,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.cross_user_experience import CrossUserExperienceManager
             from nyx.core.emotions.hormone_system import HormoneSystem
             from nyx.core.attentional_controller import AttentionalController
-            from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator
+            from nyx.core.multimodal_integrator import MultiModalIntegrator
             from nyx.core.reward_system import RewardSignalProcessor
             from nyx.core.temporal_perception import TemporalPerception
             from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
@@ -231,7 +231,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.mood_manager import MoodManager
             from nyx.core.theory_of_mind import TheoryOfMind
             from nyx.core.imagination_simulator import ImaginationSimulator
-            from nyx.core.internal_thoughts import InternalThoughtsManager, pre_prt, pre_process_output
+            from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
     
             from nyx.core.femdom.body_service_system import BodyServiceSystem
             from nyx.core.femdom.protocol_enforcement import ProtocolEnforcement
