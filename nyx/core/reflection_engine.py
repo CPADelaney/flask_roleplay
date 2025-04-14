@@ -288,10 +288,10 @@ async def get_agent_stats(ctx: RunContextWrapper[Any]) -> Dict[str, Any]:
         }
 
 @function_tool
-async def analyze_emotional_patterns(ctx: RunContextWrapper[Any], 
+async def analyze_emotional_patterns_reflect(ctx: RunContextWrapper[Any], 
                                     emotional_history: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze patterns in emotional history"""
-    with custom_span("analyze_emotional_patterns"):
+    with custom_span("analyze_emotional_patterns_reflect"):
         if not emotional_history:
             return {
                 "message": "No emotional history available",
@@ -1116,7 +1116,7 @@ class ReflectionEngine:
             model_settings=self.model_settings,
             tools=[
                 function_tool(get_agent_stats),
-                function_tool(analyze_emotional_patterns),
+                function_tool(analyze_emotional_patterns_reflect),
                 function_tool(process_emotional_content)
             ],
             output_type=IntrospectionOutput
@@ -1143,7 +1143,7 @@ class ReflectionEngine:
             model_settings=self.model_settings,
             tools=[
                 function_tool(process_emotional_content),
-                function_tool(analyze_emotional_patterns)
+                function_tool(analyze_emotional_patterns_reflect)
             ],
             output_type=EmotionalProcessingOutput
         )
@@ -1981,7 +1981,7 @@ class ReflectionEngine:
                 )
                 
                 # Analyze emotional patterns from history
-                emotional_patterns = await analyze_emotional_patterns(
+                emotional_patterns = await analyze_emotional_patterns_reflect(
                     RunContextWrapper(tool_context),
                     self.reflection_history
                 )
