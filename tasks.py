@@ -4,9 +4,10 @@ import os
 import json
 import logging
 import asyncio
-import asyncpg # Import asyncpg
+import asyncpg
 import datetime
-from celery_config import celery_app # Import our dedicated Celery app
+from celery_config import celery_app
+from functools import wraps
 
 # Import your helper functions and task logic
 from npcs.new_npc_creation import NPCCreationHandler
@@ -14,10 +15,9 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
-from db.connection import get_db_connection_context # Import async context manager
+from db.connection import get_db_connection_context
 
-from nyx.core.brain.base import NyxBrain  # Adjust import path if needed
-
+from nyx.core.brain.base import NyxBrain
 
 logger = logging.getLogger(__name__)
 
@@ -26,20 +26,27 @@ DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.error("DB_DSN environment variable not set for Celery tasks!")
 
+# Helper decorator to run async functions in Celery tasks
+def async_task(func):
+    """Decorator to run async functions in synchronous Celery tasks."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return asyncio.run(func(*args, **kwargs))
+    return wrapper
+
 @celery_app.task
 def test_task():
+    """Simple test task to verify Celery is working."""
     logger.info("Executing test task!")
-    return "Hello from dummy task!"
+    return "Hello from test task!"
 
+# Convert async tasks to use the async_task wrapper
+@celery_app.task
+@async_task
 async def background_chat_task_with_memory(conversation_id, user_input, user_id, universal_update=None):
     """
     Enhanced background chat task that includes memory retrieval.
     """
-    global socketio
-    if not socketio:
-        logger.error("SocketIO instance not available in background_chat_task")
-        return
-
     logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
     try:
         # Get aggregator context
@@ -72,10 +79,9 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
                 context["aggregator_data"] = aggregator_data
             except Exception as update_err:
                 logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
-                return
+                return {"error": "Failed to apply world updates"}
 
-        # NEW: Enrich context with relevant memories
+        # Enrich context with relevant memories
         try:
             from memory.memory_integration import enrich_context_with_memories
             
@@ -100,8 +106,7 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
         if not response or not response.get("success", False):
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
             logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-            socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
-            return
+            return {"error": error_msg}
 
         # Extract the message content
         message_content = response.get("message", "")
@@ -118,11 +123,10 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
                 )
             logger.info(f"[BG Task {conversation_id}] Stored Nyx response to DB.")
             
-            # NEW: Store as memory as well
+            # Add AI response as a memory
             try:
                 from memory.memory_integration import add_memory_from_message
                 
-                # Add AI response as a memory
                 memory_id = await add_memory_from_message(
                     user_id=user_id,
                     conversation_id=conversation_id,
@@ -136,79 +140,25 @@ async def background_chat_task_with_memory(conversation_id, user_input, user_id,
                 logger.info(f"[BG Task {conversation_id}] Added AI response as memory {memory_id}")
             except Exception as memory_err:
                 logger.error(f"[BG Task {conversation_id}] Error adding memory: {memory_err}", exc_info=True)
-                # Continue even if memory storage fails
                 
         except Exception as db_err:
             logger.error(f"[BG Task {conversation_id}] DB Error storing Nyx response: {db_err}", exc_info=True)
 
-        # Check if we should generate an image
-        should_generate = response.get("generate_image", False)
-        if "function_args" in response and "image_generation" in response["function_args"]:
-            img_settings = response["function_args"]["image_generation"]
-            should_generate = should_generate or img_settings.get("generate", False)
-
-        # Generate image if needed
-        if should_generate:
-            logger.info(f"[BG Task {conversation_id}] Image generation triggered.")
-            try:
-                img_data = {
-                    "narrative": message_content,
-                    "image_generation": response.get("function_args", {}).get("image_generation", {
-                        "generate": True, "priority": "medium", "focus": "balanced",
-                        "framing": "medium_shot", "reason": "Narrative moment"
-                    })
-                }
-                res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
-
-                if res and "image_urls" in res and res["image_urls"]:
-                    image_url = res["image_urls"][0]
-                    prompt_used = res.get('prompt_used', '')
-                    reason = img_data["image_generation"].get("reason", "Narrative moment")
-                    logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
-                    socketio.emit('image', {
-                        'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
-                    }, room=str(conversation_id))
-                else:
-                    logger.warning(f"[BG Task {conversation_id}] Image generation task ran but produced no valid URLs.")
-            except Exception as img_err:
-                logger.error(f"[BG Task {conversation_id}] Error generating image: {img_err}", exc_info=True)
-
-        # Stream the text tokens
-        if message_content:
-            logger.debug(f"[BG Task {conversation_id}] Streaming tokens...")
-            chunk_size = 5
-            delay = 0.01
-            for i in range(0, len(message_content), chunk_size):
-                token = message_content[i:i+chunk_size]
-                socketio.emit('new_token', {'token': token}, room=str(conversation_id))
-                await asyncio.sleep(delay)
-
-            socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
-            logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
-        else:
-            logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
-            socketio.emit('done', {'full_text': ''}, room=str(conversation_id))
+        return {
+            "success": True,
+            "message": message_content,
+            "conversation_id": conversation_id
+        }
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+        return {"error": f"Server error processing message: {str(e)}"}
 
-# --- Memory System Celery Tasks ---
-
+# Memory System Celery Tasks
 @celery_app.task
 def process_memory_embedding_task(user_id, conversation_id, message_text, entity_type="memory", metadata=None):
     """
     Celery task to process a memory embedding asynchronously.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        message_text: Message text
-        entity_type: Entity type (memory, npc, location, narrative)
-        metadata: Optional metadata
-        
-    Returns:
-        Dictionary with task result
     """
     from memory.memory_integration import process_memory_task
     
@@ -223,16 +173,6 @@ def process_memory_embedding_task(user_id, conversation_id, message_text, entity
 def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
     """
     Celery task to retrieve relevant memories.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        query_text: Query text
-        entity_types: List of entity types to search
-        top_k: Number of results to return
-        
-    Returns:
-        Dictionary with task result
     """
     from memory.memory_integration import memory_celery_task
     
@@ -274,16 +214,6 @@ def retrieve_memories_task(user_id, conversation_id, query_text, entity_types=No
 def analyze_with_memory_task(user_id, conversation_id, query_text, entity_types=None, top_k=5):
     """
     Celery task to analyze a query with relevant memories.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        query_text: Query text
-        entity_types: List of entity types to search
-        top_k: Number of results to return
-        
-    Returns:
-        Dictionary with task result
     """
     from memory.memory_integration import memory_celery_task
     
@@ -359,80 +289,78 @@ def memory_maintenance_task():
     
     return result
 
-# --- New Task for NPC Learning Cycle ---
+# Fixed version of the NPC learning cycle task
 @celery_app.task
-async def run_npc_learning_cycle_task():
+def run_npc_learning_cycle_task():
     """
     Celery task to run the NPC learning cycle periodically for active conversations.
-    Uses asyncpg for database access.
     """
     logger.info("Starting NPC learning cycle task via Celery Beat.")
-    processed_conversations = 0
-    try:
-        # Use the async context manager for DB connection
-        async with get_db_connection_context() as conn:
-            # Find recent conversations (adjust interval as needed)
-            convs = await conn.fetch("""
-                SELECT id, user_id
-                FROM conversations
-                WHERE last_active > NOW() - INTERVAL '1 day'
-            """) # Assuming 'last_active' column exists
+    
+    async def run_learning_cycle():
+        processed_conversations = 0
+        try:
+            # Use the async context manager for DB connection
+            async with get_db_connection_context() as conn:
+                # Find recent conversations
+                convs = await conn.fetch("""
+                    SELECT id, user_id
+                    FROM conversations
+                    WHERE last_active > NOW() - INTERVAL '1 day'
+                """)
 
-            if not convs:
-                logger.info("No recent conversations found for NPC learning.")
-                return {"status": "success", "processed_conversations": 0}
+                if not convs:
+                    logger.info("No recent conversations found for NPC learning.")
+                    return {"status": "success", "processed_conversations": 0}
 
-            for conv_row in convs:
-                conv_id = conv_row['id']
-                user_id = conv_row['user_id']
-                try:
-                    # Fetch NPCs for this conversation using the same connection
-                    npc_rows = await conn.fetch("""
-                        SELECT npc_id FROM NPCStats
-                        WHERE user_id=$1 AND conversation_id=$2
-                    """, user_id, conv_id)
+                for conv_row in convs:
+                    conv_id = conv_row['id']
+                    user_id = conv_row['user_id']
+                    try:
+                        # Fetch NPCs for this conversation
+                        npc_rows = await conn.fetch("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id=$1 AND conversation_id=$2
+                        """, user_id, conv_id)
 
-                    npc_ids = [row['npc_id'] for row in npc_rows]
+                        npc_ids = [row['npc_id'] for row in npc_rows]
 
-                    if npc_ids:
-                        # Run the learning logic (ensure NPCLearningManager uses asyncpg)
-                        # Make NPCLearningManager accept an existing connection or pool if possible
-                        # Or ensure it creates its own async connections internally
-                        manager = NPCLearningManager(user_id, conv_id)
-                        await manager.initialize() # Assuming this sets up async resources if needed
-                        await manager.run_regular_adaptation_cycle(npc_ids)
-                        logger.info(f"Learning cycle completed for conversation {conv_id}: {len(npc_ids)} NPCs")
-                        processed_conversations += 1
-                    else:
-                        logger.info(f"No NPCs found for learning cycle in conversation {conv_id}.")
+                        if npc_ids:
+                            # Run the learning logic
+                            manager = NPCLearningManager(user_id, conv_id)
+                            await manager.initialize()
+                            await manager.run_regular_adaptation_cycle(npc_ids)
+                            logger.info(f"Learning cycle completed for conversation {conv_id}: {len(npc_ids)} NPCs")
+                            processed_conversations += 1
+                        else:
+                            logger.info(f"No NPCs found for learning cycle in conversation {conv_id}.")
 
-                except Exception as e_inner:
-                    logger.error(f"Error in NPC learning cycle for conv {conv_id}: {e_inner}", exc_info=True)
-                    # Continue to the next conversation
+                    except Exception as e_inner:
+                        logger.error(f"Error in NPC learning cycle for conv {conv_id}: {e_inner}", exc_info=True)
+                        # Continue to the next conversation
 
-    except Exception as e_outer:
-        logger.error(f"Critical error in NPC learning scheduler task: {e_outer}", exc_info=True)
-        # Depending on the error, you might want to raise it to trigger Celery retry mechanisms
-        # raise self.retry(exc=e_outer, countdown=60)
-        return {"status": "error", "message": str(e_outer)}
+        except Exception as e_outer:
+            logger.error(f"Critical error in NPC learning scheduler task: {e_outer}", exc_info=True)
+            return {"status": "error", "message": str(e_outer)}
 
-    logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
-    return {"status": "success", "processed_conversations": processed_conversations}
-
+        logger.info(f"NPC learning cycle task finished. Processed {processed_conversations} conversations.")
+        return {"status": "success", "processed_conversations": processed_conversations}
+    
+    # Run the async function in the sync task
+    return asyncio.run(run_learning_cycle())
 
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
     """
     Celery task to run heavy game startup processing.
     This function uses the NewGameAgent to create a new game with Nyx governance.
-    (Assumes NewGameAgent handles its own async DB correctly)
     """
     logger.info(f"Starting process_new_game_task for user_id={user_id}")
     try:
         # Create a NewGameAgent instance
         agent = NewGameAgent()
 
-        # Run the async method using asyncio.run (appropriate for sync Celery task calling async code)
+        # Run the async method using asyncio.run
         result = asyncio.run(agent.process_new_game(user_id, conversation_data))
         logger.info(f"Completed processing new game for user_id={user_id}. Result: {result}")
         return result
@@ -441,13 +369,12 @@ def process_new_game_task(user_id, conversation_data):
         # Return a serializable error structure
         return {"status": "failed", "error": str(e)}
 
-
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     """Celery task to create NPCs using async logic."""
     logger.info(f"Starting create_npcs_task for user={user_id}, conv={conversation_id}, count={count}")
 
-    async def main():
+    async def create_npcs_async():
         # Use the async context manager
         async with get_db_connection_context() as conn:
             # Fetch environment_desc from DB
@@ -477,15 +404,14 @@ def create_npcs_task(user_id, conversation_id, count=10):
                 day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
             logger.debug(f"Using day_names: {day_names}")
 
-            # Spawn NPCs using your new approach
-            # Ensure spawn_multiple_npcs_through_nyx is async and handles its own DB or accepts conn
+            # Spawn NPCs - assuming this function exists in your codebase
+            from npcs.npc_creation import spawn_multiple_npcs
             npc_ids = await spawn_multiple_npcs(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 environment_desc=environment_desc,
                 day_names=day_names,
                 count=count
-                # Pass conn if the function accepts it: connection=conn
             )
 
             return {
@@ -495,33 +421,29 @@ def create_npcs_task(user_id, conversation_id, count=10):
 
     try:
         # Run the async main function within the synchronous Celery task
-        final_info = asyncio.run(main())
+        final_info = asyncio.run(create_npcs_async())
         logger.info(f"Finished create_npcs_task successfully for user={user_id}, conv={conversation_id}. NPCs: {final_info.get('npc_ids')}")
         return final_info
     except Exception as e:
         logger.exception(f"Error in create_npcs_task for user={user_id}, conv={conversation_id}")
         return {"status": "failed", "error": str(e)}
 
-
-
 @celery_app.task
 def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_prompt):
     """
     Generate the GPT opening line.
     This task calls the GPT API (or fallback) and returns a JSON-encoded reply.
-    (Assumes get_chatgpt_response is synchronous or handled appropriately)
     """
     logger.info(f"Async GPT task: Calling GPT for opening line for conv_id={conversation_id}.")
 
     # First attempt: normal GPT call
-    # Ensure get_chatgpt_response doesn't block excessively if it's synchronous
     gpt_reply_dict = get_chatgpt_response(
         conversation_id=conversation_id,
         aggregator_text=aggregator_text,
         user_input=opening_user_prompt
     )
 
-    # Check if a fallback is needed (handle potential errors in get_chatgpt_response)
+    # Check if a fallback is needed
     nyx_text = None
     if isinstance(gpt_reply_dict, dict):
         nyx_text = gpt_reply_dict.get("response")
@@ -540,7 +462,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
                 {"role": "user", "content": "No function calls. Produce only a text narrative.\n\n" + opening_user_prompt}
             ]
             fallback_response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o"), # Use env var for model
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
                 messages=forced_messages,
                 temperature=0.7,
             )
@@ -554,7 +476,6 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
             gpt_reply_dict["type"] = "error"
             gpt_reply_dict["error"] = str(e)
 
-
     # Ensure the result is always JSON serializable
     try:
         result_json = json.dumps(gpt_reply_dict)
@@ -565,7 +486,6 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         # Return a serializable error
         return json.dumps({"status": "error", "message": "Failed to serialize GPT response", "original_response_type": str(type(gpt_reply_dict))})
 
-
 @celery_app.task
 def nyx_memory_maintenance_task():
     """Celery task for Nyx memory maintenance using asyncpg."""
@@ -573,15 +493,12 @@ def nyx_memory_maintenance_task():
 
     async def process_all_conversations():
         processed_count = 0
-        # Use the async context manager
         async with get_db_connection_context() as conn:
-            # Same query to find relevant user_id + conversation_id
             rows = await conn.fetch("""
                 SELECT DISTINCT user_id, conversation_id
-                FROM NyxMemories -- Or unified_memories if that's the target
+                FROM NyxMemories
                 WHERE is_archived = FALSE
                 AND timestamp > NOW() - INTERVAL '30 days'
-                -- Add other conditions as necessary
             """)
 
             if not rows:
@@ -593,20 +510,16 @@ def nyx_memory_maintenance_task():
                 conversation_id = row["conversation_id"]
 
                 try:
-                    # Ensure run_maintenance_through_nyx is async
-                    # and handles its DB needs or accepts the connection
                     await run_maintenance_through_nyx(
                         user_id=user_id,
                         conversation_id=conversation_id,
-                        entity_type="nyx", # Adjust as needed
-                        entity_id=0 # Adjust as needed
-                        # Pass conn if accepted: connection=conn
+                        entity_type="nyx",
+                        entity_id=0
                     )
                     processed_count += 1
                     logger.info(f"Completed governed memory maintenance for user={user_id}, conv={conversation_id}")
                 except Exception as e:
                     logger.error(f"Governed maintenance error user={user_id}, conv={conversation_id}: {e}", exc_info=True)
-                    # Continue with the next conversation
 
                 await asyncio.sleep(0.1) # Small delay to prevent hammering
 
@@ -651,7 +564,6 @@ async def perform_sweep_and_merge():
     logger.info(f"Found split-brain Nyxes: {split_nyxes}")
     for nyx_id in split_nyxes:
         try:
-            # Modify NyxBrain.get_instance signature as needed for your system!
             brain = await NyxBrain.get_instance(0, 0, nyx_id=nyx_id)
             await brain.restore_entity_from_distributed_checkpoints()
             logger.info(f"Successfully merged split-brain Nyx: {nyx_id}")
@@ -662,7 +574,6 @@ async def perform_sweep_and_merge():
 def sweep_and_merge_nyx_split_brains():
     """
     Celery task for periodically merging split-brain Nyx instances.
-    Use as a periodic/beat-maintenance task!
     """
     logger.info("Starting split-brain Nyx sweep-and-merge task")
     try:
@@ -673,6 +584,29 @@ def sweep_and_merge_nyx_split_brains():
         logger.exception("Sweep-and-merge task failed")
         return {"status": "error", "error": str(e)}
 
+@celery_app.task
+def memory_embedding_consolidation_task():
+    """
+    Celery task to consolidate memory embeddings.
+    """
+    logger.info("Starting memory embedding consolidation task")
+    
+    async def consolidate_embeddings():
+        try:
+            from memory.memory_integration import consolidate_memory_embeddings
+            
+            result = await consolidate_memory_embeddings()
+            logger.info(f"Memory embedding consolidation completed: {result}")
+            return result
+        except Exception as e:
+            logger.exception("Memory embedding consolidation failed")
+            return {"status": "error", "error": str(e)}
+    
+    try:
+        return asyncio.run(consolidate_embeddings())
+    except Exception as e:
+        logger.exception("Memory embedding consolidation task failed")
+        return {"status": "error", "error": str(e)}
 
-# Assign celery_app to 'app' if needed for discovery, although explicit -A tasks should work
+# Assign celery_app to 'app' if needed for discovery
 app = celery_app
