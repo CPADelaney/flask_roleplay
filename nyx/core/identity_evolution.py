@@ -9,7 +9,7 @@ import random
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 
 from agents import (
-    Agent, Runner, trace, function_tool, RunContextWrapper, handoff, trace_id,
+    Agent, Runner, trace, function_tool, RunContextWrapper, handoff, gen_trace_id,
     InputGuardrail, OutputGuardrail, GuardrailFunctionOutput, RunConfig
 )
 from pydantic import BaseModel, Field, TypeAdapter
@@ -119,7 +119,7 @@ class IdentityContext(BaseModel):
     coherence_score: float
     min_impact_threshold: float
     max_history_entries: int
-    trace_id: str
+    gen_trace_id: str
 
 class IdentityUpdateInput(BaseModel):
     """Input schema for identity updates"""
@@ -1136,7 +1136,7 @@ class IdentityEvolutionSystem:
             coherence_score=self.coherence_score,
             min_impact_threshold=self.min_impact_threshold,
             max_history_entries=self.max_history_entries,
-            trace_id=self.trace_group_id
+            gen_trace_id=self.trace_group_id
         )
 
     @staticmethod  
@@ -2287,11 +2287,11 @@ class IdentityEvolutionSystem:
             Update results
         """
         # Create a trace with a unique ID and group ID
-        current_trace_id = f"identity_update_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        current_gen_trace_id = f"identity_update_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         with trace(
             workflow_name="update_identity", 
-            trace_id=current_trace_id, 
+            gen_trace_id=current_gen_trace_id, 
             group_id=self.trace_group_id
         ):
             try:
@@ -2314,7 +2314,7 @@ class IdentityEvolutionSystem:
                     agent_input,
                     run_config=RunConfig(
                         workflow_name="identity_evolution",
-                        trace_id=current_trace_id,
+                        gen_trace_id=current_gen_trace_id,
                         group_id=self.trace_group_id
                     )
                 )
