@@ -1116,8 +1116,9 @@ class IdentityEvolutionSystem:
         )
     
     # Tool functions
+    @staticmethod  
     @function_tool
-    async def _get_current_identity_context(self, ctx: RunContextWrapper) -> IdentityContext:
+    async def _get_current_identity_context(ctx: RunContextWrapper) -> IdentityContext:
         """
         Get the current identity context for agents
         
@@ -1138,9 +1139,10 @@ class IdentityEvolutionSystem:
             max_history_entries=self.max_history_entries,
             trace_id=self.trace_group_id
         )
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_current_identity(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_current_identity(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get the current identity profile
         
@@ -1160,9 +1162,10 @@ class IdentityEvolutionSystem:
         }
         
         return identity
-    
+
+    @staticmethod      
     @function_tool
-    async def _get_neurochemical_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_neurochemical_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get the current neurochemical profile
         
@@ -1170,9 +1173,10 @@ class IdentityEvolutionSystem:
             Current neurochemical baseline profile
         """
         return self.neurochemical_profile
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_emotional_tendencies(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_emotional_tendencies(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get the current emotional tendencies
         
@@ -1180,10 +1184,10 @@ class IdentityEvolutionSystem:
             Current emotional tendencies
         """
         return self.emotional_tendencies
-    
+
+        @staticmethod  
     @function_tool
     async def _update_neurochemical_baseline(
-        self, 
         ctx: RunContextWrapper,
         chemical: str,
         impact: float,
@@ -1242,10 +1246,10 @@ class IdentityEvolutionSystem:
             "new_value": new_value,
             "adaptability": adaptability
         }
-    
+
+    @staticmethod  
     @function_tool
     async def _update_emotional_tendency(
-        self, 
         ctx: RunContextWrapper,
         emotion: str,
         likelihood_change: float = 0.0,
@@ -1328,10 +1332,10 @@ class IdentityEvolutionSystem:
             "emotion": emotion,
             "changes": changes
         }
-    
+
+    @staticmethod  
     @function_tool
     async def _update_trait(
-        self, 
         ctx: RunContextWrapper,
         trait: str,
         impact: float,
@@ -1413,10 +1417,10 @@ class IdentityEvolutionSystem:
             "new_value": new_value,
             "neurochemical_impacts": neurochemical_results
         }
-    
+
+    @staticmethod  
     @function_tool
     async def _update_preference(
-        self, 
         ctx: RunContextWrapper,
         category: str,
         preference: str,
@@ -1507,10 +1511,10 @@ class IdentityEvolutionSystem:
             "new_value": new_value,
             "neurochemical_impacts": neurochemical_results
         }
-    
+
+    @staticmethod  
     @function_tool
     async def _calculate_neurochemical_impacts(
-        self, 
         ctx: RunContextWrapper,
         experience: Dict[str, Any]
     ) -> NeurochemicalImpact:
@@ -1606,10 +1610,10 @@ class IdentityEvolutionSystem:
             impact_source="experience",
             impact_strength=impact_strength
         )
-    
+
+    @staticmethod  
     @function_tool
     async def _calculate_emotional_impacts(
-        self, 
         ctx: RunContextWrapper,
         experience: Dict[str, Any],
         neurochemical_impacts: NeurochemicalImpact
@@ -1689,10 +1693,10 @@ class IdentityEvolutionSystem:
                             impacts[emotion]["threshold"] += 0.02 * scale
         
         return impacts
-    
+
+    @staticmethod  
     @function_tool
     async def _update_identity_history(
-        self, 
         ctx: RunContextWrapper,
         trait_changes: Dict[str, Dict[str, Any]],
         preference_changes: Dict[str, Dict[str, Dict[str, Any]]],
@@ -1784,9 +1788,10 @@ class IdentityEvolutionSystem:
             "update_count": self.update_count,
             "timestamp": timestamp
         }
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_recent_impacts(self, ctx: RunContextWrapper, limit: int = 10) -> List[Dict[str, Any]]:
+    async def _get_recent_impacts(ctx: RunContextWrapper, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Get recent identity impacts
         
@@ -1797,10 +1802,10 @@ class IdentityEvolutionSystem:
             List of recent impacts
         """
         return self.impact_history[-limit:]
-    
+        
+    @staticmethod  
     @function_tool
     async def _calculate_identity_changes(
-        self, 
         ctx: RunContextWrapper,
         time_period: str = "recent"
     ) -> Dict[str, Dict[str, float]]:
@@ -1872,9 +1877,10 @@ class IdentityEvolutionSystem:
                     changes["emotions"][emotion][aspect] += value
         
         return changes
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_neurochemical_patterns(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_neurochemical_patterns(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get patterns in neurochemical baselines over time
         
@@ -1964,9 +1970,10 @@ class IdentityEvolutionSystem:
             "chemical_patterns": patterns,
             "relationships": relationships
         }
-    
+        
+    @staticmethod  
     @function_tool
-    async def _calculate_trait_consistency(self, ctx: RunContextWrapper) -> Dict[str, float]:
+    async def _calculate_trait_consistency(ctx: RunContextWrapper) -> Dict[str, float]:
         """
         Calculate consistency scores for traits
         
@@ -1993,9 +2000,10 @@ class IdentityEvolutionSystem:
             consistency[trait] = min(1.0, consistency_score)  # Cap at 1.0
         
         return consistency
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_preference_consistency(self, ctx: RunContextWrapper) -> Dict[str, Dict[str, float]]:
+    async def _calculate_preference_consistency(ctx: RunContextWrapper) -> Dict[str, Dict[str, float]]:
         """
         Calculate consistency scores for preferences
         
@@ -2030,9 +2038,10 @@ class IdentityEvolutionSystem:
                 consistency[category][pref] = min(1.0, consistency_score)  # Cap at 1.0
         
         return consistency
-    
+
+    @staticmethod  
     @function_tool
-    async def _identify_contradictions(self, ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    async def _identify_contradictions(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         """
         Identify potential contradictions in identity
         
@@ -2171,9 +2180,10 @@ class IdentityEvolutionSystem:
                         })
         
         return contradictions
-    
+
+    @staticmethod  
     @function_tool
-    async def _assess_neurochemical_coherence(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _assess_neurochemical_coherence(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Assess coherence of neurochemical baselines
         
