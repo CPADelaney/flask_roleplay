@@ -27,7 +27,21 @@ from logic.conflict_system.conflict_agents import (
 
 logger = logging.getLogger(__name__)
 
+async def get_lore_system(user_id: int, conversation_id: int):
+    """
+    Get an initialized instance of the LoreSystem.
     
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Initialized LoreSystem instance
+    """
+    lore_system = LoreSystem.get_instance(user_id, conversation_id)
+    await lore_system.initialize()
+    return lore_system    
+
 class ConflictSystemIntegration:
     """
     Integration class for conflict system with Nyx governance.
