@@ -360,7 +360,7 @@ class AttentionalController:
             
             return self.current_foci
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _recover_attentional_resources(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
         """
@@ -795,7 +795,7 @@ class AttentionalController:
         
         self.attention_biases[target] = new_bias
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_current_attentional_state(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
         """
