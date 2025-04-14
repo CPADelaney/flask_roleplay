@@ -215,7 +215,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.identity_evolution import IdentityEvolutionSystem
             from nyx.core.experience_consolidation import ExperienceConsolidationSystem
             from nyx.core.cross_user_experience import CrossUserExperienceManager
-            from nyx.core.hormone_system import HormoneSystem
+            from nyx.core.emotions.hormone_system import HormoneSystem
             from nyx.core.attentional_controller import AttentionalController
             from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator
             from nyx.core.reward_system import RewardSignalProcessor
