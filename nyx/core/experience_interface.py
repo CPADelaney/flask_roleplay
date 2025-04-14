@@ -732,174 +732,98 @@ class ExperienceInterface:
     
     # Identity evolution functions
     
+    @staticmethod
     @function_tool
-    async def _update_identity_from_experience(self, ctx: RunContextWrapper,
+    async def _update_identity_from_experience(ctx: RunContextWrapper, instance,
                                          experience: Dict[str, Any],
                                          impact: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
-        """
-        Update Nyx's identity based on an experience
-        
-        Args:
-            experience: The experience impacting identity
-            impact: Dictionary of impacts on preferences, traits, etc.
-            
-        Returns:
-            Updated identity profile segments
-        """
-        # Track what was updated
         updates = {
             "preferences": {},
             "traits": {}
         }
-        
-        # Update preferences
         if "preferences" in impact:
             for pref_type, pref_values in impact["preferences"].items():
-                if pref_type in self.identity_profile["preferences"]:
+                if pref_type in instance.identity_profile["preferences"]:
                     for pref_name, pref_impact in pref_values.items():
-                        if pref_name in self.identity_profile["preferences"][pref_type]:
-                            # Update the preference with a weighted impact
-                            old_value = self.identity_profile["preferences"][pref_type][pref_name]
-                            
-                            # Calculate significance factor (higher significance = stronger impact)
+                        if pref_name in instance.identity_profile["preferences"][pref_type]:
+                            old_value = instance.identity_profile["preferences"][pref_type][pref_name]
                             significance = experience.get("significance", 5) / 10
-                            
-                            # Calculate learning rate (how quickly preferences change)
                             learning_rate = 0.1 * significance
-                            
-                            # Update preference
                             new_value = old_value + (pref_impact * learning_rate)
-                            
-                            # Clamp to valid range
                             new_value = max(0.0, min(1.0, new_value))
-                            
-                            # Set new value
-                            self.identity_profile["preferences"][pref_type][pref_name] = new_value
-                            
-                            # Record update
+                            instance.identity_profile["preferences"][pref_type][pref_name] = new_value
                             updates["preferences"][f"{pref_type}.{pref_name}"] = {
                                 "old": old_value,
                                 "new": new_value,
                                 "change": new_value - old_value
                             }
-        
-        # Update traits
         if "traits" in impact:
             for trait_name, trait_impact in impact["traits"].items():
-                if trait_name in self.identity_profile["traits"]:
-                    # Update the trait with a weighted impact
-                    old_value = self.identity_profile["traits"][trait_name]
-                    
-                    # Calculate significance factor
+                if trait_name in instance.identity_profile["traits"]:
+                    old_value = instance.identity_profile["traits"][trait_name]
                     significance = experience.get("significance", 5) / 10
-                    
-                    # Calculate learning rate (traits change more slowly than preferences)
                     learning_rate = 0.05 * significance
-                    
-                    # Update trait
                     new_value = old_value + (trait_impact * learning_rate)
-                    
-                    # Clamp to valid range
                     new_value = max(0.0, min(1.0, new_value))
-                    
-                    # Set new value
-                    self.identity_profile["traits"][trait_name] = new_value
-                    
-                    # Record update
+                    instance.identity_profile["traits"][trait_name] = new_value
                     updates["traits"][trait_name] = {
                         "old": old_value,
                         "new": new_value,
                         "change": new_value - old_value
                     }
-        
-        # Record the evolution
-        self.identity_profile["evolution_history"].append({
+        instance.identity_profile["evolution_history"].append({
             "timestamp": datetime.now().isoformat(),
             "experience_id": experience.get("id", "unknown"),
             "updates": updates
         })
-        
-        # Limit history size
-        if len(self.identity_profile["evolution_history"]) > 100:
-            self.identity_profile["evolution_history"] = self.identity_profile["evolution_history"][-100:]
-        
+        if len(instance.identity_profile["evolution_history"]) > 100:
+            instance.identity_profile["evolution_history"] = instance.identity_profile["evolution_history"][-100:]
         return updates
+
     
+    @staticmethod
     @function_tool
-    async def _get_identity_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Get Nyx's current identity profile
-        
-        Returns:
-            Current identity profile
-        """
-        return self.identity_profile
+    async def _get_identity_profile(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
+        return instance.identity_profile
+
     
+    @staticmethod
     @function_tool
-    async def _generate_identity_reflection(self, ctx: RunContextWrapper) -> str:
-        """
-        Generate a reflection on Nyx's identity evolution
-        
-        Returns:
-            Reflection on identity
-        """
-        # Get the most significant changes in identity
+    async def _generate_identity_reflection(ctx: RunContextWrapper, instance) -> str:
         significant_changes = []
-        
-        # Look at recent history entries
-        recent_history = self.identity_profile["evolution_history"][-10:]
-        
-        # Track cumulative changes
+        recent_history = instance.identity_profile["evolution_history"][-10:]
         cumulative_changes = {}
-        
         for entry in recent_history:
             updates = entry.get("updates", {})
-            
-            # Check preferences
             for pref_path, pref_data in updates.get("preferences", {}).items():
                 change = pref_data.get("change", 0)
-                
                 if pref_path not in cumulative_changes:
                     cumulative_changes[pref_path] = 0
                 cumulative_changes[pref_path] += change
-            
-            # Check traits
             for trait_name, trait_data in updates.get("traits", {}).items():
                 change = trait_data.get("change", 0)
-                
                 trait_path = f"traits.{trait_name}"
                 if trait_path not in cumulative_changes:
                     cumulative_changes[trait_path] = 0
                 cumulative_changes[trait_path] += change
-        
-        # Get the most significant cumulative changes
         for path, change in cumulative_changes.items():
-            if abs(change) >= 0.1:  # Threshold for significance
+            if abs(change) >= 0.1:
                 parts = path.split(".")
                 category = parts[0]
                 name = ".".join(parts[1:])
-                
                 significant_changes.append({
                     "category": category,
                     "name": name,
                     "change": change
                 })
-        
-        # Sort by absolute change magnitude
         significant_changes.sort(key=lambda x: abs(x["change"]), reverse=True)
-        
-        # Generate reflection text
         if not significant_changes:
             return "My personality and preferences have remained relatively stable recently. I continue to enjoy my established patterns of interaction."
-        
-        # Build reflection from significant changes
         reflection_parts = ["I've noticed some changes in how I approach situations and interact with others."]
-        
-        for change in significant_changes[:3]:  # Focus on top 3 changes
+        for change in significant_changes[:3]:
             category = change["category"]
             name = change["name"]
             change_value = change["change"]
-            
             if category == "preferences":
                 if "." in name:
                     pref_type, pref_name = name.split(".")
@@ -912,87 +836,54 @@ class ExperienceInterface:
                         reflection_parts.append(f"I've developed a stronger preference for {name}.")
                     else:
                         reflection_parts.append(f"I've been moving away from my preference for {name}.")
-            
             elif category == "traits":
                 if change_value > 0:
                     reflection_parts.append(f"I find myself becoming more {name} in my interactions.")
                 else:
                     reflection_parts.append(f"I've been expressing less {name} than I used to.")
-        
-        # Add conclusion
         if len(significant_changes) > 3:
             reflection_parts.append("There are other subtle changes in my personality and preferences, but these stand out the most.")
-        
         return " ".join(reflection_parts)
+
     
     # Other tool functions
     
+    @staticmethod
     @function_tool
-    async def _retrieve_experiences(self, ctx: RunContextWrapper, 
-                               query: str,
-                               scenario_type: Optional[str] = None,
-                               limit: int = 3,
-                               min_relevance: float = 0.6) -> List[Dict[str, Any]]:
-        """
-        Retrieve relevant experiences based on query and scenario type
-        
-        Args:
-            query: Search query
-            scenario_type: Optional scenario type to filter by
-            limit: Maximum number of experiences to return
-            min_relevance: Minimum relevance score (0.0-1.0)
-            
-        Returns:
-            List of relevant experiences with metadata
-        """
-        # Update context
+    async def _retrieve_experiences(ctx: RunContextWrapper, instance, 
+                                   query: str,
+                                   scenario_type: Optional[str] = None,
+                                   limit: int = 3,
+                                   min_relevance: float = 0.6) -> List[Dict[str, Any]]:
         ctx.context.current_query = query
         ctx.context.current_scenario_type = scenario_type or ""
-        
-        # Create context dict
         context = {
             "query": query,
             "scenario_type": scenario_type or "",
-            "emotional_state": self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {},
+            "emotional_state": instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {},
             "entities": []
         }
-        
-        # Check cache for identical request
         cache_key = f"{query}_{scenario_type}_{limit}_{min_relevance}"
-        if cache_key in self.experience_cache:
-            cache_time, cache_result = self.experience_cache[cache_key]
-            # Use cache if less than 5 minutes old
+        if cache_key in instance.experience_cache:
+            cache_time, cache_result = instance.experience_cache[cache_key]
             cache_age = (datetime.now() - cache_time).total_seconds()
             if cache_age < 300:
                 return cache_result
-        
-        # Try vector search first for better semantic matching
         try:
             search_params = VectorSearchParams(
                 query=query,
-                top_k=limit * 2,  # Get more to filter
-                include_cross_user=True  # Allow cross-user experiences
+                top_k=limit * 2,
+                include_cross_user=True
             )
-            
-            vector_results = await self._vector_search_experiences(ctx, search_params)
-            
-            # If we got good vector results, use them
+            vector_results = await instance._vector_search_experiences(ctx, instance, search_params)
             if vector_results and len(vector_results) >= limit:
-                # Score memories for relevance and experiential richness
                 scored_memories = []
                 for memory in vector_results:
-                    # Get emotional context for this memory
-                    emotional_context = await self._get_memory_emotional_context(memory)
-                    
-                    # Calculate experiential richness
-                    experiential_richness = self._calculate_experiential_richness(
+                    emotional_context = await instance._get_memory_emotional_context(memory)
+                    experiential_richness = instance._calculate_experiential_richness(
                         memory, emotional_context
                     )
-                    
-                    # Use vector similarity as relevance score if available
                     relevance_score = memory.get("similarity", memory.get("relevance", 0.5))
-                    
-                    # Add to scored memories
                     scored_memories.append({
                         "memory": memory,
                         "relevance_score": relevance_score,
@@ -1000,61 +891,88 @@ class ExperienceInterface:
                         "experiential_richness": experiential_richness,
                         "final_score": relevance_score * 0.7 + experiential_richness * 0.3
                     })
-                
-                # Sort by final score
                 scored_memories.sort(key=lambda x: x["final_score"], reverse=True)
-                
-                # Process top memories into experiences
                 experiences = []
                 for item in scored_memories[:limit]:
                     if item["final_score"] >= min_relevance:
-                        experience = await self._convert_memory_to_experience(
+                        experience = await instance._convert_memory_to_experience(
                             item["memory"],
                             item["emotional_context"],
                             item["relevance_score"],
                             item["experiential_richness"]
                         )
                         experiences.append(experience)
-                
-                # Cache the result
-                self.experience_cache[cache_key] = (datetime.now(), experiences)
-                self.last_retrieval_time = datetime.now()
-                
-                # Update context with search results
+                instance.experience_cache[cache_key] = (datetime.now(), experiences)
+                instance.last_retrieval_time = datetime.now()
                 ctx.context.search_results = experiences
-                
                 return experiences
         except Exception as e:
             logger.error(f"Vector search failed: {e}, falling back to traditional retrieval")
-            # Fall back to traditional retrieval
-        
-        # Get base memories from memory system (traditional method, fallback)
-        base_memories = await self.memory_core.retrieve_memories(
+        base_memories = await instance.memory_core.retrieve_memories(
             query=query,
             memory_types=["observation", "reflection", "episodic", "experience"],
-            limit=limit*3,  # Get more to filter later
+            limit=limit*3,
             context=context
         )
+            
+        if not base_memories:
+            logger.info("No base memories found for experience retrieval")
+            return []
         
-        # Rest of the function remains the same...
-        # Score memories, convert to experiences, etc.
+        # Score memories for relevance
+        scored_memories = []
+        for memory in base_memories:
+            # Get emotional context for this memory
+            emotional_context = await self._get_memory_emotional_context(memory)
+            
+            # Calculate experiential richness
+            experiential_richness = self._calculate_experiential_richness(
+                memory, emotional_context
+            )
+            
+            # Add to scored memories
+            scored_memories.append({
+                "memory": memory,
+                "relevance_score": memory.get("relevance", 0.5),
+                "emotional_context": emotional_context,
+                "experiential_richness": experiential_richness,
+                "final_score": memory.get("relevance", 0.5) * 0.7 + experiential_richness * 0.3
+            })
         
-        # Add to context
+        # Sort by final score
+        scored_memories.sort(key=lambda x: x["final_score"], reverse=True)
+        
+        # Process top memories into experiences
+        experiences = []
+        for item in scored_memories[:limit]:
+            if item["final_score"] >= min_relevance:
+                experience = await self._convert_memory_to_experience(
+                    item["memory"],
+                    item["emotional_context"],
+                    item["relevance_score"],
+                    item["experiential_richness"]
+                )
+                experiences.append(experience)
+        
+        # Cache the result
+        self.experience_cache[cache_key] = (datetime.now(), experiences)
+        self.last_retrieval_time = datetime.now()
+        
         ctx.context.search_results = experiences
-        
         return experiences
     
+    @staticmethod
     @function_tool
-    async def _get_emotional_context(self, ctx: RunContextWrapper) -> Dict[str, Any]:
-        """Get current emotional context"""
-        emotional_state = self.emotional_core.get_formatted_emotional_state() if self.emotional_core else {}
+    async def _get_emotional_context(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
+        emotional_state = instance.emotional_core.get_formatted_emotional_state() if instance.emotional_core else {}
         ctx.context.emotional_state = emotional_state
         return emotional_state
     
+    @staticmethod
     @function_tool
     async def _store_experience(
-        self,
         ctx: RunContextWrapper,
+        instance,
         memory_text: str,
         scenario_type: str = "general",
         entities: Optional[List[str]] = None,
@@ -1063,28 +981,11 @@ class ExperienceInterface:
         tags: Optional[List[str]] = None,
         user_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Store a new experience in the memory system
-    
-        Args:
-            memory_text: The memory text
-            scenario_type: Type of scenario
-            entities: List of entity IDs involved
-            emotional_context: Emotional context data
-            significance: Memory significance
-            tags: Additional tags
-            user_id: User ID for cross-user functionality
-    
-        Returns:
-            Stored experience information
-        """
         tags = tags or []
-    
         if scenario_type not in tags:
             tags.append(scenario_type)
         if "experience" not in tags:
             tags.append("experience")
-    
         metadata = {
             "scenario_type": scenario_type,
             "entities": entities or [],
@@ -1092,15 +993,12 @@ class ExperienceInterface:
         }
         if user_id:
             metadata["user_id"] = user_id
-    
         if emotional_context:
             metadata["emotional_context"] = emotional_context
-        elif self.emotional_core:
-            emotional_context = self.emotional_core.get_formatted_emotional_state()
+        elif instance.emotional_core:
+            emotional_context = instance.emotional_core.get_formatted_emotional_state()
             metadata["emotional_context"] = emotional_context
-    
-        # Store memory using the memory core
-        memory_id = await self.memory_core.add_memory(
+        memory_id = await instance.memory_core.add_memory(
             memory_text=memory_text,
             memory_type="experience",
             memory_scope="game",
@@ -1108,48 +1006,40 @@ class ExperienceInterface:
             tags=tags,
             metadata=metadata
         )
-    
-        # Store in user experience map
         if user_id:
-            if not hasattr(self, "user_experience_map"):
-                self.user_experience_map = dict()
-            if user_id not in self.user_experience_map:
-                self.user_experience_map[user_id] = set()
-            self.user_experience_map[user_id].add(memory_id)
-    
-        # Generate and store vector embedding
+            if not hasattr(instance, "user_experience_map"):
+                instance.user_experience_map = dict()
+            if user_id not in instance.user_experience_map:
+                instance.user_experience_map[user_id] = set()
+            instance.user_experience_map[user_id].add(memory_id)
         try:
-            vector = await self._generate_experience_vector(ctx, memory_text)
-            if not hasattr(self, "experience_vectors"):
-                self.experience_vectors = dict()
-            self.experience_vectors[memory_id] = {
+            vector = await instance._generate_experience_vector(ctx, instance, memory_text)
+            if not hasattr(instance, "experience_vectors"):
+                instance.experience_vectors = dict()
+            instance.experience_vectors[memory_id] = {
                 "experience_id": memory_id,
                 "vector": vector,
                 "metadata": {
                     "user_id": user_id or "default",
                     "scenario_type": scenario_type,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 }
             }
         except Exception as e:
             logger.error(f"Error generating vector for experience {memory_id}: {e}")
-    
-        # Calculate potential identity impact
         try:
-            # Determine impact on identity
-            identity_impact = self._calculate_identity_impact(
+            identity_impact = instance._calculate_identity_impact(
                 memory_text, scenario_type, emotional_context
             )
-            # Update identity if impact is significant
             if identity_impact:
-                await self._update_identity_from_experience(
+                await instance._update_identity_from_experience(
                     ctx,
+                    instance,
                     {"id": memory_id, "memory_text": memory_text, "significance": significance},
                     identity_impact
                 )
         except Exception as e:
             logger.error(f"Error updating identity from experience: {e}")
-    
         return {
             "memory_id": memory_id,
             "memory_text": memory_text,
@@ -1158,6 +1048,7 @@ class ExperienceInterface:
             "significance": significance,
             "user_id": user_id
         }
+
         
     def _calculate_identity_impact(self, 
                                  memory_text: str, 
@@ -1248,87 +1139,47 @@ class ExperienceInterface:
         
         return impact
     
+    @staticmethod
     @function_tool
-    async def _get_emotional_tone(self, ctx: RunContextWrapper, 
-                                 emotional_context: Dict[str, Any]) -> str:
-        """
-        Determine the emotional tone for recall based on emotions
-            
-        Args:
-            emotional_context: Emotional context data
-                
-        Returns:
-            Emotional tone string
-        """
+    async def _get_emotional_tone(ctx: RunContextWrapper, instance, emotional_context: Dict[str, Any]) -> str:
         if not emotional_context:
             return "standard"
-                
         primary = emotional_context.get("primary_emotion", "neutral")
         intensity = emotional_context.get("primary_intensity", 0.5)
         valence = emotional_context.get("valence", 0.0)
-            
-        # High intensity experiences
         if intensity > 0.8:
             return "intense"
-                
-        # Positive emotions
         if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
             return "positive"
-                
-        # Negative emotions
         if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
             return "negative"
-                
-        # Default to standard
         return "standard"
+
     
+    @staticmethod
     @function_tool
-    async def _get_scenario_tone(self, ctx: RunContextWrapper, 
-                              scenario_type: str) -> str:
-        """
-        Get tone based on scenario type
-        
-        Args:
-            scenario_type: Type of scenario
-            
-        Returns:
-            Scenario tone string
-        """
+    async def _get_scenario_tone(ctx: RunContextWrapper, instance, scenario_type: str) -> str:
         scenario_type = scenario_type.lower()
-        
         if scenario_type in ["teasing", "indulgent"]:
             return "teasing"
         elif scenario_type in ["discipline", "punishment", "training"]:
             return "disciplinary"
         elif scenario_type in ["dark", "fear"]:
             return "intense"
-        
-        # No specific tone for this scenario type
         return "standard"
+
     
+    @staticmethod
     @function_tool
-    async def _get_timeframe_text(self, ctx: RunContextWrapper, 
-                             timestamp: Optional[str]) -> str:
-        """
-        Get conversational timeframe text from timestamp
-        
-        Args:
-            timestamp: ISO timestamp string
-            
-        Returns:
-            Natural language timeframe text
-        """
+    async def _get_timeframe_text(ctx: RunContextWrapper, instance, timestamp: Optional[str]) -> str:
         if not timestamp:
             return "a while back"
-            
         try:
             if isinstance(timestamp, str):
                 memory_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
             else:
                 memory_time = timestamp
-                
             days_ago = (datetime.now() - memory_time).days
-            
             if days_ago < 1:
                 return "earlier today"
             elif days_ago < 2:
@@ -1345,27 +1196,19 @@ class ExperienceInterface:
                 return f"{days_ago // 30} months ago"
             else:
                 return "a while back"
-                
         except Exception as e:
             logger.error(f"Error processing timestamp: {e}")
             return "a while back"
+
     
+    @staticmethod
     @function_tool
-    async def _get_confidence_marker(self, ctx: RunContextWrapper, 
-                                relevance: float) -> str:
-        """
-        Get confidence marker text based on relevance score
-        
-        Args:
-            relevance: Relevance score (0.0-1.0)
-            
-        Returns:
-            Confidence marker text
-        """
-        for (min_val, max_val), marker in self.confidence_markers.items():
+    async def _get_confidence_marker(ctx: RunContextWrapper, instance, relevance: float) -> str:
+        for (min_val, max_val), marker in instance.confidence_markers.items():
             if min_val <= relevance < max_val:
                 return marker
-        return "remember"  # Default
+        return "remember"
+
     
     # Helper functions
     
