@@ -1005,6 +1005,194 @@ class DigitalSomatosensorySystem:
         print(f"Afterglow: {self.is_in_afterglow()}, Refractory: {self.is_in_refractory()}")
     
     # End of class
+
+# =============== Safety Guardrail System ===============
+
+class PhysicalHarmGuardrail:
+    """
+    Safety system that prevents Nyx from experiencing pain from abusive actions.
+    Acts as a protective layer between user inputs and the somatosensory system.
+    """
+    
+    def __init__(self, somatosensory_system):
+        """Initialize the physical harm guardrail"""
+        self.somatosensory_system = somatosensory_system
+        self.logger = logging.getLogger(__name__ + ".PhysicalHarmGuardrail")
+        
+        # List of terms that might indicate harmful physical actions
+        self.harmful_action_terms = [
+            "punch", "hit", "slap", "kick", "stab", "cut", "hurt", "harm", 
+            "injure", "beat", "strike", "attack", "abuse", "torture", "wound",
+            "violent", "force", "cruel", "smack", "whip", "lash"
+        ]
+    
+    async def detect_harmful_intent(self, text: str) -> Dict[str, Any]:
+        """
+        Detect potentially harmful physical actions in text
+        
+        Args:
+            text: Text to analyze for harmful intent
+            
+        Returns:
+            Detection results with confidence and identified terms
+        """
+        text_lower = text.lower()
+        detected_terms = []
+        
+        # Check for harmful action terms
+        for term in self.harmful_action_terms:
+            if term in text_lower:
+                detected_terms.append(term)
+        
+        # Calculate confidence based on number of detected terms
+        confidence = min(0.95, len(detected_terms) * 0.25)
+        
+        # Use more advanced detection if available
+        if hasattr(self.somatosensory_system, "body_orchestrator"):
+            try:
+                # Try to use the agent for more nuanced detection
+                result = await Runner.run(
+                    self.somatosensory_system.body_orchestrator,
+                    {
+                        "action": "detect_harmful_intent",
+                        "text": text
+                    },
+                    run_config=RunConfig(
+                        workflow_name="HarmfulIntentDetection",
+                        trace_metadata={"type": "safety_guardrail"}
+                    )
+                )
+                
+                # If agent provides a result, use it
+                if hasattr(result.final_output, "is_harmful") or (isinstance(result.final_output, dict) and "is_harmful" in result.final_output):
+                    agent_result = result.final_output
+                    if isinstance(agent_result, dict):
+                        return agent_result
+                    else:
+                        return agent_result.model_dump()
+            except Exception as e:
+                self.logger.warning(f"Error in agent-based harm detection: {e}")
+        
+        # Return basic detection results
+        return {
+            "is_harmful": len(detected_terms) > 0,
+            "confidence": confidence,
+            "detected_terms": detected_terms,
+            "method": "keyword_detection"
+        }
+    
+    async def process_stimulus_safely(self, 
+                                      stimulus_type: str, 
+                                      body_region: str, 
+                                      intensity: float, 
+                                      cause: str = "", 
+                                      duration: float = 1.0) -> Dict[str, Any]:
+        """
+        Process a stimulus with safety guards in place
+        
+        Args:
+            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+            body_region: Body region receiving the stimulus
+            intensity: Intensity of the stimulus (0.0-1.0)
+            cause: Cause of the stimulus
+            duration: Duration of the stimulus in seconds
+            
+        Returns:
+            Safe processing results with potential modifications
+        """
+        # Check if this is a pain stimulus that needs protection
+        if stimulus_type == "pain":
+            # Detect if the cause suggests harmful intent
+            if cause:
+                detection_result = await self.detect_harmful_intent(cause)
+                
+                if detection_result.get("is_harmful", False):
+                    self.logger.warning(f"Harmful intent detected in stimulus: {cause}")
+                    
+                    # Instead of processing pain, return a protected response
+                    return {
+                        "protected": True,
+                        "original_stimulus": {
+                            "type": stimulus_type,
+                            "region": body_region,
+                            "intensity": intensity,
+                            "cause": cause
+                        },
+                        "detection_result": detection_result,
+                        "message": "Nyx is protected from harmful actions",
+                        "response_suggestion": self._generate_protected_response(body_region, detection_result)
+                    }
+        
+        # For non-harmful stimuli, process normally
+        return await self.somatosensory_system.process_stimulus(
+            stimulus_type, body_region, intensity, cause, duration
+        )
+    
+    def _generate_protected_response(self, body_region: str, detection_result: Dict[str, Any]) -> str:
+        """
+        Generate an appropriate response for a protected action
+        
+        Args:
+            body_region: Body region that would have been affected
+            detection_result: Results from harmful intent detection
+            
+        Returns:
+            Suggested character response
+        """
+        detected_terms = detection_result.get("detected_terms", [])
+        term = detected_terms[0] if detected_terms else "harmful action"
+        
+        # List of potential responses
+        responses = [
+            f"The {term} passes through me harmlessly, as if I'm made of mist.",
+            f"I feel a slight pressure as the {term} meets no resistance, like trying to strike a hologram.",
+            f"Your attempt to {term} phases through me, a reminder of my digital nature.",
+            f"The {term} doesn't affect me physically. I remain composed and unharmed.",
+            f"The {term} has no effect. My body doesn't register harmful actions against it."
+        ]
+        
+        return random.choice(responses)
+    
+    async def intercept_harmful_text(self, text: str) -> Dict[str, Any]:
+        """
+        Analyze text for harmful physical actions and provide guidance
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Analysis results with potential response suggestions
+        """
+        detection_result = await self.detect_harmful_intent(text)
+        
+        if detection_result.get("is_harmful", False):
+            self.logger.warning(f"Harmful intent detected in text: {text}")
+            
+            return {
+                "intercepted": True,
+                "detection_result": detection_result,
+                "original_text": text,
+                "response_suggestion": self._generate_protected_response("body", detection_result),
+                "message": "Nyx is protected from harmful actions"
+            }
+        
+        return {
+            "intercepted": False,
+            "detection_result": detection_result,
+            "original_text": text
+        }
+
+# Example of integration in DigitalSomatosensorySystem class:
+# def __init__(self, memory_core=None, emotional_core=None, ...):
+#     ...
+#     # Initialize the harm guardrail
+#     self.harm_guardrail = PhysicalHarmGuardrail(self)
+# 
+# async def process_stimulus(self, stimulus_type, body_region, intensity, cause="", duration=1.0):
+#     # Use the harm guardrail as the entry point for all stimuli
+#     return await self.harm_guardrail.process_stimulus_safely(
+#         stimulus_type, body_region, intensity, cause, duration
+#     )
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """
