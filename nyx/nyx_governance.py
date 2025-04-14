@@ -1550,40 +1550,77 @@ class NyxUnifiedGovernor:
         context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Enhanced permission checking with disagreement handling.
-        """
-        # First check basic permissions
-        basic_permission = await super().check_action_permission(
-            agent_type,
-            agent_id,
-            action_type,
-            action_details,
-            context
-        )
+        Check if an action is permitted by governance.
         
-        if not basic_permission["approved"]:
-            return basic_permission
-        
-        # If this is a player action, check for disagreements
-        if agent_type == "player":
-            disagreement = await self.handle_player_disagreement(
-                action_details.get("user_id"),
-                action_details.get("conversation_id"),
-                action_type,
-                action_details,
-                context
-            )
+        Args:
+            agent_type: Type of agent performing the action
+            agent_id: ID of agent performing the action
+            action_type: Type of action being performed
+            action_details: Details of the action
+            context: Additional context (optional)
             
-            if disagreement["disagrees"]:
-                return {
-                    "approved": False,
-                    "reasoning": disagreement["reasoning"],
-                    "suggested_alternative": disagreement.get("suggested_alternative"),
-                    "impact_analysis": disagreement["impact_analysis"],
-                    "narrative_context": disagreement.get("narrative_context")
-                }
+        Returns:
+            Dictionary with permission result
+        """
+        # Initialize the result
+        result = {
+            "approved": True,
+            "reasoning": "Action is permitted by default"
+        }
         
-        return basic_permission
+        # Check for active prohibitions on this action
+        prohibitions = self._get_active_prohibitions(agent_type, action_type)
+        if prohibitions:
+            # Action is prohibited
+            prohibition = prohibitions[0]  # Get the highest priority prohibition
+            result = {
+                "approved": False,
+                "reasoning": prohibition.get("reason", "Action is prohibited"),
+                "prohibition_id": prohibition.get("id")
+            }
+            return result
+        
+        # Return the result
+        return result
+
+    def _get_active_prohibitions(self, agent_type: str, action_type: str) -> List[Dict[str, Any]]:
+        """
+        Get active prohibitions for an agent and action type.
+        
+        Args:
+            agent_type: Type of agent
+            action_type: Type of action
+            
+        Returns:
+            List of active prohibitions, sorted by priority
+        """
+        if not hasattr(self, "directives"):
+            return []
+        
+        # Get active prohibitions
+        now = datetime.now()
+        prohibitions = []
+        
+        for directive_id, directive in getattr(self, "directives", {}).items():
+            # Check if directive is a prohibition
+            if directive["type"] != DirectiveType.PROHIBITION:
+                continue
+            
+            # Check if prohibition applies to this agent and action
+            prohibited_agent = directive["data"].get("agent_type")
+            prohibited_action = directive["data"].get("action_type")
+            
+            if (prohibited_agent == agent_type or prohibited_agent == "*") and \
+               (prohibited_action == action_type or prohibited_action == "*"):
+                # Check if prohibition is still active
+                expires_at = datetime.fromisoformat(directive["expires_at"])
+                if expires_at > now:
+                    prohibitions.append(directive)
+        
+        # Sort by priority
+        prohibitions.sort(key=lambda p: p.get("priority", 0), reverse=True)
+        
+        return prohibitions
 
     async def _calculate_narrative_impact(
         self,
