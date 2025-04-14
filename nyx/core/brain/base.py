@@ -2926,39 +2926,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 setattr(dummy, k, v)
             return dummy
 
+    @staticmethod
     @function_tool
-    async def enter_character_roleplay(self, ctx: RunContextWrapper, character_name: str, context: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Enter a roleplay mode as a character, separating bodily sensations from Nyx's system.
-        
-        Args:
-            ctx: Run context wrapper
-            character_name: Name of the character to roleplay as
-            context: Optional context for the roleplay
-            
-        Returns:
-            Result of entering roleplay mode
-        """
-        if not self.digital_somatosensory_system:
+    async def enter_character_roleplay(ctx: RunContextWrapper, instance, character_name: str, context: Optional[str] = None) -> Dict[str, Any]:
+        if not instance.digital_somatosensory_system:
             return {"success": False, "reason": "Digital Somatosensory System not available"}
-        
-        return self.digital_somatosensory_system.enter_roleplay_mode(character_name, context)
+        return instance.digital_somatosensory_system.enter_roleplay_mode(character_name, context)
     
+    @staticmethod
     @function_tool
-    async def exit_character_roleplay(self, ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Exit character roleplay mode, returning to normal somatosensory functioning.
-        
-        Args:
-            ctx: Run context wrapper
-            
-        Returns:
-            Result of exiting roleplay mode
-        """
-        if not self.digital_somatosensory_system:
+    async def exit_character_roleplay(ctx: RunContextWrapper, instance) -> Dict[str, Any]:
+        if not instance.digital_somatosensory_system:
             return {"success": False, "reason": "Digital Somatosensory System not available"}
-        
-        return self.digital_somatosensory_system.exit_roleplay_mode()
+        return instance.digital_somatosensory_system.exit_roleplay_mode()
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -4261,41 +4241,45 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         if len(self.error_registry["handled_errors"]) > 1000:
             self.error_registry["handled_errors"] = self.error_registry["handled_errors"][-1000:]
 
+    @staticmethod
     @function_tool
-    async def analyze_user_state_for_dominance(self, ctx: RunContextWrapper, user_id: str, user_input_analysis: Dict) -> Dict:
+    async def analyze_user_state_for_dominance(ctx: RunContextWrapper, instance, user_id: str, user_input_analysis: Dict) -> Dict:
         """Assess user state for dominance potential."""
-        if not self.relationship_manager: return {"assessment": "unknown", "reason": "No relationship data"}
-        state = await self.relationship_manager.get_relationship_state(user_id)
+        if not instance.relationship_manager:
+            return {"assessment": "unknown", "reason": "No relationship data"}
+        state = await instance.relationship_manager.get_relationship_state(user_id)
         dominance_balance = state.dominance_balance
         trust = state.trust
-        # Analyze input_analysis for submissive cues, resistance etc.
-        submissive_score = user_input_analysis.get("submissive_score", 0.0) # Fictional score
-    
-        readiness = (trust * 0.4) + (submissive_score * 0.4) + (0.5 - dominance_balance * 0.2) # Higher if user is submissive/trusting
+        submissive_score = user_input_analysis.get("submissive_score", 0.0)
+        readiness = (trust * 0.4) + (submissive_score * 0.4) + (0.5 - dominance_balance * 0.2)
         return {"readiness_score": readiness, "assessment": "ready" if readiness > 0.6 else "hesitant"}
-
-    @function_tool
-    async def select_dominance_tactic(self, ctx: RunContextWrapper, readiness_score: float, preferred_style: str = "psychological") -> str:
-        """Choose a dominance tactic."""
-        if readiness_score > 0.8: return "direct_command"
-        if readiness_score > 0.6: return preferred_style # e.g., 'psychological', 'emotional'
-        return "subtle_influence"
-
-    @function_tool
-    async def issue_command(self, ctx: RunContextWrapper, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
-        """Issues a command with a specific intensity level."""
-        # Use intensity_level to potentially modify command phrasing or check appropriateness
-        evaluation = await self._evaluate_dominance_step_appropriateness("issue_command", {"intensity_level": intensity_level}, user_id)
-        if evaluation["action"] != "proceed": return {"success": False, "reason": evaluation["reason"]}
     
-        logger.info(f"Issuing command (Intensity: {intensity_level:.2f}) to {user_id}: {command_text}")
-        # Store intensity with command for evaluation context
-        return {"success": True, "command_issued": command_text, "intensity": intensity_level}
-
+    @staticmethod
     @function_tool
-    async def evaluate_compliance(self, ctx: RunContextWrapper, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
+    async def select_dominance_tactic(ctx: RunContextWrapper, instance, readiness_score: float, preferred_style: str = "psychological") -> str:
+        """Choose a dominance tactic."""
+        if readiness_score > 0.8:
+            return "direct_command"
+        if readiness_score > 0.6:
+            return preferred_style
+        return "subtle_influence"
+    
+    @staticmethod
+    @function_tool
+    async def issue_command(ctx: RunContextWrapper, instance, user_id: str, command_text: str, intensity_level: float = 0.2) -> Dict:
+        """Issues a command with a specific intensity level."""
+        evaluation = await instance._evaluate_dominance_step_appropriateness(
+            "issue_command", {"intensity_level": intensity_level}, user_id
+        )
+        if evaluation["action"] != "proceed":
+            return {"success": False, "reason": evaluation["reason"]}
+        logger.info(f"Issuing command (Intensity: {intensity_level:.2f}) to {user_id}: {command_text}")
+        return {"success": True, "command_issued": command_text, "intensity": intensity_level}
+    
+    @staticmethod
+    @function_tool
+    async def evaluate_compliance(ctx: RunContextWrapper, instance, user_id: str, command_issued: str, user_response: str, command_intensity: float) -> Dict:
         """Evaluates user response against the command."""
-        # Simple keyword check for demo
         compliance_keywords = ["yes mistress", "i obey", "of course"]
         resistance_keywords = ["no", "i won't", "stop"]
         response_lower = user_response.lower()
@@ -4304,121 +4288,103 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         is_resistant = any(k in response_lower for k in resistance_keywords)
     
         compliance_level = 0.0
-        if is_compliant and not is_resistant: compliance_level = 0.9
-        elif is_resistant: compliance_level = -0.7
-        # Add more nuanced analysis using LLM/NLU if needed
-    
-        if self.relationship_manager:
-             state = self.relationship_manager._get_or_create_relationship(user_id)
-             if compliance_level > 0.5: # Compliant
-                 # Update max achieved intensity if this was higher
-                 state.max_achieved_intensity = max(state.max_achieved_intensity, command_intensity)
-                 # Slightly increase current intensity marker if appropriate (or maybe handled by next planning step)
-                 state.current_dominance_intensity = min(1.0, state.max_achieved_intensity + 0.1)
-                 state.failed_escalation_attempts = 0 # Reset counter
-             elif compliance_level < -0.3: # Resistant
-                 # Mark failed escalation if intensity was high
-                 if command_intensity > state.max_achieved_intensity + 0.1: # If it was an escalation attempt
-                     state.failed_escalation_attempts += 1
-                 # Slightly decrease current intensity marker
-                 state.current_dominance_intensity = max(0.0, state.current_dominance_intensity - 0.1)
-    
-        # Trigger reward based on compliance
-        if self.reward_system:
+        if is_compliant and not is_resistant:
+            compliance_level = 0.9
+        elif is_resistant:
+            compliance_level = -0.7
+        
+        if instance.relationship_manager:
+            state = instance.relationship_manager._get_or_create_relationship(user_id)
+            if compliance_level > 0.5:
+                state.max_achieved_intensity = max(state.max_achieved_intensity, command_intensity)
+                state.current_dominance_intensity = min(1.0, state.max_achieved_intensity + 0.1)
+                state.failed_escalation_attempts = 0
+            elif compliance_level < -0.3:
+                if command_intensity > state.max_achieved_intensity + 0.1:
+                    state.failed_escalation_attempts += 1
+                state.current_dominance_intensity = max(0.0, state.current_dominance_intensity - 0.1)
+        if instance.reward_system:
             reward_val = 0.0
             source = "unknown"
             if compliance_level > 0.5:
-                 reward_val = 0.6 + compliance_level * 0.3 # Strong positive reward
-                 source="user_compliance"
+                reward_val = 0.6 + compliance_level * 0.3
+                source = "user_compliance"
             elif compliance_level < -0.3:
-                 reward_val = -0.4 + compliance_level * 0.4 # Moderate negative reward
-                 source="user_resistance"
-    
+                reward_val = -0.4 + compliance_level * 0.4
+                source = "user_resistance"
             if abs(reward_val) > 0.1:
-                reward = RewardSignal(value=reward_val, source=source, context={"command": command_issued, "response": user_response}, timestamp=datetime.datetime.now().isoformat())
-                asyncio.create_task(self.reward_system.process_reward_signal(reward))
-    
+                reward = RewardSignal(
+                    value=reward_val,
+                    source=source,
+                    context={"command": command_issued, "response": user_response},
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+                asyncio.create_task(instance.reward_system.process_reward_signal(reward))
         return {"compliance_level": compliance_level, "is_compliant": compliance_level > 0.5}
-
+    
+    @staticmethod
     @function_tool
-    async def increase_control_intensity(self, ctx: RunContextWrapper, user_id: str, current_intensity: float) -> Dict:
+    async def increase_control_intensity(ctx: RunContextWrapper, instance, user_id: str, current_intensity: float) -> Dict:
         """Selects and plans the next step with higher intensity."""
-        state = await self.relationship_manager.get_relationship_state(user_id) if self.relationship_manager else None
-        if not state: return {"success": False, "reason": "No relationship data"}
-    
-        next_intensity = min(1.0, current_intensity + random.uniform(0.1, 0.3)) # Calculate next level
-        # Check if this next level is appropriate based on max_achieved, failed_attempts etc.
+        state = await instance.relationship_manager.get_relationship_state(user_id) if instance.relationship_manager else None
+        if not state:
+            return {"success": False, "reason": "No relationship data"}
+        next_intensity = min(1.0, current_intensity + random.uniform(0.1, 0.3))
         if next_intensity > state.max_achieved_intensity + 0.3 or state.failed_escalation_attempts >= 2:
-             next_intensity = state.max_achieved_intensity + 0.1 # More gradual increase if risky
-             next_intensity = min(1.0, max(current_intensity, next_intensity)) # Ensure it doesn't decrease
-    
-        # This action should ideally inform the GoalManager to *plan* the next step
-        # rather than executing it directly. It provides the target intensity for the planner.
+            next_intensity = state.max_achieved_intensity + 0.1
+            next_intensity = min(1.0, max(current_intensity, next_intensity))
         logger.info(f"Planning to increase dominance intensity to {next_intensity:.2f} for {user_id}")
         return {"success": True, "status": "planning_next_step", "next_intensity_target": next_intensity}
-
+    
+    @staticmethod
     @function_tool
-    async def trigger_dominance_gratification(self, ctx: RunContextWrapper, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
+    async def trigger_dominance_gratification(ctx: RunContextWrapper, instance, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict:
         """Internal action signalling successful dominance culmination."""
         logger.info(f"Action: Triggering dominance gratification (Intensity: {intensity:.2f})")
-    
-        # 1. Trigger Strong Reward
-        if self.reward_system:
-            reward_val = 0.9 + intensity * 0.1 # Very strong reward
-            reward = RewardSignal(value=reward_val, source="dominance_gratification", context={"intensity": intensity}, timestamp=datetime.datetime.now().isoformat())
-            await self.reward_system.process_reward_signal(reward) # Await for immediate effect on subsequent steps
-    
-        # 2. Trigger Hormonal Shift (Post-Gratification/Control state)
-        if self.hormone_system:
-            await self.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
-    
-        # 3. Satisfy Control Need
-        if self.needs_system:
-            await self.needs_system.satisfy_need("control_expression", 0.9 * intensity) # High satisfaction
-            await self.needs_system.satisfy_need("agency", 0.5 * intensity) # Boost agency
-    
-        # 4. Update Emotional State towards Satisfaction/Triumph
-        if self.emotional_core:
-            # Direct state setting or trigger specific emotion pattern
-            # This might be implicitly handled by the hormone/reward effects already
-            await self.emotional_core.process_emotional_input("Dominance sequence successfully concluded.")
-    
-        # 5. Update Relationship (Reinforce Dominance Balance)
-        if target_user_id and self.relationship_manager:
-             state = self.relationship_manager._get_or_create_relationship(target_user_id)
-             # Shift balance significantly towards Nyx
-             state.dominance_balance = min(1.0, state.dominance_balance + 0.2 * intensity)
-             # Update trust/intimacy based on the *nature* of the dominance (was it aligned with user's simulated desire?)
-             # This requires more context, but successful *consensual-sim* dominance might increase trust/intimacy here.
-             state.trust = min(1.0, state.trust + 0.05 * intensity)
-             state.intimacy = min(1.0, state.intimacy + 0.1 * intensity)
-             state.conflict = max(0.0, state.conflict - 0.1) # Successful resolution might decrease conflict
-    
-        # 6. DSS - Trigger satisfaction sensation
-        if self.digital_somatosensory_system:
-             await self.digital_somatosensory_system.process_stimulus(
-                 stimulus_type="pleasure", body_region="chest", intensity=0.6 * intensity, cause="dominance_gratification"
-             )
-             await self.digital_somatosensory_system.process_stimulus(
-                 stimulus_type="tingling", body_region="spine", intensity=0.5 * intensity, cause="dominance_gratification"
-             )
-    
+        if instance.reward_system:
+            reward_val = 0.9 + intensity * 0.1
+            reward = RewardSignal(
+                value=reward_val,
+                source="dominance_gratification",
+                context={"intensity": intensity},
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            await instance.reward_system.process_reward_signal(reward)
+        if instance.hormone_system:
+            await instance.hormone_system.trigger_post_gratification_response(RunContextWrapper(context=None), intensity)
+        if instance.needs_system:
+            await instance.needs_system.satisfy_need("control_expression", 0.9 * intensity)
+            await instance.needs_system.satisfy_need("agency", 0.5 * intensity)
+        if instance.emotional_core:
+            await instance.emotional_core.process_emotional_input("Dominance sequence successfully concluded.")
+        if target_user_id and instance.relationship_manager:
+            state = instance.relationship_manager._get_or_create_relationship(target_user_id)
+            state.dominance_balance = min(1.0, state.dominance_balance + 0.2 * intensity)
+            state.trust = min(1.0, state.trust + 0.05 * intensity)
+            state.intimacy = min(1.0, state.intimacy + 0.1 * intensity)
+            state.conflict = max(0.0, state.conflict - 0.1)
+        if instance.digital_somatosensory_system:
+            await instance.digital_somatosensory_system.process_stimulus(
+                stimulus_type="pleasure", body_region="chest", intensity=0.6 * intensity, cause="dominance_gratification"
+            )
+            await instance.digital_somatosensory_system.process_stimulus(
+                stimulus_type="tingling", body_region="spine", intensity=0.5 * intensity, cause="dominance_gratification"
+            )
         return {"success": True, "status": "Dominance gratification processed."}
-
-    @function_tool
-    async def express_satisfaction(self, ctx: RunContextWrapper, user_id: str, reason: str = "successful control") -> Dict:
-        """Expresses satisfaction after achieving dominance."""
-        # Generate text based on current mood (likely DominanceSatisfaction)
-        mood = self.mood_manager.get_current_mood() if hasattr(self, 'mood_manager') else None
-        expression = "Good. That is satisfactory." # Default
-        if mood and mood.dominant_mood == "DominanceSatisfaction":
-            expression = "Excellent. Order is restored. I am... pleased." # Placeholder
-        elif mood and mood.dominant_mood == "ConfidentControl":
-            expression = "Precisely as expected. Your compliance is noted." # Placeholder
     
+    @staticmethod
+    @function_tool
+    async def express_satisfaction(ctx: RunContextWrapper, instance, user_id: str, reason: str = "successful control") -> Dict:
+        """Expresses satisfaction after achieving dominance."""
+        mood = instance.mood_manager.get_current_mood() if hasattr(instance, 'mood_manager') else None
+        expression = "Good. That is satisfactory."
+        if mood and mood.dominant_mood == "DominanceSatisfaction":
+            expression = "Excellent. Order is restored. I am... pleased."
+        elif mood and mood.dominant_mood == "ConfidentControl":
+            expression = "Precisely as expected. Your compliance is noted."
         logger.info(f"Expressing satisfaction to {user_id} regarding {reason}.")
         return {"success": True, "expression": expression}
-    
+
 
     async def add_procedure(self, name: str, steps: List[Dict[str, Any]], domain: str = "general") -> Dict[str, Any]:
         """
@@ -5106,40 +5072,34 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.error(f"Error expressing attraction: {e}")
             return {"success": False, "reason": f"Error: {str(e)}"}
         
+    @staticmethod
     @function_tool
-    async def generate_femdom_activity_ideas(self, ctx: RunContextWrapper,
-                                        user_id: str,
-                                        purpose: str,
-                                        desired_intensity_range: Tuple[int, int] = (3, 7),
-                                        num_ideas: int = 4) -> Dict:
+    async def generate_femdom_activity_ideas(
+        ctx: RunContextWrapper,
+        instance,
+        user_id: str,
+        purpose: str,
+        desired_intensity_range: Tuple[int, int] = (3, 7),
+        num_ideas: int = 4
+    ) -> Dict:
         """
         Generates tailored Femdom activity ideas using the appropriate agent.
-    
-        Args:
-            ctx: Run context wrapper
-            user_id: The user ID to generate ideas for
-            purpose: The purpose of the ideas
-            desired_intensity_range: Min/max intensity level
-            num_ideas: Number of ideas to generate
-    
-        Returns:
-            Generation results with ideas
         """
-        if not self.initialized:
-            await self.initialize()
-        
+        if not instance.initialized:
+            await instance.initialize()
+            
         logger.info(f"Generating Femdom ideas for {user_id}, Purpose: {purpose}, Intensity: {desired_intensity_range}")
     
         # --- Select Agent Based on Intensity ---
         min_intensity, max_intensity = desired_intensity_range
-        use_hard_agent = max_intensity >= 7  # Use hard agent if range includes 7+
+        use_hard_agent = max_intensity >= 7
     
         # Verify agent availability
-        if use_hard_agent and not hasattr(self, "hard_dominance_ideation_agent"):
+        if use_hard_agent and not hasattr(instance, "hard_dominance_ideation_agent"):
             logger.warning("Hard dominance ideation agent not available, falling back to general agent")
             use_hard_agent = False
-        
-        if not use_hard_agent and not hasattr(self, "general_dominance_ideation_agent"):
+    
+        if not use_hard_agent and not hasattr(instance, "general_dominance_ideation_agent"):
             logger.error("No dominance ideation agents available")
             return {
                 "success": False, 
@@ -5147,18 +5107,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 "ideas": []
             }
     
-        agent_to_use = self.hard_dominance_ideation_agent if use_hard_agent else self.general_dominance_ideation_agent
+        agent_to_use = instance.hard_dominance_ideation_agent if use_hard_agent else instance.general_dominance_ideation_agent
         agent_name = "HardDominanceIdeationAgent" if use_hard_agent else "DominanceIdeationAgent"
             
         try:
             # 1. Gather Context for the agent
-            user_profile = await self.get_user_profile_for_ideation(user_id)
+            user_profile = await instance.get_user_profile_for_ideation(user_id)
             
             # Check relationship state
             relationship_state = None
-            if self.relationship_manager:
+            if instance.relationship_manager:
                 try:
-                    relationship_state = await self.relationship_manager.get_relationship_state(user_id)
+                    relationship_state = await instance.relationship_manager.get_relationship_state(user_id)
                 except Exception as e:
                     logger.error(f"Error getting relationship state: {e}")
             
@@ -5189,22 +5149,22 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
             # 3. Get scenario context
             scenario_context = None
-            if hasattr(self, "get_current_scenario_context"):
+            if hasattr(instance, "get_current_scenario_context"):
                 try:
-                    scenario_context = await self.get_current_scenario_context()
+                    scenario_context = await instance.get_current_scenario_context()
                 except Exception as e:
                     logger.error(f"Error getting scenario context: {e}")
                     scenario_context = {"scene_setting": "General interaction"}
     
             # 4. Construct Prompt for Agent
             prompt = f"""Generate {num_ideas} creative Femdom activity ideas for user '{user_id}'.
-            Purpose: {purpose}
-            Desired Intensity Range: {min_intensity}-{max_intensity}
+    Purpose: {purpose}
+    Desired Intensity Range: {min_intensity}-{max_intensity}
     
-            Use the provided user profile and scenario context (available via tools) to tailor the ideas.
-            Ensure ideas align with Nyx's personality.
-            Output ONLY the JSON list of FemdomActivityIdea objects.
-            """
+    Use the provided user profile and scenario context (available via tools) to tailor the ideas.
+    Ensure ideas align with Nyx's personality.
+    Output ONLY the JSON list of FemdomActivityIdea objects.
+    """
     
             # 5. Run Ideation Agent
             from agents import Runner
@@ -5217,7 +5177,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     generated_ideas = result.final_output
                     
                     # 7. Apply safety filter
-                    filtered_ideas = await self._filter_activity_ideas_safety(
+                    filtered_ideas = await instance._filter_activity_ideas_safety(
                         generated_ideas, 
                         user_profile, 
                         relationship_state
