@@ -277,7 +277,7 @@ class DistributedProcessingManager:
             output_type=TaskExecutionPlan
         )
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _check_dependency_existence(ctx: RunContextWrapper, dependencies: List[str]) -> Dict[str, Any]:
         """
@@ -301,7 +301,7 @@ class DistributedProcessingManager:
             "existing_dependencies": len(dependencies) - len(missing_dependencies)
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _check_circular_dependencies(ctx: RunContextWrapper, task_id: str, dependencies: List[str]) -> Dict[str, Any]:
         """
@@ -351,7 +351,7 @@ class DistributedProcessingManager:
             "task_id": task_id
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _validate_resource_requirements(ctx: RunContextWrapper, task_id: str, resource_requirements: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -392,7 +392,7 @@ class DistributedProcessingManager:
             "resource_requirements": resource_requirements
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_available_resources(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -417,7 +417,7 @@ class DistributedProcessingManager:
             "available_capacity": max(0, 1.0 - active_task_load)
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_task_resource_needs(ctx: RunContextWrapper, task_ids: List[str]) -> Dict[str, float]:
         """
@@ -455,7 +455,7 @@ class DistributedProcessingManager:
         
         return resource_needs
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_system_load(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -482,7 +482,7 @@ class DistributedProcessingManager:
             "subsystem_load": subsystem_load
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_task_dependencies(ctx: RunContextWrapper) -> Dict[str, List[str]]:
         """
@@ -498,7 +498,7 @@ class DistributedProcessingManager:
         
         return dependencies
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_execution_levels(ctx: RunContextWrapper, dependencies: Dict[str, List[str]]) -> List[List[str]]:
         """
@@ -541,7 +541,7 @@ class DistributedProcessingManager:
         
         return execution_levels
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _identify_bottlenecks(ctx: RunContextWrapper, execution_levels: List[List[str]]) -> Dict[str, Any]:
         """
@@ -585,7 +585,7 @@ class DistributedProcessingManager:
         
         return bottlenecks
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_performance_metrics(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -636,7 +636,7 @@ class DistributedProcessingManager:
             "bottlenecks": self.performance_metrics.get("bottlenecks", {})
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _analyze_execution_trends(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -686,7 +686,7 @@ class DistributedProcessingManager:
             "has_sufficient_data": len(sorted_tasks) >= 5
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _identify_performance_bottlenecks(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -751,7 +751,7 @@ class DistributedProcessingManager:
             "recommendation": "Investigate subsystem performance" if bottleneck_subsystems else "No clear bottlenecks"
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_registered_tasks(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -781,7 +781,7 @@ class DistributedProcessingManager:
             "completed_count": sum(1 for t in self.task_registry.values() if t.completed)
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _schedule_task(ctx: RunContextWrapper, task_id: str, execution_time: int) -> Dict[str, Any]:
         """
@@ -815,7 +815,7 @@ class DistributedProcessingManager:
             "execution_delay_ms": execution_time
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _execute_single_task(ctx: RunContextWrapper, task_id: str) -> Dict[str, Any]:
         """
@@ -875,7 +875,7 @@ class DistributedProcessingManager:
                 "duration": (task.end_time - task.start_time).total_seconds() if task.start_time else None
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _handle_task_failure(ctx: RunContextWrapper, task_id: str, error: str, retry: bool = False) -> Dict[str, Any]:
         """
