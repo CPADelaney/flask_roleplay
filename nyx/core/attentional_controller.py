@@ -359,9 +359,10 @@ class AttentionalController:
             self._update_history()
             
             return self.current_foci
-    
+
+    @static_method
     @function_tool
-    async def _recover_attentional_resources(self, ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
+    async def _recover_attentional_resources(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, float]:
         """
         Recover attentional resources over time
         
@@ -793,9 +794,10 @@ class AttentionalController:
         new_bias = max(-0.3, min(0.3, new_bias))  # Limit bias to -0.3 to 0.3
         
         self.attention_biases[target] = new_bias
-        
+
+    @static_method
     @function_tool
-    async def _get_current_attentional_state(self, ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
+    async def _get_current_attentional_state(ctx: RunContextWrapper[AttentionContext]) -> Dict[str, Any]:
         """
         Get the current attentional state
         
