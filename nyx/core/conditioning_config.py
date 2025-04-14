@@ -165,8 +165,9 @@ class ConditioningConfiguration:
             model_settings=ModelSettings(temperature=0.2)
         )
 
+    @staticmethod  
     @function_tool
-    async def _get_parameters(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_parameters(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get current conditioning parameters
         
@@ -178,9 +179,10 @@ class ConditioningConfiguration:
                 self._load_parameters()
             
             return self.context.parameters.model_dump() if self.context.parameters else {}
-    
+
+    @staticmethod  
     @function_tool
-    async def _update_parameters(self, ctx: RunContextWrapper, 
+    async def _update_parameters(ctx: RunContextWrapper, 
                            new_params: Dict[str, Any]) -> ConfigUpdateResult:
         """
         Update specific conditioning parameters
@@ -224,9 +226,10 @@ class ConditioningConfiguration:
             
             result.message += f"Updated {len(result.updated_keys)} parameters."
             return result
-    
+
+    @staticmethod  
     @function_tool
-    async def _validate_parameters(self, ctx: RunContextWrapper, 
+    async def _validate_parameters(ctx: RunContextWrapper, 
                              parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate parameters against constraints
@@ -287,9 +290,10 @@ class ConditioningConfiguration:
                     )
             
             return validation_result
-    
+
+    @staticmethod  
     @function_tool
-    async def _reset_to_defaults(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _reset_to_defaults(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Reset all parameters and profile to defaults
         
@@ -309,9 +313,10 @@ class ConditioningConfiguration:
                 "parameters": self.context.parameters.model_dump(),
                 "personality_profile": self.context.personality_profile.model_dump()
             }
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_personality_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_personality_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get current personality profile
         
@@ -323,9 +328,10 @@ class ConditioningConfiguration:
                 self._load_personality_profile()
             
             return self.context.personality_profile.model_dump() if self.context.personality_profile else {}
-    
+
+    @staticmethod  
     @function_tool
-    async def _update_personality_profile(self, ctx: RunContextWrapper,
+    async def _update_personality_profile(ctx: RunContextWrapper,
                                     new_profile: Dict[str, Any]) -> ConfigUpdateResult:
         """
         Update personality profile
@@ -386,9 +392,10 @@ class ConditioningConfiguration:
             
             result.message += f"Updated {len(result.updated_keys)} profile elements."
             return result
-    
+
+    @staticmethod  
     @function_tool
-    async def _adjust_trait(self, ctx: RunContextWrapper,
+    async def _adjust_trait(ctx: RunContextWrapper,
                       trait: str, 
                       value: float) -> TraitUpdateResult:
         """
@@ -425,9 +432,10 @@ class ConditioningConfiguration:
                 old_value=old_value,
                 new_value=traits[trait]
             )
-    
+
+    @staticmethod  
     @function_tool
-    async def _adjust_preference(self, ctx: RunContextWrapper,
+    async def _adjust_preference(ctx: RunContextWrapper,
                            preference_type: str, 
                            stimulus: str, 
                            value: float) -> Dict[str, Any]:
