@@ -18,6 +18,7 @@ from agents.tracing import Span, Trace
 from agents.tracing.setup import TraceProvider
 from agents.exceptions import UserError
 
+
 from .models import Procedure, StepResult
 
 logger = logging.getLogger(__name__)
