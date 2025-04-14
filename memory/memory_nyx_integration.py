@@ -410,14 +410,14 @@ class MemoryNyxBridge:
                 limit=limit
             )
             
-            result = await self.memory_agent.recall(
-                self.memory_context,
-                entity_type=memory_query.entity_type,
-                entity_id=memory_query.entity_id,
-                query=memory_query.query,
-                context=memory_query.context,
-                limit=memory_query.limit
-            )
+        result = await self.memory_agent.recall(
+            self.memory_context,
+            entity_type=memory_query.entity_type,
+            entity_id=memory_query.entity_id,
+            query=memory_query.query,
+            context_text=memory_query.context,  # Changed to context_text to match the wrapper's parameter name
+            limit=memory_query.limit
+        )
             
             # Report action back to Nyx
             await self.governor.process_agent_action_report(
