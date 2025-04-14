@@ -123,7 +123,7 @@ class PredictionEngine:
             instructions="""You predict how emotional states will evolve based on context.
             Your task is to analyze emotional trajectories and predict future emotional states
             considering the current context and recent history.""",
-            tools=[function_tool(self._analyze_emotional_patterns)],
+            tools=[function_tool(self._analyze_emotional_patterns_predict)],
             model_settings=ModelSettings(temperature=0.5)
         )
     
@@ -255,9 +255,9 @@ class PredictionEngine:
             }
     
     @function_tool
-    async def _analyze_emotional_patterns(self, history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _analyze_emotional_patterns_predict(self, history: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze patterns in emotional states"""
-        with custom_span("analyze_emotional_patterns"):
+        with custom_span("analyze_emotional_patterns_predict"):
             # Extract emotional states from history
             emotional_states = []
             for entry in history:
