@@ -307,7 +307,7 @@ class NyxUnifiedGovernor:
                     metrics = await agent.get_performance_metrics()
                     self.agent_performance[agent_type][agent_id] = metrics
                     
-                    # Update strategy effectiveness - needs to be adjusted for nested structure
+                    # Update strategy effectiveness with nested structure
                     for strategy, data in metrics.get("strategies", {}).items():
                         if strategy not in self.strategy_effectiveness:
                             self.strategy_effectiveness[strategy] = {
