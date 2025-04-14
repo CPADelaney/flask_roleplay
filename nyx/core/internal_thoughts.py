@@ -341,7 +341,7 @@ class InternalThoughtsManager:
                     priority=thought_output.priority,
                     context=thought_output.related_context or context,
                     critique=thought_output.critique,
-                    thought.epistemic_status = self._infer_epistemic_status(thought_output)
+                    epistemic_status=self._infer_epistemic_status(thought_output)
                 )
                 
                 # Perform self-critique if enabled and not already provided
