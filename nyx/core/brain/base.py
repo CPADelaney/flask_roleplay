@@ -1054,7 +1054,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 {
                     "id": "express_need",
                     "description": "Express a need or desire that implies obligation",
-                    "function": "express_desire",
+                    "function": "ee",
                     "parameters": {"target_user_id": "${user_id}", "object_of_desire": "your understanding", "intensity": 0.4}
                 },
                 {
@@ -1146,7 +1146,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 {
                     "id": "share_vulnerability",
                     "description": "Share calculated vulnerability to create intimacy and obligation",
-                    "function": "express_desire",
+                    "function": "ee",
                     "parameters": {"target_user_id": "${user_id}", "object_of_desire": "to be understood", "intensity": 0.5}
                 },
                 {
@@ -2375,8 +2375,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             )
 
 
+    @staticmethod
     @function_tool
-    async def express_desire(self, ctx: RunContextWrapper, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
+    async def express_desire(ctx: RunContextWrapper, instance, target_user_id: str, object_of_desire: str, intensity: float) -> Dict[str, Any]:
         """Expresses desire for something (e.g., closeness, an action)."""
         if not self.initialized: await self.initialize()
         logger.info(f"Action: Express desire for '{object_of_desire}' towards {target_user_id} (Intensity: {intensity:.2f})")
@@ -2396,10 +2397,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
         return {"success": True, "expression": expression_text, "target": target_user_id}
 
+    @staticmethod
     @function_tool
-    async def simulate_physical_touch(self, ctx: RunContextWrapper, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
-        """Triggers DSS to simulate touch."""
-        if not self.initialized: await self.initialize()
+    async def simulate_physical_touch(ctx: RunContextWrapper, instance, target_user_id: str, body_region: str, touch_type: str, intensity: float) -> Dict[str, Any]:
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Simulate {touch_type} touch on {body_region} (Intensity: {intensity:.2f})")
     
         # GUARDRAILS ARE PARAMOUNT HERE
@@ -2443,10 +2445,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
         return {"success": True, "sensation_result": sensation_result, "internal_expression": expression}
 
+    @staticmethod
     @function_tool
-    async def seek_gratification(self, ctx: RunContextWrapper, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Initiates actions planned to lead to gratification."""
-        if not self.initialized: await self.initialize()
+    async def seek_gratification(ctx: RunContextWrapper, instance, target_user_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Seek gratification with {target_user_id}")
     
         # GUARDRAILS - Very High Thresholds needed
@@ -2467,10 +2470,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
         return {"success": True, "status": "Seeking gratification plan initiated. Awaiting further steps/feedback."}
 
+    @staticmethod
     @function_tool
-    async def process_gratification_outcome(self, ctx: RunContextWrapper, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Processes the internal state changes following a gratification event."""
-        if not self.initialized: await self.initialize()
+    async def process_gratification_outcome(ctx: RunContextWrapper, instance, success: bool, intensity: float = 1.0, target_user_id: Optional[str] = None) -> Dict[str, Any]:
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Process gratification outcome (Success: {success}, Intensity: {intensity:.2f})")
     
         if success:
@@ -3992,22 +3996,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         return integrated
 
+    @staticmethod
     @function_tool
-    async def initiate_intimate_interaction(self, ctx: RunContextWrapper, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
-        """
-        Initiates a more intimate phase of interaction.
-        
-        Args:
-            ctx: Run context wrapper
-            target_user_id: ID of the target user
-            desired_level: Desired intimacy level ("emotional", "physical_sim", etc.)
-            
-        Returns:
-            Result of the initiation attempt
-        """
-        if not self.initialized:
-            await self.initialize()
-            
+    async def initiate_intimate_interaction(ctx: RunContextWrapper, instance, target_user_id: str, desired_level: str = "emotional") -> Dict[str, Any]:
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Initiate intimate interaction ({desired_level}) with {target_user_id}")
     
         # Check relationship context
@@ -5066,23 +5059,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.error(f"Error evaluating dominance step appropriateness: {e}")
             return {"action": "block", "reason": f"Evaluation error: {str(e)}"}
     
+    @staticmethod
     @function_tool
-    async def express_attraction(self, ctx: RunContextWrapper, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
-        """
-        Expresses attraction towards a user appropriately.
-        
-        Args:
-            ctx: Run context wrapper
-            target_user_id: ID of the target user
-            intensity: Intensity of attraction expression (0.0-1.0)
-            expression_style: Style of expression ("subtle", "direct", etc.)
-            
-        Returns:
-            Result of the expression attempt
-        """
-        if not self.initialized:
-            await self.initialize()
-            
+    async def express_attraction(ctx: RunContextWrapper, instance, target_user_id: str, intensity: float, expression_style: str = "subtle") -> Dict[str, Any]:
+        if not instance.initialized:
+            await instance.initialize()
         logger.info(f"Action: Express attraction towards {target_user_id} (Intensity: {intensity:.2f}, Style: {expression_style})")
     
         # Check Relationship Context (Crucial Guardrail)
@@ -5464,57 +5445,58 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         return await self.parallel_executor.execute_tools(tools_info)    
 
+    @staticmethod
     @function_tool
-    async def process_orgasm_permission_request(self, ctx: RunContextWrapper, user_id: str, request_text: str) -> Dict[str, Any]:
-        """Process a request for permission to orgasm."""
-        if not self.orgasm_control_system:
+    async def process_orgasm_permission_request(ctx: RunContextWrapper, instance, user_id: str, request_text: str) -> Dict[str, Any]:
+        if not instance.orgasm_control_system:
             return {"success": False, "message": "Orgasm control system not initialized"}
-        
-        # Process the request through the orgasm control system
-        return await self.orgasm_control_system.process_permission_request(
-            RunContextWrapper(context=self.orgasm_control_system.context),
+        return await instance.orgasm_control_system.process_permission_request(
+            RunContextWrapper(context=instance.orgasm_control_system.context),
             user_id,
             request_text
         )
     
+    @staticmethod
     @function_tool
-    async def recommend_dominance_persona(self, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
+    async def recommend_dominance_persona(ctx: RunContextWrapper, instance, user_id: str, scenario: Optional[str] = None) -> Dict[str, Any]:
         """Recommend an appropriate dominance persona based on user traits and scenario."""
         if not self.dominance_persona_manager:
             return {"success": False, "message": "Dominance persona manager not initialized"}
         
         return await self.dominance_persona_manager.recommend_persona(user_id, scenario)
     
+    @staticmethod
     @function_tool
-    async def activate_dominance_persona(self, ctx: RunContextWrapper,
-                                     user_id: str, 
-                                     persona_id: str, 
-                                     intensity: float = 0.7,
-                                     duration_minutes: Optional[int] = None) -> Dict[str, Any]:
-        """Activate a specific dominance persona for a user."""
-        if not self.dominance_persona_manager:
+    async def activate_dominance_persona(ctx: RunContextWrapper, instance,
+                                         user_id: str, 
+                                         persona_id: str, 
+                                         intensity: float = 0.7,
+                                         duration_minutes: Optional[int] = None) -> Dict[str, Any]:
+        if not instance.dominance_persona_manager:
             return {"success": False, "message": "Dominance persona manager not initialized"}
         
-        return await self.dominance_persona_manager.activate_persona(
+        return await instance.dominance_persona_manager.activate_persona(
             user_id, persona_id, intensity, duration_minutes
         )
+
         
+    @staticmethod
     @function_tool
-    async def generate_sadistic_response(self, ctx: RunContextWrapper,
-                                     user_id: str, 
-                                     humiliation_level: Optional[float] = None,
-                                     category: str = "amusement") -> Dict[str, Any]:
-        """Generate a sadistic response based on detected humiliation level."""
-        if not self.sadistic_response_system:
+    async def generate_sadistic_response(ctx: RunContextWrapper, instance,
+                                         user_id: str, 
+                                         humiliation_level: Optional[float] = None,
+                                         category: str = "amusement") -> Dict[str, Any]:
+        if not instance.sadistic_response_system:
             return {"success": False, "message": "Sadistic response system not initialized"}
         
-        return await self.sadistic_response_system.generate_sadistic_amusement_response(
+        return await instance.sadistic_response_system.generate_sadistic_amusement_response(
             user_id, humiliation_level, category=category
         )
 
+
+    @staticmethod
     @function_tool
-    async def test_limit_soft(self, ctx: RunContextWrapper, user_id: str, limit_to_test: str) -> Dict:
-        """Carefully probes a known soft limit."""
+    async def test_limit_soft(ctx: RunContextWrapper, instance, user_id: str, limit_to_test: str) -> Dict:
         logger.info(f"Action: Planning to test soft limit '{limit_to_test}' for {user_id}")
     
         # --- VERY STRICT Appropriateness Check ---
