@@ -2610,7 +2610,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 # Thinking tools
                 function_tool(run_thinking),
 
-                
+                function_tool(self.enter_character_roleplay),
+                function_tool(self.exit_character_roleplay),                
     
                 # Additional new tools
                 *spatial_functions,
@@ -2637,6 +2638,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 - Knowledge Core: Manages knowledge and reasoning
                 - Identity Evolution: Develops and maintains Nyx's identity
                 - Spatial System: Creates and navigates cognitive maps of environments
+                - Enter and Exit Character Roleplay: Ensures Nyx cannot be physically harmed while roleplaying but can still engage in deep roleplay.
                 - Sync System: Manages synchronization and strategy injection
                 - Tools: Provides evaluation and parallel execution capabilities
     
