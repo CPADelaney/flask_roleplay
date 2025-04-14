@@ -212,3 +212,122 @@ class MemoryAgentWrapper:
         except Exception as e:
             logger.error(f"Error in get_beliefs: {str(e)}")
             return []
+    async def run_maintenance(
+            self,
+            context,
+            entity_type: str,
+            entity_id: int
+        ) -> Dict[str, Any]:
+            """
+            Run maintenance on memories by wrapping calls to the agent.
+            """
+            try:
+                input_message = {
+                    "role": "user",
+                    "content": f"Run memory maintenance for {entity_type} {entity_id}",
+                    "metadata": {
+                        "operation": "run_maintenance",
+                        "entity_type": entity_type,
+                        "entity_id": entity_id
+                    }
+                }
+                
+                result = await Runner.run(
+                    self.agent,
+                    input=[input_message],
+                    context=context
+                )
+                
+                # Process result
+                if isinstance(result.final_output, str):
+                    import json
+                    try:
+                        return json.loads(result.final_output)
+                    except json.JSONDecodeError:
+                        return {"success": True, "message": result.final_output}
+                else:
+                    return result.final_output
+                    
+            except Exception as e:
+                logger.error(f"Error in run_maintenance: {str(e)}")
+                return {"error": str(e), "success": False}
+    
+    async def analyze_memories(
+        self,
+        context,
+        entity_type: str,
+        entity_id: int
+    ) -> Dict[str, Any]:
+        """
+        Analyze memories for an entity by wrapping calls to the agent.
+        """
+        try:
+            input_message = {
+                "role": "user",
+                "content": f"Analyze memories for {entity_type} {entity_id}",
+                "metadata": {
+                    "operation": "analyze_memories",
+                    "entity_type": entity_type,
+                    "entity_id": entity_id
+                }
+            }
+            
+            result = await Runner.run(
+                self.agent,
+                input=[input_message],
+                context=context
+            )
+            
+            # Process result
+            if isinstance(result.final_output, str):
+                import json
+                try:
+                    return json.loads(result.final_output)
+                except json.JSONDecodeError:
+                    return {"analysis": result.final_output}
+            else:
+                return result.final_output
+                
+        except Exception as e:
+            logger.error(f"Error in analyze_memories: {str(e)}")
+            return {"error": str(e), "analysis": None}
+    
+    async def generate_schemas(
+        self,
+        context,
+        entity_type: str,
+        entity_id: int
+    ) -> Dict[str, Any]:
+        """
+        Generate memory schemas by wrapping calls to the agent.
+        """
+        try:
+            input_message = {
+                "role": "user",
+                "content": f"Generate memory schemas for {entity_type} {entity_id}",
+                "metadata": {
+                    "operation": "generate_schemas",
+                    "entity_type": entity_type,
+                    "entity_id": entity_id
+                }
+            }
+            
+            result = await Runner.run(
+                self.agent,
+                input=[input_message],
+                context=context
+            )
+            
+            # Process result
+            if isinstance(result.final_output, str):
+                import json
+                try:
+                    return json.loads(result.final_output)
+                except json.JSONDecodeError:
+                    return {"schemas": [], "message": result.final_output}
+            else:
+                return result.final_output
+                
+        except Exception as e:
+            logger.error(f"Error in generate_schemas: {str(e)}")
+            return {"error": str(e), "schemas": []}
