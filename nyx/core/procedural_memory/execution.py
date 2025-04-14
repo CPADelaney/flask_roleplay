@@ -14,7 +14,8 @@ import uuid
 from agents import (
     function_tool, custom_span, trace, RunContextWrapper, RunConfig
 )
-from agents.tracing import TraceProvider, Span, Trace
+from agents.tracing import Span, Trace
+from agents.tracing.setup import TraceProvider
 from agents.exceptions import UserError
 
 from .models import Procedure, StepResult
