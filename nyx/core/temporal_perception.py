@@ -5,7 +5,6 @@ import datetime
 import logging
 import math
 import random
-from typing import Dict, List, Any, Optional, Tuple, Union
 import json
 import time
 
@@ -25,9 +24,23 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
 
+from typing import Dict, List, Any, Optional, Tuple, Union, TYPE_CHECKING
+
+# Add this conditional import to avoid circular imports
+if TYPE_CHECKING:
+    from .temporal_perception import TemporalPerceptionSystem
+
 logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Time Perception ===============
+
+class TemporalSystemReference(BaseModel):
+    """Reference to a TemporalPerceptionSystem instance"""
+    user_id: int = Field(..., description="User ID associated with the temporal system")
+    conversation_id: Optional[int] = Field(None, description="Conversation ID if applicable")
+    
+    class Config:
+        arbitrary_types_allowed = True
 
 class TimeDriftEffect(BaseModel):
     """Effect from time passing"""
@@ -914,6 +927,8 @@ class TemporalPerceptionSystem:
     Core system for Nyx's temporal perception framework.
     Enables Nyx to continuously experience time passage across multiple scales.
     """
+    class Config:
+        arbitrary_types_allowed = True
     
     def __init__(self, user_id: int, conversation_id: int = None):
         self.user_id = user_id
@@ -1705,55 +1720,72 @@ async def initialize_temporal_perception(user_id: int, brain_context: Any) -> Di
     }
 
 @function_tool
-async def process_temporal_interaction_start(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
+async def process_temporal_interaction_start(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Process the start of a new interaction with temporal effects
     
     Args:
-        time_system: Temporal perception system instance
+        system_ref: Reference to the temporal perception system
         
     Returns:
         Temporal interaction results
     """
+    # Get the actual system instance (implementation depends on your architecture)
+    from nyx.core.brain.base import NyxBrain
+    brain = await NyxBrain.get_instance(system_ref.user_id, system_ref.conversation_id)
+    time_system = brain.temporal_perception
+    
     return await time_system.on_interaction_start()
 
 @function_tool
-async def process_temporal_interaction_end(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
+async def process_temporal_interaction_end(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Process the end of an interaction with temporal updates
     
     Args:
-        time_system: Temporal perception system instance
+        system_ref: Reference to the temporal perception system
         
     Returns:
         Interaction end results
     """
+    from nyx.core.brain.base import NyxBrain
+    brain = await NyxBrain.get_instance(system_ref.user_id, system_ref.conversation_id)
+    time_system = brain.temporal_perception
+    
     return await time_system.on_interaction_end()
 
 @function_tool
-async def get_temporal_awareness_state(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
+async def get_temporal_awareness_state(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Get current temporal awareness state
     
     Args:
-        time_system: Temporal perception system instance
+        system_ref: Reference to the temporal perception system
         
     Returns:
         Temporal awareness state
     """
+    from nyx.core.brain.base import NyxBrain
+    brain = await NyxBrain.get_instance(system_ref.user_id, system_ref.conversation_id)
+    time_system = brain.temporal_perception
+    
     return await time_system.get_temporal_awareness()
 
 @function_tool
-async def generate_temporal_expression(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
+async def generate_temporal_expression(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
     
     Args:
-        time_system: Temporal perception system instance
+        system_ref: Reference to the temporal perception system
         
     Returns:
         Time expression
     """
+    from nyx.core.brain.base import NyxBrain
+    brain = await NyxBrain.get_instance(system_ref.user_id, system_ref.conversation_id)
+    time_system = brain.temporal_perception
+    
     # Get current state
     now = datetime.datetime.now()
     time_since_last = (now - time_system.last_interaction).total_seconds()
@@ -1774,16 +1806,20 @@ async def generate_temporal_expression(time_system: TemporalPerceptionSystem) ->
     return await generate_time_expression(perception_state)
 
 @function_tool
-async def get_current_temporal_context(time_system: TemporalPerceptionSystem) -> Dict[str, Any]:
+async def get_current_temporal_context(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Get current temporal context information
     
     Args:
-        time_system: Temporal perception system instance
+        system_ref: Reference to the temporal perception system
         
     Returns:
         Current temporal context
     """
+    from nyx.core.brain.base import NyxBrain
+    brain = await NyxBrain.get_instance(system_ref.user_id, system_ref.conversation_id)
+    time_system = brain.temporal_perception
+    
     # Update temporal context
     time_system.current_temporal_context = await determine_temporal_context()
     return time_system.current_temporal_context
