@@ -320,9 +320,10 @@ class BlendedInputProcessor:
             ],
             output_type=BlendedResponseModification
         )
-    
+
+    @static_method
     @function_tool
-    async def _detect_patterns(self, ctx: RunContextWrapper[ProcessingContext], text: str) -> List[Dict[str, Any]]:
+    async def _detect_patterns(ctx: RunContextWrapper[ProcessingContext], text: str) -> List[Dict[str, Any]]:
         """
         Detect patterns in input text using regular expressions.
         
