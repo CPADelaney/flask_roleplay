@@ -918,10 +918,9 @@ class DynamicAdaptationSystem:
         )
     
     # Function tools for the agents
-    
+    @staticmethod    
     @function_tool
-    async def _calculate_context_difference(self, 
-                                        ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_context_difference(ctx: RunContextWrapper[DynamicAdaptationContext],
                                         current: Dict[str, Any], 
                                         previous: Dict[str, Any]) -> float:
         """
@@ -963,10 +962,10 @@ class DynamicAdaptationSystem:
             
         # Return average difference
         return sum(differences) / len(differences)
-    
+
+    @staticmethod    
     @function_tool
-    async def _generate_change_description(self,
-                                       ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _generate_change_description(ctx: RunContextWrapper[DynamicAdaptationContext],
                                        current: Dict[str, Any], 
                                        previous: Dict[str, Any], 
                                        magnitude: float) -> str:
@@ -1019,10 +1018,10 @@ class DynamicAdaptationSystem:
             change_desc += f", and {len(changes) - 3} more changes"
             
         return f"Context changed ({magnitude:.2f}): {change_desc}"
-    
+
+    @staticmethod    
     @function_tool
-    async def _extract_context_features(self, 
-                                    ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _extract_context_features(ctx: RunContextWrapper[DynamicAdaptationContext],
                                     context: Dict[str, Any]) -> ContextFeatures:
         """
         Extract numerical features from context for analysis
@@ -1085,10 +1084,10 @@ class DynamicAdaptationSystem:
         
         # Return as pydantic model
         return ContextFeatures(**features)
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_context_complexity(self, 
-                                        ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_context_complexity(ctx: RunContextWrapper[DynamicAdaptationContext],
                                         context: Dict[str, Any]) -> float:
         """
         Calculate the complexity of the current context
@@ -1149,10 +1148,10 @@ class DynamicAdaptationSystem:
         )
         
         return complexity
-    
+
+    @staticmethod    
     @function_tool
-    async def _add_to_context_history(self, 
-                                  ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _add_to_context_history(ctx: RunContextWrapper[DynamicAdaptationContext],
                                   context: Dict[str, Any]) -> bool:
         """
         Add current context to the history
@@ -1171,10 +1170,10 @@ class DynamicAdaptationSystem:
             ctx.context.context_history.pop(0)
         
         return True
-    
+
+    @staticmethod    
     @function_tool
-    async def _get_available_strategies(self, 
-                                    ctx: RunContextWrapper[DynamicAdaptationContext]) -> List[Strategy]:
+    async def _get_available_strategies(ctx: RunContextWrapper[DynamicAdaptationContext]) -> List[Strategy]:
         """
         Get list of available strategies
         
@@ -1192,10 +1191,10 @@ class DynamicAdaptationSystem:
             strategies.append(strategy)
         
         return strategies
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_strategy_score(self,
-                                    ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_strategy_score(ctx: RunContextWrapper[DynamicAdaptationContext],
                                     strategy: Strategy, 
                                     context_features: ContextFeatures,
                                     performance_metrics: Dict[str, Any]) -> float:
@@ -1280,10 +1279,10 @@ class DynamicAdaptationSystem:
         
         # Ensure score is in [0,1] range
         return min(1.0, max(0.0, score))
-    
+
+    @staticmethod    
     @function_tool
-    async def _get_strategy(self, 
-                        ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _get_strategy(ctx: RunContextWrapper[DynamicAdaptationContext],
                         strategy_id: str) -> Optional[Strategy]:
         """
         Get a specific strategy by ID
@@ -1332,10 +1331,10 @@ class DynamicAdaptationSystem:
         volatility = min(1.0, math.sqrt(variance) * 3.0)  # Scale to make values more meaningful
         
         return volatility
-    
+
+    @staticmethod    
     @function_tool
-    async def _update_strategy_history(self, 
-                                   ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _update_strategy_history(ctx: RunContextWrapper[DynamicAdaptationContext],
                                    strategy_id: str, 
                                    context_summary: Dict[str, Any]) -> bool:
         """
@@ -1364,10 +1363,10 @@ class DynamicAdaptationSystem:
             ctx.context.strategy_history.pop(0)
         
         return True
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_performance_trends(self, 
-                                        ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_performance_trends(ctx: RunContextWrapper[DynamicAdaptationContext],
                                         metrics: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
         """
         Calculate trends in performance metrics
@@ -1428,10 +1427,10 @@ class DynamicAdaptationSystem:
             }
         
         return trends
-    
+
+    @staticmethod    
     @function_tool
-    async def _generate_performance_insights(self,
-                                         ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _generate_performance_insights(ctx: RunContextWrapper[DynamicAdaptationContext],
                                          metrics: Dict[str, float], 
                                          trends: Dict[str, Dict[str, Any]]) -> List[str]:
         """
@@ -1487,10 +1486,10 @@ class DynamicAdaptationSystem:
                 insights.append("Identity profile lacks coherence")
         
         return insights
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_resource_trend(self, 
-                                    ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_resource_trend(ctx: RunContextWrapper[DynamicAdaptationContext],
                                     values: List[float]) -> Dict[str, Any]:
         """
         Calculate trend from a series of resource values
@@ -1538,10 +1537,10 @@ class DynamicAdaptationSystem:
             "slope": slope,
             "mean": mean_y
         }
-    
+
+    @staticmethod    
     @function_tool
-    async def _update_performance_history(self, 
-                                      ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _update_performance_history(ctx: RunContextWrapper[DynamicAdaptationContext],
                                       metrics: Dict[str, float]) -> bool:
         """
         Update performance history with current metrics
@@ -1605,10 +1604,10 @@ class DynamicAdaptationSystem:
         return volatility
     
     # New function tools for experience-related adaptations
-    
+
+    @staticmethod    
     @function_tool
-    async def _analyze_experience_context(self, 
-                                      ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _analyze_experience_context(ctx: RunContextWrapper[DynamicAdaptationContext],
                                       context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze experience-related context features
@@ -1649,10 +1648,10 @@ class DynamicAdaptationSystem:
             experience_analysis["user_engagement"] = context["user_engagement"]
         
         return experience_analysis
-    
+
+    @staticmethod    
     @function_tool
-    async def _analyze_identity_context(self, 
-                                    ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _analyze_identity_context(ctx: RunContextWrapper[DynamicAdaptationContext],
                                     context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze identity-related context features
@@ -1697,10 +1696,10 @@ class DynamicAdaptationSystem:
                     identity_analysis["update_magnitude"] = update_magnitude / update_count
         
         return identity_analysis
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_experience_strategy_fit(self,
-                                           ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_experience_strategy_fit(ctx: RunContextWrapper[DynamicAdaptationContext],
                                            strategy: Strategy,
                                            context_features: Dict[str, Any]) -> float:
         """
@@ -1755,10 +1754,10 @@ class DynamicAdaptationSystem:
         
         # Ensure score is in valid range
         return min(1.0, max(0.0, score))
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_identity_strategy_fit(self,
-                                         ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_identity_strategy_fit(ctx: RunContextWrapper[DynamicAdaptationContext],
                                          strategy: Strategy,
                                          context_features: Dict[str, Any]) -> float:
         """
@@ -1805,10 +1804,10 @@ class DynamicAdaptationSystem:
         
         # Ensure score is in valid range
         return min(1.0, max(0.0, score))
-    
+
+    @staticmethod    
     @function_tool
-    async def _analyze_experience_performance(self, 
-                                         ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _analyze_experience_performance(ctx: RunContextWrapper[DynamicAdaptationContext],
                                          metrics: Dict[str, float]) -> Dict[str, Any]:
         """
         Analyze experience-related performance metrics
@@ -1871,10 +1870,10 @@ class DynamicAdaptationSystem:
             experience_analysis["trend_magnitude"] = abs(trend)
         
         return experience_analysis
-    
+
+    @staticmethod    
     @function_tool
-    async def _analyze_identity_performance(self, 
-                                       ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _analyze_identity_performance(ctx: RunContextWrapper[DynamicAdaptationContext],
                                        metrics: Dict[str, float]) -> Dict[str, Any]:
         """
         Analyze identity-related performance metrics
@@ -1937,10 +1936,10 @@ class DynamicAdaptationSystem:
         return identity_analysis
     
     # Tools for experience adaptation agent
-    
+
+    @staticmethod    
     @function_tool
-    async def _get_current_experience_params(self, 
-                                        ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
+    async def _get_current_experience_params(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
         """
         Get current experience adaptation parameters
         
@@ -1948,10 +1947,10 @@ class DynamicAdaptationSystem:
             Current experience adaptation parameters
         """
         return ctx.context.experience_adaptation.model_dump()
-    
+
+    @staticmethod    
     @function_tool
-    async def _calculate_experience_adaptation(self, 
-                                         ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_experience_adaptation(ctx: RunContextWrapper[DynamicAdaptationContext],
                                          feedback: Dict[str, Any], 
                                          current_params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2003,10 +2002,10 @@ class DynamicAdaptationSystem:
             params["personalization_level"] = experience_rating / 10.0
         
         return params
-    
+
+    @staticmethod    
     @function_tool
-    async def _update_experience_sharing_history(self, 
-                                           ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _update_experience_sharing_history(ctx: RunContextWrapper[DynamicAdaptationContext],
                                            user_id: str, 
                                            feedback: Dict[str, Any], 
                                            adapted_params: Dict[str, Any]) -> bool:
@@ -2037,10 +2036,10 @@ class DynamicAdaptationSystem:
         return True
     
     # Tools for identity adaptation agent
-    
+
+    @staticmethod    
     @function_tool
-    async def _get_current_identity_params(self, 
-                                      ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
+    async def _get_current_identity_params(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
         """
         Get current identity adaptation parameters
         
@@ -2048,10 +2047,10 @@ class DynamicAdaptationSystem:
             Current identity adaptation parameters
         """
         return ctx.context.identity_adaptation.model_dump()
-    
+
+    @staticmethod  
     @function_tool
-    async def _calculate_identity_adaptation(self, 
-                                       ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _calculate_identity_adaptation(ctx: RunContextWrapper[DynamicAdaptationContext],
                                        identity_state: Dict[str, Any], 
                                        performance: Dict[str, Any],
                                        current_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2117,10 +2116,10 @@ class DynamicAdaptationSystem:
             params["consolidation_frequency"] = max(0.1, params["consolidation_frequency"] - 0.05)
         
         return params
-    
+
+    @staticmethod  
     @function_tool
-    async def _update_identity_evolution_history(self, 
-                                          ctx: RunContextWrapper[DynamicAdaptationContext],
+    async def _update_identity_evolution_history(ctx: RunContextWrapper[DynamicAdaptationContext],
                                           identity_state: Dict[str, Any], 
                                           adapted_params: Dict[str, Any]) -> bool:
         """
@@ -2148,10 +2147,10 @@ class DynamicAdaptationSystem:
         return True
     
     # Public tools for external use
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_experience_adaptation_settings(self, 
-                                             ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
+    async def _get_experience_adaptation_settings(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
         """
         Get current experience adaptation settings based on active strategy
         
@@ -2177,10 +2176,10 @@ class DynamicAdaptationSystem:
         settings.update(ctx.context.experience_adaptation.model_dump())
         
         return settings
-    
+
+    @staticmethod  
     @function_tool
-    async def _get_identity_adaptation_settings(self, 
-                                           ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
+    async def _get_identity_adaptation_settings(ctx: RunContextWrapper[DynamicAdaptationContext]) -> Dict[str, Any]:
         """
         Get current identity adaptation settings based on active strategy
         
