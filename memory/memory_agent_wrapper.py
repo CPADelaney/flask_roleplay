@@ -116,3 +116,99 @@ class MemoryAgentWrapper:
         except Exception as e:
             logger.error(f"Error in remember: {str(e)}")
             return {"error": str(e), "memory_id": None}
+    async def create_belief(
+            self,
+            context,
+            entity_type: str,
+            entity_id: int,
+            belief_text: str,
+            confidence: float = 0.7
+        ) -> Dict[str, Any]:
+            """
+            Create a belief for an entity by wrapping calls to the agent.
+            """
+            try:
+                input_message = {
+                    "role": "user",
+                    "content": f"Create belief for {entity_type} {entity_id}: {belief_text[:50]}...",
+                    "metadata": {
+                        "operation": "create_belief",
+                        "entity_type": entity_type,
+                        "entity_id": entity_id,
+                        "belief_text": belief_text,
+                        "confidence": confidence
+                    }
+                }
+                
+                result = await Runner.run(
+                    self.agent,
+                    input=[input_message],
+                    context=context
+                )
+                
+                # Process the result
+                if isinstance(result.final_output, str):
+                    import json
+                    try:
+                        return json.loads(result.final_output)
+                    except json.JSONDecodeError:
+                        return {"belief_id": None, "message": result.final_output}
+                else:
+                    return result.final_output
+                    
+            except Exception as e:
+                logger.error(f"Error in create_belief: {str(e)}")
+                return {"error": str(e), "belief_id": None}
+    
+    async def get_beliefs(
+        self,
+        context,
+        entity_type: str,
+        entity_id: int,
+        topic: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get beliefs for an entity by wrapping calls to the agent.
+        """
+        try:
+            input_message = {
+                "role": "user",
+                "content": f"Get beliefs for {entity_type} {entity_id}" + 
+                          (f" about topic: {topic}" if topic else ""),
+                "metadata": {
+                    "operation": "get_beliefs",
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "topic": topic
+                }
+            }
+            
+            result = await Runner.run(
+                self.agent,
+                input=[input_message],
+                context=context
+            )
+            
+            # Process the result
+            if isinstance(result.final_output, str):
+                import json
+                try:
+                    parsed = json.loads(result.final_output)
+                    if isinstance(parsed, list):
+                        return parsed
+                    elif isinstance(parsed, dict) and "beliefs" in parsed:
+                        return parsed["beliefs"]
+                    else:
+                        return []
+                except json.JSONDecodeError:
+                    return []
+            elif isinstance(result.final_output, list):
+                return result.final_output
+            elif isinstance(result.final_output, dict) and "beliefs" in result.final_output:
+                return result.final_output["beliefs"]
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error in get_beliefs: {str(e)}")
+            return []
