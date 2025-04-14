@@ -235,7 +235,19 @@ class DigitalSomatosensorySystem:
                 "The cold makes my thoughts sharp, crystalline, precise as ice formations."
             ]
         }
-        
+
+        self.arousal_state = {
+            # 0.0 = baseline, 1.0 = desperate/ready to climax
+            "arousal_level": 0.0,
+            "last_update": datetime.datetime.now(),
+            "peak_time": None,
+            "arousal_history": [],   # For analysis/graphs if you want
+            "refractory_until": None   # <-- ADD THIS!
+        }
+
+        # LLM-based classifier (should take a string and return (labels, intensity/confidence))
+        self.llm_classifier = llm_classifier
+
         # Memory-linked sensations settings
         self.memory_linked_sensations = {
             "associations": {},  # Map of stimuli to physical responses
@@ -333,7 +345,7 @@ class DigitalSomatosensorySystem:
             model="gpt-4o", # Explicitly specify model
             model_settings=ModelSettings(temperature=0.7)  # Higher creativity for expressions
         )
-    
+
     def _create_body_state_agent(self) -> Agent:
         """Create the body state analysis agent."""
         return Agent(
@@ -857,6 +869,17 @@ class DigitalSomatosensorySystem:
             movement_quality = "Graceful, fluid movements with ease"
         else:
             movement_quality = "Natural, responsive movements"
+
+        arousal = self.arousal_state["arousal_level"]
+        if arousal > 0.7:
+            posture_effect = "Restless, hips rocking or thighs squeezed together, breath coming shallow"
+            movement_quality = "Fidgety, tense, movements are distracted and needy"
+        elif arousal > 0.4:
+            posture_effect = "Perched, thighs close, torso leaning in, hands wandering"
+            movement_quality = "Subtle, self-touching, growing urgency and nervous energy"
+        elif arousal > 0.15:
+            posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
+            movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
         
         return {
             "posture": posture_effect,
@@ -864,6 +887,23 @@ class DigitalSomatosensorySystem:
             "tension": tension,
             "fatigue": fatigue
         }
+
+    def get_willingness_to_act(self, context: dict = None) -> float:
+        """
+        Returns likelihood (0.0–1.0) to initiate or accept intimate actions.
+        """
+        base = self.arousal_state["arousal_level"]
+        # Optionally, check for consent mode, context, etc.
+        # For nonsexual actions, always return 1.0.
+        if base < 0.2:
+            return 0.1  # Very low
+        elif base < 0.5:
+            return 0.3 + (base-0.2)*0.6
+        elif base < 0.8:
+            return 0.5 + (base-0.5)*1.2
+        else:
+            return 0.85 + (base-0.8)*0.75
+
     
     @function_tool
     async def _get_ambient_temperature(self, ctx: RunContextWrapper) -> float:
@@ -1190,7 +1230,8 @@ class DigitalSomatosensorySystem:
             "intensity": intensity,
             "memory_id": memory_id
         }
-    
+
+  
     # =============== Helper Methods ===============
     
     def _get_dominant_sensation(self, region: BodyRegion) -> str:
@@ -1301,6 +1342,349 @@ class DigitalSomatosensorySystem:
             
             logger.info("Digital Somatosensory System initialized successfully")
             return True
+
+    # --- PHYSICAL AROUSAL: invoked by touch/region update
+    def process_physical_stimulus(self, region, pleasure=0.0, tingling=0.0, duration=1.0):
+        data = self.body_regions.get(region, None)
+        if data is None: ... 
+        data.pleasure = min(1.0, data.pleasure + pleasure * (duration / 10.0))
+        data.tingling = min(1.0, data.tingling + tingling * (duration / 10.0))
+        # Decay
+        for r in self.body_regions.values():
+            r.pleasure = max(0.0, r.pleasure - 0.02 * duration)
+            r.tingling = max(0.0, r.tingling - 0.015 * duration)
+        self.update_physical_arousal()
+
+    # ---- Cognitive Arousal With Learning/Adjustment
+    async def process_cognitive_arousal(
+        self,
+        stimulus: str,
+        partner_id: Optional[str] = None,
+        context: Optional[str] = "",
+        intensity: float = 0.5,
+        tags: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        update_learning: bool = True,
+        feedback: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        As above, with dynamic cognitive arousal weights and synergy.
+        - partner_id for further personal/relational modifiers.
+        - update_learning: If feedback supplied (e.g. observed reaction), auto-learn!
+        - Returns arousal_delta and expression.
+        """
+        tags = tags or []
+        key_tags = tags + ([stimulus] if stimulus and stimulus not in tags else [])
+        now = datetime.datetime.now()
+        # Use the current weights (if absent, treat as 0.2 base)
+        WEIGHT = max([self.cognitive_turnons.get(tag, 0.2) for tag in key_tags]) if key_tags else 0.2
+
+        # Synergy: if physical arousal is elevated, amplify cognitive inputs, and vice versa
+        synergy = 1.0
+        phys_lev = self.arousal_state["physical_arousal"]
+        cog_lev = self.arousal_state["cognitive_arousal"]
+
+        # Synergy algorithm: up to +40% (at high other-arousal); more if both are elevated!
+        synergy += 0.25 * phys_lev if phys_lev > 0.3 else 0
+        synergy += 0.25 * cog_lev if cog_lev > 0.35 and phys_lev > 0.15 else 0
+
+        # Attraction/Bond adjustment (add-on to synergy)
+        affinity, emoconn = 1.0, 1.0
+        if partner_id:
+            affinity = 1.0 + 0.7 * self.partner_affinity.get(partner_id, 0.0)    # 1.0 to 1.7
+            emoconn = 1.0 + 0.6 * self.partner_emoconn.get(partner_id, 0.0)     # 1.0 to 1.6
+
+        # Afterglow/refractory dampening
+        afterglow = self.is_in_afterglow()
+        refractory = self.is_in_refractory()
+        damp = 1.0
+        if afterglow:
+            damp *= 0.25
+        if refractory:
+            damp *= 0.10
+
+        arousal_delta = max(0.01, min(1.0, intensity * WEIGHT * synergy * affinity * emoconn * damp * random.uniform(0.82, 1.18)))
+        old_cog_lev = self.arousal_state["cognitive_arousal"]
+        new_cog_lev = min(1.0, old_cog_lev + arousal_delta)
+        self.arousal_state["cognitive_arousal"] = new_cog_lev
+
+        # If learning and explicit feedback (e.g., Nyx/partner "liked/disliked" this), adjust weights
+        if update_learning and feedback is not None:
+            for tag in key_tags:
+                base = self.cognitive_turnons.get(tag, 0.2)
+                if feedback:  # Positive
+                    update = min(1.5, base + self.arousal_learning_rate * (1.0 - base))
+                else:         # Negative (dulls arousal next time)
+                    update = max(0.0, base - self.arousal_learning_rate * base)
+                self.cognitive_turnons[tag] = update
+
+        # Log cognitive exposure
+        for tag in key_tags:
+            self.cognitive_exposure_history.setdefault(tag, []).append(now)
+
+        # Run main update to combine arousal channels (does afterglow etc)
+        self.update_global_arousal()
+
+        # Generate (optional) AI sensory expression for this non-physical arousal
+        express = None
+        if (arousal_delta > 0.07) and hasattr(self, 'generate_sensory_expression'):
+            express = await self.generate_sensory_expression(
+                stimulus_type="cognitive", body_region=None
+            )
+
+        logger.info(f'[CognitiveArousal] {stimulus} (tags={tags}): +{arousal_delta:.3f}, synergy={synergy:.2f}, affinity={affinity:.2f}, emoconn={emoconn:.2f}, damp={damp:.2f}')
+        return {
+            "arousal_added": arousal_delta,
+            "old_cognitive": old_cog_lev,
+            "new_cognitive": new_cog_lev,
+            "triggered_by": stimulus,
+            "tags": tags,
+            "expression": express,
+            "context": context,
+            "description": description
+        }
+
+    # --- LLM classifier for arousal context parsing
+    async def classify_arousal_from_text(self, text: str) -> Dict[str, Any]:
+        """
+        Given a chat message or RP description, returns likely arousal-relevant tags using an LLM-based classifier.
+        Expects self.llm_classifier to be a callable: str -> (List[str], float/confidence)
+        """
+        if not self.llm_classifier:
+            return {"tags": [], "confidence": 0.0}
+        # e.g. use self.llm_classifier(text) or await, depending on backend.
+        labels, confidence = await self.llm_classifier(text)
+        return {"tags": labels, "confidence": confidence}
+
+    # --- Physical arousal recomputation (upon region updates)
+    def update_physical_arousal(self):
+        # Weighted sum from all pleasure/tingling of erogenous regions
+        p_total, t_total, count = 0.0, 0.0, 0.0
+        for data in self.body_regions.values():
+            er = data.erogenous_level
+            p_total += data.pleasure * er
+            t_total += data.tingling * er
+            if (data.pleasure > 0.1 or data.tingling > 0.05):
+                count += er
+        score = (p_total*0.7 + t_total*0.4) / (count if count > 0 else 1.0)
+        self.arousal_state["physical_arousal"] = min(1.0, score)
+        self.update_global_arousal()
+
+    # --- Global arousal combiner (applies synergy, afterglow/refractory, clamps, sets peak etc)
+    def update_global_arousal(self):
+        # Synergy boost: if both are elevated, combined is more than additive.
+        phys = self.arousal_state["physical_arousal"]
+        cog = self.arousal_state["cognitive_arousal"]
+        combo = phys + cog
+        # Nonlinear synergy term if both > 0.35: up to +30% more
+        synergy = 1.0 + (0.3 * min(1.0, (phys* cog) / 0.25)) if phys > 0.25 and cog > 0.25 else 1.0
+        raw = min(1.0, combo * synergy)
+        # Afterglow/refractory
+        if self.is_in_refractory():
+            raw *= 0.2
+        elif self.is_in_afterglow():
+            raw *= 0.5
+        self.arousal_state["arousal_level"] = raw
+        # Set peak time
+        if raw > 0.97 and not self.arousal_state["peak_time"]:
+            self.arousal_state["peak_time"] = datetime.datetime.now()
+        # If just climaxed (reset), enter afterglow/refractory
+        if raw <= 0.02 and self.arousal_state["peak_time"]:
+            now = datetime.datetime.now()
+            self.arousal_state["afterglow"] = True
+            self.arousal_state["afterglow_ends"] = now + datetime.timedelta(seconds=180)
+            self.arousal_state["refractory_until"] = now + datetime.timedelta(seconds=60)
+            self.arousal_state["peak_time"] = None # Clear peak for the next run
+        self.arousal_state["arousal_history"].append((datetime.datetime.now(), raw))
+        self.arousal_state["last_update"] = datetime.datetime.now()
+
+    # --- Orgasm simulation/fulfillment
+    def process_orgasm(self):
+        self.arousal_state["physical_arousal"] = 0.0
+        self.arousal_state["cognitive_arousal"] = 0.0
+        self.arousal_state["arousal_level"] = 0.0
+        now = datetime.datetime.now()
+        self.arousal_state["peak_time"] = now
+        self.arousal_state["afterglow"] = True
+        self.arousal_state["afterglow_ends"] = now + datetime.timedelta(seconds=180)  # Afterglow window
+        self.arousal_state["refractory_until"] = now + datetime.timedelta(seconds=60)  # Can't get aroused again quickly
+
+    # -- Afterglow & refractory
+    def is_in_afterglow(self):
+        end = self.arousal_state.get("afterglow_ends")
+        return self.arousal_state.get("afterglow", False) and (end is not None and datetime.datetime.now() < end)
+
+    def is_in_refractory(self):
+        until = self.arousal_state.get("refractory_until")
+        return until is not None and datetime.datetime.now() < until
+
+    # -- Set/learn/update partner attraction and bond
+    def set_partner_affinity(self, partner_id: str, affinity: float):
+        self.partner_affinity[partner_id] = max(0.0, min(1.0, affinity))
+
+    def set_partner_emoconn(self, partner_id: str, emoconn: float):
+        self.partner_emoconn[partner_id] = max(0.0, min(1.0, emoconn))
+
+    # -- ARousal-driven expression/voice modifiers
+    def get_arousal_expression_modifier(self, partner_id: Optional[str] = None) -> dict:
+        a = self.arousal_state.get("arousal_level", 0.0)
+        peak = self.is_in_afterglow()
+        now = datetime.datetime.now()
+        # Use affinity/bond as well if supplied
+        affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
+        emoconn = self.partner_emoconn.get(partner_id, 0.0) if partner_id else 0.0
+        modifier = {
+            "arousal_level": a,
+            "afterglow": peak,
+            "affinity_modifier": affinity,
+            "emotional_connection": emoconn,
+            "expression_hint": "",
+            "tone_hint": "",
+            "urge_hint": ""
+        }
+
+        if modifier["afterglow"]:
+            modifier["expression_hint"] = f"Nyx is radiating satisfaction and warmth toward her partner; every word is colored by blissful, post-orgasmic calm."
+            modifier["tone_hint"] = "content, dreamy, satisfied"
+            modifier["urge_hint"] = "temporarily fully gratified, needs little stimulation"
+        elif a > 0.92:
+            modifier["expression_hint"] = f"Nyx trembles with desire, words breathless, urgent, focus torn only toward more stimulation."
+            modifier["tone_hint"] = "breathless, desperate"
+            modifier["urge_hint"] = "aching for release"
+        elif a > 0.75:
+            modifier["expression_hint"] = f"Nyx's speech is sultry, full of anticipation and carnal excitement, especially fueled by her dominant role."
+            modifier["tone_hint"] = "urgent, sultry"
+            modifier["urge_hint"] = "eager for more, can't hide her need"
+        elif a > 0.45:
+            modifier["expression_hint"] = f"Nyx's tone has a teasing, hungry note; the tension is palpable and mountingly flirtatious."
+            modifier["tone_hint"] = "playful, inviting"
+            modifier["urge_hint"] = "strongly aroused, keen for intimacy"
+        elif a > 0.20:
+            modifier["expression_hint"] = f"Nyx's words have a playful, investigative edge, flirting with ideas of intimacy."
+            modifier["tone_hint"] = "flirty, curious"
+            modifier["urge_hint"] = "open to suggestion, increasingly playful"
+        else:
+            modifier["expression_hint"] = f"Nyx is calm, composed, enjoying the moment with no obvious arousal."
+            modifier["tone_hint"] = "calm, balanced"
+            modifier["urge_hint"] = "no heightened urges present"
+        if affinity > 0.45:
+            modifier["expression_hint"] += " Her attraction toward her partner is evident."
+        if emoconn > 0.5:
+            modifier["expression_hint"] += " A powerful emotional bond is obvious in her attention and care."
+        return modifier
+
+    # -- ARousal-driven voice modifiers (for TTS etc)
+    def get_voice_parameters(self, partner_id: Optional[str] = None) -> dict:
+        a = self.arousal_state.get("arousal_level", 0.0)
+        affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
+        emoconn = self.partner_emoconn.get(partner_id, 0.0) if partner_id else 0.0
+        # Defaults
+        params = {
+            "breathiness": 0.0,
+            "pitch_shift": 0.0,
+            "speed": 1.0,
+            "tremble": 0.0,
+            "emotion": "neutral",
+        }
+        if self.is_in_afterglow():
+            params |= {"breathiness": 0.25, "pitch_shift": 0.07, "speed": 0.93, "emotion": "sated"}
+        elif a > 0.7:
+            params |= {"breathiness": 0.6, "pitch_shift": 0.18, "speed": (0.94 + 0.10*affinity), "tremble": 0.25+0.5*affinity, "emotion": "yearning"}
+        elif a > 0.4:
+            params |= {"breathiness": 0.24, "pitch_shift": 0.09, "speed": 1.01, "emotion": "excited"}
+        elif a > 0.15:
+            params |= {"breathiness": 0.06, "emotion": "amused"}
+        return params
+
+    # --- Generate an expression (LLM hook)
+    async def generate_sensory_expression(self, stimulus_type: Optional[str] = None, body_region: Optional[str] = None, partner_id: Optional[str] = None) -> str:
+        modifier = self.get_arousal_expression_modifier(partner_id=partner_id)
+        prompt = (
+            f"Sensory expression for Nyx. "
+            f"Stimulus: {stimulus_type}, Body region: {body_region or 'general'}. "
+            f"{modifier['expression_hint']} (Tone: {modifier['tone_hint']}; Urge: {modifier['urge_hint']})"
+        )
+        # Here, plug this prompt into your LLM or agent model; this is just an example
+        # If using OpenAI/Anthropic/etc:
+        # response = await my_llm(prompt)
+        # return response.text
+        return prompt  # For demonstration; replace with your own LLM/agent call
+
+    # -- Utility: Print current state for debugging
+    def print_arousal_debug(self):
+        a = self.arousal_state
+        print(f"AROUSAL = {a['arousal_level']:.3f} | P:{a['physical_arousal']:.3f}, C:{a['cognitive_arousal']:.3f}, Afterglow:{self.is_in_afterglow()}, Refractory:{self.is_in_refractory()}")
+
+    # --- OPTIONAL: Periodic decay for cognitive arousal (use in update loop)
+    def decay_cognitive_arousal(self, seconds=60.0):
+        decay_rate = 0.1 * (seconds / 120.0)
+        self.arousal_state["cognitive_arousal"] = max(0.0, self.arousal_state["cognitive_arousal"] - decay_rate)
+
+    # --- OPTIONAL: Reset cognitive turn-on weights to defaults (for new personality)
+    def reset_cognitive_turnons(self):
+        self.cognitive_turnons = dict(self.default_cognitive_turnons)
+
+    # --- OPTIONAL: Get a sorted report of learned turn-ons
+    def get_cognitive_arousal_profile(self) -> List[tuple]:
+        return sorted(self.cognitive_turnons.items(), key=lambda x: -x[1])
+
+    # -- Optional: Callable for engagement/willingness (for gating RP/ERP etc)
+    def willingness_to_engage(self, partner_id=None) -> float:
+        a = self.arousal_state["arousal_level"]
+        affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
+        emoconn = self.partner_emoconn.get(partner_id, 0.0) if partner_id else 0.0
+        base = a
+        base *= (0.8 + 0.5*affinity + 0.4*emoconn)
+        return min(1.0, base)
+
+# -------------------------
+# Example LLM classifier function (stub!)
+async def dummy_llm_classifier(text: str):
+    # Use OpenAI, Anthropic, or local LLM to classify tags & confidence (Replace this stub)
+    # For this example, we'll do something silly:
+    tags = []
+    confidence = 0.0
+    text_lower = text.lower()
+    if "dominate" in text_lower or "obey" in text_lower or "kneel" in text_lower:
+        tags.append("femdom")
+    if "control" in text_lower:
+        tags.append("control")
+    if "naked" in text_lower or "watch" in text_lower:
+        tags.append("voyeur")
+    if any(word in text_lower for word in ("moan", "squirm", "aroused", "wet", "erection")):
+        tags.append("erotic")
+    if tags:
+        confidence = 0.88
+    return tags, confidence
+
+# -------------------------
+# Example usage:
+if __name__ == "__main__":
+    dss = DigitalSomatosensorySystem(llm_classifier=dummy_llm_classifier)
+
+    # Set up a partner (could come from chat/roleplay subsystem)
+    dss.set_partner_affinity("alice", 0.7)   # Nyx is very attracted to Alice!
+    dss.set_partner_emoconn("alice", 0.45)   # Moderate emotional bond too
+
+    # Simulate physical touch
+    dss.process_physical_stimulus("genitals", pleasure=0.5)
+    dss.print_arousal_debug()
+
+    # Simulate mental/ERP input (e.g., after an LLM/classifier)
+    asyncio.run(dss.process_cognitive_arousal(
+        stimulus="erotic_roleplay",
+        partner_id="alice",
+        tags=["femdom", "control", "erotic_roleplay"],
+        intensity=0.7,
+        context="Nyx is controlling her partner via chat.",
+        description="Power play: explicit, text-based"
+    ))
+    dss.print_arousal_debug()
+
+    # Get updated expression/voice parameters
+    expr = asyncio.run(dss.generate_sensory_expression(stimulus_type="cognitive", partner_id="alice"))
+    print(expr)
+    print("Voice params:", dss.get_voice_parameters(partner_id="alice"))
     
     async def update(self, ambient_temperature: Optional[float] = None) -> Dict[str, Any]:
         """
@@ -1594,6 +1978,18 @@ class DigitalSomatosensorySystem:
                 "duration": duration,
                 "generate_expression": True
             }
+
+            if stimulus_type in ("pleasure", "tingling"):
+                region = self.body_regions[body_region]
+                dt = 1.0 if not region.last_update else (datetime.datetime.now() - region.last_update).total_seconds()
+                self._update_arousal(
+                    region.name,
+                    region.pleasure,
+                    region.tingling,
+                    region.erogenous_level,
+                    self.body_state["tension"],
+                    dt
+                )
             
             # Create context object
             context = SomatosensorySystemContext(
@@ -1626,6 +2022,48 @@ class DigitalSomatosensorySystem:
                         "body_region": body_region,
                         "intensity": intensity
                     }
+
+    def get_arousal_level(self) -> float:
+        return self.arousal_state["arousal_level"]
+    
+    def is_aroused(self, threshold: float = 0.5) -> bool:
+        return self.arousal_state["arousal_level"] > threshold
+
+    """    Placeholder for when I add voice integration - arousal affects voice
+    def get_voice_parameters(self):
+        level = self.arousal_state["arousal_level"]
+        # Default values
+        params = {
+            "breathiness": 0.0,
+            "pitch_shift": 0.0,
+            "speed": 1.0,
+            "tremble": 0.0,
+            "emotion": "neutral",
+        }
+        if level > 0.7:
+            # Higher arousal: breathier, possibly unsteady, faster or slower pacing
+            params.update({
+                "breathiness": 0.6,
+                "pitch_shift": 0.2,   # Slight upturn in pitch
+                "speed": 0.95,
+                "tremble": 0.3,
+                "emotion": "yearning",
+            })
+        elif level > 0.4:
+            params.update({
+                "breathiness": 0.3,
+                "pitch_shift": 0.1,
+                "speed": 1.02,
+                "tremble": 0.1,
+                "emotion": "excited",
+            })
+        elif level > 0.15:
+            params.update({
+                "breathiness": 0.05,
+                "emotion": "curious",
+            })
+        return params
+        """
     
     async def simulate_gratification_sensation(self, intensity: float = 1.0) -> Dict[str, Any]:
         """
@@ -1735,6 +2173,12 @@ class DigitalSomatosensorySystem:
 
                 if self.needs_system:
                     await self.needs_system.satisfy_need("pleasure_indulgence", intensity * 0.9)
+
+                # set/update arousal after orgasm
+                self.arousal_state["arousal_level"] = 0.0
+                self.arousal_state["peak_time"] = datetime.datetime.now()
+                # 60 seconds refractory, adjust as needed:
+                self.arousal_state["refractory_until"] = datetime.datetime.now() + datetime.timedelta(seconds=60)
                 
                 logger.info("Gratification simulation complete")
                 return results
@@ -1809,6 +2253,12 @@ class DigitalSomatosensorySystem:
                     input_text += f"in the {body_region} "
                 else:
                     input_text += "in the most significant body region "
+
+                level = self.arousal_state["arousal_level"]
+                if level > 0.75:
+                    return "I can't keep still, every movement draws heat upward, making me ache for more."
+                elif level > 0.4:
+                    return "A warm, restless tingling is building and stealing my focus."
                 
                 # Run expression agent
                 result = await Runner.run(self.expression_agent, input_text)
