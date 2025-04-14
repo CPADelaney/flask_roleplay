@@ -391,6 +391,8 @@ async def validate_entity_input(ctx, agent, input_data):
 # Create the Memory Agent
 def create_memory_agent(user_id: int, conversation_id: int):
     """Create the memory agent with all tools and guardrails."""
+    memory_context = MemorySystemContext(user_id, conversation_id)
+    
     memory_agent = Agent[MemorySystemContext](
         name="Memory Manager",
         instructions="""
@@ -433,6 +435,8 @@ def create_memory_agent(user_id: int, conversation_id: int):
         model_settings=ModelSettings(temperature=0.3)
     )
     
+    # Create and return the wrapped agent with the SAME NAME as before
+    memory_agent = MemoryAgentWrapper(base_agent, memory_context)
     return memory_agent
 
 # Main function to run the memory agent
