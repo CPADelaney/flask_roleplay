@@ -171,7 +171,7 @@ class ObservationContentOutput(BaseModel):
 # =============== Function Tools ===============
 
 @function_tool
-async def categorize_time_elapsed(seconds: float) -> str:
+async def categorize_time_elapsed_obs(seconds: float) -> str:
     """Categorize elapsed time into descriptive buckets"""
     if seconds < 60:  # < 1 min
         return "very_short"
@@ -731,7 +731,7 @@ Your observations should feel like genuine realizations that emerge organically 
 pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
 of herself and her environment.""",
             [generate_observation_from_source, check_observation_patterns, 
-             categorize_time_elapsed, generate_observation_from_action],
+             categorize_time_elapsed_obs, generate_observation_from_action],
             ObservationGenerationOutput
         )
         
