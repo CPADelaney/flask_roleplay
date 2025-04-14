@@ -14,6 +14,7 @@ from agents import (
     GuardrailFunctionOutput
 )
 
+from memory_agent_wrapper import MemoryAgentWrapper
 # Import the memory system components
 from memory.wrapper import MemorySystem
 from memory.core import MemorySignificance
