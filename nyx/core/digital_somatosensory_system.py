@@ -251,7 +251,25 @@ class DigitalSomatosensorySystem:
             "scalp": BodyRegion(name="scalp", sensitivity=1.3, erogenous_level=0.4),
             "perineum": BodyRegion(name="perineum", sensitivity=1.6, erogenous_level=0.7)
         }
-        
+
+    async def process_stimulus_with_protection(self, 
+                                             stimulus_type: str, 
+                                             body_region: str, 
+                                             intensity: float, 
+                                             cause: str = "", 
+                                             duration: float = 1.0) -> Dict[str, Any]:
+        """
+        Process a stimulus with protection against harmful actions.
+        This should be the primary entry point for all stimulus processing.
+        """
+        return await self.harm_guardrail.process_stimulus_safely(
+            stimulus_type, body_region, intensity, cause, duration
+        )
+
+    async def analyze_text_for_harmful_content(self, text: str) -> Dict[str, Any]:
+        """Analyze text for harmful or sensation content with protection"""
+        return await self.harm_guardrail.intercept_harmful_text(text)
+            
     def _init_state_models(self):
         """Initialize the various state models and settings"""
         # Pain model settings
