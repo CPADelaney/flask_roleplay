@@ -252,8 +252,9 @@ class ProceduralMemoryManager:
         self.function_registry[name] = func
     
     # Function tools for the agents
+    @static_method
     @function_tool
-    async def list_procedures(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def list_procedures(ctx: RunContextWrapper) -> Dict[str, Any]:
         """List all available procedures"""
         with agents_trace("list_procedures"):
             procedures_list = []
