@@ -7,6 +7,7 @@ import asyncio
 from typing import Dict, List, Any, Optional, Set, Tuple, Union
 from collections import Counter, defaultdict
 import numpy as np
+import openai
 
 # Updated imports for the new Agents SDK
 from agents import Agent, Runner, function_tool, trace, ModelResponse
@@ -26,9 +27,6 @@ from openai import AsyncOpenAI
 client = AsyncOpenAI()
 
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client (should be configured with API key in environment)
-client = OpenAI()
 
 class ContextAwareChunkSelector:
     """Enhanced selection system for chunks based on execution context"""
