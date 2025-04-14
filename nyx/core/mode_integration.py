@@ -687,7 +687,7 @@ class ModeIntegrationManager:
             }
     
     # Agent function tools
-    @static_method 
+    @staticmethod 
     @function_tool
     async def _process_context(ctx: RunContextWrapper, message: str) -> Dict[str, Any]:
         """
@@ -709,7 +709,7 @@ class ModeIntegrationManager:
             logger.error(f"Error processing context: {e}")
             return {"error": str(e)}
             
-    @static_method 
+    @staticmethod 
     @function_tool
     async def _update_mode_distribution(ctx: RunContextWrapper, context_result: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -731,7 +731,7 @@ class ModeIntegrationManager:
             logger.error(f"Error updating mode: {e}")
             return {"error": str(e)}
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _add_mode_goals(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -781,7 +781,7 @@ class ModeIntegrationManager:
                 "error": str(e)
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_response_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> Dict[str, Any]:
         """
@@ -824,7 +824,7 @@ class ModeIntegrationManager:
                 "verbosity": 0.5
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _analyze_feedback(ctx: RunContextWrapper, 
                              feedback: str, 
@@ -869,7 +869,7 @@ class ModeIntegrationManager:
                                ("Negative feedback" if sentiment < -0.3 else "Neutral feedback")
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _suggest_mode_adjustments(ctx: RunContextWrapper,
                                     feedback_analysis: Dict[str, Any],
@@ -944,7 +944,7 @@ class ModeIntegrationManager:
         
         return adjustments
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _calculate_feedback_reward(ctx: RunContextWrapper,
                                     feedback_analysis: Dict[str, Any],
@@ -976,7 +976,7 @@ class ModeIntegrationManager:
         
         return reward
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_mode_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
@@ -1016,7 +1016,7 @@ class ModeIntegrationManager:
                 "active_modes": []
             }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_mode_parameters(ctx: RunContextWrapper, mode: str) -> Dict[str, Any]:
         """
@@ -1037,7 +1037,7 @@ class ModeIntegrationManager:
             logger.error(f"Error getting mode parameters: {e}")
             return {}
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _get_conversation_style(ctx: RunContextWrapper, mode: str) -> Dict[str, Any]:
         """
@@ -1304,7 +1304,7 @@ class ModeIntegrationManager:
             "misalignments": misalignments
         }
 
-    @static_method
+    @staticmethod
     @function_tool
     async def _extract_blended_guidance(ctx: RunContextWrapper, mode_distribution: Dict[str, float]) -> ModeGuidance:
         """
