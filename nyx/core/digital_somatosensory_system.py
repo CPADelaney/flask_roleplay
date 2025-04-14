@@ -530,8 +530,8 @@ class DigitalSomatosensorySystem:
             
             for i in range(cycles):
                 intensity = base_intensity + (i * 0.1)
-                pleasure_regions = ["genitals", "inner_thighs", "breasts_nipples", "lips"]
-                
+                pleasure_regions = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt cheeks", "anus", "toes", "armpits", "neck", "feet"]
+
                 logger.info(f"Cycle {i+1}: stimulating but withholding")
                 stim_tasks = [
                     self.process_stimulus("pleasure", region, min(1.0, intensity), "denial_loop", duration=1.5)
@@ -742,7 +742,7 @@ class DigitalSomatosensorySystem:
                 self.body_state["gratification_level"] = intensity
                 
                 # Apply pleasure to erogenous regions with varying intensity
-                regions = ["genitals", "inner_thighs", "skin", "chest", "breasts_nipples"]
+                regions = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt cheeks", "anus", "toes", "armpits", "neck", "feet"]
                 tasks = []
                 
                 # Create tasks for parallel processing
@@ -3030,7 +3030,7 @@ class PhysicalHarmGuardrail:
                 max_value = 0.0
 
             # Calculate pleasure index
-            pleasure_zones = ["genitals", "breasts_nipples", "inner_thighs", "anus", "lips"]
+            pleasure_zones = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt cheeks", "anus", "toes", "armpits", "neck", "feet"]
             total = 0.0
             count = 0
             for region in pleasure_zones:
