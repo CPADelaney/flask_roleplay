@@ -19,6 +19,7 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 from nyx.governance_helpers import with_governance
 from lore.lore_system import LoreSystem
 from db.connection import get_db_connection_context
+from logic.fully_integrated_npc_system import IntegratedNPCSystem
 
 from logic.conflict_system.conflict_agents import (
     triage_agent, conflict_generation_agent, stakeholder_agent,
@@ -65,6 +66,7 @@ class ConflictSystemIntegration:
         
     async def initialize(self):
         """Initialize the conflict system with all necessary systems."""
+        from 
         if not self.is_initialized:
             self.agents = await initialize_agents()
             self.lore_system = await get_lore_system(self.user_id, self.conversation_id)
@@ -119,6 +121,26 @@ class ConflictSystemIntegration:
         )
         
         return permission
+
+    async def get_npc_system(user_id: int, conversation_id: int) -> IntegratedNPCSystem:
+        """
+        Get (or create) an IntegratedNPCSystem instance for the user/conversation.
+        Uses caching to avoid repeated initialization.
+        
+        Args:
+            user_id: The user ID
+            conversation_id: The conversation ID
+            
+        Returns:
+            An IntegratedNPCSystem instance
+        """
+        key = f"{user_id}:{conversation_id}"
+        
+        if key not in _npc_systems:
+            _npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
+            logging.info(f"Created new IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
+        
+        return _npc_systems[key]
 
     async def get_lore_system(user_id: int, conversation_id: int):
         """
