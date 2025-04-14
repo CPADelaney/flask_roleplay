@@ -1269,8 +1269,7 @@ class RewardSignalProcessor:
         """Get statistics about the reward system"""
         # Calculate success rate
         total_rewards = self.positive_rewards + self.negative_rewards
-        success_rate = self.positive_rewards / max(1, total_rewards)\
-        "novelty_decay": dict(self.novelty_decay)
+        success_rate = self.positive_rewards / max(1, total_rewards)
         
         # Calculate category statistics
         category_stats = {}
