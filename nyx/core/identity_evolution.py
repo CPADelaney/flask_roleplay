@@ -1184,7 +1184,7 @@ class IdentityEvolutionSystem:
         """
         return self.emotional_tendencies
 
-        @staticmethod  
+    @staticmethod  
     @function_tool
     async def _update_neurochemical_baseline(
         ctx: RunContextWrapper,
