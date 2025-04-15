@@ -332,6 +332,52 @@ class WorldPoliticsManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     #   NATION & RELATIONS  (Add, Get, etc.)
     # ------------------------------------------------------------------------
+    # Internal implementation (not decorated, safe for code)
+    async def _add_nation_impl(
+        self,
+        ctx,
+        name: str,
+        government_type: str,
+        description: str,
+        relative_power: int,
+        matriarchy_level: int,
+        population_scale: str = None,
+        major_resources: List[str] = None,
+        major_cities: List[str] = None,
+        cultural_traits: List[str] = None,
+        notable_features: str = None,
+        neighboring_nations: List[str] = None
+    ) -> int:
+        await self.ensure_initialized()
+        major_resources = major_resources or []
+        major_cities = major_cities or []
+        cultural_traits = cultural_traits or []
+        neighboring_nations = neighboring_nations or []
+    
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                nation_id = await conn.fetchval("""
+                    INSERT INTO Nations (
+                        name, government_type, description, relative_power,
+                        matriarchy_level, population_scale, major_resources,
+                        major_cities, cultural_traits, notable_features,
+                        neighboring_nations
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING id
+                """,
+                    name, government_type, description, relative_power,
+                    matriarchy_level, population_scale, major_resources,
+                    major_cities, cultural_traits, notable_features,
+                    neighboring_nations
+                )
+    
+                # Generate and store embedding
+                embedding_text = f"{name} {government_type} {description}"
+                await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
+                return nation_id
+    
+    # Tool wrapper (decorated, just calls the above)
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_nation",
@@ -354,46 +400,13 @@ class WorldPoliticsManager(BaseLoreManager):
         notable_features: str = None,
         neighboring_nations: List[str] = None
     ) -> int:
-        """
-        Add a nation to the database (function tool).
-        """
-        await self.ensure_initialized()
-        major_resources = major_resources or []
-        major_cities = major_cities or []
-        cultural_traits = cultural_traits or []
-        neighboring_nations = neighboring_nations or []
+        return await self._add_nation_impl(
+            ctx, name, government_type, description, relative_power, matriarchy_level,
+            population_scale, major_resources, major_cities, cultural_traits, notable_features, neighboring_nations
+        )
 
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                nation_id = await conn.fetchval("""
-                    INSERT INTO Nations (
-                        name, government_type, description, relative_power,
-                        matriarchy_level, population_scale, major_resources,
-                        major_cities, cultural_traits, notable_features,
-                        neighboring_nations
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING id
-                """,
-                    name, government_type, description, relative_power,
-                    matriarchy_level, population_scale, major_resources,
-                    major_cities, cultural_traits, notable_features,
-                    neighboring_nations
-                )
 
-                # Generate and store embedding
-                embedding_text = f"{name} {government_type} {description}"
-                await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
-                return nation_id
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_international_relation",
-        action_description="Adding relation between nations",
-        id_from_context=lambda ctx: "world_politics_manager"
-    )
-    @function_tool
-    async def add_international_relation(
+    async def _add_international_relation_impl(
         self,
         ctx,
         nation1_id: int,
@@ -406,14 +419,10 @@ class WorldPoliticsManager(BaseLoreManager):
         trade_relations: str = None,
         cultural_exchanges: str = None
     ) -> int:
-        """
-        Add or update a relation between two nations (function tool).
-        """
-
         await self.ensure_initialized()
         notable_conflicts = notable_conflicts or []
         notable_alliances = notable_alliances or []
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 relation_id = await conn.fetchval("""
@@ -438,6 +447,32 @@ class WorldPoliticsManager(BaseLoreManager):
                     notable_alliances, trade_relations, cultural_exchanges
                 )
                 return relation_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_international_relation",
+        action_description="Adding relation between nations",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    @function_tool
+    async def add_international_relation(
+        self,
+        ctx,
+        nation1_id: int,
+        nation2_id: int,
+        relationship_type: str,
+        relationship_quality: int,
+        description: str,
+        notable_conflicts: List[str] = None,
+        notable_alliances: List[str] = None,
+        trade_relations: str = None,
+        cultural_exchanges: str = None
+    ) -> int:
+        return await self._add_international_relation_impl(
+            ctx, nation1_id, nation2_id, relationship_type, relationship_quality,
+            description, notable_conflicts, notable_alliances, trade_relations, cultural_exchanges
+        )
+
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
