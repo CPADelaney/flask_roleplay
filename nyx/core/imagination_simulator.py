@@ -6,18 +6,36 @@ import datetime
 import random
 import uuid
 import json
-from typing import Dict, List, Any, Optional, Sequence, Mapping
+from typing import Dict, List, Any, Optional, Sequence, Mapping, Union, TypedDict
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, ModelSettings, trace, function_tool, RunContextWrapper
+# Import OpenAI Agents SDK components
+from agents import (
+    Agent, 
+    Runner, 
+    ModelSettings, 
+    trace, 
+    function_tool, 
+    handoff, 
+    RunContextWrapper, 
+    RunConfig,
+    custom_span
+)
+from agents.tracing.util import gen_trace_id
+
+# Import Nyx core systems
+from nyx.core.reasoning_core import ReasoningCore, CausalModel
+from nyx.core.reflection_engine import ReflectionEngine
 
 logger = logging.getLogger(__name__)
+
+# =============== Pydantic Models for Structured Output ===============
 
 class SimulationState(BaseModel):
     """Represents a state within a simulation."""
     step: int
     timestamp: datetime.datetime
-    state_variables: Dict[str, Any] = Field(default_factory=dict)  # Key variables being tracked
+    state_variables: Dict[str, Any] = Field(default_factory=dict)
     emotional_state: Optional[Dict[str, Any]] = None
     reasoning_focus: Optional[str] = None
     last_action: Optional[str] = None
@@ -26,42 +44,72 @@ class SimulationResult(BaseModel):
     """Result of running a simulation."""
     simulation_id: str
     success: bool
-    termination_reason: str  # e.g., "max_steps", "goal_reached", "stable_state", "error"
+    termination_reason: str
     final_state: SimulationState
     trajectory: List[SimulationState] = Field(default_factory=list)
-    predicted_outcome: Any = None  # What the simulation predicts will happen
-    emotional_impact: Optional[Dict[str, float]] = None  # Predicted emotional consequence
-    causal_analysis: Optional[Dict[str, Any]] = None  # Causal links identified in simulation
+    predicted_outcome: Any = None
+    emotional_impact: Optional[Dict[str, float]] = None
+    causal_analysis: Optional[Dict[str, Any]] = None
     confidence: float = Field(0.5, ge=0.0, le=1.0)
+    reflection: Optional[str] = None
+    abstraction: Optional[Dict[str, Any]] = None
 
 class SimulationInput(BaseModel):
     """Input parameters for running a simulation."""
     simulation_id: str = Field(default_factory=lambda: f"sim_{uuid.uuid4().hex[:8]}")
     description: str = "Hypothetical simulation"
-    initial_state: Dict[str, Any]  # Starting variables, emotion state, etc.
-    hypothetical_event: Optional[Dict[str, Any]] = None  # e.g., {'action': 'say_X', 'params': {}}
-    counterfactual_condition: Optional[Dict[str, Any]] = None  # e.g., {'node_id': 'user_trust', 'value': 0.2}
-    goal_condition: Optional[Dict[str, Any]] = None  # State to reach for success
+    initial_state: Dict[str, Any]
+    hypothetical_event: Optional[Dict[str, Any]] = None
+    counterfactual_condition: Optional[Dict[str, Any]] = None
+    goal_condition: Optional[Dict[str, Any]] = None
     max_steps: int = 10
-    focus_variables: List[str] = Field(default_factory=list)  # Variables to primarily track/report
+    focus_variables: List[str] = Field(default_factory=list)
+    domain: str = "general"
+    use_reflection: bool = True
 
-class ImaginationSimulator:
-    """
-    Simulates hypothetical scenarios, counterfactuals, and potential futures.
-    Integrates reasoning, knowledge, emotional prediction, and identity.
-    """
+class ScenarioGenerationOutput(BaseModel):
+    """Output from the scenario generation agent."""
+    scenario_description: str
+    initial_state_modifications: Dict[str, Any]
+    hypothetical_event: Optional[Dict[str, Any]] = None
+    counterfactual_condition: Optional[Dict[str, Any]] = None
+    goal_condition: Optional[Dict[str, Any]] = None
+    focus_variables: List[str] = Field(default_factory=list)
+    creative_elements: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
 
-    def __init__(self, reasoning_core=None, knowledge_core=None, emotional_core=None, identity_evolution=None):
+class SimulationAnalysisOutput(BaseModel):
+    """Output from the simulation analysis agent."""
+    analysis_text: str
+    causal_patterns: List[Dict[str, Any]] = Field(default_factory=list)
+    emotional_impacts: Dict[str, float] = Field(default_factory=dict)
+    key_insights: List[str] = Field(default_factory=list)
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
+    recommended_followup: Optional[str] = None
+
+class SimulationContext:
+    """Context object for simulation agents."""
+    def __init__(self, 
+                reasoning_core=None, 
+                reflection_engine=None, 
+                knowledge_core=None, 
+                emotional_core=None,
+                identity_evolution=None):
         self.reasoning_core = reasoning_core
+        self.reflection_engine = reflection_engine
         self.knowledge_core = knowledge_core
         self.emotional_core = emotional_core
         self.identity_evolution = identity_evolution
-        self.simulation_history: Dict[str, SimulationResult] = {}
-        self.max_history = 50
-        self.simulation_agent = self._create_simulation_agent()
+        
+        # Runtime state
+        self.current_simulation = None
+        self.current_state = None
+        self.history = []
         self.trace_group_id = "NyxImagination"
         
-        # Initialize simulation counters
+        # Temporary storage
+        self.causal_models = {}
+        self.concept_spaces = {}
         self.simulation_stats = {
             "total_simulations": 0,
             "successful_simulations": 0,
@@ -69,715 +117,1604 @@ class ImaginationSimulator:
             "by_category": {}
         }
 
-        logger.info("ImaginationSimulator initialized")
+# =============== Function Tools for Agents ===============
 
-    def _create_simulation_agent(self) -> Optional[Agent]:
-        """Creates an agent to help interpret simulation requests and results."""
-        try:
-            return Agent(
-                name="Simulation Analyst",
-                instructions="""You analyze requests for simulations and interpret their results for the Nyx AI.
-                
-                For simulation setup:
-                1. Based on a description (e.g., "What if I apologized?"), determine appropriate initial state modifications, events, or counterfactuals.
-                2. Define variables to track during the simulation.
-                3. Specify any goal conditions that would indicate successful simulation completion.
-                
-                For simulation analysis:
-                1. Examine the simulation trajectory and final state.
-                2. Identify key causal relationships and patterns.
-                3. Provide a concise summary of what the simulation predicts will happen.
-                4. Assess the confidence in this prediction based on simulation coherence.
-                5. Note any significant emotional impacts or changes.
-                
-                Your outputs should be structured JSON matching the expected input or output formats.
-                """,
-                model="gpt-4o",
-                model_settings=ModelSettings(
-                    temperature=0.3,
-                    response_format={"type": "json_object"}
-                ),
-                tools=[
-                    self.get_causal_model,
-                    self.get_current_emotional_state
-                ],
-                output_type=Dict  # Flexible output for analysis
-            )
-        except Exception as e:
-            logger.error(f"Error creating simulation agent: {e}")
-            return None
-
-    @function_tool
-    async def get_causal_model(self, domain: str = "general") -> Dict[str, Any]:
-        """Gets the causal model for a specific domain from the reasoning core."""
-        if not self.reasoning_core:
-            return {"status": "error", "message": "No reasoning core available"}
-            
-        try:
-            if hasattr(self.reasoning_core, 'get_causal_model'):
-                model = await self.reasoning_core.get_causal_model(domain)
-                return {
-                    "status": "success",
-                    "model": model
-                }
-            else:
-                return {
-                    "status": "error", 
-                    "message": "Reasoning core does not support causal models"
-                }
-        except Exception as e:
-            logger.error(f"Error getting causal model: {e}")
-            return {
-                "status": "error",
-                "message": f"Error: {str(e)}"
-            }
-
-    @function_tool
-    async def get_current_emotional_state(self) -> Dict[str, Any]:
-        """Gets the current emotional state from the emotional core."""
-        if not self.emotional_core:
-            return {"status": "error", "message": "No emotional core available"}
-            
-        try:
-            if hasattr(self.emotional_core, 'get_current_emotion'):
-                emotion = await self.emotional_core.get_current_emotion()
-                return {
-                    "status": "success",
-                    "emotion": emotion
-                }
-            else:
-                return {
-                    "status": "error", 
-                    "message": "Emotional core does not support emotion retrieval"
-                }
-        except Exception as e:
-            logger.error(f"Error getting emotional state: {e}")
-            return {
-                "status": "error",
-                "message": f"Error: {str(e)}"
-            }
-
-    async def setup_simulation(self, description: str, current_brain_state: Dict[str, Any]) -> Optional[SimulationInput]:
-        """Uses the agent to interpret a description into SimulationInput."""
-        if not self.simulation_agent:
-            logger.warning("Simulation agent not available for setup")
-            # Basic setup based on description keywords as fallback
-            sim_input = SimulationInput(
-                initial_state=current_brain_state, 
-                description=description
-            )
-            
-            if "what if i" in description.lower():
-                 sim_input.hypothetical_event = {"description": description}  # Placeholder
-            elif "what if" in description.lower():
-                 sim_input.counterfactual_condition = {"description": description}  # Placeholder
-                 
-            return sim_input
-
-        try:
-            with trace(workflow_name="SetupSimulation", group_id=self.trace_group_id):
-                # Prepare context for the agent
-                context = {
-                    "request": description,
-                    "current_state_keys": list(current_brain_state.keys()),
-                    "current_state_sample": {
-                        k: current_brain_state[k] for k in list(current_brain_state.keys())[:5]
-                    } if current_brain_state else {}
-                }
-                
-                prompt = json.dumps(context)
-
-                # Run the agent to get simulation setup
-                result = await Runner.run(
-                    self.simulation_agent,
-                    prompt,
-                    run_config={
-                        "workflow_name": "SimulationSetup",
-                        "trace_metadata": {"description": description}
-                    }
-                )
-                
-                # Process agent output
-                setup_data = result.final_output
-                
-                # Ensure we have required fields
-                if "initial_state" not in setup_data and "description" not in setup_data:
-                    raise ValueError("Missing required fields in simulation setup")
-                
-                # Merge with current state, apply changes
-                initial_state = current_brain_state.copy()
-                
-                # Apply specific state changes if provided
-                if "initial_state" in setup_data and isinstance(setup_data["initial_state"], dict):
-                    initial_state.update(setup_data["initial_state"])
-                
-                # Create SimulationInput object
-                sim_input = SimulationInput(
-                    description=setup_data.get("description", description),
-                    initial_state=initial_state,
-                    hypothetical_event=setup_data.get("hypothetical_event"),
-                    counterfactual_condition=setup_data.get("counterfactual_condition"),
-                    goal_condition=setup_data.get("goal_condition"),
-                    max_steps=setup_data.get("max_steps", 10),
-                    focus_variables=setup_data.get("focus_variables", [])
-                )
-                
-                return sim_input
-
-        except Exception as e:
-            logger.exception(f"Error setting up simulation for '{description}': {e}")
-            return None
-            
-
-    self.simulation_analyst_agent = Agent(
-        name="Simulation Analyst",
-        instructions="""You analyze the results of simulations to extract insights.
-        
-        Your role is to:
-        1. Examine the simulation trajectory and identify patterns
-        2. Extract key causal relationships
-        3. Predict likely outcomes based on the simulation data
-        4. Assess confidence in these predictions
-        5. Identify emotional impacts and key dynamics
-        
-        Focus on extracting practical, actionable insights from simulation data.
-        """,
-        model="gpt-4o",
-        model_settings=ModelSettings(temperature=0.3),
-        tools=[],
-        output_type=SimulationInsights  # Define this Pydantic model
-    )
+@function_tool
+async def setup_simulation_from_description(
+    ctx: RunContextWrapper[SimulationContext],
+    description: str,
+    current_brain_state: Dict[str, Any],
+    domain: str = "general"
+) -> Dict[str, Any]:
+    """
+    Interpret a simulation description into a structured simulation setup.
     
-    # Add better tracing to simulation runs
-    async def run_simulation(self, sim_input: SimulationInput) -> SimulationResult:
-        """Runs a simulation based on the input parameters."""
+    Args:
+        description: User description of the desired simulation
+        current_brain_state: Current state variables
+        domain: Domain for the simulation
         
+    Returns:
+        Structured simulation setup
+    """
+    with custom_span("setup_simulation_from_description"):
+        # Create base simulation input
+        sim_input = {
+            "simulation_id": f"sim_{uuid.uuid4().hex[:8]}",
+            "description": description,
+            "initial_state": current_brain_state.copy(),
+            "domain": domain,
+            "max_steps": 10,
+            "focus_variables": []
+        }
+        
+        # Extract simulation type from description
+        if "what if i" in description.lower():
+            sim_input["hypothetical_event"] = {
+                "action": "hypothetical_user_action",
+                "description": description
+            }
+        elif "what if" in description.lower():
+            sim_input["counterfactual_condition"] = {
+                "description": description
+            }
+        
+        # Add timestamp
+        sim_input["timestamp"] = datetime.datetime.now().isoformat()
+        
+        return sim_input
+
+@function_tool
+async def get_causal_model_for_simulation(
+    ctx: RunContextWrapper[SimulationContext],
+    domain: str = "general"
+) -> Dict[str, Any]:
+    """
+    Retrieve or create a causal model for the specified domain.
+    
+    Args:
+        domain: Domain for the causal model
+        
+    Returns:
+        Causal model structure
+    """
+    with custom_span("get_causal_model_for_simulation"):
+        # Try to get from context cache first
+        if domain in ctx.context.causal_models:
+            return {
+                "status": "cached",
+                "model": ctx.context.causal_models[domain]
+            }
+        
+        # Try to get from reasoning core
+        if ctx.context.reasoning_core:
+            try:
+                model = await ctx.context.reasoning_core.get_causal_model(domain)
+                if model:
+                    # Cache the model
+                    ctx.context.causal_models[domain] = model
+                    return {
+                        "status": "retrieved",
+                        "model": model
+                    }
+            except Exception as e:
+                logger.error(f"Error getting causal model: {str(e)}")
+        
+        # Create a simple default model
+        default_model = {
+            "id": f"model_{uuid.uuid4().hex[:8]}",
+            "name": f"Default {domain} model",
+            "domain": domain,
+            "nodes": {},
+            "relations": [],
+            "metadata": {
+                "created_at": datetime.datetime.now().isoformat(),
+                "is_default": True
+            }
+        }
+        
+        # Add some basic nodes based on domain
+        if domain == "social":
+            default_model["nodes"] = {
+                "user_trust": {"name": "User Trust", "type": "variable", "current_value": 0.5},
+                "user_satisfaction": {"name": "User Satisfaction", "type": "variable", "current_value": 0.5},
+                "relationship_depth": {"name": "Relationship Depth", "type": "variable", "current_value": 0.3},
+                "communication_quality": {"name": "Communication Quality", "type": "variable", "current_value": 0.6}
+            }
+            
+            # Add basic relations
+            default_model["relations"] = [
+                {"source": "communication_quality", "target": "user_satisfaction", "type": "causal", "strength": 0.7},
+                {"source": "user_satisfaction", "target": "user_trust", "type": "causal", "strength": 0.8},
+                {"source": "user_trust", "target": "relationship_depth", "type": "causal", "strength": 0.6}
+            ]
+        elif domain == "problem_solving":
+            default_model["nodes"] = {
+                "problem_complexity": {"name": "Problem Complexity", "type": "variable", "current_value": 0.5},
+                "solution_quality": {"name": "Solution Quality", "type": "variable", "current_value": 0.5},
+                "user_comprehension": {"name": "User Comprehension", "type": "variable", "current_value": 0.6},
+                "implementation_feasibility": {"name": "Implementation Feasibility", "type": "variable", "current_value": 0.7}
+            }
+            
+            # Add basic relations
+            default_model["relations"] = [
+                {"source": "problem_complexity", "target": "solution_quality", "type": "causal", "strength": -0.6},
+                {"source": "solution_quality", "target": "implementation_feasibility", "type": "causal", "strength": 0.7},
+                {"source": "user_comprehension", "target": "implementation_feasibility", "type": "causal", "strength": 0.5}
+            ]
+        else:
+            # Generic default model
+            default_model["nodes"] = {
+                "user_satisfaction": {"name": "User Satisfaction", "type": "variable", "current_value": 0.5},
+                "system_performance": {"name": "System Performance", "type": "variable", "current_value": 0.7},
+                "interaction_quality": {"name": "Interaction Quality", "type": "variable", "current_value": 0.6}
+            }
+            
+            # Add basic relations
+            default_model["relations"] = [
+                {"source": "system_performance", "target": "user_satisfaction", "type": "causal", "strength": 0.6},
+                {"source": "interaction_quality", "target": "user_satisfaction", "type": "causal", "strength": 0.7}
+            ]
+        
+        # Cache the model
+        ctx.context.causal_models[domain] = default_model
+        
+        return {
+            "status": "created",
+            "model": default_model
+        }
+
+@function_tool
+async def predict_simulation_step(
+    ctx: RunContextWrapper[SimulationContext],
+    current_state: Dict[str, Any],
+    causal_model: Dict[str, Any],
+    step: int
+) -> Dict[str, Any]:
+    """
+    Predict the next simulation state based on causal model.
+    
+    Args:
+        current_state: Current simulation state
+        causal_model: Causal model to use for prediction
+        step: Current step number
+        
+    Returns:
+        Updated simulation state
+    """
+    with custom_span("predict_simulation_step"):
+        # Start with a copy of the current state
+        next_state = current_state.copy()
+        next_state["step"] = step
+        next_state["timestamp"] = datetime.datetime.now().isoformat()
+        
+        # Get the state variables
+        state_vars = next_state.get("state_variables", {}).copy()
+        
+        # Propagate causal effects through the model
+        nodes = causal_model.get("nodes", {})
+        relations = causal_model.get("relations", [])
+        
+        # Process each causal relation
+        for relation in relations:
+            source_id = relation.get("source")
+            target_id = relation.get("target")
+            relation_type = relation.get("type", "causal")
+            strength = relation.get("strength", 0.5)
+            
+            # Skip if not a causal relation
+            if relation_type != "causal":
+                continue
+                
+            # Skip if nodes don't exist in model
+            if source_id not in nodes or target_id not in nodes:
+                continue
+                
+            # Skip if source not in state variables
+            if source_id not in state_vars:
+                continue
+                
+            # Initialize target if not exists
+            if target_id not in state_vars:
+                state_vars[target_id] = nodes[target_id].get("current_value", 0.5)
+                
+            # Get current values
+            source_value = state_vars[source_id]
+            target_value = state_vars[target_id]
+            
+            # Apply causal influence with some random variation
+            if isinstance(source_value, (int, float)) and isinstance(target_value, (int, float)):
+                # Calculate influence
+                change = (source_value - 0.5) * strength * 0.2  # Scale the effect
+                
+                # Add some noise
+                noise = random.uniform(-0.05, 0.05)
+                
+                # Apply change
+                new_value = target_value + change + noise
+                
+                # Clamp between 0 and 1
+                new_value = max(0.0, min(1.0, new_value))
+                
+                # Update state
+                state_vars[target_id] = new_value
+        
+        # Update emotional state based on state variables
+        emotional_state = next_state.get("emotional_state", {}).copy()
+        
+        # Map key variables to emotional impacts
+        if "user_satisfaction" in state_vars:
+            # Satisfaction impacts valence
+            emotional_state["valence"] = state_vars["user_satisfaction"] * 2 - 1  # Map 0-1 to -1 to 1
+            
+        if "interaction_quality" in state_vars:
+            # Interaction quality impacts arousal
+            emotional_state["arousal"] = state_vars["interaction_quality"]
+            
+        # Set a primary emotion based on valence and arousal
+        valence = emotional_state.get("valence", 0)
+        arousal = emotional_state.get("arousal", 0.5)
+        
+        # Simple emotion mapping based on valence and arousal
+        primary_emotion = "Neutral"
+        if valence > 0.3:
+            if arousal > 0.6:
+                primary_emotion = "Joy"
+            else:
+                primary_emotion = "Contentment"
+        elif valence < -0.3:
+            if arousal > 0.6:
+                primary_emotion = "Frustration"
+            else:
+                primary_emotion = "Sadness"
+        
+        emotional_state["primary_emotion"] = {
+            "name": primary_emotion,
+            "intensity": abs(valence) * 0.8 + 0.2  # Scale to 0.2-1.0
+        }
+        
+        # Update the next state
+        next_state["state_variables"] = state_vars
+        next_state["emotional_state"] = emotional_state
+        
+        return next_state
+
+@function_tool
+async def apply_hypothetical_event(
+    ctx: RunContextWrapper[SimulationContext],
+    initial_state: Dict[str, Any],
+    event: Dict[str, Any],
+    causal_model: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Apply a hypothetical event to the initial state.
+    
+    Args:
+        initial_state: Initial simulation state
+        event: Hypothetical event to apply
+        causal_model: Causal model for simulation
+        
+    Returns:
+        Updated state after applying event
+    """
+    with custom_span("apply_hypothetical_event"):
+        # Start with a copy of the initial state
+        updated_state = initial_state.copy()
+        state_vars = updated_state.get("state_variables", {}).copy()
+        
+        # Extract event information
+        action = event.get("action", "")
+        description = event.get("description", "")
+        parameters = event.get("parameters", {})
+        
+        # Apply event effects based on action type
+        if "apologize" in action.lower() or "apologize" in description.lower():
+            # Apologizing typically increases trust and decreases negative emotions
+            if "user_trust" in state_vars:
+                state_vars["user_trust"] = min(1.0, state_vars["user_trust"] + 0.15)
+            if "user_anger" in state_vars:
+                state_vars["user_anger"] = max(0.0, state_vars["user_anger"] - 0.2)
+            if "relationship_tension" in state_vars:
+                state_vars["relationship_tension"] = max(0.0, state_vars["relationship_tension"] - 0.15)
+        
+        elif "explain" in action.lower() or "explain" in description.lower():
+            # Explaining typically increases comprehension
+            if "user_comprehension" in state_vars:
+                state_vars["user_comprehension"] = min(1.0, state_vars["user_comprehension"] + 0.2)
+            if "communication_quality" in state_vars:
+                state_vars["communication_quality"] = min(1.0, state_vars["communication_quality"] + 0.1)
+        
+        elif "share" in action.lower() or "share" in description.lower():
+            # Sharing typically increases intimacy and trust
+            if "intimacy" in state_vars:
+                state_vars["intimacy"] = min(1.0, state_vars["intimacy"] + 0.15)
+            if "user_trust" in state_vars:
+                state_vars["user_trust"] = min(1.0, state_vars["user_trust"] + 0.1)
+            if "relationship_depth" in state_vars:
+                state_vars["relationship_depth"] = min(1.0, state_vars["relationship_depth"] + 0.1)
+        
+        elif "disagree" in action.lower() or "disagree" in description.lower():
+            # Disagreeing can increase tension but also respect if done well
+            if "relationship_tension" in state_vars:
+                state_vars["relationship_tension"] = min(1.0, state_vars["relationship_tension"] + 0.15)
+            if "intellectual_engagement" in state_vars:
+                state_vars["intellectual_engagement"] = min(1.0, state_vars["intellectual_engagement"] + 0.2)
+        
+        else:
+            # Generic event based on description
+            # Extract key words from description
+            description_lower = description.lower()
+            
+            # Apply effects based on sentiment
+            positive_words = ["help", "improve", "increase", "better", "good", "positive", "success"]
+            negative_words = ["harm", "worsen", "decrease", "bad", "negative", "failure"]
+            
+            # Count positive and negative words
+            positive_count = sum(1 for word in positive_words if word in description_lower)
+            negative_count = sum(1 for word in negative_words if word in description_lower)
+            
+            # Determine overall sentiment
+            sentiment = positive_count - negative_count
+            
+            # Apply generic effects based on sentiment
+            for var_name in state_vars.keys():
+                if isinstance(state_vars[var_name], (int, float)):
+                    if "trust" in var_name or "satisfaction" in var_name or "quality" in var_name:
+                        # Adjust positively or negatively based on sentiment
+                        if sentiment > 0:
+                            state_vars[var_name] = min(1.0, state_vars[var_name] + 0.1 * sentiment)
+                        elif sentiment < 0:
+                            state_vars[var_name] = max(0.0, state_vars[var_name] + 0.1 * sentiment)
+        
+        # Update the state variables
+        updated_state["state_variables"] = state_vars
+        updated_state["last_action"] = action or description
+        
+        return updated_state
+
+@function_tool
+async def apply_counterfactual_condition(
+    ctx: RunContextWrapper[SimulationContext],
+    initial_state: Dict[str, Any],
+    counterfactual: Dict[str, Any],
+    causal_model: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Apply a counterfactual condition to the initial state.
+    
+    Args:
+        initial_state: Initial simulation state
+        counterfactual: Counterfactual condition to apply
+        causal_model: Causal model for simulation
+        
+    Returns:
+        Updated state after applying counterfactual
+    """
+    with custom_span("apply_counterfactual_condition"):
+        # Start with a copy of the initial state
+        updated_state = initial_state.copy()
+        state_vars = updated_state.get("state_variables", {}).copy()
+        
+        # Extract counterfactual information
+        node_id = counterfactual.get("node_id")
+        value = counterfactual.get("value")
+        description = counterfactual.get("description", "")
+        
+        # If node_id and value provided, apply directly
+        if node_id and value is not None:
+            state_vars[node_id] = value
+        
+        # Otherwise, interpret from description
+        elif description:
+            description_lower = description.lower()
+            
+            # Look for phrases matching "what if X was Y"
+            matched = False
+            
+            # Check nodes in model
+            nodes = causal_model.get("nodes", {})
+            for node_id, node_data in nodes.items():
+                node_name = node_data.get("name", "").lower()
+                
+                # Check if node name is in description
+                if node_name in description_lower:
+                    # Look for value indicators
+                    if "high" in description_lower or "increase" in description_lower:
+                        state_vars[node_id] = min(1.0, (state_vars.get(node_id, 0.5) + 0.3))
+                        matched = True
+                    elif "low" in description_lower or "decrease" in description_lower:
+                        state_vars[node_id] = max(0.0, (state_vars.get(node_id, 0.5) - 0.3))
+                        matched = True
+                    elif "very high" in description_lower:
+                        state_vars[node_id] = 0.9
+                        matched = True
+                    elif "very low" in description_lower:
+                        state_vars[node_id] = 0.1
+                        matched = True
+            
+            # If no match, look for emotional counterfactuals
+            if not matched:
+                if "user was happy" in description_lower or "user felt good" in description_lower:
+                    if "user_satisfaction" in state_vars:
+                        state_vars["user_satisfaction"] = 0.8
+                    emotional_state = updated_state.get("emotional_state", {}).copy()
+                    emotional_state["valence"] = 0.7
+                    emotional_state["primary_emotion"] = {"name": "Joy", "intensity": 0.8}
+                    updated_state["emotional_state"] = emotional_state
+                    
+                elif "user was unhappy" in description_lower or "user felt bad" in description_lower:
+                    if "user_satisfaction" in state_vars:
+                        state_vars["user_satisfaction"] = 0.2
+                    emotional_state = updated_state.get("emotional_state", {}).copy()
+                    emotional_state["valence"] = -0.6
+                    emotional_state["primary_emotion"] = {"name": "Sadness", "intensity": 0.7}
+                    updated_state["emotional_state"] = emotional_state
+                    
+                elif "relationship was stronger" in description_lower:
+                    if "relationship_depth" in state_vars:
+                        state_vars["relationship_depth"] = 0.8
+                    if "user_trust" in state_vars:
+                        state_vars["user_trust"] = 0.8
+                
+                elif "relationship was weaker" in description_lower:
+                    if "relationship_depth" in state_vars:
+                        state_vars["relationship_depth"] = 0.2
+                    if "user_trust" in state_vars:
+                        state_vars["user_trust"] = 0.3
+        
+        # Update the state variables
+        updated_state["state_variables"] = state_vars
+        updated_state["reasoning_focus"] = f"Counterfactual: {description}"
+        
+        return updated_state
+
+@function_tool
+async def check_goal_condition(
+    ctx: RunContextWrapper[SimulationContext],
+    current_state: Dict[str, Any],
+    goal_condition: Dict[str, Any]
+) -> Dict[str, bool]:
+    """
+    Check if the current state satisfies the goal condition.
+    
+    Args:
+        current_state: Current simulation state
+        goal_condition: Goal condition to check
+        
+    Returns:
+        Whether the goal condition is met
+    """
+    with custom_span("check_goal_condition"):
+        # Get state variables
+        state_vars = current_state.get("state_variables", {})
+        
+        # Check each goal condition
+        all_conditions_met = True
+        conditions_met = {}
+        
+        for var_name, target_value in goal_condition.items():
+            if var_name not in state_vars:
+                all_conditions_met = False
+                conditions_met[var_name] = False
+                continue
+                
+            current_value = state_vars[var_name]
+            
+            # Handle numeric comparisons with tolerance
+            if isinstance(target_value, (int, float)) and isinstance(current_value, (int, float)):
+                is_met = abs(current_value - target_value) <= 0.1  # 10% tolerance
+            else:
+                is_met = current_value == target_value
+                
+            conditions_met[var_name] = is_met
+            if not is_met:
+                all_conditions_met = False
+        
+        return {
+            "goal_met": all_conditions_met,
+            "conditions_met": conditions_met
+        }
+
+@function_tool
+async def evaluate_simulation_stability(
+    ctx: RunContextWrapper[SimulationContext],
+    current_state: Dict[str, Any],
+    previous_state: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Check if the simulation has reached a stable state.
+    
+    Args:
+        current_state: Current simulation state
+        previous_state: Previous simulation state
+        
+    Returns:
+        Stability evaluation
+    """
+    with custom_span("evaluate_simulation_stability"):
+        # Get state variables
+        current_vars = current_state.get("state_variables", {})
+        previous_vars = previous_state.get("state_variables", {})
+        
+        # Calculate changes in each variable
+        changes = {}
+        total_change = 0.0
+        num_variables = 0
+        
+        for var_name, current_value in current_vars.items():
+            if var_name in previous_vars:
+                previous_value = previous_vars[var_name]
+                
+                # Calculate change for numeric variables
+                if isinstance(current_value, (int, float)) and isinstance(previous_value, (int, float)):
+                    change = abs(current_value - previous_value)
+                    changes[var_name] = change
+                    total_change += change
+                    num_variables += 1
+        
+        # Calculate average change
+        avg_change = total_change / num_variables if num_variables > 0 else 0.0
+        
+        # Determine stability
+        is_stable = avg_change < 0.05  # Less than 5% average change
+        
+        return {
+            "is_stable": is_stable,
+            "avg_change": avg_change,
+            "changes": changes,
+            "stability_confidence": 1.0 - min(1.0, avg_change * 10)  # Convert change to confidence
+        }
+
+@function_tool
+async def analyze_simulation_result(
+    ctx: RunContextWrapper[SimulationContext],
+    simulation_result: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Analyze the results of a simulation run.
+    
+    Args:
+        simulation_result: Simulation result to analyze
+        
+    Returns:
+        Analysis of simulation results
+    """
+    with custom_span("analyze_simulation_result"):
+        # Extract key information
+        simulation_id = simulation_result.get("simulation_id", "unknown")
+        success = simulation_result.get("success", False)
+        termination_reason = simulation_result.get("termination_reason", "unknown")
+        final_state = simulation_result.get("final_state", {})
+        trajectory = simulation_result.get("trajectory", [])
+        
+        # Calculate key metrics
+        state_vars = final_state.get("state_variables", {})
+        initial_state = trajectory[0].get("state_variables", {}) if trajectory else {}
+        
+        # Track changes in key variables
+        variable_changes = {}
+        for var_name, final_value in state_vars.items():
+            if var_name in initial_state:
+                initial_value = initial_state[var_name]
+                if isinstance(final_value, (int, float)) and isinstance(initial_value, (int, float)):
+                    change = final_value - initial_value
+                    variable_changes[var_name] = {
+                        "initial": initial_value,
+                        "final": final_value,
+                        "change": change,
+                        "percent_change": (change / initial_value) * 100 if initial_value != 0 else 0
+                    }
+        
+        # Identify significant changes
+        significant_changes = {k: v for k, v in variable_changes.items() if abs(v["change"]) > 0.1}
+        
+        # Analyze emotional impact
+        emotional_impact = {}
+        if "emotional_state" in final_state:
+            final_emotional = final_state["emotional_state"]
+            
+            if trajectory and "emotional_state" in trajectory[0]:
+                initial_emotional = trajectory[0]["emotional_state"]
+                
+                # Compare emotional states
+                if "valence" in final_emotional and "valence" in initial_emotional:
+                    valence_change = final_emotional["valence"] - initial_emotional["valence"]
+                    emotional_impact["valence_change"] = valence_change
+                
+                if "arousal" in final_emotional and "arousal" in initial_emotional:
+                    arousal_change = final_emotional["arousal"] - initial_emotional["arousal"]
+                    emotional_impact["arousal_change"] = arousal_change
+                
+                # Compare primary emotions
+                if "primary_emotion" in final_emotional and "primary_emotion" in initial_emotional:
+                    initial_emotion = initial_emotional["primary_emotion"].get("name") if isinstance(initial_emotional["primary_emotion"], dict) else initial_emotional["primary_emotion"]
+                    final_emotion = final_emotional["primary_emotion"].get("name") if isinstance(final_emotional["primary_emotion"], dict) else final_emotional["primary_emotion"]
+                    
+                    emotional_impact["emotion_transition"] = f"{initial_emotion} -> {final_emotion}"
+            
+            # Set current emotional state
+            if "primary_emotion" in final_emotional:
+                if isinstance(final_emotional["primary_emotion"], dict):
+                    emotional_impact["final_emotion"] = final_emotional["primary_emotion"].get("name", "Unknown")
+                    emotional_impact["emotion_intensity"] = final_emotional["primary_emotion"].get("intensity", 0.5)
+                else:
+                    emotional_impact["final_emotion"] = final_emotional["primary_emotion"]
+                    emotional_impact["emotion_intensity"] = 0.5
+        
+        # Generate insights
+        insights = []
+        
+        # Insight about success/failure
+        if success:
+            insights.append(f"The simulation was successful, terminating due to {termination_reason}.")
+        else:
+            insights.append(f"The simulation was unsuccessful, terminating due to {termination_reason}.")
+        
+        # Insights about significant changes
+        if significant_changes:
+            changes_text = ", ".join([f"{k} ({v['change']:.2f})" for k, v in significant_changes.items()])
+            insights.append(f"Significant changes occurred in: {changes_text}")
+        else:
+            insights.append("No significant changes occurred in state variables.")
+        
+        # Insight about emotional impact
+        if emotional_impact:
+            if "emotion_transition" in emotional_impact:
+                insights.append(f"Emotional transition: {emotional_impact['emotion_transition']}")
+            if "valence_change" in emotional_impact:
+                valence_desc = "positive" if emotional_impact["valence_change"] > 0 else "negative"
+                insights.append(f"Emotional valence shifted in a {valence_desc} direction.")
+        
+        # Confidence calculation based on trajectory length and termination reason
+        confidence_factors = {
+            "trajectory_length": min(1.0, len(trajectory) / 10) * 0.3,  # More steps = more confidence
+            "termination": 0.0,
+            "stability": 0.0
+        }
+        
+        # Adjust for termination reason
+        if termination_reason == "goal_reached":
+            confidence_factors["termination"] = 0.4
+        elif termination_reason == "stable_state":
+            confidence_factors["termination"] = 0.3
+            confidence_factors["stability"] = 0.2
+        elif termination_reason == "max_steps":
+            confidence_factors["termination"] = 0.1
+        
+        # Calculate overall confidence
+        confidence = sum(confidence_factors.values()) + 0.2  # Base confidence of 0.2
+        
+        return {
+            "simulation_id": simulation_id,
+            "variable_changes": variable_changes,
+            "significant_changes": significant_changes,
+            "emotional_impact": emotional_impact,
+            "insights": insights,
+            "confidence": confidence,
+            "confidence_factors": confidence_factors
+        }
+
+@function_tool
+async def generate_simulation_reflection(
+    ctx: RunContextWrapper[SimulationContext],
+    simulation_result: Dict[str, Any],
+    analysis: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Generate reflection on a simulation using the reflection engine.
+    
+    Args:
+        simulation_result: Simulation result
+        analysis: Analysis of simulation result
+        
+    Returns:
+        Reflection on simulation
+    """
+    with custom_span("generate_simulation_reflection"):
+        reflection_text = ""
+        confidence = 0.0
+        
+        # Check if reflection engine is available
+        if ctx.context.reflection_engine:
+            try:
+                # Convert simulation result to memories format for reflection
+                memories = []
+                
+                # Add initial state as memory
+                if simulation_result.get("trajectory"):
+                    initial_state = simulation_result["trajectory"][0]
+                    initial_memory = {
+                        "id": f"sim_init_{simulation_result['simulation_id']}",
+                        "memory_text": f"Initial state of simulation '{simulation_result.get('description', 'Simulation')}' with variables: {json.dumps(initial_state.get('state_variables', {}))}",
+                        "memory_type": "simulation",
+                        "metadata": {
+                            "emotional_context": initial_state.get("emotional_state", {}),
+                            "simulation_step": 0,
+                            "simulation_id": simulation_result["simulation_id"]
+                        }
+                    }
+                    memories.append(initial_memory)
+                
+                # Add final state as memory
+                final_state = simulation_result.get("final_state", {})
+                final_memory = {
+                    "id": f"sim_final_{simulation_result['simulation_id']}",
+                    "memory_text": f"Final state of simulation '{simulation_result.get('description', 'Simulation')}' with variables: {json.dumps(final_state.get('state_variables', {}))}",
+                    "memory_type": "simulation",
+                    "metadata": {
+                        "emotional_context": final_state.get("emotional_state", {}),
+                        "simulation_step": len(simulation_result.get("trajectory", [])) - 1,
+                        "simulation_id": simulation_result["simulation_id"],
+                        "termination_reason": simulation_result.get("termination_reason", "unknown")
+                    }
+                }
+                memories.append(final_memory)
+                
+                # Add key events from trajectory (significant changes) as memories
+                trajectory = simulation_result.get("trajectory", [])
+                significant_steps = []
+                
+                # Find steps with significant changes
+                for i in range(1, len(trajectory)):
+                    prev_state = trajectory[i-1].get("state_variables", {})
+                    curr_state = trajectory[i].get("state_variables", {})
+                    
+                    # Look for significant changes
+                    has_significant_change = False
+                    for var_name, curr_value in curr_state.items():
+                        if var_name in prev_state:
+                            prev_value = prev_state[var_name]
+                            if isinstance(curr_value, (int, float)) and isinstance(prev_value, (int, float)):
+                                if abs(curr_value - prev_value) >= 0.1:  # 10% change threshold
+                                    has_significant_change = True
+                                    break
+                    
+                    if has_significant_change:
+                        significant_steps.append(i)
+                
+                # Add memories for significant steps
+                for step_idx in significant_steps[:3]:  # Limit to 3 significant steps
+                    step = trajectory[step_idx]
+                    step_memory = {
+                        "id": f"sim_step_{simulation_result['simulation_id']}_{step_idx}",
+                        "memory_text": f"At step {step_idx} of simulation '{simulation_result.get('description', 'Simulation')}', variables changed to: {json.dumps(step.get('state_variables', {}))}",
+                        "memory_type": "simulation",
+                        "metadata": {
+                            "emotional_context": step.get("emotional_state", {}),
+                            "simulation_step": step_idx,
+                            "simulation_id": simulation_result["simulation_id"],
+                            "last_action": step.get("last_action", "")
+                        }
+                    }
+                    memories.append(step_memory)
+                
+                # Get neurochemical state from emotional core or use default
+                neurochemical_state = None
+                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "_get_neurochemical_state"):
+                    neurochemical_state = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
+                
+                # Generate reflection using reflection engine
+                topic = f"Simulation: {simulation_result.get('description', 'Hypothetical scenario')}"
+                reflection_text, confidence = await ctx.context.reflection_engine.generate_reflection(
+                    memories=memories,
+                    topic=topic,
+                    neurochemical_state=neurochemical_state
+                )
+            except Exception as e:
+                logger.error(f"Error generating reflection: {str(e)}")
+                reflection_text = f"I tried to reflect on this simulation but encountered difficulties: {str(e)}"
+                confidence = 0.3
+        else:
+            # Generate a basic reflection without the reflection engine
+            insights = analysis.get("insights", [])
+            emotional_impact = analysis.get("emotional_impact", {})
+            
+            reflection_parts = [
+                f"When I imagine this scenario of {simulation_result.get('description', 'this hypothetical situation')}, I notice several interesting patterns.",
+                f"The simulation {simulation_result.get('success', False) and 'succeeded' or 'did not succeed'}, ending due to {simulation_result.get('termination_reason', 'unknown reasons')}."
+            ]
+            
+            # Add insights
+            for insight in insights[:2]:  # Limit to 2 insights
+                reflection_parts.append(insight)
+            
+            # Add emotional reflection
+            if emotional_impact:
+                if "emotion_transition" in emotional_impact:
+                    reflection_parts.append(f"I observe an emotional shift from {emotional_impact['emotion_transition']}, which suggests this scenario could have significant emotional impact.")
+                elif "final_emotion" in emotional_impact:
+                    reflection_parts.append(f"This scenario appears to lead to a primary emotion of {emotional_impact['final_emotion']}, which is worth considering.")
+            
+            # Add conclusion
+            reflection_parts.append(f"This simulation helps me understand potential outcomes and prepare for similar situations.")
+            
+            # Join parts
+            reflection_text = " ".join(reflection_parts)
+            confidence = 0.5  # Moderate confidence without reflection engine
+        
+        return {
+            "reflection": reflection_text,
+            "confidence": confidence,
+            "source": "reflection_engine" if ctx.context.reflection_engine else "basic_generation",
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
+@function_tool
+async def generate_abstraction_from_simulation(
+    ctx: RunContextWrapper[SimulationContext],
+    simulation_result: Dict[str, Any],
+    pattern_type: str = "causal"
+) -> Dict[str, Any]:
+    """
+    Generate an abstraction from the simulation using the reflection engine.
+    
+    Args:
+        simulation_result: Simulation result
+        pattern_type: Type of pattern to look for
+        
+    Returns:
+        Abstraction from simulation
+    """
+    with custom_span("generate_abstraction_from_simulation"):
+        # Default response
+        result = {
+            "abstraction_text": "",
+            "pattern_type": pattern_type,
+            "confidence": 0.0,
+            "supporting_evidence": []
+        }
+        
+        # Check if reflection engine is available
+        if ctx.context.reflection_engine and hasattr(ctx.context.reflection_engine, "create_abstraction"):
+            try:
+                # Convert simulation result to memories format for abstraction
+                memories = []
+                
+                # Create memories from the trajectory
+                trajectory = simulation_result.get("trajectory", [])
+                for i, state in enumerate(trajectory):
+                    memory = {
+                        "id": f"sim_state_{simulation_result['simulation_id']}_{i}",
+                        "memory_text": f"Step {i} of simulation: {json.dumps(state.get('state_variables', {}))}",
+                        "memory_type": "simulation",
+                        "significance": 7.0,  # High significance
+                        "metadata": {
+                            "emotional_context": state.get("emotional_state", {}),
+                            "simulation_step": i,
+                            "simulation_id": simulation_result["simulation_id"],
+                            "last_action": state.get("last_action", "")
+                        }
+                    }
+                    memories.append(memory)
+                
+                # Get neurochemical state
+                neurochemical_state = None
+                if ctx.context.emotional_core and hasattr(ctx.context.emotional_core, "_get_neurochemical_state"):
+                    neurochemical_state = {c: d["value"] for c, d in ctx.context.emotional_core.neurochemicals.items()}
+                
+                # Generate abstraction
+                abstraction_text, abstraction_data = await ctx.context.reflection_engine.create_abstraction(
+                    memories=memories,
+                    pattern_type=pattern_type,
+                    neurochemical_state=neurochemical_state
+                )
+                
+                # Update result
+                result["abstraction_text"] = abstraction_text
+                result["confidence"] = abstraction_data.get("confidence", 0.5)
+                
+                # Add additional data if available
+                if "pattern_type" in abstraction_data:
+                    result["pattern_type"] = abstraction_data["pattern_type"]
+                if "entity_focus" in abstraction_data:
+                    result["entity_focus"] = abstraction_data["entity_focus"]
+                if "supporting_evidence" in abstraction_data:
+                    result["supporting_evidence"] = abstraction_data["supporting_evidence"]
+                if "neurochemical_insight" in abstraction_data:
+                    result["neurochemical_insight"] = abstraction_data["neurochemical_insight"]
+            except Exception as e:
+                logger.error(f"Error generating abstraction: {str(e)}")
+                result["abstraction_text"] = f"I tried to generate an abstraction but encountered difficulties: {str(e)}"
+                result["confidence"] = 0.2
+        else:
+            # Generate basic abstraction without reflection engine
+            trajectory = simulation_result.get("trajectory", [])
+            
+            # Look for patterns in state changes
+            if len(trajectory) >= 3:
+                # Track changes in key variables
+                var_trends = {}
+                
+                # Get state variables from trajectory
+                for i in range(1, len(trajectory)):
+                    prev_state = trajectory[i-1].get("state_variables", {})
+                    curr_state = trajectory[i].get("state_variables", {})
+                    
+                    # Track changes
+                    for var_name, curr_value in curr_state.items():
+                        if var_name in prev_state and isinstance(curr_value, (int, float)) and isinstance(prev_state[var_name], (int, float)):
+                            change = curr_value - prev_state[var_name]
+                            
+                            if var_name not in var_trends:
+                                var_trends[var_name] = []
+                            
+                            var_trends[var_name].append(change)
+                
+                # Analyze trends
+                trend_patterns = {}
+                for var_name, changes in var_trends.items():
+                    if len(changes) >= 2:
+                        # Check for consistent direction
+                        consistent_direction = all(change > 0 for change in changes) or all(change < 0 for change in changes)
+                        
+                        # Check for acceleration/deceleration
+                        if len(changes) >= 3:
+                            differences = [abs(changes[i]) - abs(changes[i-1]) for i in range(1, len(changes))]
+                            accelerating = all(diff > 0 for diff in differences)
+                            decelerating = all(diff < 0 for diff in differences)
+                        else:
+                            accelerating = False
+                            decelerating = False
+                        
+                        # Check for oscillation
+                        oscillating = any(changes[i] * changes[i-1] < 0 for i in range(1, len(changes)))
+                        
+                        # Record pattern
+                        if consistent_direction:
+                            direction = "increasing" if changes[0] > 0 else "decreasing"
+                            speed = "accelerating" if accelerating else "decelerating" if decelerating else "constant"
+                            trend_patterns[var_name] = f"{direction} at {speed} rate"
+                        elif oscillating:
+                            trend_patterns[var_name] = "oscillating"
+                        else:
+                            trend_patterns[var_name] = "variable"
+                
+                # Generate abstraction text
+                if trend_patterns:
+                    pattern_desc = ", ".join([f"{var_name} ({pattern})" for var_name, pattern in list(trend_patterns.items())[:3]])
+                    abstraction_text = f"In this simulation, I notice a pattern where {pattern_desc}. This suggests a {pattern_type} relationship where certain variables follow predictable trajectories under these conditions."
+                    
+                    # Add causal insights if available
+                    final_state = simulation_result.get("final_state", {})
+                    if final_state and "emotional_state" in final_state:
+                        emotion = final_state["emotional_state"].get("primary_emotion")
+                        emotion_name = emotion.get("name") if isinstance(emotion, dict) else emotion
+                        if emotion_name:
+                            abstraction_text += f" The emotional outcome tends toward {emotion_name}, which appears connected to these variable changes."
+                    
+                    # Set result
+                    result["abstraction_text"] = abstraction_text
+                    result["confidence"] = 0.6
+                    result["supporting_evidence"] = [f"Trend in {var}: {pattern}" for var, pattern in trend_patterns.items()]
+                else:
+                    result["abstraction_text"] = "I don't see a clear pattern in this simulation data."
+                    result["confidence"] = 0.3
+            else:
+                result["abstraction_text"] = "This simulation is too short to extract meaningful patterns."
+                result["confidence"] = 0.2
+        
+        return result
+
+# =============== Main Imagination Simulator Class ===============
+
+class ImaginationSimulator:
+    """
+    Enhanced Imagination Simulator that leverages reasoning and reflection capabilities 
+    through the OpenAI Agents SDK.
+    """
+    
+    def __init__(self, reasoning_core=None, reflection_engine=None, knowledge_core=None, 
+                 emotional_core=None, identity_evolution=None):
+        """
+        Initialize the imagination simulator with required components.
+        
+        Args:
+            reasoning_core: Reference to reasoning core system
+            reflection_engine: Reference to reflection engine system
+            knowledge_core: Reference to knowledge core system
+            emotional_core: Reference to emotional core system 
+            identity_evolution: Reference to identity evolution system
+        """
+        # Store references to other systems
+        self.reasoning_core = reasoning_core
+        self.reflection_engine = reflection_engine
+        self.knowledge_core = knowledge_core
+        self.emotional_core = emotional_core
+        self.identity_evolution = identity_evolution
+        
+        # Initialize simulation context
+        self.context = SimulationContext(
+            reasoning_core=reasoning_core,
+            reflection_engine=reflection_engine,
+            knowledge_core=knowledge_core,
+            emotional_core=emotional_core,
+            identity_evolution=identity_evolution
+        )
+        
+        # Initialize history
+        self.simulation_history = {}
+        self.max_history = 50
+        
+        # Initialize next ID counters
+        self.next_simulation_id = 1
+        
+        # Initialize agents
+        self._init_agents()
+        
+        self.trace_group_id = "NyxImagination"
+        
+        logger.info("EnhancedImaginationSimulator initialized with Agents SDK integration")
+    
+    def _init_agents(self):
+        """Initialize the specialized agents for the imagination system."""
+        # Configure model settings
+        base_model_settings = ModelSettings(
+            temperature=0.7,
+            top_p=0.9
+        )
+        
+        low_temp_settings = ModelSettings(
+            temperature=0.4,
+            top_p=0.9
+        )
+        
+        # Scenario Generation Agent - creates creative simulation scenarios
+        self.scenario_generation_agent = Agent[SimulationContext](
+            name="Scenario Generator",
+            instructions="""You are an creative scenario generation agent for the Nyx AI system.
+            
+            Your role is to interpret natural language descriptions into structured simulation
+            inputs that can be used by the imagination system. You should:
+            
+            1. Identify whether this is a hypothetical event or counterfactual condition
+            2. Structure the simulation parameters appropriately 
+            3. Identify relevant variables to focus on and track
+            4. Set appropriate goal conditions when possible
+            5. Add creative elements that enrich the simulation
+            
+            Be specific and detailed in your interpretations, translating vague descriptions
+            into concrete simulation parameters. Use your creativity to elaborate on the
+            basic scenario in meaningful ways.""",
+            model="gpt-4o",
+            model_settings=base_model_settings,
+            tools=[
+                function_tool(setup_simulation_from_description),
+                function_tool(get_causal_model_for_simulation)
+            ],
+            output_type=ScenarioGenerationOutput
+        )
+        
+        # Simulation Analysis Agent - analyzes simulation results
+        self.simulation_analysis_agent = Agent[SimulationContext](
+            name="Simulation Analyst",
+            instructions="""You are a simulation analysis agent for the Nyx AI system.
+            
+            Your role is to analyze the results of simulations to extract meaningful insights,
+            patterns, and implications. You should:
+            
+            1. Identify key patterns in the simulation trajectory
+            2. Extract causal relationships between variables
+            3. Analyze emotional impacts and responses
+            4. Provide overall insights about what the simulation reveals
+            5. Suggest potential follow-up simulations when appropriate
+            
+            Focus on extracting actionable insights that help Nyx understand potential
+            outcomes and improve decision-making. Consider both the objective changes in
+            variables and the subjective emotional responses.""",
+            model="gpt-4o",
+            model_settings=low_temp_settings,
+            tools=[
+                function_tool(analyze_simulation_result),
+                function_tool(generate_simulation_reflection),
+                function_tool(generate_abstraction_from_simulation)
+            ],
+            output_type=SimulationAnalysisOutput
+        )
+        
+        # Create the orchestration agent
+        self.orchestrator_agent = Agent[SimulationContext](
+            name="Imagination Orchestrator",
+            instructions="""You are the orchestrator for Nyx's imagination system, coordinating
+            various specialized agents to create and analyze simulations of hypothetical scenarios.
+            
+            Your role is to:
+            1. Interpret user requests for simulations
+            2. Coordinate between scenario generation and simulation analysis
+            3. Manage the overall simulation process
+            4. Integrate reasoning and reflection components into simulations
+            5. Return comprehensive simulation results
+            
+            You should ensure that simulations are both creative and grounded in causal reasoning,
+            leveraging Nyx's reasoning core and reflection capabilities to provide meaningful
+            insights about hypothetical scenarios.""",
+            model="gpt-4o",
+            model_settings=low_temp_settings,
+            handoffs=[
+                handoff(self.scenario_generation_agent,
+                       tool_name_override="generate_scenario",
+                       tool_description_override="Generate a detailed simulation scenario from a description"),
+                handoff(self.simulation_analysis_agent,
+                       tool_name_override="analyze_simulation",
+                       tool_description_override="Analyze the results of a simulation run")
+            ],
+            tools=[
+                function_tool(setup_simulation_from_description),
+                function_tool(get_causal_model_for_simulation),
+                function_tool(predict_simulation_step),
+                function_tool(apply_hypothetical_event),
+                function_tool(apply_counterfactual_condition),
+                function_tool(check_goal_condition),
+                function_tool(evaluate_simulation_stability)
+            ]
+        )
+    
+    async def setup_simulation(self, description: str, current_brain_state: Dict[str, Any]) -> Optional[SimulationInput]:
+        """
+        Uses the scenario generation agent to interpret a description into a structured SimulationInput.
+        
+        Args:
+            description: Natural language description of the desired simulation
+            current_brain_state: Current state variables
+            
+        Returns:
+            Structured SimulationInput object or None if setup fails
+        """
+        with trace(workflow_name="SetupSimulation", group_id=self.trace_group_id):
+            try:
+                # Configure the run
+                run_config = RunConfig(
+                    workflow_name="Simulation Setup",
+                    trace_id=f"sim-setup-{gen_trace_id()}",
+                    trace_metadata={"description": description}
+                )
+                
+                # Run the orchestrator agent
+                result = await Runner.run(
+                    self.orchestrator_agent,
+                    f"Generate a simulation setup for this description: {description}",
+                    context=self.context,
+                    run_config=run_config
+                )
+                
+                # Check if we got a ScenarioGenerationOutput
+                if hasattr(result.final_output, "model_dump"):
+                    # Convert to SimulationInput
+                    scenario = result.final_output
+                    
+                    # Use scenario data to create SimulationInput
+                    sim_input = SimulationInput(
+                        simulation_id=f"sim_{self.next_simulation_id}",
+                        description=description,
+                        initial_state=current_brain_state.copy(),  # Start with current state
+                        domain="general",
+                        max_steps=10,
+                        focus_variables=scenario.focus_variables
+                    )
+                    
+                    # Apply initial state modifications
+                    for key, value in scenario.initial_state_modifications.items():
+                        sim_input.initial_state[key] = value
+                    
+                    # Set hypothetical event or counterfactual condition
+                    if scenario.hypothetical_event:
+                        sim_input.hypothetical_event = scenario.hypothetical_event
+                    
+                    if scenario.counterfactual_condition:
+                        sim_input.counterfactual_condition = scenario.counterfactual_condition
+                    
+                    # Set goal condition if provided
+                    if scenario.goal_condition:
+                        sim_input.goal_condition = scenario.goal_condition
+                    
+                    self.next_simulation_id += 1
+                    return sim_input
+                
+                # If we got a dictionary instead
+                elif isinstance(result.final_output, dict):
+                    # Try to extract SimulationInput fields
+                    sim_input = SimulationInput(
+                        simulation_id=f"sim_{self.next_simulation_id}",
+                        description=description,
+                        initial_state=current_brain_state.copy()
+                    )
+                    
+                    # Apply any modifications from the output
+                    if "initial_state_modifications" in result.final_output:
+                        for key, value in result.final_output["initial_state_modifications"].items():
+                            sim_input.initial_state[key] = value
+                    
+                    # Set hypothetical event if provided
+                    if "hypothetical_event" in result.final_output:
+                        sim_input.hypothetical_event = result.final_output["hypothetical_event"]
+                    
+                    # Set counterfactual condition if provided
+                    if "counterfactual_condition" in result.final_output:
+                        sim_input.counterfactual_condition = result.final_output["counterfactual_condition"]
+                    
+                    # Set goal condition if provided
+                    if "goal_condition" in result.final_output:
+                        sim_input.goal_condition = result.final_output["goal_condition"]
+                    
+                    # Set focus variables if provided
+                    if "focus_variables" in result.final_output:
+                        sim_input.focus_variables = result.final_output["focus_variables"]
+                    
+                    self.next_simulation_id += 1
+                    return sim_input
+                
+                return None
+            except Exception as e:
+                logger.error(f"Error setting up simulation for '{description}': {e}")
+                return None
+    
+    async def run_simulation(self, sim_input: SimulationInput) -> SimulationResult:
+        """
+        Run a simulation based on the input parameters.
+        
+        Args:
+            sim_input: Input parameters for simulation
+            
+        Returns:
+            Simulation result
+        """
         with trace(
             workflow_name="RunSimulation", 
             group_id=self.trace_group_id, 
             metadata={
                 "sim_id": sim_input.simulation_id, 
-                "category": self._determine_simulation_category(sim_input),
-                "domain": sim_input.domain if hasattr(sim_input, 'domain') else "general",
-                "max_steps": sim_input.max_steps
+                "description": sim_input.description
             }
         ):
-        logger.info(f"Starting simulation '{sim_input.simulation_id}': {sim_input.description}")
-        trajectory: List[SimulationState] = []
-        
-        # Setup initial simulation state
-        current_sim_state = SimulationState(
-            step=0,
-            timestamp=datetime.datetime.now(),
-            state_variables=sim_input.initial_state.copy()  # Start with initial state
-        )
-        trajectory.append(current_sim_state)
-
-        termination_reason = "max_steps"
-        success = False
-        
-        # Track simulation category for stats
-        simulation_category = "counterfactual" if sim_input.counterfactual_condition else (
-            "hypothetical" if sim_input.hypothetical_event else "general"
-        )
-        
-        # Update simulation counters
-        self.simulation_stats["total_simulations"] += 1
-        if simulation_category not in self.simulation_stats["by_category"]:
-            self.simulation_stats["by_category"][simulation_category] = 0
-        self.simulation_stats["by_category"][simulation_category] += 1
-
-        with trace(
-            workflow_name="RunSimulation", 
-            group_id=self.trace_group_id, 
-            metadata={"sim_id": sim_input.simulation_id, "category": simulation_category}
-        ):
+            logger.info(f"Starting simulation '{sim_input.simulation_id}': {sim_input.description}")
+            
+            # Initialize trajectory
+            trajectory = []
+            
+            # Get causal model
+            causal_model_result = await get_causal_model_for_simulation(
+                RunContextWrapper(self.context),
+                sim_input.domain
+            )
+            causal_model = causal_model_result["model"]
+            
+            # Initialize simulation state
+            initial_state = {
+                "step": 0,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "state_variables": sim_input.initial_state.copy(),
+                "emotional_state": {
+                    "valence": 0.0,
+                    "arousal": 0.5,
+                    "primary_emotion": {"name": "Neutral", "intensity": 0.5}
+                }
+            }
+            
+            # Apply initial conditions
+            if sim_input.hypothetical_event:
+                initial_state = await apply_hypothetical_event(
+                    RunContextWrapper(self.context),
+                    initial_state,
+                    sim_input.hypothetical_event,
+                    causal_model
+                )
+            
+            if sim_input.counterfactual_condition:
+                initial_state = await apply_counterfactual_condition(
+                    RunContextWrapper(self.context),
+                    initial_state,
+                    sim_input.counterfactual_condition,
+                    causal_model
+                )
+            
+            # Add initial state to trajectory
+            trajectory.append(SimulationState(**initial_state))
+            
+            # Initialize result variables
+            termination_reason = "max_steps"
+            success = False
+            
+            # Run simulation steps
             try:
-                # Step 0: Apply initial conditions (counterfactual or hypothetical event)
-                if sim_input.counterfactual_condition:
-                    # Apply counterfactual condition
-                    node_id = sim_input.counterfactual_condition.get("node_id")
-                    value = sim_input.counterfactual_condition.get("value")
-                    
-                    if node_id:
-                        current_sim_state.state_variables[node_id] = value
-                        logger.debug(f"Sim Step 0: Applied counterfactual {node_id}={value}")
-                    else:
-                        description = sim_input.counterfactual_condition.get("description", "")
-                        logger.warning(f"Counterfactual condition missing node_id: {description}")
-
-                elif sim_input.hypothetical_event:
-                    # Apply hypothetical event
-                    action = sim_input.hypothetical_event.get("action")
-                    params = sim_input.hypothetical_event.get("parameters", {})
-                    
-                    if action:
-                        current_sim_state.last_action = action
-                        
-                        # Predict immediate effect using reasoning core
-                        if self.reasoning_core and hasattr(self.reasoning_core, 'predict_action_effect'):
-                            predicted_changes = await self.reasoning_core.predict_action_effect(
-                                action, 
-                                params, 
-                                current_sim_state.state_variables
-                            )
-                            current_sim_state.state_variables.update(predicted_changes)
-                            logger.debug(f"Sim Step 0: Applied hypothetical event '{action}'. Predicted changes: {predicted_changes}")
-                        else:
-                            # Fallback if no reasoning core: apply simple effects
-                            # For example, if action is "apologize", might increase "user_trust" slightly
-                            self._apply_simple_event_effects(current_sim_state, action, params)
-                    else:
-                        description = sim_input.hypothetical_event.get("description", "")
-                        logger.warning(f"Hypothetical event missing action: {description}")
-
-                # Simulation loop for steps 1 to max_steps
-                for i in range(1, sim_input.max_steps + 1):
-                    prev_state = current_sim_state
-                    current_sim_state = SimulationState(
-                        step=i,
-                        timestamp=prev_state.timestamp + datetime.timedelta(seconds=10),  # Arbitrary time step
-                        state_variables=prev_state.state_variables.copy()  # Copy previous state
+                for step in range(1, sim_input.max_steps + 1):
+                    # Predict next state
+                    next_state = await predict_simulation_step(
+                        RunContextWrapper(self.context),
+                        trajectory[-1].model_dump(),
+                        causal_model,
+                        step
                     )
-
-                    # Predict changes for this step
-                    if self.reasoning_core and hasattr(self.reasoning_core, 'predict_next_state'):
-                        # Use causal reasoning to predict next state
-                        predicted_changes = await self.reasoning_core.predict_next_state(prev_state.state_variables)
-                        current_sim_state.state_variables.update(predicted_changes)
-                    else:
-                        # Fallback: basic simulation with decay/random walk
-                        self._simulate_basic_state_changes(current_sim_state)
-
-                    # Predict emotional state changes if possible
-                    if self.emotional_core and hasattr(self.emotional_core, 'predict_emotional_state'):
-                        current_sim_state.emotional_state = await self.emotional_core.predict_emotional_state(
-                            current_sim_state.state_variables
-                        )
                     
                     # Add to trajectory
-                    trajectory.append(current_sim_state)
-                    logger.debug(f"Sim Step {i}: Updated state variables")
-
+                    trajectory.append(SimulationState(**next_state))
+                    
                     # Check goal condition if specified
                     if sim_input.goal_condition:
-                        goal_met = True
-                        for key, value in sim_input.goal_condition.items():
-                            current_value = current_sim_state.state_variables.get(key)
-                            
-                            # Handle numeric comparisons with tolerance
-                            if isinstance(value, (int, float)) and isinstance(current_value, (int, float)):
-                                if abs(current_value - value) > 0.01:  # Small tolerance
-                                    goal_met = False
-                                    break
-                            # String/boolean/other exact comparison
-                            elif current_value != value:
-                                goal_met = False
-                                break
-                                
-                        if goal_met:
+                        goal_check = await check_goal_condition(
+                            RunContextWrapper(self.context),
+                            next_state,
+                            sim_input.goal_condition
+                        )
+                        
+                        if goal_check["goal_met"]:
                             termination_reason = "goal_reached"
                             success = True
                             break
-
-                    # Check for stable state (minimal changes between steps)
-                    if i > 1 and self._is_stable(current_sim_state, trajectory[-2]):
-                        termination_reason = "stable_state"
-                        # Not marking as success/failure since stability is neutral
-                        break
-
+                    
+                    # Check for stability
+                    if step > 1:
+                        stability_check = await evaluate_simulation_stability(
+                            RunContextWrapper(self.context),
+                            next_state,
+                            trajectory[-2].model_dump()
+                        )
+                        
+                        if stability_check["is_stable"]:
+                            termination_reason = "stable_state"
+                            # Not marking as success/failure since stability is neutral
+                            break
             except Exception as e:
                 logger.exception(f"Error during simulation '{sim_input.simulation_id}': {e}")
                 termination_reason = "error"
                 success = False
-
-        # --- Finalize and analyze results ---
-        final_state = trajectory[-1]
-        
-        # Set success flag based on termination reason
-        if termination_reason == "goal_reached":
-            success = True
-        elif termination_reason == "error":
-            success = False
-        # For "stable_state" or "max_steps", success depends on progress toward goal
-        elif sim_input.goal_condition:
-            # Check if we made progress toward the goal even if not reached
-            success = self._check_goal_progress(trajectory[0], final_state, sim_input.goal_condition)
-        
-        # Update statistics
-        if success:
-            self.simulation_stats["successful_simulations"] += 1
-        else:
-            self.simulation_stats["failed_simulations"] += 1
-
-        # Get predicted outcome and confidence
-        analysis_result = await self._analyze_trajectory(
-            trajectory, 
-            sim_input.goal_condition, 
-            sim_input.description
-        )
-        
-        # Create result object
-        result = SimulationResult(
-            simulation_id=sim_input.simulation_id,
-            success=success,
-            termination_reason=termination_reason,
-            final_state=final_state,
-            trajectory=trajectory,
-            predicted_outcome=analysis_result.get("predicted_outcome", "unknown"),
-            emotional_impact=analysis_result.get("emotional_impact"),
-            causal_analysis=analysis_result.get("causal_analysis"),
-            confidence=analysis_result.get("confidence", 0.5)
-        )
-
-        # Store result in history
-        self.simulation_history[result.simulation_id] = result
-        if len(self.simulation_history) > self.max_history:
-             oldest_id = next(iter(self.simulation_history))
-             del self.simulation_history[oldest_id]
-
-        logger.info(f"Simulation '{result.simulation_id}' finished: {termination_reason}. Success: {success}")
-        return result
-    
-    def _simulate_basic_state_changes(self, state: SimulationState) -> None:
-        """Apply basic simulation logic when no reasoning core is available."""
-        # Apply random walks with regression to mean for numeric values
-        for key, value in state.state_variables.items():
-            if isinstance(value, (int, float)):
-                # Different behavior for different variable types
-                if "trust" in key.lower() or "relationship" in key.lower():
-                    # Trust/relationship: slow changes with inertia
-                    mean = 0.5  # Default neutral value
-                    volatility = 0.03  # Low volatility
-                    inertia = 0.95  # High inertia
-                    state.state_variables[key] = value * inertia + mean * (1 - inertia) + random.uniform(-volatility, volatility)
-                elif "emotion" in key.lower() or "mood" in key.lower():
-                    # Emotions: faster changes, less inertia
-                    mean = 0.0  # Default neutral
-                    volatility = 0.08  # Higher volatility
-                    inertia = 0.8  # Medium inertia
-                    state.state_variables[key] = value * inertia + mean * (1 - inertia) + random.uniform(-volatility, volatility)
-                else:
-                    # Default values for other numeric variables
-                    inertia = 0.9  # Medium-high inertia
-                    volatility = 0.05  # Medium volatility
-                    state.state_variables[key] = value * inertia + random.uniform(-volatility, volatility)
-                
-                # Clamp values between expected ranges
-                if "trust" in key.lower() or "confidence" in key.lower() or "probability" in key.lower():
-                    state.state_variables[key] = max(0.0, min(1.0, state.state_variables[key]))
-                elif "valence" in key.lower():
-                    state.state_variables[key] = max(-1.0, min(1.0, state.state_variables[key]))
             
-            # For dictionaries, recurse into them
-            elif isinstance(value, dict):
-                for subkey, subvalue in value.items():
-                    if isinstance(subvalue, (int, float)):
-                        # Apply similar logic recursively
-                        inertia = 0.9
-                        volatility = 0.04
-                        state.state_variables[key][subkey] = subvalue * inertia + random.uniform(-volatility, volatility)
-    
-    def _apply_simple_event_effects(self, state: SimulationState, action: str, params: Dict[str, Any]) -> None:
-        """Apply simplified effects for events when no reasoning core is available."""
-        # Common human interaction events and their typical effects
-        action_effects = {
-            "apologize": {
-                "user_trust": 0.1, 
-                "user_anger": -0.2, 
-                "relationship_tension": -0.15
-            },
-            "praise": {
-                "user_happiness": 0.2, 
-                "user_trust": 0.05, 
-                "user_receptivity": 0.1
-            },
-            "criticize": {
-                "user_defensiveness": 0.2, 
-                "user_trust": -0.1, 
-                "relationship_tension": 0.15
-            },
-            "share_personal": {
-                "intimacy": 0.15, 
-                "user_trust": 0.1, 
-                "relationship_depth": 0.1
-            },
-            "disagree": {
-                "user_respect": -0.05, 
-                "intellectual_engagement": 0.1, 
-                "relationship_tension": 0.1
-            },
-            "express_vulnerability": {
-                "intimacy": 0.2, 
-                "user_trust": 0.1, 
-                "perceived_authenticity": 0.2
-            }
-        }
-        
-        # Apply effects if action is known
-        normalized_action = action.lower().strip()
-        for key, effect_dict in action_effects.items():
-            if key in normalized_action:
-                for var, change in effect_dict.items():
-                    # Initialize if not exists
-                    if var not in state.state_variables:
-                        state.state_variables[var] = 0.5  # Default starting value
-                    
-                    # Apply change
-                    state.state_variables[var] += change
-                    
-                    # Clamp between 0-1 for most variables
-                    state.state_variables[var] = max(0.0, min(1.0, state.state_variables[var]))
-                
-                # Mark the action
-                state.last_action = action
-                return
-        
-        # If no predefined action matched, apply a small random effect
-        # on trust and emotional variables as a fallback
-        if "user_trust" in state.state_variables:
-            state.state_variables["user_trust"] += random.uniform(-0.05, 0.05)
-            state.state_variables["user_trust"] = max(0.0, min(1.0, state.state_variables["user_trust"]))
-        
-        # Mark the action
-        state.last_action = action
-    
-    def _check_goal_progress(self, initial_state: SimulationState, final_state: SimulationState, 
-                            goal_condition: Dict[str, Any]) -> bool:
-        """Check if the simulation made significant progress toward the goal condition."""
-        progress_score = 0
-        goal_vars_count = 0
-        
-        for key, target_value in goal_condition.items():
-            if key in initial_state.state_variables and key in final_state.state_variables:
-                goal_vars_count += 1
-                initial_value = initial_state.state_variables[key]
-                final_value = final_state.state_variables[key]
-                
-                # For numeric values, check if we moved closer to target
-                if isinstance(target_value, (int, float)) and isinstance(initial_value, (int, float)) and isinstance(final_value, (int, float)):
-                    initial_distance = abs(target_value - initial_value)
-                    final_distance = abs(target_value - final_value)
-                    
-                    if final_distance < initial_distance:
-                        # Made progress toward goal
-                        progress_ratio = (initial_distance - final_distance) / initial_distance
-                        progress_score += progress_ratio
-                
-                # For boolean/string/etc., check if we reached the value
-                elif final_value == target_value and initial_value != target_value:
-                    progress_score += 1.0
-        
-        # If no goal variables found, consider it not successful
-        if goal_vars_count == 0:
-            return False
-        
-        # Calculate average progress across all goal variables
-        avg_progress = progress_score / goal_vars_count
-        
-        # Consider significant progress (>25% toward goal) as success
-        return avg_progress > 0.25
-    
-    def _is_stable(self, current_state: SimulationState, previous_state: SimulationState) -> bool:
-        """Check if the simulation has reached a stable state with minimal changes."""
-        stable_threshold = 0.01  # Maximum change considered stable
-        stable_vars_count = 0
-        total_vars_count = 0
-        
-        for key, current_value in current_state.state_variables.items():
-            if key in previous_state.state_variables:
-                prev_value = previous_state.state_variables[key]
-                total_vars_count += 1
-                
-                # Check for stability based on variable type
-                if isinstance(current_value, (int, float)) and isinstance(prev_value, (int, float)):
-                    change = abs(current_value - prev_value)
-                    if change <= stable_threshold:
-                        stable_vars_count += 1
-                elif current_value == prev_value:
-                    stable_vars_count += 1
-        
-        # Consider stable if at least 90% of variables are stable
-        return total_vars_count > 0 and (stable_vars_count / total_vars_count) >= 0.9
-
-    async def _analyze_trajectory(self, trajectory: List[SimulationState], 
-                                 goal_condition: Optional[Dict[str, Any]],
-                                 description: str) -> Dict[str, Any]:
-        """Analyze the simulation trajectory to extract insights."""
-        if not self.simulation_agent or len(trajectory) < 2:
-            # Fallback basic analysis if no agent or too few steps
-            return {
-                "predicted_outcome": "Cannot determine outcome without simulation agent",
-                "confidence": 0.3,
-                "causal_analysis": None,
-                "emotional_impact": None
-            }
-        
-        try:
-            # Prepare trajectory summary (to avoid overwhelming the agent)
-            trajectory_summary = []
-            
-            # Always include first and last states
-            trajectory_summary.append(self._format_state_for_analysis(trajectory[0], is_first=True))
-            
-            # For longer trajectories, sample intermediate states
-            if len(trajectory) > 5:
-                step_size = len(trajectory) // 3
-                for i in range(step_size, len(trajectory) - 1, step_size):
-                    trajectory_summary.append(self._format_state_for_analysis(trajectory[i]))
-            else:
-                # For short trajectories, include all intermediate states
-                for i in range(1, len(trajectory) - 1):
-                    trajectory_summary.append(self._format_state_for_analysis(trajectory[i]))
-            
-            # Always include final state
-            trajectory_summary.append(self._format_state_for_analysis(trajectory[-1], is_last=True))
-            
-            # Build analysis request
-            analysis_request = {
-                "description": description,
-                "trajectory": trajectory_summary,
-                "goal_condition": goal_condition
-            }
-            
-            # Run agent to analyze trajectory
-            result = await Runner.run(
-                self.simulation_agent,
-                json.dumps(analysis_request),
-                run_config={
-                    "workflow_name": "SimulationAnalysis",
-                    "trace_metadata": {"type": "trajectory_analysis"}
-                }
+            # Create result object
+            result = SimulationResult(
+                simulation_id=sim_input.simulation_id,
+                success=success,
+                termination_reason=termination_reason,
+                final_state=trajectory[-1],
+                trajectory=trajectory,
+                confidence=0.5  # Default confidence, will be updated by analysis
             )
             
-            # Process agent output
-            analysis = result.final_output
-            
-            # Ensure we have the expected fields
-            if not isinstance(analysis, dict):
-                raise ValueError(f"Expected dict from analysis agent, got {type(analysis)}")
-            
-            return {
-                "predicted_outcome": analysis.get("predicted_outcome", "Outcome unclear"),
-                "confidence": analysis.get("confidence", 0.5),
-                "causal_analysis": analysis.get("causal_analysis"),
-                "emotional_impact": analysis.get("emotional_impact")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error analyzing simulation trajectory: {e}")
-            return {
-                "predicted_outcome": "Error analyzing simulation trajectory",
-                "confidence": 0.2,
-                "causal_analysis": None,
-                "emotional_impact": None
-            }
-    
-    def _format_state_for_analysis(self, state: SimulationState, is_first: bool = False, is_last: bool = False) -> Dict[str, Any]:
-        """Format a simulation state for analysis, focusing on the most relevant data."""
-        # Extract key variables (limit to most important ones to avoid overwhelming the agent)
-        key_vars = {}
-        for k, v in state.state_variables.items():
-            # Include emotional, trust, relationship variables, and a few others
-            if (any(term in k.lower() for term in ["trust", "emotion", "mood", "relationship", "confidence"]) or
-                (is_first or is_last)):  # Include more details for first/last states
-                if isinstance(v, dict) and len(v) > 3:
-                    # For complex nested objects, include only a summary
-                    key_vars[k] = f"<complex object with {len(v)} keys>"
-                else:
-                    key_vars[k] = v
-        
-        return {
-            "step": state.step,
-            "key_variables": key_vars,
-            "emotional_state": state.emotional_state,
-            "last_action": state.last_action,
-            "is_first": is_first,
-            "is_last": is_last
-        }
-
-    async def analyze_simulation_result(self, result: SimulationResult) -> Dict[str, Any]:
-        """Uses agent to interpret the simulation result with additional context."""
-        if not self.simulation_agent: 
-            return {"summary": "Analysis agent unavailable"}
-
-        try:
-            with trace(workflow_name="AnalyzeSimulation", group_id=self.trace_group_id):
-                # Prepare context for the agent
-                context = {
-                    "simulation_id": result.simulation_id,
-                    "description": result.final_state.state_variables.get("description", "Simulation"),
-                    "success": result.success,
-                    "termination_reason": result.termination_reason,
-                    "predicted_outcome": result.predicted_outcome,
-                    "confidence": result.confidence,
-                    "initial_state": self._format_state_for_analysis(result.trajectory[0], is_first=True),
-                    "final_state": self._format_state_for_analysis(result.final_state, is_last=True),
-                    "trajectory_length": len(result.trajectory),
-                    "key_metrics": self._extract_key_metrics(result)
-                }
-                
-                # Run the agent
-                analysis_result = await Runner.run(
-                    self.simulation_agent,
-                    json.dumps(context),
-                    run_config={
-                        "workflow_name": "SimulationInterpretation",
-                        "trace_metadata": {"sim_id": result.simulation_id}
-                    }
-                )
-                
-                # Process and return the analysis
-                analysis = analysis_result.final_output
-                
-                # Add metadata before returning
-                if isinstance(analysis, dict):
-                    analysis["simulation_id"] = result.simulation_id
-                    analysis["analyzed_at"] = datetime.datetime.now().isoformat()
-                
-                return analysis
-                
-        except Exception as e:
-            logger.error(f"Error analyzing simulation result {result.simulation_id}: {e}")
-            return {"summary": "Error during analysis", "error": str(e)}
-    
-    def _extract_key_metrics(self, result: SimulationResult) -> Dict[str, Any]:
-        """Extract key metrics from the simulation for analysis."""
-        metrics = {}
-        
-        # List of important variable patterns to track
-        key_patterns = [
-            "trust", "emotion", "mood", "relationship", "confidence", 
-            "tension", "intimacy", "satisfaction", "agreement"
-        ]
-        
-        # Get initial and final values for important variables
-        if result.trajectory:
-            initial_state = result.trajectory[0].state_variables
-            final_state = result.final_state.state_variables
-            
-            for key in set(list(initial_state.keys()) + list(final_state.keys())):
-                if any(pattern in key.lower() for pattern in key_patterns):
-                    initial_value = initial_state.get(key)
-                    final_value = final_state.get(key)
+            # Analyze simulation result
+            if len(trajectory) > 1:
+                try:
+                    # Configure the run
+                    run_config = RunConfig(
+                        workflow_name="Simulation Analysis",
+                        trace_id=f"sim-analysis-{gen_trace_id()}",
+                        trace_metadata={"sim_id": sim_input.simulation_id}
+                    )
                     
-                    if initial_value is not None and final_value is not None:
-                        metrics[key] = {
-                            "initial": initial_value,
-                            "final": final_value,
-                            "change": final_value - initial_value if isinstance(final_value, (int, float)) and 
-                                                                    isinstance(initial_value, (int, float)) else "N/A"
+                    # Convert SimulationResult to dict for analysis
+                    result_dict = result.model_dump()
+                    
+                    # Run the analysis agent
+                    analysis_result = await Runner.run(
+                        self.simulation_analysis_agent,
+                        f"Analyze this simulation result for '{sim_input.description}'",
+                        context=self.context,
+                        run_config=run_config
+                    )
+                    
+                    # Update result with analysis
+                    if hasattr(analysis_result.final_output, "model_dump"):
+                        analysis = analysis_result.final_output.model_dump()
+                        result.confidence = analysis.get("confidence", result.confidence)
+                        
+                        # Get causal patterns
+                        causal_analysis = {
+                            "patterns": analysis.get("causal_patterns", []),
+                            "insights": analysis.get("key_insights", [])
                         }
+                        result.causal_analysis = causal_analysis
+                        
+                        # Get emotional impact
+                        result.emotional_impact = analysis.get("emotional_impacts", {})
+                    elif isinstance(analysis_result.final_output, dict):
+                        analysis = analysis_result.final_output
+                        result.confidence = analysis.get("confidence", result.confidence)
+                        
+                        # Get causal patterns
+                        causal_analysis = {
+                            "patterns": analysis.get("causal_patterns", []),
+                            "insights": analysis.get("key_insights", [])
+                        }
+                        result.causal_analysis = causal_analysis
+                        
+                        # Get emotional impact
+                        result.emotional_impact = analysis.get("emotional_impacts", {})
+                except Exception as e:
+                    logger.error(f"Error analyzing simulation: {e}")
+            
+            # Generate reflection if requested
+            if sim_input.use_reflection and self.reflection_engine:
+                try:
+                    # Generate reflection
+                    reflection_result = await generate_simulation_reflection(
+                        RunContextWrapper(self.context),
+                        result.model_dump(),
+                        result.causal_analysis or {}
+                    )
+                    
+                    # Update result with reflection
+                    result.reflection = reflection_result.get("reflection", "")
+                    
+                    # Generate abstraction
+                    abstraction_result = await generate_abstraction_from_simulation(
+                        RunContextWrapper(self.context),
+                        result.model_dump(),
+                        "causal"
+                    )
+                    
+                    # Update result with abstraction
+                    result.abstraction = abstraction_result
+                except Exception as e:
+                    logger.error(f"Error generating reflection/abstraction: {e}")
+            
+            # Store in history
+            self.simulation_history[result.simulation_id] = result
+            if len(self.simulation_history) > self.max_history:
+                oldest_id = next(iter(self.simulation_history))
+                del self.simulation_history[oldest_id]
+            
+            # Update statistics
+            self.context.simulation_stats["total_simulations"] += 1
+            if success:
+                self.context.simulation_stats["successful_simulations"] += 1
+            else:
+                self.context.simulation_stats["failed_simulations"] += 1
+            
+            return result
+    
+    async def imagine_scenario(self, description: str, current_brain_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        High-level function to imagine a scenario from a natural language description.
         
-        return metrics
+        Args:
+            description: Natural language description of the scenario
+            current_brain_state: Current state variables
+            
+        Returns:
+            Dictionary with simulation results and insights
+        """
+        # Setup simulation
+        sim_input = await self.setup_simulation(description, current_brain_state)
+        
+        if not sim_input:
+            return {
+                "success": False,
+                "error": "Failed to setup simulation from description",
+                "description": description
+            }
+        
+        # Run simulation
+        result = await self.run_simulation(sim_input)
+        
+        # Return formatted result
+        return {
+            "success": result.success,
+            "simulation_id": result.simulation_id,
+            "description": sim_input.description,
+            "termination_reason": result.termination_reason,
+            "confidence": result.confidence,
+            "steps": len(result.trajectory),
+            "reflection": result.reflection,
+            "key_insights": result.causal_analysis.get("insights", []) if result.causal_analysis else [],
+            "abstraction": result.abstraction.get("abstraction_text", "") if result.abstraction else "",
+            "predicted_outcome": result.predicted_outcome or "Unknown outcome"
+        }
+    
+    async def imagine_counterfactual(self, 
+                                 description: str, 
+                                 variable_name: str, 
+                                 variable_value: Any,
+                                 current_brain_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Imagine a counterfactual scenario with a specific variable change.
+        
+        Args:
+            description: Description of the counterfactual scenario
+            variable_name: Name of the variable to modify
+            variable_value: New value for the variable
+            current_brain_state: Current state variables
+            
+        Returns:
+            Dictionary with simulation results and insights
+        """
+        # Create simulation input
+        sim_input = SimulationInput(
+            simulation_id=f"sim_{self.next_simulation_id}",
+            description=description,
+            initial_state=current_brain_state.copy(),
+            counterfactual_condition={
+                "node_id": variable_name,
+                "value": variable_value,
+                "description": description
+            },
+            max_steps=10,
+            use_reflection=True
+        )
+        
+        self.next_simulation_id += 1
+        
+        # Run simulation
+        result = await self.run_simulation(sim_input)
+        
+        # Return formatted result
+        return {
+            "success": result.success,
+            "simulation_id": result.simulation_id,
+            "counterfactual": {
+                "variable": variable_name,
+                "value": variable_value,
+                "description": description
+            },
+            "termination_reason": result.termination_reason,
+            "confidence": result.confidence,
+            "steps": len(result.trajectory),
+            "reflection": result.reflection,
+            "key_insights": result.causal_analysis.get("insights", []) if result.causal_analysis else [],
+            "predicted_outcome": result.predicted_outcome or "Unknown outcome"
+        }
+    
+    async def imagine_action_outcome(self, 
+                                action: str, 
+                                parameters: Dict[str, Any],
+                                current_brain_state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Imagine the outcome of a specific action.
+        
+        Args:
+            action: Description of the action
+            parameters: Parameters for the action
+            current_brain_state: Current state variables
+            
+        Returns:
+            Dictionary with simulation results and insights
+        """
+        # Create simulation input
+        sim_input = SimulationInput(
+            simulation_id=f"sim_{self.next_simulation_id}",
+            description=f"Imagining outcome of action: {action}",
+            initial_state=current_brain_state.copy(),
+            hypothetical_event={
+                "action": action,
+                "parameters": parameters,
+                "description": f"What if I {action}?"
+            },
+            max_steps=8,
+            use_reflection=True
+        )
+        
+        self.next_simulation_id += 1
+        
+        # Run simulation
+        result = await self.run_simulation(sim_input)
+        
+        # Return formatted result
+        return {
+            "success": result.success,
+            "simulation_id": result.simulation_id,
+            "action": {
+                "type": action,
+                "parameters": parameters
+            },
+            "termination_reason": result.termination_reason,
+            "confidence": result.confidence,
+            "steps": len(result.trajectory),
+            "reflection": result.reflection,
+            "emotional_impact": result.emotional_impact,
+            "key_insights": result.causal_analysis.get("insights", []) if result.causal_analysis else [],
+            "predicted_outcome": result.predicted_outcome or "Unknown outcome"
+        }
     
     async def get_simulation_history(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Get summaries of recent simulations."""
-        # Convert to list and sort by recency (most recent first)
+        """
+        Get summaries of recent simulations.
+        
+        Args:
+            limit: Maximum number of simulations to return
+            
+        Returns:
+            List of simulation summaries
+        """
+        # Convert to list and sort by recency
         history = list(self.simulation_history.values())
         history.sort(key=lambda x: x.trajectory[-1].timestamp if x.trajectory else datetime.datetime.min, reverse=True)
         
-        # Limit and format results
+        # Format results
         results = []
         for sim in history[:limit]:
             results.append({
@@ -786,21 +1723,9 @@ class ImaginationSimulator:
                 "success": sim.success,
                 "termination_reason": sim.termination_reason,
                 "steps": len(sim.trajectory),
-                "predicted_outcome": str(sim.predicted_outcome),
                 "confidence": sim.confidence,
+                "reflection": sim.reflection,
                 "timestamp": sim.trajectory[-1].timestamp.isoformat() if sim.trajectory else None
             })
             
         return results
-    
-    async def get_simulation_statistics(self) -> Dict[str, Any]:
-        """Get statistics about simulations run so far."""
-        return {
-            "total_simulations": self.simulation_stats["total_simulations"],
-            "successful_simulations": self.simulation_stats["successful_simulations"],
-            "failed_simulations": self.simulation_stats["failed_simulations"],
-            "success_rate": self.simulation_stats["successful_simulations"] / max(1, self.simulation_stats["total_simulations"]),
-            "by_category": self.simulation_stats["by_category"],
-            "average_steps": sum(len(sim.trajectory) for sim in self.simulation_history.values()) / max(1, len(self.simulation_history)),
-            "current_history_size": len(self.simulation_history)
-        }
