@@ -372,9 +372,9 @@ class EducationalSystemManager(BaseLoreManager):
 
                     return system_id
 
+    @staticmethod
     @function_tool
     async def add_educational_system(
-        self,
         ctx: RunContextWrapper,
         name: str,
         system_type: str,
@@ -502,9 +502,9 @@ class EducationalSystemManager(BaseLoreManager):
     
                     return tradition_id
 
+    @staticmethod
     @function_tool
     async def add_knowledge_tradition(
-        self,
         ctx: RunContextWrapper,
         name: str,
         tradition_type: str,
@@ -564,9 +564,9 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 3) Stream educational system generation with progressive updates
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def stream_educational_development(
-        self, 
         ctx: RunContextWrapper,
         system_name: str,
         system_type: str,
@@ -807,9 +807,9 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 4) Agent-to-agent knowledge exchange
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def exchange_knowledge_between_systems(
-        self,
         ctx: RunContextWrapper,
         source_system_id: int,
         target_system_id: int,
@@ -943,8 +943,9 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 5) Generate educational systems (with structured output)
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def generate_educational_systems(self, ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    async def generate_educational_systems(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         """
         Use an LLM to generate a set of educational systems for the matriarchal setting,
         with structured output and specialized agents.
@@ -1093,8 +1094,9 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 6) Generate knowledge traditions (with structured output)
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def generate_knowledge_traditions(self, ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    async def generate_knowledge_traditions(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         """
         Generate knowledge traditions that represent how knowledge is
         passed down across generations in informal ways, with structured output.
