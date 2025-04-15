@@ -2146,6 +2146,65 @@ class EnhancedAgenticActionGenerator:
                 activities[activity]["confidence"] = max(activities[activity].get("confidence", 0.0), 1.0)
                 activities[activity]["is_hobby"] = True
 
+    async def apply_expression_to_action_generation(expression_system, action_context):
+        """
+        Modify action generation context based on expression pattern.
+        
+        Args:
+            expression_system: ExpressionSystem instance
+            action_context: Action context dictionary
+            
+        Returns:
+            Modified action context with expression influences
+        """
+        # Get current expression pattern
+        pattern = expression_system.current_pattern
+        
+        # Apply action biases to context
+        activity_biases = expression_system.get_action_biases()
+        if activity_biases:
+            # Modify action probabilities in the context
+            if "available_actions" in action_context:
+                biased_actions = []
+                for action in action_context["available_actions"]:
+                    # Check if action type matches any bias
+                    for activity_type, bias in activity_biases.items():
+                        if activity_type.lower() in action.lower():
+                            # Apply bias: add to biased list with higher probability
+                            biased_actions.append(action)
+                            # Could be added multiple times to increase probability
+                            if bias > 1.3:
+                                biased_actions.append(action)  # Add again for very high bias
+                
+                # Combine original and biased actions
+                action_context["available_actions"] = action_context["available_actions"] + biased_actions
+        
+        # Apply initiative level to influence action proactivity
+        initiative = getattr(pattern, "initiative_level", 0.5)
+        if "motivations" in action_context:
+            motivations = action_context["motivations"]
+            
+            # Adjust autonomy and self-improvement based on initiative
+            if "autonomy" in motivations:
+                motivations["autonomy"] = max(0.1, min(0.9, motivations["autonomy"] * (0.5 + initiative)))
+                
+            if "self_improvement" in motivations:
+                motivations["self_improvement"] = max(0.1, min(0.9, motivations["self_improvement"] * (0.5 + initiative)))
+                
+        # Apply engagement level to influence connection-seeking
+        engagement = getattr(pattern, "engagement_level", 0.5)
+        if "motivations" in action_context:
+            motivations = action_context["motivations"]
+            
+            # Adjust connection and validation based on engagement
+            if "connection" in motivations:
+                motivations["connection"] = max(0.1, min(0.9, motivations["connection"] * (0.5 + engagement)))
+                
+            if "validation" in motivations:
+                motivations["validation"] = max(0.1, min(0.9, motivations["validation"] * (0.5 + engagement)))
+        
+        return action_context
+
 
     async def periodic_hobby_meta_loop(self, interval=3600):
         """
