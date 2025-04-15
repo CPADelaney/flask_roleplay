@@ -20,6 +20,11 @@ from nyx.core.internal_thoughts import InternalThought
 from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
 from nyx.core.brain.nyx_event_log import EventLogMixin
 
+# Import new components
+from nyx.core.novelty_engine import NoveltyEngine
+from nyx.core.recognition_memory import RecognitionMemorySystem
+from nyx.core.creative_memory_integration import CreativeMemoryIntegration
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -163,6 +168,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.integration_manager = None
 
         self.checkpoint_planner = None
+
+        # Initialize new components
+        self.novelty_engine = NoveltyEngine(
+            imagination_simulator=self.imagination_simulator,
+            memory_core=self.memory_core
+        )
+        
+        self.recognition_memory = RecognitionMemorySystem(
+            memory_core=self.memory_core,
+            context_awareness=self.context_awareness
+        )
+        
+        self.creative_memory = CreativeMemoryIntegration(
+            novelty_engine=self.novelty_engine,
+            recognition_memory=self.recognition_memory,
+            memory_core=self.memory_core
+        )
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
@@ -675,7 +697,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Map visualization initialized")
             
             self.navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
-            logger.debug("Spatial navigator initialized")            
+            logger.debug("Spatial navigator initialized")          
+
+            # Initialize new components
+            await self.novelty_engine.initialize()
+            await self.recognition_memory.initialize()
+            await self.creative_memory.initialize()
     
             # 17. Create main orchestration agent
             self.brain_agent = self._create_brain_agent()
@@ -5452,7 +5479,99 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return await instance.sadistic_response_system.generate_sadistic_amusement_response(
             user_id, humiliation_level, category=category
         )
-
+                                             
+    # Convenience methods for accessing the novelty engine
+    
+    async def generate_novel_idea(
+        self,
+        technique: str = "auto",
+        domain: str = None,
+        concepts: List[str] = None
+    ) -> Any:
+        """
+        Generate a novel idea using the novelty engine
+        
+        Args:
+            technique: Creative technique to use
+            domain: Domain for the idea
+            concepts: Concepts to work with
+            
+        Returns:
+            Generated novel idea
+        """
+        # Ensure brain is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.novelty_engine.generate_novel_idea(
+            technique=technique,
+            domain=domain,
+            concepts=concepts
+        )
+    
+    # Helper methods for memory management
+    
+    async def add_recog_memory(self, memory_text: str, memory_type: str = "observation", **kwargs) -> str:
+        """
+        Add a new memory
+        
+        Args:
+            memory_text: Text content of the memory
+            memory_type: Type of memory
+            **kwargs: Additional memory parameters
+            
+        Returns:
+            ID of the created memory
+        """
+        # Ensure brain is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.memory_core.add_memory(
+            memory_text=memory_text,
+            memory_type=memory_type,
+            **kwargs
+        )
+    
+    async def retrieve_recog_memories(self, query: str, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories based on query
+        
+        Args:
+            query: Search query
+            **kwargs: Additional search parameters
+            
+        Returns:
+            List of matching memories
+        """
+        # Ensure brain is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        return await self.memory_core.retrieve_memories(
+            query=query,
+            **kwargs
+        )
+    
+    # Periodic maintenance method
+    
+    async def run_recog_maintenance(self):
+        """Run periodic maintenance tasks for all components"""
+        # Ensure brain is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="Nyx Brain Maintenance", group_id=self.trace_group_id):
+            # Run memory maintenance
+            memory_result = await self.memory_core.run_maintenance()
+            
+            # Process accumulated contextual cues
+            cue_result = await self.recognition_memory.process_accumulated_cues()
+            
+            return {
+                "memory_maintenance": memory_result,
+                "contextual_cues_processed": len(cue_result)
+            }
 
     @staticmethod
     @function_tool
