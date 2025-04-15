@@ -832,9 +832,16 @@ class MasterCoordinationAgent:
     async def initialize(self, user_id: int, conversation_id: int):
         """Initialize the master coordination agent."""
         self.trace_id = f"master_coord_{user_id}_{conversation_id}"
-        with trace("MasterCoordinationInit", group_id=self.trace_id):
+        
+        # Use proper Agents SDK tracing
+        with trace("MasterCoordinationInit", 
+                  trace_id=self.trace_id,
+                  metadata={"user_id": user_id, "conversation_id": conversation_id}):
             # Load existing world state
-            world_data = await self.world_lore_manager.get_world_data("main")
+            world_data = await self.world_lore_manager.get_world_data(
+                RunContextWrapper(context=None), "main"
+            )
+            
             # Initialize coordination memory
             self.coordination_memory = {
                 "subsystems": {
@@ -851,83 +858,108 @@ class MasterCoordinationAgent:
     
     async def coordinate_task(self, task_description: str, subsystems: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
         """Coordinate a task across multiple subsystems."""
-        with trace("TaskCoordination", group_id=self.trace_id, metadata={"task": task_description, "subsystems": subsystems}):
-            run_ctx = context or {}
-            
-            # Ask the agent how to coordinate this task
-            prompt = f"""
-            I need to coordinate this task across multiple subsystems:
-            
-            TASK: {task_description}
-            
-            SUBSYSTEMS: {subsystems}
-            
-            CURRENT WORLD STATE:
-            {json.dumps(await self.world_lore_manager.get_world_metadata("main"), indent=2)}
-            
-            For each subsystem, determine:
-            1. What action it should take
-            2. In what order the subsystems should execute
-            3. How data should flow between them
-            4. How to ensure consistency
-            
-            Return a detailed JSON execution plan.
-            """
-            
-            result = await Runner.run(self.agent, prompt, context=run_ctx)
-            
-            try:
-                execution_plan = json.loads(result.final_output)
-                # Update the coordination memory
-                self.coordination_memory["pending_tasks"].append({
-                    "task": task_description,
-                    "plan": execution_plan,
-                    "status": "pending",
-                    "created_at": datetime.now().isoformat()
-                })
-                return execution_plan
-            except json.JSONDecodeError:
-                return {"error": "Failed to parse execution plan", "raw_output": result.final_output}
+        # Create run configuration with proper tracing
+        run_config = RunConfig(
+            workflow_name="TaskCoordination",
+            trace_id=self.trace_id,
+            trace_metadata={"task": task_description, "subsystems": subsystems}
+        )
+        
+        # Prepare run context
+        run_ctx = context or {}
+        
+        # Ask the agent how to coordinate this task
+        prompt = f"""
+        I need to coordinate this task across multiple subsystems:
+        
+        TASK: {task_description}
+        
+        SUBSYSTEMS: {subsystems}
+        
+        CURRENT WORLD STATE:
+        {json.dumps(await self.world_lore_manager.get_world_metadata(
+            RunContextWrapper(context=run_ctx), "main"
+        ), indent=2)}
+        
+        For each subsystem, determine:
+        1. What action it should take
+        2. In what order the subsystems should execute
+        3. How data should flow between them
+        4. How to ensure consistency
+        
+        Return a detailed JSON execution plan.
+        """
+        
+        result = await Runner.run(
+            self.agent, 
+            prompt, 
+            context=run_ctx,
+            run_config=run_config
+        )
+        
+        try:
+            execution_plan = json.loads(result.final_output)
+            # Update the coordination memory
+            self.coordination_memory["pending_tasks"].append({
+                "task": task_description,
+                "plan": execution_plan,
+                "status": "pending",
+                "created_at": datetime.now().isoformat()
+            })
+            return execution_plan
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse execution plan", "raw_output": result.final_output}
     
     async def validate_consistency(self, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
         """Validate the consistency of newly generated content."""
-        with trace("ConsistencyValidation", group_id=self.trace_id, metadata={"content_type": content_type}):
-            # Get relevant existing content for comparison
-            existing_data = await self._get_related_content(content, content_type)
-            
-            prompt = f"""
-            Validate the consistency of this newly generated {content_type}:
-            
-            NEW CONTENT:
-            {json.dumps(content, indent=2)}
-            
-            EXISTING RELATED CONTENT:
-            {json.dumps(existing_data, indent=2)}
-            
-            Check for:
-            1. Timeline inconsistencies
-            2. Character/faction motivation contradictions
-            3. World rule violations
-            4. Thematic inconsistencies with matriarchal setting
-            
-            Return JSON with validation results and any issues found.
-            """
-            
-            result = await Runner.run(self.agent, prompt, context={})
-            
-            try:
-                validation = json.loads(result.final_output)
-                # Update consistency issues if any found
-                if not validation.get("is_consistent", True):
-                    self.coordination_memory["consistency_issues"].append({
-                        "content_type": content_type,
-                        "content_id": content.get("id", "unknown"),
-                        "issues": validation.get("issues", []),
-                        "detected_at": datetime.now().isoformat()
-                    })
-                return validation
-            except json.JSONDecodeError:
-                return {"is_consistent": False, "error": "Failed to parse validation", "raw_output": result.final_output}
+        # Create run configuration with proper tracing
+        run_config = RunConfig(
+            workflow_name="ConsistencyValidation", 
+            trace_id=self.trace_id,
+            trace_metadata={"content_type": content_type}
+        )
+        
+        # Get relevant existing content for comparison
+        existing_data = await self._get_related_content(content, content_type)
+        
+        prompt = f"""
+        Validate the consistency of this newly generated {content_type}:
+        
+        NEW CONTENT:
+        {json.dumps(content, indent=2)}
+        
+        EXISTING RELATED CONTENT:
+        {json.dumps(existing_data, indent=2)}
+        
+        Check for:
+        1. Timeline inconsistencies
+        2. Character/faction motivation contradictions
+        3. World rule violations
+        4. Thematic inconsistencies with matriarchal setting
+        
+        Return JSON with validation results and any issues found.
+        """
+        
+        result = await Runner.run(
+            self.agent, 
+            prompt, 
+            context={},
+            run_config=run_config
+        )
+        
+        try:
+            validation = json.loads(result.final_output)
+            # Update consistency issues if any found
+            if not validation.get("is_consistent", True):
+                self.coordination_memory["consistency_issues"].append({
+                    "content_type": content_type,
+                    "content_id": content.get("id", "unknown"),
+                    "issues": validation.get("issues", []),
+                    "detected_at": datetime.now().isoformat()
+                })
+            return validation
+        except json.JSONDecodeError:
+            return {"is_consistent": False, "error": "Failed to parse validation", "raw_output": result.final_output}
     
     async def get_status(self) -> Dict[str, Any]:
         """Get the current status of the coordination system."""
@@ -1038,19 +1070,20 @@ class MasterCoordinationAgent:
         
         return unique_related
 
+
+# Unified tracing for lore subsystems using Agents SDK tracing
 class UnifiedTraceSystem:
     """
-    System for unified tracing across all lore subsystems.
+    System for unified tracing across all lore subsystems, using Agents SDK.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.trace_id = f"lore_{user_id}_{conversation_id}"
-        self.traces = {}
     
     def start_trace(self, operation: str, metadata: Dict[str, Any] = None) -> str:
-        """Start a new trace for an operation."""
+        """Start a new trace for an operation using Agents SDK trace."""
         metadata = metadata or {}
         metadata.update({
             "user_id": self.user_id,
@@ -1059,88 +1092,44 @@ class UnifiedTraceSystem:
         })
         
         trace_id = f"{operation}_{uuid.uuid4()}"
-        with trace(operation, group_id=self.trace_id, metadata=metadata) as current_trace:
-            self.traces[trace_id] = {
-                "id": trace_id,
-                "operation": operation,
-                "metadata": metadata,
-                "started_at": datetime.now().isoformat(),
-                "status": "running",
-                "steps": [],
-                "trace_obj": current_trace
-            }
-            return trace_id
+        
+        # Use Agents SDK trace instead of custom implementation
+        # The trace object itself will be created and managed by the SDK
+        trace_obj = trace(
+            name=operation, 
+            group_id=self.trace_id, 
+            trace_id=trace_id,
+            metadata=metadata
+        )
+        
+        # Return trace ID for reference
+        return trace_id
     
     def add_trace_step(self, trace_id: str, step_name: str, data: Dict[str, Any] = None):
-        """Add a step to an existing trace."""
-        if trace_id not in self.traces:
-            return
-        
+        """Add a step to an existing trace using Agents SDK span functionality."""
+        # Create custom span within the trace
         with trace(
-            step_name, 
-            group_id=self.traces[trace_id]["trace_obj"].id, 
-            metadata=data
+            name=step_name,
+            group_id=self.trace_id,
+            trace_id=trace_id,
+            metadata=data or {}
         ):
-            self.traces[trace_id]["steps"].append({
-                "name": step_name,
-                "timestamp": datetime.now().isoformat(),
-                "data": data or {}
-            })
-    
-    def end_trace(self, trace_id: str, status: str = "completed", result: Dict[str, Any] = None):
-        """End a trace with a status and result."""
-        if trace_id not in self.traces:
-            return
-        
-        self.traces[trace_id]["status"] = status
-        self.traces[trace_id]["ended_at"] = datetime.now().isoformat()
-        self.traces[trace_id]["result"] = result or {}
-    
-    def get_trace(self, trace_id: str) -> Dict[str, Any]:
-        """Get the details of a specific trace."""
-        return self.traces.get(trace_id)
-    
-    def get_active_traces(self) -> List[Dict[str, Any]]:
-        """Get all currently active traces."""
-        return [t for t in self.traces.values() if t["status"] == "running"]
+            # Span is automatically created and finished within this context
+            pass
     
     def export_trace(self, trace_id: str, format_type: str = "json") -> Dict[str, Any]:
-        """Export a trace in the specified format."""
-        if trace_id not in self.traces:
-            return {"error": "Trace not found"}
-        
-        trace_data = self.traces[trace_id]
-        
-        if format_type == "json":
-            return trace_data
-        elif format_type == "timeline":
-            # Format for timeline visualization
-            events = []
-            events.append({
-                "time": trace_data["started_at"],
-                "event": f"Started {trace_data['operation']}",
-                "type": "start"
-            })
-            
-            for step in trace_data["steps"]:
-                events.append({
-                    "time": step["timestamp"],
-                    "event": step["name"],
-                    "data": step["data"],
-                    "type": "step"
-                })
-            
-            if trace_data["status"] != "running":
-                events.append({
-                    "time": trace_data["ended_at"],
-                    "event": f"Ended {trace_data['operation']} with status {trace_data['status']}",
-                    "type": "end"
-                })
-            
-            return {"timeline": events}
-        else:
-            return {"error": f"Unsupported format: {format_type}"}
+        """
+        Export trace information. Note that actual trace data is managed by the
+        SDK and visible through the OpenAI Dashboard.
+        """
+        # Return reference information since actual trace data is in SDK
+        return {
+            "trace_id": trace_id,
+            "reference": f"View this trace in the OpenAI Dashboard with ID: {trace_id}",
+            "format": format_type
+        }
 
+# Content validation tool integrated with Agents SDK
 class ContentValidationTool:
     """
     Tool for validating and ensuring consistency of lore content.
@@ -1159,8 +1148,14 @@ class ContentValidationTool:
             model_settings=ModelSettings(temperature=0.7)
         )
     
-    async def validate_content(self, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
+    async def validate_content(self, ctx, content: Dict[str, Any], content_type: str) -> Dict[str, Any]:
         """Validate the provided content against consistency rules."""
+        # Create run configuration with proper tracing
+        run_config = RunConfig(
+            workflow_name="ContentValidation",
+            trace_metadata={"content_type": content_type}
+        )
+        
         # Get validation schema for this content type
         schema = self._get_validation_schema(content_type)
         
@@ -1196,7 +1191,12 @@ class ContentValidationTool:
         - matriarchal_score: 1-10 rating of how well it upholds matriarchal themes
         """
         
-        result = await Runner.run(self.validator_agent, prompt, context={})
+        result = await Runner.run(
+            self.validator_agent, 
+            prompt, 
+            context=ctx.context,
+            run_config=run_config
+        )
         
         try:
             validation_result = json.loads(result.final_output)
@@ -1231,7 +1231,7 @@ class ContentValidationTool:
                     "description": str
                 }
             }
-            # Add schemas for other content types
+            # Add other content types as needed
         }
         
         return schemas.get(content_type, {
@@ -1263,7 +1263,7 @@ class ContentValidationTool:
         """Fetch content related to the provided content for contextual validation."""
         related = {}
         
-        async with self.get_connection_pool() as pool:
+        async with self.world_lore_manager.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 if content_type == "nation":
                     # Get neighboring nations
@@ -1287,85 +1287,8 @@ class ContentValidationTool:
                     """, content.get("id"))
                     if religions:
                         related["religions"] = [dict(r) for r in religions]
-                    
-                    # Get cultural traditions
-                    traditions = await conn.fetch("""
-                        SELECT ce.* 
-                        FROM CulturalElements ce
-                        WHERE $1 = ANY(ce.practiced_by)
-                    """, content.get("name", ""))
-                    if traditions:
-                        related["cultural_traditions"] = [dict(t) for t in traditions]
                 
-                elif content_type == "religion":
-                    # Get nations where this religion is practiced
-                    nations = await conn.fetch("""
-                        SELECT n.* 
-                        FROM Nations n
-                        JOIN NationReligions nr ON n.id = nr.nation_id
-                        WHERE nr.religion_id = $1
-                    """, content.get("id"))
-                    if nations:
-                        related["practicing_nations"] = [dict(n) for n in nations]
-                    
-                    # Get deities associated with this religion
-                    deities = await conn.fetch("""
-                        SELECT * FROM Deities
-                        WHERE religion_id = $1
-                    """, content.get("id"))
-                    if deities:
-                        related["deities"] = [dict(d) for d in deities]
-                    
-                    # Get religious practices
-                    practices = await conn.fetch("""
-                        SELECT * FROM ReligiousPractices
-                        WHERE religion_id = $1
-                    """, content.get("id"))
-                    if practices:
-                        related["practices"] = [dict(p) for p in practices]
-                
-                elif content_type == "faction":
-                    # Get faction leaders
-                    leaders = await conn.fetch("""
-                        SELECT nf.* 
-                        FROM NotableFigures nf
-                        WHERE nf.id = ANY($1)
-                    """, content.get("leadership", []))
-                    if leaders:
-                        related["leaders"] = [dict(l) for l in leaders]
-                    
-                    # Get controlled locations
-                    locations = await conn.fetch("""
-                        SELECT * FROM Locations
-                        WHERE controlling_faction = $1
-                    """, content.get("name", ""))
-                    if locations:
-                        related["controlled_locations"] = [dict(l) for l in locations]
-                    
-                    # Get rival factions
-                    rivals = await conn.fetch("""
-                        SELECT * FROM Factions
-                        WHERE name = ANY($1)
-                    """, content.get("rivals", []))
-                    if rivals:
-                        related["rival_factions"] = [dict(r) for r in rivals]
-                
-                elif content_type == "location":
-                    # Get controlling faction
-                    faction = await conn.fetchrow("""
-                        SELECT * FROM Factions
-                        WHERE name = $1
-                    """, content.get("controlling_faction", ""))
-                    if faction:
-                        related["controlling_faction"] = dict(faction)
-                    
-                    # Get historical events at this location
-                    events = await conn.fetch("""
-                        SELECT * FROM HistoricalEvents
-                        WHERE $1 = ANY(affected_locations)
-                    """, content.get("name", ""))
-                    if events:
-                        related["historical_events"] = [dict(e) for e in events]
+                # Add other content types as needed
         
         return related
 
