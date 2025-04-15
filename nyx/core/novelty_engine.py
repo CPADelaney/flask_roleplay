@@ -386,9 +386,10 @@ class NoveltyEngine:
         )
     
     # Tool functions for the various agents
-    
+
+    @staticmethod
     @function_tool
-    async def _get_creative_techniques(self, ctx: RunContextWrapper[NoveltyEngineContext]) -> Dict[str, str]:
+    async def _get_creative_techniques(ctx: RunContextWrapper[NoveltyEngineContext]) -> Dict[str, str]:
         """
         Get the list of available creative techniques
         
@@ -396,9 +397,10 @@ class NoveltyEngine:
             Dictionary of technique names and descriptions
         """
         return ctx.context.techniques
-    
+
+    @staticmethod
     @function_tool
-    async def _get_domains(self, ctx: RunContextWrapper[NoveltyEngineContext]) -> List[str]:
+    async def _get_domains(ctx: RunContextWrapper[NoveltyEngineContext]) -> List[str]:
         """
         Get the list of creative domains
         
@@ -406,10 +408,10 @@ class NoveltyEngine:
             List of domain names
         """
         return ctx.context.domains
-    
+
+    @staticmethod
     @function_tool
     async def _extract_domain_principles(
-        self, 
         ctx: RunContextWrapper[NoveltyEngineContext],
         domain: str
     ) -> List[Dict[str, str]]:
@@ -448,10 +450,10 @@ class NoveltyEngine:
             ]
         
         return principles
-    
+
+    @staticmethod
     @function_tool
     async def _find_connections(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         domain1_principles: List[Dict[str, str]],
         domain2_principles: List[Dict[str, str]]
@@ -480,10 +482,10 @@ class NoveltyEngine:
                     })
         
         return connections
-    
+
+    @staticmethod
     @function_tool
     async def _decompose_concepts(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         concepts: List[str]
     ) -> Dict[str, List[str]]:
@@ -512,10 +514,10 @@ class NoveltyEngine:
             decomposed[concept] = elements
         
         return decomposed
-    
+
+    @staticmethod
     @function_tool
     async def _create_blended_space(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         concept_elements: Dict[str, List[str]]
     ) -> Dict[str, Any]:
@@ -551,10 +553,10 @@ class NoveltyEngine:
         }
         
         return blend
-    
+
+    @staticmethod
     @function_tool
     async def _identify_constraints(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         domain: str
     ) -> List[Dict[str, Any]]:
@@ -592,10 +594,10 @@ class NoveltyEngine:
         ]
         
         return constraints
-    
+
+    @staticmethod
     @function_tool
     async def _explore_constraint_removal(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         constraints: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -632,10 +634,10 @@ class NoveltyEngine:
             possibilities.append(possibility)
         
         return possibilities
-    
+
+    @staticmethod
     @function_tool
     async def _generate_random_stimuli(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         count: int = 3
     ) -> List[str]:
@@ -659,10 +661,10 @@ class NoveltyEngine:
         ]
         
         return random.sample(stimuli_options, min(count, len(stimuli_options)))
-    
+
+    @staticmethod
     @function_tool
     async def _force_connections(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         problem: str,
         stimuli: List[str]
@@ -691,10 +693,10 @@ class NoveltyEngine:
             connections.append(connection)
         
         return connections
-    
+
+    @staticmethod
     @function_tool
     async def _generate_perspectives(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         problem: str
     ) -> List[Dict[str, str]]:
@@ -734,10 +736,10 @@ class NoveltyEngine:
         ]
         
         return perspectives
-    
+
+    @staticmethod
     @function_tool
     async def _analyze_from_perspective(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         problem: str,
         perspective: Dict[str, str]
@@ -774,10 +776,10 @@ class NoveltyEngine:
         }
         
         return analysis
-    
+
+    @staticmethod
     @function_tool
     async def _extract_domain_structure(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         domain: str
     ) -> Dict[str, Any]:
@@ -816,10 +818,10 @@ class NoveltyEngine:
         }
         
         return structure
-    
+
+    @staticmethod
     @function_tool
     async def _map_across_domains(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         source_structure: Dict[str, Any],
         target_domain: str
@@ -860,10 +862,10 @@ class NoveltyEngine:
         }
         
         return mapping
-    
+
+    @staticmethod
     @function_tool
     async def _assess_novelty(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         idea: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -899,10 +901,10 @@ class NoveltyEngine:
         }
         
         return assessment
-    
+
+    @staticmethod
     @function_tool
     async def _assess_usefulness(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         idea: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -943,10 +945,10 @@ class NoveltyEngine:
         }
         
         return assessment
-    
+
+    @staticmethod
     @function_tool
     async def _assess_feasibility(
-        self,
         ctx: RunContextWrapper[NoveltyEngineContext],
         idea: Dict[str, Any]
     ) -> Dict[str, Any]:
