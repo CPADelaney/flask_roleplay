@@ -408,14 +408,7 @@ class EducationalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 2) Adding knowledge tradition (CRUD) with structured output
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_knowledge_tradition",
-        action_description="Adding knowledge tradition: {name}",
-        id_from_context=lambda ctx: "educational_system_manager"
-    )
-    @registered_tool(category="education")
-    async def add_knowledge_tradition(
+    async def _add_knowledge_tradition_impl(
         self,
         ctx,
         name: str,
@@ -430,33 +423,13 @@ class EducationalSystemManager(BaseLoreManager):
         gendered_access: Dict[str, str] = None,
         matriarchal_reinforcement: str = None
     ) -> int:
-        """
-        Add a knowledge tradition to the database with matriarchal elements.
-        
-        Args:
-            ctx: Context object
-            name: Name of the tradition
-            tradition_type: Type of tradition (oral, written, etc.)
-            description: Detailed description
-            knowledge_domain: Area of knowledge
-            preservation_method: How knowledge is preserved
-            access_requirements: Requirements for access
-            associated_group: Group associated with this tradition
-            examples: Examples of knowledge contained
-            female_gatekeepers: Whether women control access
-            gendered_access: Different access levels by gender
-            matriarchal_reinforcement: How it reinforces matriarchal power
-            
-        Returns:
-            ID of the created knowledge tradition
-        """
         with trace(
             "AddKnowledgeTradition", 
             group_id=self.trace_group_id,
             metadata={**self.trace_metadata, "tradition_name": name}
         ):
             await self.initialize_tables()
-
+    
             examples = examples or []
             
             # Set defaults for optional matriarchal elements if not provided
@@ -465,11 +438,11 @@ class EducationalSystemManager(BaseLoreManager):
                 "male": "Limited access under supervision"
             }
             matriarchal_reinforcement = matriarchal_reinforcement or "Emphasizes female wisdom and authority"
-
+    
             # Generate embedding
             embedding_text = f"{name} {tradition_type} {description} {knowledge_domain}"
             embedding = await generate_embedding(embedding_text)
-
+    
             async with self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     tradition_id = await conn.fetchval("""
@@ -486,8 +459,72 @@ class EducationalSystemManager(BaseLoreManager):
                     preservation_method, access_requirements,
                     associated_group, examples, embedding,
                     female_gatekeepers, json.dumps(gendered_access), matriarchal_reinforcement)
-
+    
                     return tradition_id
+                    
+    async def _add_educational_system_impl(
+        self,
+        ctx,
+        name: str,
+        system_type: str,
+        description: str,
+        target_demographics: List[str],
+        controlled_by: str,
+        core_teachings: List[str],
+        teaching_methods: List[str],
+        coming_of_age_rituals: str = None,
+        knowledge_restrictions: str = None,
+        female_leadership_roles: List[str] = None,
+        male_roles: List[str] = None,
+        gender_specific_teachings: Dict[str, List[str]] = None,
+        taboo_subjects: List[str] = None,
+        censorship_level: int = 5,
+        censorship_enforcement: str = None
+    ) -> int:
+        with trace(
+            "AddEducationalSystem", 
+            group_id=self.trace_group_id,
+            metadata={**self.trace_metadata, "system_name": name}
+        ):
+            # Ensure tables exist
+            await self.initialize_tables()
+            
+            # Set defaults for optional matriarchal elements if not provided
+            female_leadership_roles = female_leadership_roles or ["Headmistress", "Teacher", "Mentor"]
+            male_roles = male_roles or ["Assistant", "Aide", "Custodian"]
+            gender_specific_teachings = gender_specific_teachings or {
+                "female": ["Leadership", "Authority", "Decision-making"],
+                "male": ["Service", "Support", "Compliance"]
+            }
+            taboo_subjects = taboo_subjects or ["Challenging feminine authority", "Male independence"]
+            censorship_enforcement = censorship_enforcement or "Monitored by female leadership"
+    
+            # Generate embedding
+            embedding_text = f"{name} {system_type} {description} {' '.join(core_teachings)}"
+            embedding = await generate_embedding(embedding_text)
+    
+            # Store in DB
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    system_id = await conn.fetchval("""
+                        INSERT INTO EducationalSystems (
+                            name, system_type, description, target_demographics,
+                            controlled_by, core_teachings, teaching_methods, 
+                            coming_of_age_rituals, knowledge_restrictions, embedding,
+                            female_leadership_roles, male_roles, gender_specific_teachings,
+                            taboo_subjects, censorship_level, censorship_enforcement
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                        RETURNING id
+                    """,
+                    name, system_type, description, target_demographics,
+                    controlled_by, core_teachings, teaching_methods,
+                    coming_of_age_rituals, knowledge_restrictions, embedding,
+                    female_leadership_roles, male_roles, json.dumps(gender_specific_teachings),
+                    taboo_subjects, censorship_level, censorship_enforcement)
+    
+                    return system_id
+
 
     # ------------------------------------------------------------------------
     # 3) Stream educational system generation with progressive updates
