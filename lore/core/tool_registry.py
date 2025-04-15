@@ -30,21 +30,31 @@ class FunctionToolRegistry:
         """
         if isinstance(function, FunctionTool):
             logging.info(f"Unwrapping FunctionTool for registration: {getattr(function, 'name', function)}")
-            function = function.func  # or function.wrapped_func if that's the field
+            if hasattr(function, "func"):
+                function = function.func
+            elif hasattr(function, "wrapped_func"):
+                function = function.wrapped_func
+            else:
+                logging.error("FunctionTool object does not have an attribute ('func' or 'wrapped_func') for the underlying function.")
+                raise AttributeError("FunctionTool object does not have an attribute ('func' or 'wrapped_func') for the underlying function.")
+        
         if not callable(function):
             logging.warning(f"Attempted to register a non-callable: {function}")
             return
 
     
     def get_tool(self, tool_id: str) -> Optional[Callable]:
-        """
-        Get a registered function tool by its ID.
-        Always returns a callable, never a FunctionTool wrapper.
-        """
         tool = self._tools.get(tool_id)
         if isinstance(tool, FunctionTool):
-            return tool.func
+            if hasattr(tool, "func"):
+                return tool.func
+            elif hasattr(tool, "wrapped_func"):
+                return tool.wrapped_func
+            else:
+                logging.error("FunctionTool object missing both 'func' and 'wrapped_func' attributes.")
+                raise AttributeError("FunctionTool object missing both 'func' and 'wrapped_func' attributes.")
         return tool
+
     
     def get_tools_by_category(self, category: str) -> List[Callable]:
         """Get all function tools in a category."""
