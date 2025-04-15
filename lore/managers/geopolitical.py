@@ -356,6 +356,68 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 1) Add geographic region with specialized handoffs
     # ------------------------------------------------------------------------
+    async def _add_geographic_region_impl(
+        self, 
+        ctx,
+        name: str,
+        region_type: str,
+        description: str,
+        climate: Optional[str] = None,
+        resources: Optional[List[str]] = None,
+        governing_faction: Optional[str] = None,
+        population_density: Optional[str] = None,
+        major_settlements: Optional[List[str]] = None,
+        cultural_traits: Optional[List[str]] = None,
+        dangers: Optional[List[str]] = None,
+        terrain_features: Optional[List[str]] = None,
+        defensive_characteristics: Optional[str] = None,
+        strategic_value: int = 5,
+        matriarchal_influence: int = 5
+    ) -> int:
+        """
+        Actual business logic and DB insert for a geographic region.
+        """
+        with trace(
+            "AddGeographicRegion", 
+            group_id=self.trace_group_id,
+            metadata={**self.trace_metadata, "region_name": name}
+        ):
+            await self.ensure_initialized()
+    
+            resources = resources or []
+            major_settlements = major_settlements or []
+            cultural_traits = cultural_traits or []
+            dangers = dangers or []
+            terrain_features = terrain_features or []
+    
+            # Apply matriarchal theming
+            description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
+    
+            # Generate embedding
+            embedding_text = f"{name} {region_type} {description} {climate or ''}"
+            embedding = await generate_embedding(embedding_text)
+    
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    region_id = await conn.fetchval("""
+                        INSERT INTO GeographicRegions (
+                            name, region_type, description, climate, resources,
+                            governing_faction, population_density, major_settlements,
+                            cultural_traits, dangers, terrain_features,
+                            defensive_characteristics, strategic_value,
+                            matriarchal_influence, embedding
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        RETURNING id
+                    """,
+                    name, region_type, description, climate, resources,
+                    governing_faction, population_density, major_settlements,
+                    cultural_traits, dangers, terrain_features,
+                    defensive_characteristics, strategic_value,
+                    matriarchal_influence, embedding)
+                    
+                    return region_id
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_geographic_region",
@@ -382,69 +444,13 @@ class GeopoliticalSystemManager(BaseLoreManager):
         matriarchal_influence: int = 5
     ) -> int:
         """
-        Add a geographic region to the database with enhanced characteristics.
-        
-        Args:
-            ctx: Context object
-            name: Region name
-            region_type: Type of region
-            description: Description text
-            climate: Climate details
-            resources: Available resources
-            governing_faction: Who governs the region
-            population_density: Density description
-            major_settlements: Major settlements in the region
-            cultural_traits: Cultural characteristics
-            dangers: Dangers in the region
-            terrain_features: Notable terrain features
-            defensive_characteristics: Defensive advantages/disadvantages
-            strategic_value: Strategic importance (1-10)
-            matriarchal_influence: Level of matriarchal influence (1-10)
-            
-        Returns:
-            ID of the created region
+        Decorated tool: just call the internal implementation.
         """
-        with trace(
-            "AddGeographicRegion", 
-            group_id=self.trace_group_id,
-            metadata={**self.trace_metadata, "region_name": name}
-        ):
-            await self.ensure_initialized()
-
-            resources = resources or []
-            major_settlements = major_settlements or []
-            cultural_traits = cultural_traits or []
-            dangers = dangers or []
-            terrain_features = terrain_features or []
-
-            # Apply matriarchal theming
-            description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
-
-            # Generate embedding
-            embedding_text = f"{name} {region_type} {description} {climate or ''}"
-            embedding = await generate_embedding(embedding_text)
-
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    region_id = await conn.fetchval("""
-                        INSERT INTO GeographicRegions (
-                            name, region_type, description, climate, resources,
-                            governing_faction, population_density, major_settlements,
-                            cultural_traits, dangers, terrain_features,
-                            defensive_characteristics, strategic_value,
-                            matriarchal_influence, embedding
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        RETURNING id
-                    """,
-                    name, region_type, description, climate, resources,
-                    governing_faction, population_density, major_settlements,
-                    cultural_traits, dangers, terrain_features,
-                    defensive_characteristics, strategic_value,
-                    matriarchal_influence, embedding)
-                    
-                    return region_id
-
+        return await self._add_geographic_region_impl(
+            ctx, name, region_type, description, climate, resources, governing_faction, 
+            population_density, major_settlements, cultural_traits, dangers, 
+            terrain_features, defensive_characteristics, strategic_value, matriarchal_influence
+        )
     # ------------------------------------------------------------------------
     # 2) Generate world nations with agent-based distribution
     # ------------------------------------------------------------------------
