@@ -168,6 +168,46 @@ class MemoryAgentWrapper:
             except Exception as e:
                 logger.error(f"Error in create_belief: {str(e)}")
                 return {"error": str(e), "belief_id": None}
+
+    def get_system_prompt(self):
+        """
+        Return the system prompt for the memory agent.
+        This method is needed by the recall method or its dependencies.
+        """
+        if hasattr(self.agent, 'get_system_prompt'):
+            return self.agent.get_system_prompt()
+        elif hasattr(self.agent, 'instructions'):
+            return self.agent.instructions
+        else:
+            return "You are a memory management assistant that helps manage and retrieve memories."
+
+    def get_tools(self):
+        """
+        Get the tools from the underlying agent.
+        """
+        if hasattr(self.agent, 'get_tools'):
+            return self.agent.get_tools()
+        else:
+            return self.tools
+    
+    def run(self, *args, **kwargs):
+        """
+        Run the agent with the given input.
+        """
+        if hasattr(self.agent, 'run'):
+            return self.agent.run(*args, **kwargs)
+        else:
+            # Fallback implementation or raise an error
+            raise NotImplementedError("Run method not implemented by underlying agent")
+    
+    def get_name(self):
+        """
+        Get the name of the agent.
+        """
+        if hasattr(self.agent, 'get_name'):
+            return self.agent.get_name()
+        else:
+            return self.name
     
     async def get_beliefs(
         self,
