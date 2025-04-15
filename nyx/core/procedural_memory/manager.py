@@ -345,10 +345,10 @@ class ProceduralMemoryManager:
                 "is_chunked": procedure.is_chunked,
                 "chunked_steps": procedure.chunked_steps if procedure.is_chunked else {}
             }
-    
+
+    @staticmethod
     @function_tool
     async def update_procedure(
-        self,
         ctx: RunContextWrapper,
         name: str,
         steps: Optional[List[Dict[str, Any]]] = None,
