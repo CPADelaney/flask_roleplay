@@ -1079,8 +1079,6 @@ class UnifiedMemoryManager:
                 data_size INTEGER,
                 error TEXT
             );
-            """
-        )
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp ON memory_telemetry(timestamp);
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation ON memory_telemetry(operation);
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success ON memory_telemetry(success);
