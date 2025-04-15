@@ -293,44 +293,13 @@ class BaseLoreManager:
                     except Exception as e:
                         logger.error(f"Error initializing table {table_name}: {e}")
 
-    async def get_connection_pool(self):
-        """Get database connection pool. Implement your actual pool logic here."""
-        # This is a placeholder - implement your actual database connection pool
-        class MockConnectionPool:
-            async def acquire(self):
-                class MockConnection:
-                    async def __aenter__(self):
-                        return self
-                    
-                    async def __aexit__(self, exc_type, exc_val, exc_tb):
-                        pass
-                    
-                    async def execute(self, query, *args):
-                        logger.debug(f"Mock executing: {query}")
-                        return None
-                    
-                    async def fetchval(self, query, *args):
-                        logger.debug(f"Mock fetchval: {query}")
-                        return 1
-                    
-                    async def fetch(self, query, *args):
-                        logger.debug(f"Mock fetch: {query}")
-                        return []
-                    
-                    async def fetchrow(self, query, *args):
-                        logger.debug(f"Mock fetchrow: {query}")
-                        return None
-                
-                return MockConnection()
-            
-            async def __aenter__(self):
-                return self
-                
-            async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
-        
-        return MockConnectionPool()
+    def get_connection_pool(self):
+        """
+        Get an async context manager for a db connection.
+        """
+        return get_db_connection_context()
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -338,7 +307,7 @@ class BaseLoreManager:
         action_description="Retrieving cached lore data",
         id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
     )
-    async def _get_cached_data(self, ctx: RunContextWrapper, cache_key: str) -> Optional[Dict[str, Any]]:
+    async def _get_cached_data(ctx: RunContextWrapper, cache_key: str) -> Optional[Dict[str, Any]]:
         """
         Get data from cache with metrics tracking and governance oversight.
         
@@ -361,6 +330,7 @@ class BaseLoreManager:
             logger.error(f"Error getting cached data: {e}")
             return None
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -368,7 +338,7 @@ class BaseLoreManager:
         action_description="Setting cached lore data",
         id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
     )
-    async def _set_cached_data(self, ctx: RunContextWrapper, cache_key: str, data: Dict[str, Any]) -> bool:
+    async def _set_cached_data(ctx: RunContextWrapper, cache_key: str, data: Dict[str, Any]) -> bool:
         """
         Set data in cache with metrics tracking and governance oversight.
         
@@ -411,6 +381,7 @@ class BaseLoreManager:
         except Exception as e:
             logger.error(f"Error evicting cache entries: {e}")
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -418,7 +389,7 @@ class BaseLoreManager:
         action_description="Deleting cached lore data",
         id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
     )
-    async def _delete_cached_data(self, ctx: RunContextWrapper, cache_key: str) -> bool:
+    async def _delete_cached_data(ctx: RunContextWrapper, cache_key: str) -> bool:
         """
         Delete data from cache with governance oversight.
         
@@ -437,6 +408,7 @@ class BaseLoreManager:
             logger.error(f"Error deleting cached data: {e}")
             return False
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -444,7 +416,7 @@ class BaseLoreManager:
         action_description="Executing database query",
         id_from_context=lambda ctx: f"lore_db_{int(datetime.now().timestamp())}"
     )
-    async def _execute_db_query(self, ctx: RunContextWrapper, query: str, *args) -> List[Dict[str, Any]]:
+    async def _execute_db_query(ctx: RunContextWrapper, query: str, *args) -> List[Dict[str, Any]]:
         """
         Execute database query with metrics tracking and governance oversight.
         
@@ -475,6 +447,7 @@ class BaseLoreManager:
             return query_lower.split('from')[1].split()[0]
         return 'unknown'
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -482,7 +455,7 @@ class BaseLoreManager:
         action_description="Performing batch database update",
         id_from_context=lambda ctx: f"lore_batch_{int(datetime.now().timestamp())}"
     )
-    async def _batch_update(self, ctx: RunContextWrapper, table: str, updates: List[Dict[str, Any]]) -> bool:
+    async def _batch_update(ctx: RunContextWrapper, table: str, updates: List[Dict[str, Any]]) -> bool:
         """
         Perform batch update operation with governance oversight.
         
@@ -519,6 +492,7 @@ class BaseLoreManager:
             logger.error(f"Error performing batch update: {e}")
             return False
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -526,7 +500,7 @@ class BaseLoreManager:
         action_description="Validating lore data",
         id_from_context=lambda ctx: f"lore_validate_{int(datetime.now().timestamp())}"
     )
-    async def _validate_data(self, ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
+    async def _validate_data(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
         """
         Validate data against schema with governance oversight.
         
@@ -619,9 +593,10 @@ class BaseLoreManager:
         if isinstance(ctx, RunContextWrapper):
             return ctx
         return RunContextWrapper(context=ctx)
-        
+
+    @staticmethod
     @function_tool
-    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get cache statistics.
         
@@ -710,6 +685,7 @@ class BaseLoreManager:
                 await asyncio.sleep(300)  # Sleep 5 min if error, then retry
                 
     # Enhanced lore generation methods
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -718,7 +694,6 @@ class BaseLoreManager:
         id_from_context=lambda ctx: f"foundation_lore_{int(datetime.now().timestamp())}"
     )
     async def generate_foundation_lore(
-        self,
         ctx: RunContextWrapper,
         environment_desc: str
     ) -> Dict[str, Any]:
@@ -780,7 +755,8 @@ class BaseLoreManager:
                 "calendar_system": "Error generating calendar system",
                 "social_structure": "Error generating social structure"
             }
-    
+
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -789,7 +765,6 @@ class BaseLoreManager:
         id_from_context=lambda ctx: f"factions_{int(datetime.now().timestamp())}"
     )
     async def generate_factions(
-        self,
         ctx: RunContextWrapper,
         environment_desc: str,
         foundation_lore: Dict[str, Any],
@@ -861,7 +836,8 @@ class BaseLoreManager:
         except Exception as e:
             logger.error(f"Error generating factions: {str(e)}")
             return [{"error": str(e), "name": "Error generating factions"}]
-            
+
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -870,7 +846,6 @@ class BaseLoreManager:
         id_from_context=lambda ctx: f"locations_{int(datetime.now().timestamp())}"
     )
     async def generate_locations(
-        self,
         ctx: RunContextWrapper,
         environment_desc: str,
         factions: List[Dict[str, Any]],
@@ -942,7 +917,8 @@ class BaseLoreManager:
         except Exception as e:
             logger.error(f"Error generating locations: {str(e)}")
             return [{"error": str(e), "name": "Error generating locations"}]
-    
+
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -951,7 +927,6 @@ class BaseLoreManager:
         id_from_context=lambda ctx: f"complete_lore_{int(datetime.now().timestamp())}"
     )
     async def generate_complete_lore(
-        self,
         ctx: RunContextWrapper,
         environment_desc: str
     ) -> Dict[str, Any]:
@@ -1195,7 +1170,8 @@ class BaseManager:
         except Exception as e:
             logger.error(f"Error getting cached data: {e}")
             return None
-            
+
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1204,7 +1180,6 @@ class BaseManager:
         id_from_context=lambda ctx: f"get_cached_{ctx.data_type}_{ctx.data_id}"
     )
     async def get_cached_data(
-        self,
         ctx: RunContextWrapper,
         data_type: str,
         data_id: str,
@@ -1282,6 +1257,7 @@ class BaseManager:
         # Implement your actual conversation data fetch logic
         return {"conversation_id": self.conversation_id, "messages": []}
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1290,7 +1266,6 @@ class BaseManager:
         id_from_context=lambda ctx: f"set_cached_{ctx.data_type}_{ctx.data_id}"
     )
     async def set_cached_data(
-        self,
         ctx: RunContextWrapper,
         data_type: str,
         data_id: str,
@@ -1316,6 +1291,7 @@ class BaseManager:
             logger.error(f"Error setting cached data: {e}")
             return False
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1324,7 +1300,6 @@ class BaseManager:
         id_from_context=lambda ctx: f"invalidate_cached_{ctx.data_type}_{ctx.data_id}"
     )
     async def invalidate_cached_data(
-        self,
         ctx: RunContextWrapper,
         data_type: str,
         data_id: Optional[str] = None,
@@ -1344,6 +1319,7 @@ class BaseManager:
         except Exception as e:
             logger.error(f"Error invalidating cached data: {e}")
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1351,7 +1327,7 @@ class BaseManager:
         action_description="Getting cache statistics",
         id_from_context=lambda ctx: f"get_cache_stats_{int(datetime.now().timestamp())}"
     )
-    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get cache statistics with governance oversight.
         
@@ -1363,6 +1339,7 @@ class BaseManager:
         """
         return self.cache_manager.get_cache_stats()
 
+    @staticmethod
     @function_tool
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -1370,7 +1347,7 @@ class BaseManager:
         action_description="Running maintenance loop",
         id_from_context=lambda ctx: f"maintenance_loop_{int(datetime.now().timestamp())}"
     )
-    async def _maintenance_loop(self, ctx: RunContextWrapper):
+    async def _maintenance_loop(ctx: RunContextWrapper):
         """
         Agent-driven background task for maintenance with governance oversight. 
         We'll call the 'MaintenanceAgent' to interpret stats and advise next steps.
