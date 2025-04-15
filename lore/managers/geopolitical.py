@@ -4,26 +4,25 @@ import logging
 import json
 import random
 import asyncio
+import re
+from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator, Union, Tuple
 from pydantic import BaseModel, Field
 
-# Agents SDK imports
+# OpenAI Agents SDK imports
 from agents import (
     Agent, function_tool, Runner, trace, RunResultStreaming,
-    GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff, ModelSettings
+    GuardrailFunctionOutput, InputGuardrail, handoff, ModelSettings
 )
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
-from nyx.governance_helpers import with_governance
 
 # Project imports
 from embedding.vector_store import generate_embedding
-from lore.core.base_manager import BaseLoreManager
-from lore.utils.theming import MatriarchalThemingUtils
-from lore.core.tool_registry import registered_tool, tool_registry
+from lore.managers.base_manager import BaseLoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +100,31 @@ class ConflictSimulation(BaseModel):
     duration_months: int
     confidence_level: int = Field(..., ge=1, le=10)
     simulation_basis: str
+
+class EconomicTradeSimulation(BaseModel):
+    """Model for economic trade simulation between nations."""
+    nation1: str
+    nation2: str
+    trade_goods: List[str]
+    trade_value: float
+    trade_route: str
+    impact_on_economy: float  # Positive/negative impact on the economy
+
+class ClimateGeographyEffect(BaseModel):
+    """Model for simulating the political impact of terrain features and climate."""
+    region_name: str
+    terrain_features: List[str]
+    climate_type: str
+    resource_availability: List[str]
+    political_stability: float
+
+class CovertOperation(BaseModel):
+    """Model for covert operations between political entities."""
+    agent_name: str
+    target_nation: str
+    operation_type: str
+    mission_outcome: str
+    secrecy_level: int
 
 class GeopoliticalSystemManager(BaseLoreManager):
     """
@@ -222,12 +246,14 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 )
             ]
         )
+        
+        # Specialized simulation agents
         self.trade_modeling_agent = Agent(
             name="EconomicTradeModelingAgent",
             instructions="Simulate trade relations between two nations, considering trade routes, goods, and economic impact.",
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.7),
-            tools=[simulate_trade]  # Add the function tool directly
+            output_type=EconomicTradeSimulation
         )
         
         self.geography_effect_agent = Agent(
@@ -235,7 +261,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             instructions="Simulate the effects of climate and geography on political development.",
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.7),
-            tools=[simulate_geography_impact]  # Add the function tool directly
+            output_type=ClimateGeographyEffect
         )
         
         self.covert_operations_agent = Agent(
@@ -243,15 +269,20 @@ class GeopoliticalSystemManager(BaseLoreManager):
             instructions="Simulate espionage and covert operations between nations.",
             model="o3-mini",
             model_settings=ModelSettings(temperature=0.8),
-            tools=[simulate_espionage]  # Add the function tool directly
+            output_type=CovertOperation
         )
 
+    async def ensure_initialized(self):
+        """Ensure system is fully initialized with necessary tables."""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self._initialize_tables()
 
     async def _initialize_tables(self):
         """Initialize necessary tables with enhanced fields."""
         table_definitions = {
             "GeographicRegions": """
-                CREATE TABLE GeographicRegions (
+                CREATE TABLE IF NOT EXISTS GeographicRegions (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     region_type TEXT NOT NULL,
@@ -274,7 +305,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON GeographicRegions USING ivfflat (embedding vector_cosine_ops);
             """,
             "PoliticalEntities": """
-                CREATE TABLE PoliticalEntities (
+                CREATE TABLE IF NOT EXISTS PoliticalEntities (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     entity_type TEXT NOT NULL,
@@ -300,7 +331,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON PoliticalEntities USING ivfflat (embedding vector_cosine_ops);
             """,
             "BorderDisputes": """
-                CREATE TABLE BorderDisputes (
+                CREATE TABLE IF NOT EXISTS BorderDisputes (
                     id SERIAL PRIMARY KEY,
                     region1_id INTEGER NOT NULL,
                     region2_id INTEGER NOT NULL,
@@ -323,7 +354,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON BorderDisputes USING ivfflat (embedding vector_cosine_ops);
             """,
             "ConflictSimulations": """
-                CREATE TABLE ConflictSimulations (
+                CREATE TABLE IF NOT EXISTS ConflictSimulations (
                     id SERIAL PRIMARY KEY,
                     conflict_type TEXT NOT NULL,
                     primary_actors JSONB NOT NULL,
@@ -345,13 +376,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                 ON ConflictSimulations USING ivfflat (embedding vector_cosine_ops);
             """
         }
-        await self.initialize_tables_from_definitions(table_definitions)
-
-    async def ensure_initialized(self):
-        """Ensure system is fully initialized with necessary tables."""
-        if not self.initialized:
-            await super().ensure_initialized()
-            await self._initialize_tables()
+        await self.initialize_tables_for_class(table_definitions)
 
     # ------------------------------------------------------------------------
     # 1) Add geographic region with specialized handoffs
@@ -390,8 +415,13 @@ class GeopoliticalSystemManager(BaseLoreManager):
             dangers = dangers or []
             terrain_features = terrain_features or []
     
-            # Apply matriarchal theming
-            description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
+            # Apply matriarchal theming if utility available
+            try:
+                from lore.utils.theming import MatriarchalThemingUtils
+                description = MatriarchalThemingUtils.apply_matriarchal_theme("region", description)
+            except ImportError:
+                # If theming utils not available, continue without theming
+                pass
     
             # Generate embedding
             embedding_text = f"{name} {region_type} {description} {climate or ''}"
@@ -418,16 +448,10 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     
                     return region_id
 
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_geographic_region",
-        action_description="Adding geographic region: {name}",
-        id_from_context=lambda ctx: "geopolitical_manager"
-    )
-    @registered_tool(category="geopolitical")
+    @function_tool
     async def add_geographic_region(
         self, 
-        ctx,
+        ctx: RunContextWrapper,
         name: str,
         region_type: str,
         description: str,
@@ -444,24 +468,56 @@ class GeopoliticalSystemManager(BaseLoreManager):
         matriarchal_influence: int = 5
     ) -> int:
         """
-        Decorated tool: just call the internal implementation.
+        Add a geographic region to the database.
+        
+        Args:
+            ctx: Context object
+            name: Name of the region
+            region_type: Type of region (mountains, coast, desert, etc.)
+            description: Description of the region
+            climate: Climate type
+            resources: Available resources
+            governing_faction: Faction in control of the region
+            population_density: How populated the region is
+            major_settlements: List of major settlements
+            cultural_traits: Cultural characteristics
+            dangers: Dangers in the region
+            terrain_features: Special terrain features
+            defensive_characteristics: Defensive advantages/disadvantages
+            strategic_value: Strategic value (1-10)
+            matriarchal_influence: Level of matriarchal influence (1-10)
+            
+        Returns:
+            ID of the created region
         """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="add_geographic_region",
+                action_details={"name": name, "type": region_type}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
         return await self._add_geographic_region_impl(
             ctx, name, region_type, description, climate, resources, governing_faction, 
             population_density, major_settlements, cultural_traits, dangers, 
             terrain_features, defensive_characteristics, strategic_value, matriarchal_influence
         )
+    
     # ------------------------------------------------------------------------
     # 2) Generate world nations with agent-based distribution
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_world_nations",
-        action_description="Generating world nations",
-        id_from_context=lambda ctx: "geopolitical_manager"
-    )
-    @registered_tool(category="geopolitical")
-    async def generate_world_nations(self, ctx, count: int = 5) -> List[Dict[str, Any]]:
+    @function_tool
+    async def generate_world_nations(self, ctx: RunContextWrapper, count: int = 5) -> List[Dict[str, Any]]:
         """
         Generate a set of nations for the world with political simulation capabilities.
         
@@ -472,6 +528,23 @@ class GeopoliticalSystemManager(BaseLoreManager):
         Returns:
             List of generated nations
         """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="generate_world_nations",
+                action_details={"count": count}
+            )
+            
+            if not permission.get("approved", True):
+                return [{"error": permission.get("reasoning", "Action not permitted by governance")}]
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
         with trace(
             "GenerateWorldNations", 
             group_id=self.trace_group_id,
@@ -481,9 +554,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
 
             # (Optional) Let an agent decide how many nations to generate
             dist_prompt = (
-                "We want to create some matriarchal nations. We proposed a default of {count}, but you can override. "
+                f"We want to create some matriarchal nations. We proposed a default of {count}, but you can override. "
                 "Return JSON with a 'count' field. e.g. {\"count\": 5}"
-            ).format(count=count)
+            )
 
             dist_config = RunConfig(workflow_name="NationDistribution")
             dist_result = await Runner.run(
@@ -510,13 +583,22 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     """)
                     region_data = [dict(r) for r in regions]
 
-                    # Some cultural elements
-                    cultures = await conn.fetch("""
-                        SELECT name, element_type, description
-                        FROM CulturalElements
-                        LIMIT 8
-                    """)
-                    culture_data = [dict(c) for c in cultures]
+                    # Some cultural elements - try to fetch if table exists
+                    try:
+                        cultures = await conn.fetch("""
+                            SELECT name, element_type, description
+                            FROM CulturalElements
+                            LIMIT 8
+                        """)
+                        culture_data = [dict(c) for c in cultures]
+                    except:
+                        # If table doesn't exist, use default data
+                        culture_data = [
+                            {"name": "Maternal Lineage", "element_type": "social", 
+                             "description": "Society traces lineage through the maternal line"},
+                            {"name": "Women's Councils", "element_type": "governance",
+                             "description": "Councils of elder women make important decisions"}
+                        ]
 
             # Create agent for nation generation with structured output
             nation_agent = Agent(
@@ -563,11 +645,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
                         region_id = region["id"]
                         nation.region_id = region_id
                     
-                    # Apply matriarchal theming to description
-                    emphasis = nation.matriarchy_level // 3
-                    nation.description = MatriarchalThemingUtils.apply_matriarchal_theme(
-                        "nation", nation.description, emphasis_level=emphasis
-                    )
+                    # Apply matriarchal theming to description if utility available
+                    try:
+                        from lore.utils.theming import MatriarchalThemingUtils
+                        emphasis = nation.matriarchy_level // 3
+                        nation.description = MatriarchalThemingUtils.apply_matriarchal_theme(
+                            "nation", nation.description, emphasis_level=emphasis
+                        )
+                    except ImportError:
+                        # If theming utils not available, continue without theming
+                        pass
                     
                     # Insert into DB
                     embed_text = f"{nation.name} {nation.entity_type} {nation.description}"
@@ -619,21 +706,15 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 3) Conflict simulation between nations/regions
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="simulate_conflict",
-        action_description="Simulating conflict between entities",
-        id_from_context=lambda ctx: "geopolitical_manager"
-    )
-    @registered_tool(category="geopolitical_conflict")
+    @function_tool
     async def simulate_conflict(
         self,
-        ctx,
+        ctx: RunContextWrapper,
         entity1_id: int,
         entity2_id: int,
         conflict_type: str,
         duration_months: int = 12
-    ) -> ConflictSimulation:
+    ) -> Dict[str, Any]:
         """
         Simulate a conflict between two political entities or regions.
         
@@ -647,6 +728,23 @@ class GeopoliticalSystemManager(BaseLoreManager):
         Returns:
             A ConflictSimulation object with detailed simulation results
         """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="simulate_conflict",
+                action_details={"entity1_id": entity1_id, "entity2_id": entity2_id}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
         with trace(
             "SimulateConflict", 
             group_id=self.trace_group_id,
@@ -671,7 +769,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     """, entity2_id)
                     
                     if not entity1 or not entity2:
-                        raise ValueError("One or both entities not found")
+                        return {"error": "One or both entities not found"}
                     
                     # Fetch regions
                     region1 = None
@@ -828,10 +926,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
                                 [],  # female_leaders_involved
                                 "Matriarchal leadership directs the conflict"
                             )
+                
+                # Return simulation with ID
+                sim_dict = simulation.dict()
+                sim_dict["id"] = sim_id
+                return sim_dict
+                
             except Exception as e:
                 logger.error(f"Error storing conflict simulation: {e}")
-            
-            return simulation
+                # Return simulation without ID
+                return simulation.dict()
     
     async def _record_border_dispute(
         self,
@@ -873,16 +977,10 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 4) Border dispute resolution
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="resolve_border_dispute",
-        action_description="Resolving border dispute between regions",
-        id_from_context=lambda ctx: "geopolitical_manager"
-    )
-    @registered_tool(category="geopolitical_conflict")
+    @function_tool
     async def resolve_border_dispute(
         self,
-        ctx,
+        ctx: RunContextWrapper,
         dispute_id: int,
         resolution_approach: str
     ) -> Dict[str, Any]:
@@ -897,6 +995,23 @@ class GeopoliticalSystemManager(BaseLoreManager):
         Returns:
             Dictionary with resolution details
         """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="resolve_border_dispute",
+                action_details={"dispute_id": dispute_id}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
         with trace(
             "ResolveBorderDispute", 
             group_id=self.trace_group_id,
@@ -1056,16 +1171,10 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 5) Time evolution prediction
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="predict_geopolitical_evolution",
-        action_description="Predicting geopolitical evolution over time",
-        id_from_context=lambda ctx: "geopolitical_manager"
-    )
-    @registered_tool(category="geopolitical_prediction")
+    @function_tool
     async def predict_geopolitical_evolution(
         self,
-        ctx,
+        ctx: RunContextWrapper,
         entity_id: int,
         years_forward: int = 5,
         include_events: bool = True
@@ -1082,6 +1191,24 @@ class GeopoliticalSystemManager(BaseLoreManager):
         Yields:
             Evolution updates as they are predicted
         """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="predict_geopolitical_evolution",
+                action_details={"entity_id": entity_id}
+            )
+            
+            if not permission.get("approved", True):
+                yield {"error": permission.get("reasoning", "Action not permitted by governance")}
+                return
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
         with trace(
             "PredictGeopoliticalEvolution", 
             group_id=self.trace_group_id,
@@ -1147,9 +1274,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
             conflict_data = [dict(c) for c in conflicts]
             neighbor_data = [dict(n) for n in neighbors]
             
-            # Create a stream for yielding results
-            stream = StreamingResponse()
-            
             # Initial yield with basic information
             yield {
                 "entity_name": entity_data["name"],
@@ -1197,10 +1321,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
             Format as structured JSON with each year as a separate object.
             """
             
-# Create a streaming run configuration
+            # Create a streaming run configuration
             streaming_config = RunConfig(
                 workflow_name="GeopoliticalEvolution",
-                chunk_size=150,  # Characters per chunk
                 trace_metadata={
                     "user_id": str(self.user_id),
                     "conversation_id": str(self.conversation_id),
@@ -1209,37 +1332,57 @@ class GeopoliticalSystemManager(BaseLoreManager):
             )
             
             # Run the time evolution prediction with streaming
-            async for chunk in Runner.stream(
+            streaming_result = Runner.run_streamed(
                 self.time_evolution_agent,
                 evolution_prompt,
                 context=run_ctx.context,
                 run_config=streaming_config
-            ):
-                # Process the streamed chunk
-                try:
-                    # Try to parse any JSON that might be in the chunk
-                    # This is challenging as chunks might split JSON
-                    # For simplicity, we'll just accumulate and periodically try to parse
-                    if "year" in chunk.lower() and ":" in chunk:
-                        # This appears to be a year marker
-                        year_match = re.search(r'year (\d+)', chunk.lower())
-                        if year_match:
-                            year = int(year_match.group(1))
+            )
+            
+            # Buffer to accumulate content between "Year X" markers
+            current_year = None
+            buffer = ""
+            
+            # Process the streamed events
+            async for event in streaming_result.stream_events():
+                if event.type == "run_item_stream_event":
+                    if event.item.type == "message_output_item":
+                        # Extract text from the message output
+                        from agents.items import ItemHelpers
+                        message_text = ItemHelpers.text_message_output(event.item)
+                        
+                        # Check for year markers
+                        year_match = re.search(r'year (\d+)', message_text.lower())
+                        if year_match and buffer:
+                            # If we're starting a new year, yield the previous year's content
+                            if current_year is not None:
+                                year_data = {
+                                    "year": current_year,
+                                    "prediction": buffer.strip(),
+                                    "entity_name": entity_data["name"],
+                                    "prediction_status": "in_progress"
+                                }
+                                yield year_data
+                                
+                                # Small delay for better streaming experience
+                                await asyncio.sleep(0.2)
                             
-                            year_data = {
-                                "year": year,
-                                "prediction": chunk,
-                                "entity_name": entity_data["name"],
-                                "prediction_status": "in_progress"
-                            }
-                            
-                            yield year_data
-                            
-                            # Small delay for better streaming experience
-                            await asyncio.sleep(0.2)
-                except Exception as e:
-                    # Just continue on parsing errors
-                    pass
+                            # Start accumulating for the new year
+                            current_year = int(year_match.group(1))
+                            buffer = message_text
+                        else:
+                            # Continue accumulating
+                            buffer += message_text
+            
+            # Yield any remaining content
+            if current_year is not None and buffer:
+                year_data = {
+                    "year": current_year,
+                    "prediction": buffer.strip(),
+                    "entity_name": entity_data["name"],
+                    "prediction_status": "in_progress"
+                }
+                yield year_data
             
             # Final attempt to parse the complete result
             try:
@@ -1274,88 +1417,291 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     "prediction_status": "error"
                 }
 
-    async def register_with_governance(self):
-        """Register with Nyx governance system."""
-        await super().register_with_governance(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="geopolitical_manager",
-            directive_text=(
-                "Create and manage geographic regions and political entities "
-                "for the matriarchal world."
-            ),
-            scope="world_building",
-            priority=DirectivePriority.MEDIUM
-        )
-# Keep the model classes for data structure
-class EconomicTradeModelingAgent(BaseModel):
-    """Model for economic trade simulation between nations."""
-    nation1: str
-    nation2: str
-    trade_goods: List[str]
-    trade_value: float
-    trade_route: str
-    impact_on_economy: float  # Positive/negative impact on the economy
-
-class ClimateGeographyEffectAgent(BaseModel):
-    """Simulate the political impact of terrain features and climate."""
-    region_name: str
-    terrain_features: List[str]
-    climate_type: str
-    resource_availability: List[str]
-    political_stability: float
-
-class CovertOperationsSimulator(BaseModel):
-    """Model covert operations between political entities."""
-    agent_name: str
-    target_nation: str
-    operation_type: str
-    mission_outcome: str
-    secrecy_level: int
-
-# Move function tools outside the classes
-@function_tool
-async def simulate_trade(ctx: RunContextWrapper, model_data: dict) -> str:
-    """Simulate the economic impact of trade between two nations."""
-    # Create a model instance from the data or use the data directly
-    trade_info = {
-        "nation1": model_data["nation1"],
-        "nation2": model_data["nation2"],
-        "trade_goods": model_data["trade_goods"],
-        "trade_value": model_data["trade_value"],
-        "trade_route": model_data["trade_route"],
-        "impact_on_economy": model_data["impact_on_economy"]
-    }
-    return json.dumps(trade_info)
-
-@function_tool
-async def simulate_geography_impact(ctx: RunContextWrapper, region_name: str, terrain_features: List[str], 
-                                   climate_type: str, resource_availability: List[str] = None) -> str:
-    """Simulate how terrain features and climate affect political stability."""
-    if resource_availability is None:
-        resource_availability = []
+    # ------------------------------------------------------------------------
+    # 6) Specialized simulations
+    # ------------------------------------------------------------------------
+    @function_tool
+    async def simulate_trade(
+        self, 
+        ctx: RunContextWrapper,
+        nation1: str,
+        nation2: str,
+        trade_goods: List[str],
+        trade_route: str
+    ) -> Dict[str, Any]:
+        """
+        Simulate the economic impact of trade between two nations.
         
-    climate_effects = {
-        "mountainous": 2,
-        "coastal": 1,
-        "desert": -1
-    }
-    terrain_effects = {feature: climate_effects.get(feature, 0) for feature in terrain_features}
-    stability_impact = sum(terrain_effects.values()) + (1 if climate_type == "temperate" else 0)
-    return f"Political stability in {region_name} is influenced by: {stability_impact}"
+        Args:
+            ctx: Context object
+            nation1: First nation name
+            nation2: Second nation name
+            trade_goods: List of goods being traded
+            trade_route: Route of trade
+            
+        Returns:
+            Economic trade simulation results
+        """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="simulate_trade",
+                action_details={"nation1": nation1, "nation2": nation2}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
+        with trace(
+            "SimulateTrade",
+            group_id=self.trace_group_id,
+            metadata={
+                **self.trace_metadata,
+                "nation1": nation1,
+                "nation2": nation2
+            }
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Get nation information from DB if available
+            nations_data = {}
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    for name in [nation1, nation2]:
+                        nation = await conn.fetchrow("""
+                            SELECT * FROM PoliticalEntities WHERE name ILIKE $1
+                        """, f"%{name}%")
+                        
+                        if nation:
+                            nation_data = dict(nation)
+                            # Parse JSON fields
+                            for field in ["relations", "power_centers"]:
+                                if field in nation_data and nation_data[field]:
+                                    try:
+                                        nation_data[field] = json.loads(nation_data[field])
+                                    except:
+                                        nation_data[field] = {}
+                            
+                            nations_data[name] = nation_data
+            
+            # Prepare prompt
+            prompt = f"""
+            Simulate trade relations between these two nations:
+            
+            NATION 1: {nation1}
+            {json.dumps(nations_data.get(nation1, {}), indent=2) if nation1 in nations_data else "No additional data available"}
+            
+            NATION 2: {nation2}
+            {json.dumps(nations_data.get(nation2, {}), indent=2) if nation2 in nations_data else "No additional data available"}
+            
+            TRADE GOODS: {', '.join(trade_goods)}
+            TRADE ROUTE: {trade_route}
+            
+            Analyze:
+            1. Economic impact on both nations
+            2. Balance of trade (who benefits more)
+            3. Strategic implications
+            4. Cultural exchange aspects
+            5. Impact on matriarchal power structures
+            
+            Return an EconomicTradeSimulation object with all fields.
+            """
+            
+            # Run the trade simulation
+            result = await Runner.run(self.trade_modeling_agent, prompt, context=run_ctx.context)
+            trade_sim = result.final_output
+            
+            return trade_sim.dict()
 
-@function_tool
-async def simulate_espionage(ctx: RunContextWrapper, agent_name: str, target_nation: str,
-                            operation_type: str, mission_outcome: str, secrecy_level: int) -> str:
-    """Simulate covert operations between nations."""
-    espionage_details = {
-        "agent_name": agent_name,
-        "target_nation": target_nation,
-        "operation_type": operation_type,
-        "mission_outcome": mission_outcome,
-        "secrecy_level": secrecy_level
-    }
-    return json.dumps(espionage_details)
-                                
-tool_registry.register_tool(simulate_trade, "economic_trade")
-tool_registry.register_tool(simulate_geography_impact, "climate_geography_effect")
-tool_registry.register_tool(simulate_espionage, "covert_operations")
+    @function_tool
+    async def simulate_geography_impact(
+        self, 
+        ctx: RunContextWrapper,
+        region_name: str,
+        terrain_features: List[str],
+        climate_type: str
+    ) -> Dict[str, Any]:
+        """
+        Simulate how terrain features and climate affect political stability.
+        
+        Args:
+            ctx: Context object
+            region_name: Name of the region
+            terrain_features: List of terrain features
+            climate_type: Type of climate
+            
+        Returns:
+            Geography effect simulation results
+        """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="simulate_geography_impact",
+                action_details={"region_name": region_name}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
+        with trace(
+            "SimulateGeographyImpact",
+            group_id=self.trace_group_id,
+            metadata={
+                **self.trace_metadata,
+                "region_name": region_name,
+                "climate_type": climate_type
+            }
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Get region information from DB if available
+            region_data = {}
+            resource_availability = []
+            
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    region = await conn.fetchrow("""
+                        SELECT * FROM GeographicRegions WHERE name ILIKE $1
+                    """, f"%{region_name}%")
+                    
+                    if region:
+                        region_data = dict(region)
+                        resource_availability = region_data.get("resources", [])
+            
+            # Prepare prompt
+            prompt = f"""
+            Simulate the impact of geography and climate on political development:
+            
+            REGION: {region_name}
+            {json.dumps(region_data, indent=2) if region_data else "No additional data available"}
+            
+            TERRAIN FEATURES: {', '.join(terrain_features)}
+            CLIMATE TYPE: {climate_type}
+            RESOURCE AVAILABILITY: {', '.join(resource_availability)}
+            
+            Analyze:
+            1. Defensive characteristics of the terrain
+            2. Impact on resource accessibility
+            3. Settlement patterns influenced by geography
+            4. Cultural adaptations to the environment
+            5. How matriarchal structures might be strengthened or challenged by geography
+            
+            Return a ClimateGeographyEffect object with all fields.
+            """
+            
+            # Run the geography impact simulation
+            result = await Runner.run(self.geography_effect_agent, prompt, context=run_ctx.context)
+            geography_effect = result.final_output
+            
+            return geography_effect.dict()
+
+    @function_tool
+    async def simulate_espionage(
+        self, 
+        ctx: RunContextWrapper,
+        agent_name: str,
+        target_nation: str,
+        operation_type: str,
+        secrecy_level: int
+    ) -> Dict[str, Any]:
+        """
+        Simulate covert operations between nations.
+        
+        Args:
+            ctx: Context object
+            agent_name: Name of the agent conducting the operation
+            target_nation: Target nation
+            operation_type: Type of operation (intelligence gathering, sabotage, etc.)
+            secrecy_level: Level of secrecy (1-10)
+            
+        Returns:
+            Covert operation simulation results
+        """
+        # Apply governance if available
+        try:
+            from nyx.nyx_governance import NyxUnifiedGovernor
+            governor = await NyxUnifiedGovernor(ctx.context.get("user_id"), ctx.context.get("conversation_id")).initialize()
+            permission = await governor.check_action_permission(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="geopolitical_manager",
+                action_type="simulate_espionage",
+                action_details={"target_nation": target_nation}
+            )
+            
+            if not permission.get("approved", True):
+                return {"error": permission.get("reasoning", "Action not permitted by governance")}
+        except (ImportError, Exception):
+            # Governance optional - continue if not available
+            pass
+            
+        with trace(
+            "SimulateEspionage",
+            group_id=self.trace_group_id,
+            metadata={
+                **self.trace_metadata,
+                "agent_name": agent_name,
+                "target_nation": target_nation
+            }
+        ):
+            run_ctx = self.create_run_context(ctx)
+            
+            # Get target nation information from DB if available
+            nation_data = {}
+            
+            async with self.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    nation = await conn.fetchrow("""
+                        SELECT * FROM PoliticalEntities WHERE name ILIKE $1
+                    """, f"%{target_nation}%")
+                    
+                    if nation:
+                        nation_data = dict(nation)
+                        # Parse JSON fields
+                        for field in ["relations", "power_centers"]:
+                            if field in nation_data and nation_data[field]:
+                                try:
+                                    nation_data[field] = json.loads(nation_data[field])
+                                except:
+                                    nation_data[field] = {}
+            
+            # Prepare prompt
+            prompt = f"""
+            Simulate a covert operation:
+            
+            AGENT: {agent_name}
+            TARGET NATION: {target_nation}
+            {json.dumps(nation_data, indent=2) if nation_data else "No additional data available"}
+            
+            OPERATION TYPE: {operation_type}
+            SECRECY LEVEL: {secrecy_level} (1-10)
+            
+            Analyze:
+            1. Likelihood of success based on target nation's security
+            2. Potential international ramifications if discovered
+            3. Strategic value of the intelligence gathered
+            4. Matriarchal leadership's response if discovered
+            5. Unexpected outcomes or complications
+            
+            Determine a realistic mission outcome (success, partial success, failure, catastrophic).
+            Return a CovertOperation object with all fields.
+            """
+            
+            # Run the espionage simulation
+            result = await Runner.run(self.covert_operations_agent, prompt, context=run_ctx.context)
+            espionage_result = result.final_output
+            
+            return espionage_result.dict()
