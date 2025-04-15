@@ -10,10 +10,8 @@ from pydantic import BaseModel, Field
 # Agents SDK imports
 from agents import (
     Agent, function_tool, Runner, trace, RunResultStreaming, ModelSettings,
-    GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff
+    GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, handoff, RunContextWrapper, RunConfig
 )
-from agents.run_context import RunContextWrapper
-from agents.run import RunConfig
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
@@ -23,7 +21,6 @@ from nyx.governance_helpers import with_governance
 from embedding.vector_store import generate_embedding
 from lore.core.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
-from lore.core.tool_registry import registered_tool, tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -89,49 +86,6 @@ class NarrativeEvolution(BaseModel):
     believability_change: int = 0
     significance_change: int = 0
 
-# Myth evolution agent types
-class FolkloreEvolutionAgent(Agent):
-    """Agent specializing in folklore-style myth evolution."""
-    def __init__(self):
-        super().__init__(
-            name="FolkloreEvolutionAgent",
-            instructions=(
-                "You specialize in evolving folklore-style urban myths. "
-                "Create poetic, metaphorical narratives with moral lessons "
-                "that center matriarchal values and feminine wisdom."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-
-class HistoricalEvolutionAgent(Agent):
-    """Agent specializing in historicized myth evolution."""
-    def __init__(self):
-        super().__init__(
-            name="HistoricalEvolutionAgent",
-            instructions=(
-                "You specialize in evolving myths into pseudo-historical narratives. "
-                "Add details that make myths seem like real historical events with dates, "
-                "specific people (especially female leaders), and concrete impacts."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-
-class SupernaturalEvolutionAgent(Agent):
-    """Agent specializing in supernatural myth evolution."""
-    def __init__(self):
-        super().__init__(
-            name="SupernaturalEvolutionAgent",
-            instructions=(
-                "You specialize in adding supernatural elements to myths. "
-                "Introduce divine intervention, magical occurrences, and mystical beings. "
-                "Emphasize feminine divine power and matriarchal spiritual authority."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-
 class MythTransmissionSimulation(BaseModel):
     """Model for myth transmission simulation results."""
     myth_id: int
@@ -143,51 +97,6 @@ class MythTransmissionSimulation(BaseModel):
     final_believability: int
     final_spread_rate: int
     variants_created: int
-
-### NEW ###
-class LegendVariantAgent(Agent):
-    """Agent that creates contradictory variants of a single myth."""
-    def __init__(self):
-        super().__init__(
-            name="LegendVariantAgent",
-            instructions=(
-                "You create multiple contradictory versions of the same myth, "
-                "each with at least one intentional inconsistency."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.9)
-        )
-
-### NEW ###
-class TouristAttractionAgent(Agent):
-    """Agent that models how a myth becomes a tourist attraction/commercial enterprise."""
-    def __init__(self):
-        super().__init__(
-            name="TouristAttractionAgent",
-            instructions=(
-                "You transform local myths into commercial tourist attractions, "
-                "including marketing angles, attractions, merchandise, etc. "
-                "Focus on how matriarchal elements can draw in visitors."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.8)
-        )
-
-### NEW ###
-class OralWrittenTraditionAgent(Agent):
-    """Agent that simulates differences in myth evolution between oral and written traditions."""
-    def __init__(self):
-        super().__init__(
-            name="OralWrittenTraditionAgent",
-            instructions=(
-                "You simulate how a myth changes when recorded in writing vs. shared orally. "
-                "Highlight differences in detail, consistency, and local variations. "
-                "Always emphasize matriarchal elements in both mediums."
-            ),
-            model="o3-mini",
-            model_settings=ModelSettings(temperature=0.8)
-        )
-
 
 class LocalLoreManager(BaseLoreManager):
     """
@@ -206,9 +115,38 @@ class LocalLoreManager(BaseLoreManager):
     def _init_specialized_agents(self):
         """Initialize specialized agents for different lore tasks."""
         # Myth evolution agents
-        self.folklore_agent = FolkloreEvolutionAgent()
-        self.historical_agent = HistoricalEvolutionAgent()
-        self.supernatural_agent = SupernaturalEvolutionAgent()
+        self.folklore_agent = Agent(
+            name="FolkloreEvolutionAgent",
+            instructions=(
+                "You specialize in evolving folklore-style urban myths. "
+                "Create poetic, metaphorical narratives with moral lessons "
+                "that center matriarchal values and feminine wisdom."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        self.historical_agent = Agent(
+            name="HistoricalEvolutionAgent",
+            instructions=(
+                "You specialize in evolving myths into pseudo-historical narratives. "
+                "Add details that make myths seem like real historical events with dates, "
+                "specific people (especially female leaders), and concrete impacts."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        self.supernatural_agent = Agent(
+            name="SupernaturalEvolutionAgent",
+            instructions=(
+                "You specialize in adding supernatural elements to myths. "
+                "Introduce divine intervention, magical occurrences, and mystical beings. "
+                "Emphasize feminine divine power and matriarchal spiritual authority."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
         
         # Combined myth evolution agent with handoffs
         self.myth_evolution_agent = Agent(
@@ -286,11 +224,38 @@ class LocalLoreManager(BaseLoreManager):
             model_settings=ModelSettings(temperature=0.8)
         )
 
-        ### NEW ###
-        self.variant_agent = LegendVariantAgent()
-        self.tourism_agent = TouristAttractionAgent()
-        self.oral_written_agent = OralWrittenTraditionAgent()
-
+        # Additional specialized agents
+        self.variant_agent = Agent(
+            name="LegendVariantAgent",
+            instructions=(
+                "You create multiple contradictory versions of the same myth, "
+                "each with at least one intentional inconsistency."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9)
+        )
+        
+        self.tourism_agent = Agent(
+            name="TouristAttractionAgent",
+            instructions=(
+                "You transform local myths into commercial tourist attractions, "
+                "including marketing angles, attractions, merchandise, etc. "
+                "Focus on how matriarchal elements can draw in visitors."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+        
+        self.oral_written_agent = Agent(
+            name="OralWrittenTraditionAgent",
+            instructions=(
+                "You simulate how a myth changes when recorded in writing vs. shared orally. "
+                "Highlight differences in detail, consistency, and local variations. "
+                "Always emphasize matriarchal elements in both mediums."
+            ),
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8)
+        )
 
 
     async def initialize_tables(self):
@@ -417,9 +382,6 @@ class LocalLoreManager(BaseLoreManager):
         
         await self.initialize_tables_for_class(table_definitions)
 
-    # ------------------------------------------------------------------------
-    # 1) Add an urban myth with structured output
-    # ------------------------------------------------------------------------
     async def _add_urban_myth_impl(
         self,
         ctx,
@@ -467,14 +429,14 @@ class LocalLoreManager(BaseLoreManager):
                     themes, matriarchal_elements, embedding)
     
                     return myth_id
-                    
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_urban_myth",
         action_description="Adding urban myth: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
+    @function_tool
     async def add_urban_myth(
         self,
         ctx,
@@ -489,15 +451,29 @@ class LocalLoreManager(BaseLoreManager):
         themes: List[str] = None,
         matriarchal_elements: List[str] = None
     ) -> int:
+        """
+        Add an urban myth to the database.
+        
+        Args:
+            name: Name of the urban myth
+            description: Description of the urban myth
+            origin_location: Location where the myth originated
+            origin_event: Event that spawned the myth
+            believability: How believable the myth is (1-10)
+            spread_rate: How quickly the myth spreads (1-10)
+            regions_known: List of regions where the myth is known
+            narrative_style: Style of the narrative (folklore, historical, etc.)
+            themes: Themes of the myth
+            matriarchal_elements: Elements related to matriarchal power
+            
+        Returns:
+            ID of the created urban myth
+        """
         return await self._add_urban_myth_impl(
             ctx, name, description, origin_location, origin_event, believability,
             spread_rate, regions_known, narrative_style, themes, matriarchal_elements
         )
     
-    
-    # ------------------------------------------------------------------------
-    # 2) Add local history with narrative connections
-    # ------------------------------------------------------------------------
     async def _add_local_history_impl(
         self,
         ctx,
@@ -571,7 +547,7 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Adding local history event: {event_name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
+    @function_tool
     async def add_local_history(
         self,
         ctx,
@@ -588,16 +564,32 @@ class LocalLoreManager(BaseLoreManager):
         related_landmarks: List[int] = None,
         narrative_category: str = "historical"
     ) -> int:
+        """
+        Add a local historical event to the database.
+        
+        Args:
+            location_id: ID of the location
+            event_name: Name of the historical event
+            description: Description of the event
+            date_description: Text description of when the event occurred
+            significance: How significant the event was (1-10)
+            impact_type: Type of impact (cultural, political, etc.)
+            notable_figures: List of notable figures involved
+            current_relevance: How the event is still relevant today
+            commemoration: How the event is commemorated
+            connected_myths: List of myth IDs connected to this event
+            related_landmarks: List of landmark IDs related to this event
+            narrative_category: Category of the narrative
+            
+        Returns:
+            ID of the created historical event
+        """
         return await self._add_local_history_impl(
             ctx, location_id, event_name, description, date_description, significance,
             impact_type, notable_figures, current_relevance, commemoration, 
             connected_myths, related_landmarks, narrative_category
         )
        
-    
-    # ------------------------------------------------------------------------
-    # 3) Add landmark with matriarchal significance
-    # ------------------------------------------------------------------------
     async def _add_landmark_impl(
         self,
         ctx,
@@ -662,7 +654,7 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Adding landmark: {name}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")
+    @function_tool
     async def add_landmark(
         self,
         ctx,
@@ -679,12 +671,31 @@ class LocalLoreManager(BaseLoreManager):
         symbolic_meaning: str = None,
         matriarchal_significance: str = "moderate"
     ) -> int:
+        """
+        Add a landmark to the database.
+        
+        Args:
+            name: Name of the landmark
+            location_id: ID of the location
+            landmark_type: Type of landmark (natural, building, etc.)
+            description: Description of the landmark
+            historical_significance: Historical significance of the landmark
+            current_use: Current use of the landmark
+            controlled_by: Who controls the landmark
+            legends: List of legends associated with the landmark
+            connected_histories: List of history IDs connected to this landmark
+            architectural_style: Architectural style of the landmark
+            symbolic_meaning: Symbolic meaning of the landmark
+            matriarchal_significance: Significance to matriarchal power (low/moderate/high)
+            
+        Returns:
+            ID of the created landmark
+        """
         return await self._add_landmark_impl(
             ctx, name, location_id, landmark_type, description, historical_significance,
             current_use, controlled_by, legends, connected_histories, architectural_style,
             symbolic_meaning, matriarchal_significance
         )
-
 
     async def _create_narrative_connection(
         self,
@@ -714,16 +725,13 @@ class LocalLoreManager(BaseLoreManager):
         
         return connection_id
 
-    # ------------------------------------------------------------------------
-    # 4) Evolve myth with specialized narrative agents
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_myth",
         action_description="Evolving urban myth: {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def evolve_myth(
         self,
         ctx,
@@ -735,7 +743,6 @@ class LocalLoreManager(BaseLoreManager):
         Evolve an urban myth using a specialized narrative style agent.
         
         Args:
-            ctx: Context object
             myth_id: ID of the myth to evolve
             evolution_type: Type of evolution (folklore, historical, supernatural)
             causal_factors: Factors causing the evolution
@@ -958,16 +965,13 @@ class LocalLoreManager(BaseLoreManager):
                 significance_change=0  # Myths don't have significance, but histories do
             )
 
-    # ------------------------------------------------------------------------
-    # 5) Connect myth to history (myth-history handoff chain)
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="connect_myth_history",
         action_description="Connecting myth {myth_id} to history {history_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def connect_myth_history(
         self,
         ctx,
@@ -978,7 +982,6 @@ class LocalLoreManager(BaseLoreManager):
         Create a narrative connection between a myth and a historical event.
         
         Args:
-            ctx: Context object
             myth_id: ID of the myth
             history_id: ID of the historical event
             
@@ -1089,16 +1092,13 @@ class LocalLoreManager(BaseLoreManager):
                 "suggested_modifications": connection_data.get("suggested_modifications", [])
             }
 
-    # ------------------------------------------------------------------------
-    # 6) Connect history to landmark (history-landmark handoff chain)
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="connect_history_landmark",
         action_description="Connecting history {history_id} to landmark {landmark_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def connect_history_landmark(
         self,
         ctx,
@@ -1109,7 +1109,6 @@ class LocalLoreManager(BaseLoreManager):
         Create a narrative connection between a historical event and a landmark.
         
         Args:
-            ctx: Context object
             history_id: ID of the historical event
             landmark_id: ID of the landmark
             
@@ -1179,7 +1178,7 @@ class LocalLoreManager(BaseLoreManager):
             3. Shared symbolic meaning or importance
             4. How matriarchal authority is reflected in both
             
-            Return JSON with:
+            Return JSON with these fields:
             - connection_type: brief label for the connection
             - connection_description: detailed explanation
             - connection_strength: 1-10 how strongly they connect
@@ -1250,16 +1249,13 @@ class LocalLoreManager(BaseLoreManager):
                 "location_warning": location_warning
             }
 
-    # ------------------------------------------------------------------------
-    # 7) Ensure narrative consistency across connected elements
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="ensure_narrative_consistency",
         action_description="Ensuring narrative consistency for location {location_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def ensure_narrative_consistency(
         self,
         ctx,
@@ -1269,7 +1265,6 @@ class LocalLoreManager(BaseLoreManager):
         Analyze and fix inconsistencies in the narrative web for a location.
         
         Args:
-            ctx: Context object
             location_id: ID of the location
             
         Returns:
@@ -1459,16 +1454,13 @@ class LocalLoreManager(BaseLoreManager):
                 "new_connections": new_connections
             }
 
-    # ------------------------------------------------------------------------
-    # 8) Simulate myth transmission between regions
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="simulate_myth_transmission",
         action_description="Simulating transmission of myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def simulate_myth_transmission(
         self,
         ctx,
@@ -1480,7 +1472,6 @@ class LocalLoreManager(BaseLoreManager):
         Simulate how a myth spreads and changes as it moves between regions.
         
         Args:
-            ctx: Context object
             myth_id: ID of the myth to transmit
             target_regions: Regions where the myth will spread
             transmission_steps: Number of transmission steps to simulate
@@ -1615,21 +1606,23 @@ class LocalLoreManager(BaseLoreManager):
             
             return transmission_data
 
-    # ------------------------------------------------------------------------
-    # 4) Get location lore
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_location_lore",
         action_description="Getting all lore for location: {location_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def get_location_lore(self, ctx, location_id: int) -> Dict[str, Any]:
         """
         Get all lore associated with a location (myths, history, landmarks).
+        
+        Args:
+            location_id: ID of the location
+            
+        Returns:
+            Dictionary with all location lore
         """
-
         cache_key = f"location_lore_{location_id}"
         cached = self.get_cache(cache_key)
         if cached:
@@ -1682,22 +1675,24 @@ class LocalLoreManager(BaseLoreManager):
                 self.set_cache(cache_key, result)
                 return result
 
-    # ------------------------------------------------------------------------
-    # 5) Generate location lore
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_location_lore",
         action_description="Generating lore for location: {location_data['id']}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def generate_location_lore(self, ctx, location_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate comprehensive lore for a location using LLM calls 
         for myths, local histories, and landmarks.
+        
+        Args:
+            location_data: Dictionary with location information
+            
+        Returns:
+            Dictionary with generated lore
         """
-
         run_ctx = self.create_run_context(ctx)
 
         if not location_data or "id" not in location_data:
@@ -1721,9 +1716,6 @@ class LocalLoreManager(BaseLoreManager):
             "generated_landmarks": landmarks
         }
 
-    # ------------------------------------------------------------------------
-    # Private generation methods for location lore
-    # ------------------------------------------------------------------------
     async def _generate_myths_for_location(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate urban myths for a location."""
         location_id = location_data.get('id')
@@ -1948,22 +1940,25 @@ class LocalLoreManager(BaseLoreManager):
 
         return saved_landmarks
 
-    # ------------------------------------------------------------------------
-    # 6) Evolve location lore
-    # ------------------------------------------------------------------------
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="evolve_location_lore",
         action_description="Evolving lore for location: {location_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def evolve_location_lore(self, ctx, location_id: int, event_description: str) -> Dict[str, Any]:
         """
         Evolve the lore of a location based on an event, 
         using agent calls to produce new or updated content.
+        
+        Args:
+            location_id: ID of the location
+            event_description: Description of the event causing evolution
+            
+        Returns:
+            Dictionary with evolution results
         """
-
         run_ctx = self.create_run_context(ctx)
         location_lore = await self.get_location_lore(ctx, location_id)
         if "error" in location_lore:
@@ -2140,14 +2135,13 @@ class LocalLoreManager(BaseLoreManager):
             "new_myth": new_myth
         }
 
-    ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_legend_variants",
         action_description="Creating contradictory legend variants for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def generate_legend_variants(
         self,
         ctx,
@@ -2157,6 +2151,13 @@ class LocalLoreManager(BaseLoreManager):
         """
         Create multiple contradictory versions of the same myth, storing them in versions_json.
         Each variant has at least one intentional inconsistency.
+        
+        Args:
+            myth_id: ID of the myth to create variants for
+            variant_count: Number of variants to create
+            
+        Returns:
+            Dictionary with variant information
         """
         run_ctx = self.create_run_context(ctx)
 
@@ -2219,14 +2220,13 @@ class LocalLoreManager(BaseLoreManager):
         except json.JSONDecodeError:
             return {"error": "Failed to parse contradictory variants"}
 
-    ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="develop_tourist_attraction",
         action_description="Developing tourism for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool
     async def develop_tourist_attraction(
         self,
         ctx,
@@ -2235,6 +2235,12 @@ class LocalLoreManager(BaseLoreManager):
         """
         Model how a local myth is turned into a commercial tourist attraction.
         Store the results in the myth's versions_json under 'tourist_development'.
+        
+        Args:
+            myth_id: ID of the myth to develop for tourism
+            
+        Returns:
+            Dictionary with tourist development details
         """
         run_ctx = self.create_run_context(ctx)
 
@@ -2276,28 +2282,6 @@ class LocalLoreManager(BaseLoreManager):
             run_config=RunConfig(workflow_name="TouristAttractionDev")
         )
 
-        try:
-            dev_data = json.loads(result.final_output)
-            # Save into versions_json["tourist_development"]
-            versions_json["tourist_development"] = dev_data
-
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute("""
-                        UPDATE UrbanMyths
-                        SET versions_json = $1
-                        WHERE id = $2
-                    """, json.dumps(versions_json), myth_id)
-
-            return {
-                "myth_id": myth_id,
-                "myth_name": myth_data["name"],
-                "tourist_development": dev_data
-            }
-
-        except json.JSONDecodeError:
-            return {"error": "Failed to parse tourist attraction data"}
-
     ### NEW ###
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -2305,7 +2289,7 @@ class LocalLoreManager(BaseLoreManager):
         action_description="Simulating oral vs. written tradition for myth {myth_id}",
         id_from_context=lambda ctx: "local_lore_manager"
     )
-    @registered_tool(category="local_lore")    
+    @function_tool 
     async def simulate_tradition_dynamics(
         self,
         ctx,
