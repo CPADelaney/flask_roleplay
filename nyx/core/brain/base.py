@@ -170,21 +170,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.checkpoint_planner = None
 
         # Initialize new components
-        self.novelty_engine = NoveltyEngine(
-            imagination_simulator=self.imagination_simulator,
-            memory_core=self.memory_core
-        )
+        self.novelty_engine = None
         
-        self.recognition_memory = RecognitionMemorySystem(
-            memory_core=self.memory_core,
-            context_awareness=self.context_awareness
-        )
+        self.recognition_memory = None
         
-        self.creative_memory = CreativeMemoryIntegration(
-            novelty_engine=self.novelty_engine,
-            recognition_memory=self.recognition_memory,
-            memory_core=self.memory_core
-        )
+        self.creative_memory = None
         
         # Timestamp tracking
         self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)
@@ -697,7 +687,24 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Map visualization initialized")
             
             self.navigator_agent = SpatialNavigatorAgent(spatial_mapper=self.spatial_mapper)
-            logger.debug("Spatial navigator initialized")          
+            logger.debug("Spatial navigator initialized")      
+
+            # Initialize new components
+            self.novelty_engine = NoveltyEngine(
+                imagination_simulator=self.imagination_simulator,
+                memory_core=self.memory_core
+            )
+            
+            self.recognition_memory = RecognitionMemorySystem(
+                memory_core=self.memory_core,
+                context_awareness=self.context_awareness
+            )
+            
+            self.creative_memory = CreativeMemoryIntegration(
+                novelty_engine=self.novelty_engine,
+                recognition_memory=self.recognition_memory,
+                memory_core=self.memory_core
+            )
 
             # Initialize new components
             await self.novelty_engine.initialize()
