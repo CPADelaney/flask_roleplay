@@ -23,9 +23,7 @@ from .temporal import TemporalNode, TemporalProcedureGraph, ProcedureGraph
 # Import manager
 from .manager import (
     ProceduralMemoryManager, 
-    EnhancedProceduralMemoryManager,
-    demonstrate_cross_game_transfer, 
-    demonstrate_procedural_memory
+    EnhancedProceduralMemoryManager
 )
 
 # Import function tools
