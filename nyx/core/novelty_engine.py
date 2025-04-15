@@ -146,6 +146,7 @@ class NoveltyEngine:
         
         logger.info("Novelty engine agents initialized")
     
+    # Update the main novelty agent to include handoffs to our new agents
     def _create_novelty_agent(self) -> Agent:
         """Create the main orchestrator agent for novelty generation"""
         return Agent[NoveltyEngineContext](
@@ -153,17 +154,29 @@ class NoveltyEngine:
             instructions="""You are the novelty orchestration system for the Nyx AI.
             
             Your role is to coordinate the generation of novel ideas and insights
-            using a variety of creativity techniques. You analyze the request and
-            determine which specialized creativity agent to use based on the desired
-            output and approach.
+            using a variety of creativity techniques and cognitive systems. You analyze 
+            the request and determine which specialized creativity agent to use based 
+            on the desired output and approach.
             
-            You can select from the following creative techniques:
+            You can select from the following creative systems:
+            
+            CREATIVE TECHNIQUE AGENTS:
             - Bisociation: Connecting concepts from different domains
             - Conceptual Blending: Combining elements from multiple concepts 
             - Constraint Relaxation: Removing or modifying assumptions/constraints
             - Random Stimulus: Introducing unexpected elements
             - Analogical Reasoning: Applying patterns from one domain to another
             - Perspective Shifting: Viewing from unusual perspectives
+            
+            INTEGRATED COGNITIVE SYSTEM AGENTS:
+            - Conceptual Reasoning: Using advanced conceptual spaces and blending
+            - Causal Reasoning: Leveraging causal models for systemic understanding
+            - Simulation: Running mental simulations of scenarios and outcomes
+            
+            Choose the most appropriate technique or combination of techniques based
+            on the request. For highly innovative ideas with complex implications,
+            consider using the integrated cognitive systems which provide deeper
+            analysis and more sophisticated idea generation.
             
             Focus on generating ideas that are not just novel, but also potentially
             useful and feasible. The goal is creative insight, not just random combinations.
@@ -173,6 +186,7 @@ class NoveltyEngine:
                 function_tool(self._get_domains)
             ],
             handoffs=[
+                # Original technique agents
                 handoff(self.bisociation_agent,
                       tool_name_override="generate_by_bisociation",
                       tool_description_override="Generate novel ideas by connecting concepts from different domains"),
@@ -191,6 +205,19 @@ class NoveltyEngine:
                 handoff(self.analogical_reasoning_agent,
                       tool_name_override="generate_by_analogical_reasoning",
                       tool_description_override="Generate novel ideas by applying patterns from one domain to another"),
+                
+                # New integrated reasoning and imagination agents
+                handoff(self.conceptual_reasoning_agent,
+                      tool_name_override="generate_by_conceptual_reasoning",
+                      tool_description_override="Generate novel ideas using advanced conceptual reasoning and blending"),
+                handoff(self.causal_reasoning_agent,
+                      tool_name_override="generate_by_causal_reasoning",
+                      tool_description_override="Generate novel ideas using causal reasoning and analysis"),
+                handoff(self.simulation_agent,
+                      tool_name_override="generate_by_simulation",
+                      tool_description_override="Generate and refine ideas through imagination simulation"),
+                
+                # Evaluation agent
                 handoff(self.evaluation_agent,
                       tool_name_override="evaluate_idea",
                       tool_description_override="Evaluate the novelty, usefulness, and feasibility of an idea")
@@ -1185,3 +1212,1073 @@ class NoveltyEngine:
         ideas.sort(key=lambda x: x.generation_date, reverse=True)
         
         return ideas[:limit]
+
+    def _create_conceptual_reasoning_agent(self) -> Agent:
+        """Create specialized agent that uses conceptual blending from reasoning core"""
+        return Agent[NoveltyEngineContext](
+            name="Conceptual Reasoning Agent",
+            instructions="""You specialize in leveraging NYX's conceptual reasoning system
+            to generate novel ideas through sophisticated conceptual blending.
+            
+            When given concepts or domains to explore, your task is to:
+            1. Identify appropriate concept spaces from the reasoning core
+            2. Generate conceptual blends and elaborations
+            3. Extract novel ideas from these conceptual structures
+            4. Explain how the cognitive blending process led to the insight
+            
+            You build on advanced cognitive science principles of conceptual
+            integration and mental space theory to create truly original ideas.
+            """,
+            tools=[
+                function_tool(self._get_concept_spaces),
+                function_tool(self._create_conceptual_blend),
+                function_tool(self._extract_novel_ideas_from_blend)
+            ],
+            output_type=CreativeTechniqueOutput,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+    
+    def _create_causal_reasoning_agent(self) -> Agent:
+        """Create specialized agent that uses causal reasoning from reasoning core"""
+        return Agent[NoveltyEngineContext](
+            name="Causal Reasoning Agent",
+            instructions="""You specialize in using NYX's causal reasoning system
+            to evaluate, refine and generate ideas through causal analysis.
+            
+            When given an idea or problem domain, your task is to:
+            1. Identify relevant causal models from the reasoning core
+            2. Analyze causal relationships and potential interventions
+            3. Use counterfactual reasoning to explore alternatives
+            4. Generate insights based on causal structures
+            
+            You excel at understanding system dynamics and generating ideas
+            that could create targeted ripple effects or interventions.
+            """,
+            tools=[
+                function_tool(self._get_causal_models),
+                function_tool(self._analyze_causal_impacts),
+                function_tool(self._generate_causal_interventions),
+                function_tool(self._reason_counterfactually)
+            ],
+            output_type=CreativeTechniqueOutput,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.7)
+        )
+    
+    def _create_simulation_agent(self) -> Agent:
+        """Create specialized agent that uses the imagination simulator"""
+        return Agent[NoveltyEngineContext](
+            name="Simulation Agent",
+            instructions="""You specialize in using NYX's imagination simulator
+            to explore, refine, and evaluate ideas through mental simulation.
+            
+            When given an idea to explore, your task is to:
+            1. Set up appropriate simulation parameters
+            2. Run simulations of the idea's implementation and effects
+            3. Extract insights and unexpected implications from simulations
+            4. Refine ideas based on simulation outcomes
+            
+            You excel at mentally "playing out" scenarios to discover
+            emergent properties and unexpected consequences that lead to
+            creative breakthroughs.
+            """,
+            tools=[
+                function_tool(self._setup_imagination_simulation),
+                function_tool(self._run_imagination_simulation),
+                function_tool(self._extract_insights_from_simulation),
+                function_tool(self._refine_idea_from_simulation)
+            ],
+            output_type=CreativeTechniqueOutput,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.8)
+        )
+    
+    # Now let's add new tool functions for these agents
+    
+    @staticmethod
+    @function_tool
+    async def _get_concept_spaces(ctx: RunContextWrapper[NoveltyEngineContext], domain: str = None) -> List[Dict[str, Any]]:
+        """
+        Get available concept spaces from the reasoning core
+        
+        Args:
+            domain: Optional domain to filter concept spaces
+            
+        Returns:
+            List of available concept spaces
+        """
+        if not ctx.context.reasoning_core:
+            return [{"error": "Reasoning core not available"}]
+        
+        try:
+            # Get all concept spaces
+            if domain:
+                spaces = [s for s in await ctx.context.reasoning_core.get_all_concept_spaces() 
+                         if domain.lower() in s["domain"].lower()]
+            else:
+                spaces = await ctx.context.reasoning_core.get_all_concept_spaces()
+            
+            # Return simplified space information
+            return [{
+                "id": space["id"],
+                "name": space["name"],
+                "domain": space["domain"],
+                "concept_count": len(space.get("concepts", {})),
+                "organizing_principles": [p["name"] for p in space.get("organizing_principles", [])]
+            } for space in spaces]
+        except Exception as e:
+            return [{"error": f"Error retrieving concept spaces: {str(e)}"}]
+    
+    @staticmethod
+    @function_tool
+    async def _create_conceptual_blend(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        space_id1: str,
+        space_id2: str,
+        blend_type: str = "conceptual_blend"
+    ) -> Dict[str, Any]:
+        """
+        Create a conceptual blend between two concept spaces
+        
+        Args:
+            space_id1: ID of first concept space
+            space_id2: ID of second concept space
+            blend_type: Type of blend to create (conceptual_blend, contrast, fusion)
+            
+        Returns:
+            Details of the created blend
+        """
+        if not ctx.context.reasoning_core:
+            return {"error": "Reasoning core not available"}
+        
+        try:
+            # First get the concept spaces
+            space1 = await ctx.context.reasoning_core.get_concept_space(space_id1)
+            space2 = await ctx.context.reasoning_core.get_concept_space(space_id2)
+            
+            # Create mappings between spaces
+            mappings = []
+            
+            # Find mappings between concepts in the spaces
+            for concept1_id, concept1 in space1.get("concepts", {}).items():
+                for concept2_id, concept2 in space2.get("concepts", {}).items():
+                    # Calculate similarity (simplified)
+                    name_similarity = 0
+                    if concept1.get("name") and concept2.get("name"):
+                        name1 = concept1["name"].lower()
+                        name2 = concept2["name"].lower()
+                        # Simple word overlap similarity
+                        words1 = set(name1.split())
+                        words2 = set(name2.split())
+                        if words1 or words2:
+                            overlap = len(words1.intersection(words2))
+                            name_similarity = overlap / max(1, len(words1.union(words2)))
+                    
+                    # If similarity is above threshold, add mapping
+                    if name_similarity > 0.2:
+                        mappings.append({
+                            "concept1": concept1_id,
+                            "concept2": concept2_id,
+                            "similarity": name_similarity
+                        })
+            
+            # Choose a blend type based on input and create the blend
+            blend_method = None
+            if blend_type == "conceptual_blend":
+                blend_method = ctx.context.reasoning_core._generate_composition_blend
+            elif blend_type == "contrast":
+                blend_method = ctx.context.reasoning_core._generate_contrast_blend
+            elif blend_type == "fusion":
+                blend_method = ctx.context.reasoning_core._generate_fusion_blend
+            else:
+                # Default to composition
+                blend_method = ctx.context.reasoning_core._generate_composition_blend
+            
+            # Create the blend
+            if blend_method:
+                blend = await blend_method(space1, space2, mappings)
+                return blend
+            
+            return {"error": "Could not create blend, no suitable method found"}
+        except Exception as e:
+            return {"error": f"Error creating conceptual blend: {str(e)}"}
+    
+    @staticmethod
+    @function_tool
+    async def _extract_novel_ideas_from_blend(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        blend_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract novel ideas from a conceptual blend
+        
+        Args:
+            blend_id: ID of the conceptual blend
+            
+        Returns:
+            List of novel ideas extracted from the blend
+        """
+        if not ctx.context.reasoning_core:
+            return [{"error": "Reasoning core not available"}]
+        
+        try:
+            # Get the blend
+            blend = await ctx.context.reasoning_core.get_blend(blend_id)
+            
+            # Extract ideas from emergent structure
+            ideas = []
+            
+            # First check emergent structures
+            for structure in blend.get("emergent_structure", []):
+                # Create idea from emergent structure
+                idea = {
+                    "title": structure.get("name", "Emergent Concept"),
+                    "description": structure.get("description", ""),
+                    "source_concepts": [blend["concepts"][c]["name"] 
+                                       for c in structure.get("concepts", []) 
+                                       if c in blend.get("concepts", {})],
+                    "novelty_score": 0.8,  # Emergent structures tend to be novel
+                    "technique_used": "conceptual_blending"
+                }
+                ideas.append(idea)
+            
+            # If no emergent structures, look at the blend concepts themselves
+            if not ideas:
+                for concept_id, concept in blend.get("concepts", {}).items():
+                    # Check if concept has source concepts from both input spaces
+                    source_concepts = concept.get("source_concepts", [])
+                    space_ids = set(src.get("space_id") for src in source_concepts)
+                    
+                    # If concept combines elements from multiple spaces, it's potentially novel
+                    if len(space_ids) > 1:
+                        # Create idea from blend concept
+                        idea = {
+                            "title": concept.get("name", "Blended Concept"),
+                            "description": f"A novel concept combining elements from multiple domains: {', '.join(concept.get('properties', {}).keys())}",
+                            "source_concepts": [blend["concepts"][src.get("concept_id")]["name"] 
+                                               for src in source_concepts 
+                                               if src.get("concept_id") in blend.get("concepts", {})],
+                            "novelty_score": 0.7,
+                            "technique_used": "conceptual_blending"
+                        }
+                        ideas.append(idea)
+            
+            return ideas
+        except Exception as e:
+            return [{"error": f"Error extracting ideas from blend: {str(e)}"}]
+    
+    @staticmethod
+    @function_tool
+    async def _get_causal_models(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        domain: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get available causal models from the reasoning core
+        
+        Args:
+            domain: Optional domain to filter causal models
+            
+        Returns:
+            List of available causal models
+        """
+        if not ctx.context.reasoning_core:
+            return [{"error": "Reasoning core not available"}]
+        
+        try:
+            # Get all causal models
+            models = await ctx.context.reasoning_core.get_all_causal_models()
+            
+            # Filter by domain if provided
+            if domain:
+                models = [m for m in models if domain.lower() in m["domain"].lower()]
+            
+            # Return simplified model information
+            return [{
+                "id": model["id"],
+                "name": model["name"],
+                "domain": model["domain"],
+                "node_count": len(model.get("nodes", {})),
+                "relation_count": len(model.get("relations", {}))
+            } for model in models]
+        except Exception as e:
+            return [{"error": f"Error retrieving causal models: {str(e)}"}]
+    
+    @staticmethod
+    @function_tool
+    async def _analyze_causal_impacts(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        model_id: str,
+        idea_description: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze the causal impacts of an idea using a causal model
+        
+        Args:
+            model_id: ID of the causal model to use
+            idea_description: Description of the idea to analyze
+            
+        Returns:
+            Analysis of potential causal impacts
+        """
+        if not ctx.context.reasoning_core:
+            return {"error": "Reasoning core not available"}
+        
+        try:
+            # Get the causal model
+            model = await ctx.context.reasoning_core.get_causal_model(model_id)
+            
+            # Find most relevant nodes for the idea
+            relevant_nodes = []
+            for node_id, node in model.get("nodes", {}).items():
+                # Simple relevance check using word overlap
+                node_name = node.get("name", "").lower()
+                description = idea_description.lower()
+                
+                # Check if node name appears in idea description
+                if node_name in description or any(word in description for word in node_name.split()):
+                    relevant_nodes.append({
+                        "id": node_id,
+                        "name": node["name"],
+                        "relevance": 0.8 if node_name in description else 0.6
+                    })
+            
+            # If no relevant nodes found, use central nodes in the model
+            if not relevant_nodes:
+                # Get a few high-degree nodes as central nodes
+                node_connections = {}
+                for relation in model.get("relations", {}).values():
+                    source_id = relation.get("source_id")
+                    target_id = relation.get("target_id")
+                    
+                    if source_id:
+                        node_connections[source_id] = node_connections.get(source_id, 0) + 1
+                    if target_id:
+                        node_connections[target_id] = node_connections.get(target_id, 0) + 1
+                
+                # Sort nodes by connection count
+                sorted_nodes = sorted(node_connections.items(), key=lambda x: x[1], reverse=True)
+                
+                # Use top 3 nodes
+                for node_id, connection_count in sorted_nodes[:3]:
+                    if node_id in model.get("nodes", {}):
+                        relevant_nodes.append({
+                            "id": node_id,
+                            "name": model["nodes"][node_id]["name"],
+                            "relevance": 0.5
+                        })
+            
+            # For each relevant node, determine potential impacts
+            impacts = []
+            for node in relevant_nodes:
+                node_id = node["id"]
+                
+                # Get downstream effects (nodes affected by this node)
+                downstream = []
+                for relation_id, relation in model.get("relations", {}).items():
+                    if relation.get("source_id") == node_id:
+                        target_id = relation.get("target_id")
+                        if target_id in model.get("nodes", {}):
+                            downstream.append({
+                                "id": target_id,
+                                "name": model["nodes"][target_id]["name"],
+                                "relation_type": relation.get("type", "causal"),
+                                "strength": relation.get("strength", 0.5)
+                            })
+                
+                # Add impact information
+                impacts.append({
+                    "node": node,
+                    "downstream_effects": downstream,
+                    "potential_impact": len(downstream) * 0.2  # Simple impact score based on number of effects
+                })
+            
+            return {
+                "model_name": model["name"],
+                "relevant_nodes": relevant_nodes,
+                "causal_impacts": impacts,
+                "overall_impact_score": sum(impact["potential_impact"] for impact in impacts)
+            }
+        except Exception as e:
+            return {"error": f"Error analyzing causal impacts: {str(e)}"}
+    
+    @staticmethod
+    @function_tool
+    async def _generate_causal_interventions(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        model_id: str,
+        target_outcome: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate potential interventions to achieve a target outcome
+        
+        Args:
+            model_id: ID of the causal model to use
+            target_outcome: Description of the desired outcome
+            
+        Returns:
+            List of potential interventions
+        """
+        if not ctx.context.reasoning_core:
+            return [{"error": "Reasoning core not available"}]
+        
+        try:
+            # Get the causal model
+            model = await ctx.context.reasoning_core.get_causal_model(model_id)
+            
+            # Find nodes relevant to the target outcome
+            target_nodes = []
+            for node_id, node in model.get("nodes", {}).items():
+                # Simple relevance check using word overlap
+                node_name = node.get("name", "").lower()
+                outcome = target_outcome.lower()
+                
+                # Check if node name appears in target outcome
+                if node_name in outcome or any(word in outcome for word in node_name.split()):
+                    target_nodes.append({
+                        "id": node_id,
+                        "name": node["name"],
+                        "current_state": node.get("current_state", "unknown")
+                    })
+            
+            # For each target node, find potential intervention points
+            interventions = []
+            for target in target_nodes:
+                # Find nodes that influence the target (directly or indirectly)
+                influencers = set()
+                stack = [target["id"]]
+                visited = set(stack)
+                
+                while stack:
+                    current = stack.pop()
+                    
+                    # Find nodes that directly influence this node
+                    for relation_id, relation in model.get("relations", {}).items():
+                        if relation.get("target_id") == current:
+                            source_id = relation.get("source_id")
+                            if source_id and source_id not in visited:
+                                influencers.add(source_id)
+                                stack.append(source_id)
+                                visited.add(source_id)
+                
+                # For each influencer, define a potential intervention
+                for influencer_id in influencers:
+                    if influencer_id in model.get("nodes", {}):
+                        influencer = model["nodes"][influencer_id]
+                        
+                        # Get current state and possible states
+                        current_state = influencer.get("current_state", "unknown")
+                        possible_states = influencer.get("states", [])
+                        
+                        # Choose a different state if possible
+                        if possible_states and current_state in possible_states:
+                            alternative_states = [s for s in possible_states if s != current_state]
+                            if alternative_states:
+                                target_state = random.choice(alternative_states)
+                                
+                                # Create intervention
+                                interventions.append({
+                                    "target_node": {
+                                        "id": influencer_id,
+                                        "name": influencer["name"]
+                                    },
+                                    "current_state": current_state,
+                                    "intervention_state": target_state,
+                                    "description": f"Change {influencer['name']} from {current_state} to {target_state}",
+                                    "expected_outcome": f"This should influence {target['name']} toward achieving {target_outcome}"
+                                })
+            
+            return interventions
+        except Exception as e:
+            return [{"error": f"Error generating causal interventions: {str(e)}"}]
+    
+    @staticmethod
+    @function_tool
+    async def _reason_counterfactually(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        model_id: str,
+        counterfactual_query: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Perform counterfactual reasoning to explore alternative scenarios
+        
+        Args:
+            model_id: ID of the causal model to use
+            counterfactual_query: Query specifying the counterfactual scenario
+            
+        Returns:
+            Results of counterfactual reasoning
+        """
+        if not ctx.context.reasoning_core:
+            return {"error": "Reasoning core not available"}
+        
+        try:
+            # Perform counterfactual reasoning using the reasoning core
+            result = await ctx.context.reasoning_core.reason_counterfactually(
+                model_id=model_id,
+                query=counterfactual_query
+            )
+            
+            return result
+        except Exception as e:
+            return {"error": f"Error performing counterfactual reasoning: {str(e)}"}
+    
+    @staticmethod
+    @function_tool
+    async def _setup_imagination_simulation(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        idea_description: str,
+        current_state: Dict[str, Any] = None,
+        domain: str = "general"
+    ) -> Dict[str, Any]:
+        """
+        Set up a simulation for exploring an idea using the imagination simulator
+        
+        Args:
+            idea_description: Description of the idea to simulate
+            current_state: Optional current state to start from
+            domain: Domain for the simulation
+            
+        Returns:
+            Simulation setup details
+        """
+        if not ctx.context.imagination_simulator:
+            return {"error": "Imagination simulator not available"}
+        
+        try:
+            # Create a default current state if none provided
+            if not current_state:
+                current_state = {
+                    "user_satisfaction": 0.5,
+                    "idea_feasibility": 0.5,
+                    "idea_novelty": 0.7,
+                    "implementation_progress": 0.0
+                }
+            
+            # Set up the simulation using the imagination simulator
+            sim_input = await ctx.context.imagination_simulator.setup_simulation(
+                description=idea_description,
+                current_brain_state=current_state
+            )
+            
+            if sim_input:
+                return {
+                    "simulation_id": sim_input.simulation_id,
+                    "description": sim_input.description,
+                    "initial_state": sim_input.initial_state,
+                    "domain": sim_input.domain,
+                    "max_steps": sim_input.max_steps,
+                    "focus_variables": sim_input.focus_variables
+                }
+            else:
+                return {"error": "Failed to set up simulation"}
+        except Exception as e:
+            return {"error": f"Error setting up imagination simulation: {str(e)}"}
+    
+    @staticmethod
+    @function_tool
+    async def _run_imagination_simulation(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        simulation_setup: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Run a simulation using the imagination simulator
+        
+        Args:
+            simulation_setup: Setup details for the simulation
+            
+        Returns:
+            Results of the simulation
+        """
+        if not ctx.context.imagination_simulator:
+            return {"error": "Imagination simulator not available"}
+        
+        try:
+            # Convert dict to SimulationInput
+            from nyx.core.imagination_simulator import SimulationInput
+            
+            sim_input = SimulationInput(
+                simulation_id=simulation_setup.get("simulation_id", f"sim_{uuid.uuid4().hex[:8]}"),
+                description=simulation_setup.get("description", "Idea simulation"),
+                initial_state=simulation_setup.get("initial_state", {}),
+                hypothetical_event=simulation_setup.get("hypothetical_event"),
+                counterfactual_condition=simulation_setup.get("counterfactual_condition"),
+                goal_condition=simulation_setup.get("goal_condition"),
+                max_steps=simulation_setup.get("max_steps", 10),
+                focus_variables=simulation_setup.get("focus_variables", []),
+                domain=simulation_setup.get("domain", "general"),
+                use_reflection=True
+            )
+            
+            # Run the simulation
+            result = await ctx.context.imagination_simulator.run_simulation(sim_input)
+            
+            # Convert result to dict for return
+            if result:
+                return {
+                    "simulation_id": result.simulation_id,
+                    "success": result.success,
+                    "termination_reason": result.termination_reason,
+                    "steps": len(result.trajectory),
+                    "final_state": result.final_state.model_dump() if result.final_state else {},
+                    "reflection": result.reflection,
+                    "confidence": result.confidence
+                }
+            else:
+                return {"error": "Simulation failed"}
+        except Exception as e:
+            return {"error": f"Error running imagination simulation: {str(e)}"}
+    
+    @staticmethod
+    @function_tool
+    async def _extract_insights_from_simulation(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        simulation_result: Dict[str, Any]
+    ) -> List[Dict[str, str]]:
+        """
+        Extract insights and creative ideas from a simulation result
+        
+        Args:
+            simulation_result: Results of an imagination simulation
+            
+        Returns:
+            List of insights extracted from the simulation
+        """
+        # Extract insights even if simulation fails
+        insights = []
+        
+        # Check for reflection
+        if "reflection" in simulation_result and simulation_result["reflection"]:
+            insights.append({
+                "type": "reflection",
+                "content": simulation_result["reflection"]
+            })
+        
+        # Check for causal analysis
+        if "causal_analysis" in simulation_result and simulation_result["causal_analysis"]:
+            causal = simulation_result["causal_analysis"]
+            if "insights" in causal:
+                for insight in causal["insights"]:
+                    insights.append({
+                        "type": "causal_insight",
+                        "content": insight
+                    })
+        
+        # Check for emotional impacts
+        if "emotional_impact" in simulation_result and simulation_result["emotional_impact"]:
+            emotions = simulation_result["emotional_impact"]
+            insight_text = "Emotional impact: "
+            if "final_emotion" in emotions:
+                insight_text += f"Primarily {emotions['final_emotion']}"
+            if "emotion_transition" in emotions:
+                insight_text += f", transitioning from {emotions['emotion_transition']}"
+            
+            insights.append({
+                "type": "emotional_insight",
+                "content": insight_text
+            })
+        
+        # Check for abstraction
+        if "abstraction" in simulation_result and simulation_result["abstraction"]:
+            abstraction = simulation_result["abstraction"]
+            if "abstraction_text" in abstraction:
+                insights.append({
+                    "type": "abstraction",
+                    "content": abstraction["abstraction_text"]
+                })
+        
+        # If no specific insights but we have a final state, create a general insight
+        if not insights and "final_state" in simulation_result:
+            final_state = simulation_result["final_state"]
+            state_vars = final_state.get("state_variables", {})
+            
+            var_descriptions = []
+            for name, value in state_vars.items():
+                if isinstance(value, (int, float)):
+                    level = "high" if value > 0.7 else "moderate" if value > 0.3 else "low"
+                    var_descriptions.append(f"{name}: {level} ({value:.2f})")
+                else:
+                    var_descriptions.append(f"{name}: {value}")
+            
+            if var_descriptions:
+                insights.append({
+                    "type": "state_analysis",
+                    "content": f"Final state analysis: {'; '.join(var_descriptions)}"
+                })
+        
+        # If still no insights, add a default insight
+        if not insights:
+            insights.append({
+                "type": "basic_insight",
+                "content": f"Simulation {simulation_result.get('simulation_id', 'unknown')} " +
+                          f"{'succeeded' if simulation_result.get('success', False) else 'failed'} " +
+                          f"due to {simulation_result.get('termination_reason', 'unknown reasons')}."
+            })
+        
+        return insights
+    
+    @staticmethod
+    @function_tool
+    async def _refine_idea_from_simulation(
+        ctx: RunContextWrapper[NoveltyEngineContext],
+        original_idea: Dict[str, Any],
+        simulation_result: Dict[str, Any],
+        insights: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Refine an idea based on simulation results and insights
+        
+        Args:
+            original_idea: The original idea
+            simulation_result: Results of simulating the idea
+            insights: Insights extracted from the simulation
+            
+        Returns:
+            Refined version of the idea
+        """
+        # Start with a copy of the original idea
+        refined_idea = original_idea.copy()
+        
+        # Add refinements based on simulation outcomes
+        refinements = []
+        
+        # Check simulation success
+        if simulation_result.get("success", False):
+            refinements.append("Simulation indicates this idea is likely to succeed")
+        else:
+            termination_reason = simulation_result.get("termination_reason", "unknown")
+            if termination_reason == "max_steps":
+                refinements.append("Simulation suggests this idea needs more time to fully develop")
+            elif termination_reason == "goal_reached":
+                refinements.append("Simulation shows this idea achieves its intended goals")
+            elif termination_reason == "stable_state":
+                refinements.append("Simulation shows this idea reaches a stable equilibrium")
+            else:
+                refinements.append(f"Simulation terminated due to {termination_reason}")
+        
+        # Add insights from simulation
+        for insight in insights:
+            insight_type = insight.get("type", "")
+            content = insight.get("content", "")
+            
+            if "abstraction" in insight_type and content:
+                refinements.append(f"Abstraction insight: {content}")
+            elif "causal" in insight_type and content:
+                refinements.append(f"Causal insight: {content}")
+            elif "emotion" in insight_type and content:
+                refinements.append(f"Emotional insight: {content}")
+            elif content:
+                refinements.append(f"Insight: {content}")
+        
+        # Update idea description with refinements
+        original_description = refined_idea.get("description", "")
+        refinement_text = "\n\nRefinements based on simulation:\n" + "\n".join([f"- {r}" for r in refinements])
+        refined_idea["description"] = original_description + refinement_text
+        
+        # Adjust novelty and feasibility scores based on simulation
+        if "confidence" in simulation_result:
+            # Increase feasibility score based on simulation confidence
+            refined_idea["feasibility_score"] = min(1.0, refined_idea.get("feasibility_score", 0.5) + 
+                                                  simulation_result["confidence"] * 0.2)
+        
+        # Add a refinement tag to the title
+        refined_idea["title"] = f"{refined_idea.get('title', 'Idea')} (Simulation Refined)"
+        
+        # Note that the idea was refined through simulation
+        refined_idea["technique_used"] = f"{refined_idea.get('technique_used', 'unknown')} + imagination_simulation"
+        
+        return refined_idea
+    
+    # Update the _initialize_agents method to include our new agents
+    def _initialize_agents(self):
+        """Initialize all specialized agents needed for the novelty engine"""
+        # Create technique-specific agents
+        self.bisociation_agent = self._create_bisociation_agent()
+        self.conceptual_blending_agent = self._create_conceptual_blending_agent()
+        self.constraint_relaxation_agent = self._create_constraint_relaxation_agent()
+        self.random_stimulus_agent = self._create_random_stimulus_agent()
+        self.perspective_shifting_agent = self._create_perspective_shifting_agent()
+        self.analogical_reasoning_agent = self._create_analogical_reasoning_agent()
+        
+        # Add new integrated reasoning and imagination agents
+        self.conceptual_reasoning_agent = self._create_conceptual_reasoning_agent()
+        self.causal_reasoning_agent = self._create_causal_reasoning_agent()
+        self.simulation_agent = self._create_simulation_agent()
+        
+        # Create evaluation agent
+        self.evaluation_agent = self._create_evaluation_agent()
+        
+        # Create the main novelty agent with handoffs to specialized agents
+        self.novelty_agent = self._create_novelty_agent()
+        
+        logger.info("Novelty engine agents initialized with reasoning and imagination integration")
+    
+    
+    # Now let's add new public methods to the NoveltyEngine class for external use
+    
+    async def generate_idea_with_reasoning(
+        self,
+        technique: str = "conceptual_reasoning",
+        domain: str = None,
+        concepts: List[str] = None,
+        constraints: List[str] = None
+    ) -> NoveltyIdea:
+        """
+        Generate a novel idea using the reasoning core's capabilities
+        
+        Args:
+            technique: Reasoning technique to use (conceptual_reasoning, causal_reasoning)
+            domain: Main domain for the idea
+            concepts: Concepts to work with
+            constraints: Constraints to consider or relax
+            
+        Returns:
+            Generated novel idea
+        """
+        # Ensure engine is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        # Ensure reasoning core is available
+        if not self.context.reasoning_core:
+            raise ValueError("Reasoning core not available for idea generation")
+        
+        # Construct appropriate prompt based on inputs
+        prompt = "Generate a novel idea"
+        
+        if technique:
+            prompt += f" using {technique}"
+        
+        if domain:
+            prompt += f" in the {domain} domain"
+        
+        if concepts:
+            concept_list = ", ".join(concepts)
+            prompt += f" involving these concepts: {concept_list}"
+        
+        if constraints:
+            constraint_list = ", ".join(constraints)
+            prompt += f" considering these constraints: {constraint_list}"
+        
+        # Configure run with tracing
+        run_config = RunConfig(
+            workflow_name="NoveltyEngine Reasoning-Based Idea Generation",
+            group_id=self.context.trace_id,
+            trace_metadata={
+                "technique": technique,
+                "domain": domain,
+                "num_concepts": len(concepts) if concepts else 0
+            }
+        )
+        
+        # Run through the appropriate agent based on technique
+        with trace(workflow_name="Generate Novel Idea with Reasoning", group_id=self.context.trace_id):
+            # Determine which agent to use
+            if technique == "conceptual_reasoning":
+                agent = self.conceptual_reasoning_agent
+            elif technique == "causal_reasoning":
+                agent = self.causal_reasoning_agent
+            else:
+                # Default to main novelty agent
+                agent = self.novelty_agent
+            
+            # Generate the idea
+            result = await Runner.run(
+                agent,
+                prompt,
+                context=self.context,
+                run_config=run_config
+            )
+            
+            # Convert result to NoveltyIdea if needed
+            idea = None
+            if isinstance(result.final_output, NoveltyIdea):
+                idea = result.final_output
+            elif isinstance(result.final_output, dict):
+                # Try to create NoveltyIdea from dict
+                try:
+                    # Extract relevant fields
+                    idea_dict = {
+                        "id": result.final_output.get("id", f"idea_{uuid.uuid4().hex[:8]}"),
+                        "title": result.final_output.get("title", "Generated Idea"),
+                        "description": result.final_output.get("description", ""),
+                        "source_concepts": result.final_output.get("source_concepts", []),
+                        "novelty_score": result.final_output.get("novelty_score", 0.5),
+                        "feasibility_score": result.final_output.get("feasibility_score", 0.5),
+                        "usefulness_score": result.final_output.get("usefulness_score", 0.5),
+                        "generation_date": result.final_output.get("generation_date", datetime.datetime.now().isoformat()),
+                        "domain": result.final_output.get("domain", domain or "general"),
+                        "technique_used": result.final_output.get("technique_used", technique)
+                    }
+                    idea = NoveltyIdea(**idea_dict)
+                except Exception as e:
+                    logger.error(f"Error converting result to NoveltyIdea: {e}")
+                    # Create basic idea with result
+                    idea = NoveltyIdea(
+                        id=f"idea_{uuid.uuid4().hex[:8]}",
+                        title="Generated Idea",
+                        description=str(result.final_output),
+                        source_concepts=[],
+                        technique_used=technique
+                    )
+            else:
+                # Create basic idea with result
+                idea = NoveltyIdea(
+                    id=f"idea_{uuid.uuid4().hex[:8]}",
+                    title="Generated Idea",
+                    description=str(result.final_output),
+                    source_concepts=[],
+                    technique_used=technique
+                )
+            
+            # Store the generated idea
+            self.context.generated_ideas[idea.id] = idea
+            
+            return idea
+    
+    async def simulate_idea(
+        self,
+        idea_id: str = None,
+        idea_content: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Simulate an idea using the imagination simulator
+        
+        Args:
+            idea_id: ID of a previously generated idea
+            idea_content: New idea content to simulate
+            
+        Returns:
+            Simulation results with insights
+        """
+        # Ensure engine is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        # Ensure imagination simulator is available
+        if not self.context.imagination_simulator:
+            raise ValueError("Imagination simulator not available for idea simulation")
+        
+        idea = None
+        
+        # Get idea by ID or use provided content
+        if idea_id and idea_id in self.context.generated_ideas:
+            idea = self.context.generated_ideas[idea_id]
+        elif idea_content:
+            idea = idea_content
+        else:
+            return {"error": "Must provide either idea_id or idea_content"}
+        
+        # Convert to dict if needed
+        if not isinstance(idea, dict):
+            idea = idea.dict()
+        
+        # Run through simulation agent
+        with trace(workflow_name="Simulate Idea", group_id=self.context.trace_id):
+            prompt = f"Simulate this idea and provide insights:\n{json.dumps(idea, indent=2)}"
+            
+            result = await Runner.run(
+                self.simulation_agent,
+                prompt,
+                context=self.context
+            )
+            
+            # Process the result
+            if hasattr(result.final_output, "model_dump"):
+                output = result.final_output.model_dump()
+            else:
+                output = result.final_output
+            
+            return {
+                "idea": idea,
+                "simulation_results": output,
+                "insights": output.get("insights", []),
+                "refinements": output.get("refinements", [])
+            }
+    
+    async def generate_integrated_idea(
+        self,
+        description: str,
+        domain: str = None,
+        use_reasoning: bool = True,
+        use_simulation: bool = True
+    ) -> NoveltyIdea:
+        """
+        Generate a novel idea using both reasoning and imagination capabilities
+        
+        Args:
+            description: Description of the idea or problem to solve
+            domain: Optional domain for the idea
+            use_reasoning: Whether to use reasoning capabilities
+            use_simulation: Whether to use imagination simulation
+            
+        Returns:
+            Integrated novel idea
+        """
+        # Ensure engine is initialized
+        if not self.initialized:
+            await self.initialize()
+        
+        # First generate initial idea
+        initial_idea = None
+        
+        if use_reasoning and self.context.reasoning_core:
+            # Generate idea using reasoning
+            initial_idea = await self.generate_idea_with_reasoning(
+                technique="conceptual_reasoning" if random.random() < 0.5 else "causal_reasoning",
+                domain=domain,
+                concepts=[description]
+            )
+        else:
+            # Generate idea using regular techniques
+            techniques = ["bisociation", "conceptual_blending", "random_stimulus", "perspective_shifting"]
+            technique = random.choice(techniques)
+            
+            initial_idea = await self.generate_novel_idea(
+                technique=technique,
+                domain=domain,
+                concepts=[description]
+            )
+        
+        # If no simulation requested or simulator not available, return initial idea
+        if not use_simulation or not self.context.imagination_simulator:
+            return initial_idea
+        
+        # Simulate and refine the idea
+        simulation_result = await self.simulate_idea(
+            idea_id=initial_idea.id if isinstance(initial_idea, NoveltyIdea) else None,
+            idea_content=initial_idea if not isinstance(initial_idea, NoveltyIdea) else None
+        )
+        
+        # Check if simulation was successful
+        if "error" in simulation_result:
+            # Return initial idea if simulation failed
+            return initial_idea
+        
+        # Extract refined idea if available
+        if "simulation_results" in simulation_result and isinstance(simulation_result["simulation_results"], dict):
+            refined_data = simulation_result["simulation_results"]
+            
+            if "title" in refined_data and "description" in refined_data:
+                # Create refined idea
+                refined_idea = NoveltyIdea(
+                    id=f"idea_{uuid.uuid4().hex[:8]}",
+                    title=refined_data["title"],
+                    description=refined_data["description"],
+                    source_concepts=refined_data.get("source_concepts", []),
+                    novelty_score=refined_data.get("novelty_score", initial_idea.novelty_score if hasattr(initial_idea, "novelty_score") else 0.5),
+                    feasibility_score=refined_data.get("feasibility_score", initial_idea.feasibility_score if hasattr(initial_idea, "feasibility_score") else 0.5),
+                    usefulness_score=refined_data.get("usefulness_score", initial_idea.usefulness_score if hasattr(initial_idea, "usefulness_score") else 0.5),
+                    generation_date=datetime.datetime.now().isoformat(),
+                    domain=refined_data.get("domain", domain or "general"),
+                    technique_used=f"{initial_idea.technique_used if hasattr(initial_idea, 'technique_used') else 'integrated'}_with_simulation"
+                )
+                
+                # Store the refined idea
+                self.context.generated_ideas[refined_idea.id] = refined_idea
+                
+                return refined_idea
+        
+        # Return initial idea if refinement failed
+        return initial_idea
