@@ -24,9 +24,6 @@ class MemoryAgentWrapper:
         self.input_guardrails = []
         self.hooks = None
         
-@property
-def hooks(self):
-    return self.agent.hooks
     
     async def recall(
         self,
@@ -343,3 +340,7 @@ def hooks(self):
         except Exception as e:
             logger.error(f"Error in generate_schemas: {str(e)}")
             return {"error": str(e), "schemas": []}
+
+@property
+def hooks(self):
+    return self.agent.hooks
