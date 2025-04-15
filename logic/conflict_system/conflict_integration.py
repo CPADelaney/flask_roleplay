@@ -20,6 +20,7 @@ from nyx.governance_helpers import with_governance
 from lore.lore_system import LoreSystem
 from db.connection import get_db_connection_context
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
+from logic.integration import get_npc_system
 
 from logic.conflict_system.conflict_agents import (
     triage_agent, conflict_generation_agent, stakeholder_agent,
