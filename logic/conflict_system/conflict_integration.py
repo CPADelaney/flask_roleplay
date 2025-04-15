@@ -66,7 +66,6 @@ class ConflictSystemIntegration:
         
     async def initialize(self):
         """Initialize the conflict system with all necessary systems."""
-        from 
         if not self.is_initialized:
             self.agents = await initialize_agents()
             self.lore_system = await get_lore_system(self.user_id, self.conversation_id)
