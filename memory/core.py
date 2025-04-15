@@ -1034,6 +1034,10 @@ class UnifiedMemoryManager:
     @staticmethod
     @with_transaction
     async def create_tables(conn: Optional[asyncpg.Connection] = None) -> None:
+        """
+        Static method: Initializes all required tables for unified memory.
+        Must be called as UnifiedMemoryManager.create_tables(conn), NOT as an instance method.
+        """
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS unified_memories (
@@ -1073,9 +1077,10 @@ class UnifiedMemoryManager:
                 success BOOLEAN NOT NULL,
                 duration FLOAT NOT NULL,
                 data_size INTEGER,
-                error TEXT,
-                metadata JSONB
+                error TEXT
             );
+            """
+        )
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp ON memory_telemetry(timestamp);
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation ON memory_telemetry(operation);
             CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success ON memory_telemetry(success);
