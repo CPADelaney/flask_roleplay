@@ -42,7 +42,6 @@ from .config import LoreConfig, ConfigManager, get_config, get_lore_config
 from .core.base_manager import BaseLoreManager
 from .core.cache import LoreCache, GLOBAL_LORE_CACHE
 from .core.registry import ManagerRegistry
-from .core.tool_registry import FunctionToolRegistry, tool_registry, registered_tool
 
 # Systems
 from .systems.dynamics import LoreDynamicsSystem, MultiStepPlanner, NarrativeEvaluator
@@ -120,9 +119,6 @@ __all__ = [
     'LoreCache',
     'GLOBAL_LORE_CACHE',
     'ManagerRegistry',
-    'FunctionToolRegistry',
-    'tool_registry',
-    'registered_tool',
     
     # Systems
     'LoreDynamicsSystem',
