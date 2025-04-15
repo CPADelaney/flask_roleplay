@@ -34,13 +34,19 @@ class FunctionToolRegistry:
                 function = function.func
             elif hasattr(function, "wrapped_func"):
                 function = function.wrapped_func
+            elif hasattr(function, "__wrapped__"):
+                # Many decorators use __wrapped__ to store the original callable.
+                function = function.__wrapped__
             else:
-                logging.error("FunctionTool object does not have an attribute ('func' or 'wrapped_func') for the underlying function.")
-                raise AttributeError("FunctionTool object does not have an attribute ('func' or 'wrapped_func') for the underlying function.")
+                logging.error("FunctionTool object does not have an attribute ('func', 'wrapped_func', or '__wrapped__') for the underlying function.")
+                raise AttributeError("FunctionTool object does not have an attribute ('func', 'wrapped_func', or '__wrapped__') for the underlying function.")
         
         if not callable(function):
             logging.warning(f"Attempted to register a non-callable: {function}")
             return
+    
+        # Proceed to register the callable into your internal storage.
+    
 
     
     def get_tool(self, tool_id: str) -> Optional[Callable]:
@@ -50,9 +56,11 @@ class FunctionToolRegistry:
                 return tool.func
             elif hasattr(tool, "wrapped_func"):
                 return tool.wrapped_func
+            elif hasattr(tool, "__wrapped__"):
+                return tool.__wrapped__
             else:
-                logging.error("FunctionTool object missing both 'func' and 'wrapped_func' attributes.")
-                raise AttributeError("FunctionTool object missing both 'func' and 'wrapped_func' attributes.")
+                logging.error("FunctionTool object missing all expected attributes ('func', 'wrapped_func', '__wrapped__').")
+                raise AttributeError("FunctionTool object missing all expected attributes ('func', 'wrapped_func', '__wrapped__').")
         return tool
 
     
