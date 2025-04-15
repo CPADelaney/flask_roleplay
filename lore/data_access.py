@@ -49,7 +49,7 @@ class BaseDataAccess:
             
         try:
             # Initialize database connection
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 self.initialized = True
                 return True
         except Exception as e:
