@@ -1,3 +1,5 @@
+# nyx/nyx_planner.py
+
 from typing import Dict, Any, List, Optional, Tuple
 import logging
 from datetime import datetime
@@ -125,7 +127,7 @@ class NyxPlanner:
             )
             
             # Initialize graph structure if not exists
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS memory_graph (
                         id SERIAL PRIMARY KEY,
@@ -149,7 +151,7 @@ class NyxPlanner:
     async def _load_plans(self):
         """Load existing plans from storage"""
         try:
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 # Create plans table if not exists
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS nyx_plans (
@@ -210,7 +212,7 @@ class NyxPlanner:
     async def save_plan(self, plan: Plan):
         """Save plan to persistent storage"""
         try:
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute("""
                     INSERT INTO nyx_plans (
                         id, user_id, conversation_id, name, description, 
@@ -251,7 +253,7 @@ class NyxPlanner:
     async def _load_player_profile(self):
         """Load existing player profile from storage"""
         try:
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 # Create player profile table if not exists
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS player_profiles (
@@ -303,7 +305,7 @@ class NyxPlanner:
     async def save_player_profile(self):
         """Save player profile to persistent storage"""
         try:
-            async with await get_db_connection_context() as conn:
+            async with get_db_connection_context() as conn:
                 await conn.execute("""
                     UPDATE player_profiles SET
                         kink_preferences = $3,
