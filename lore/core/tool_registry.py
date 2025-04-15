@@ -37,8 +37,14 @@ class FunctionToolRegistry:
 
     
     def get_tool(self, tool_id: str) -> Optional[Callable]:
-        """Get a registered function tool by its ID."""
-        return self._tools.get(tool_id)
+        """
+        Get a registered function tool by its ID.
+        Always returns a callable, never a FunctionTool wrapper.
+        """
+        tool = self._tools.get(tool_id)
+        if isinstance(tool, FunctionTool):
+            return tool.func
+        return tool
     
     def get_tools_by_category(self, category: str) -> List[Callable]:
         """Get all function tools in a category."""
