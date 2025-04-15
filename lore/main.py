@@ -214,7 +214,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         
         # Get basic world state
-        async with await self._initialize_db_pool() as conn:
+        async with self._initialize_db_pool() as conn:
             # Query the WorldState table
             world_state = await conn.fetchrow("""
                 SELECT * FROM WorldState 
@@ -246,7 +246,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
         
         # Get a sample of locations and factions
         # Combine into single query for efficiency
-        async with await self._initialize_db_pool() as conn:
+        async with self._initialize_db_pool() as conn:
             # Get major factions
             factions = await conn.fetch("""
                 SELECT id, name, type, description 
