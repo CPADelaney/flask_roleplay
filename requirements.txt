@@ -20,6 +20,7 @@ asgiref
 quart
 asyncio-extras
 smolagents>=1.0.0
+SentenceTransformers
 
 # Web framework
 flask==3.0.0
