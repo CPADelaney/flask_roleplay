@@ -47,7 +47,7 @@ class SettingAnalyzer:
             set(), set(), set(), set(), set()
         )
         
-        async with await get_db_connection_context() as conn:
+        async with get_db_connection_context() as conn:
             # Fetch NPC data using async query
             rows = await conn.fetch("""
                 SELECT npc_id, npc_name, archetypes, likes, dislikes, 
@@ -217,7 +217,7 @@ class SettingAnalyzer:
         setting_desc = "A setting with no description."
         setting_name = "The Setting"
         
-        async with await get_db_connection_context() as conn:
+        async with get_db_connection_context() as conn:
             # Get environment description
             row = await conn.fetchrow("""
                 SELECT value FROM CurrentRoleplay
