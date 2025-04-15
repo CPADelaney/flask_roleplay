@@ -448,9 +448,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     
                     return region_id
 
+    @staticmethod
     @function_tool
     async def add_geographic_region(
-        self, 
         ctx: RunContextWrapper,
         name: str,
         region_type: str,
@@ -516,8 +516,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 2) Generate world nations with agent-based distribution
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
-    async def generate_world_nations(self, ctx: RunContextWrapper, count: int = 5) -> List[Dict[str, Any]]:
+    async def generate_world_nations(ctx: RunContextWrapper, count: int = 5) -> List[Dict[str, Any]]:
         """
         Generate a set of nations for the world with political simulation capabilities.
         
@@ -706,9 +707,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 3) Conflict simulation between nations/regions
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def simulate_conflict(
-        self,
         ctx: RunContextWrapper,
         entity1_id: int,
         entity2_id: int,
@@ -977,9 +978,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 4) Border dispute resolution
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def resolve_border_dispute(
-        self,
         ctx: RunContextWrapper,
         dispute_id: int,
         resolution_approach: str
@@ -1171,9 +1172,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 5) Time evolution prediction
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def predict_geopolitical_evolution(
-        self,
         ctx: RunContextWrapper,
         entity_id: int,
         years_forward: int = 5,
@@ -1420,9 +1421,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 6) Specialized simulations
     # ------------------------------------------------------------------------
+    @staticmethod
     @function_tool
     async def simulate_trade(
-        self, 
         ctx: RunContextWrapper,
         nation1: str,
         nation2: str,
@@ -1520,9 +1521,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             return trade_sim.dict()
 
+    @staticmethod
     @function_tool
     async def simulate_geography_impact(
-        self, 
         ctx: RunContextWrapper,
         region_name: str,
         terrain_features: List[str],
@@ -1609,9 +1610,9 @@ class GeopoliticalSystemManager(BaseLoreManager):
             
             return geography_effect.dict()
 
+    @staticmethod
     @function_tool
     async def simulate_espionage(
-        self, 
         ctx: RunContextWrapper,
         agent_name: str,
         target_nation: str,
