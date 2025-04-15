@@ -420,14 +420,7 @@ class LocalLoreManager(BaseLoreManager):
     # ------------------------------------------------------------------------
     # 1) Add an urban myth with structured output
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_urban_myth",
-        action_description="Adding urban myth: {name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @registered_tool(category="local_lore")    
-    async def add_urban_myth(
+    async def _add_urban_myth_impl(
         self,
         ctx,
         name: str,
@@ -441,25 +434,6 @@ class LocalLoreManager(BaseLoreManager):
         themes: List[str] = None,
         matriarchal_elements: List[str] = None
     ) -> int:
-        """
-        Add a new urban myth to the database with enhanced narrative elements.
-        
-        Args:
-            ctx: Context object
-            name: Myth name
-            description: Myth description
-            origin_location: Where the myth originated
-            origin_event: Event that spawned the myth
-            believability: How believable it is (1-10)
-            spread_rate: How quickly it spreads (1-10)
-            regions_known: Regions where the myth is known
-            narrative_style: Style of the narrative
-            themes: Thematic elements
-            matriarchal_elements: Elements reinforcing matriarchal power
-            
-        Returns:
-            ID of the created myth
-        """
         with trace(
             "AddUrbanMyth", 
             group_id=self.trace_group_id,
@@ -469,14 +443,14 @@ class LocalLoreManager(BaseLoreManager):
             regions_known = regions_known or ["local area"]
             themes = themes or ["mystery", "caution"]
             matriarchal_elements = matriarchal_elements or ["female authority"]
-
+    
             # Apply matriarchal theming
             description = MatriarchalThemingUtils.apply_matriarchal_theme("myth", description)
-
+    
             # Embedding
             embedding_text = f"{name} {description} {narrative_style} {' '.join(themes)}"
             embedding = await generate_embedding(embedding_text)
-
+    
             async with self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     myth_id = await conn.fetchval("""
@@ -491,20 +465,40 @@ class LocalLoreManager(BaseLoreManager):
                     name, description, origin_location, origin_event,
                     believability, spread_rate, regions_known, narrative_style,
                     themes, matriarchal_elements, embedding)
-
+    
                     return myth_id
-
+                    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_urban_myth",
+        action_description="Adding urban myth: {name}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="local_lore")
+    async def add_urban_myth(
+        self,
+        ctx,
+        name: str,
+        description: str,
+        origin_location: Optional[str] = None,
+        origin_event: Optional[str] = None,
+        believability: int = 6,
+        spread_rate: int = 5,
+        regions_known: List[str] = None,
+        narrative_style: str = "folklore",
+        themes: List[str] = None,
+        matriarchal_elements: List[str] = None
+    ) -> int:
+        return await self._add_urban_myth_impl(
+            ctx, name, description, origin_location, origin_event, believability,
+            spread_rate, regions_known, narrative_style, themes, matriarchal_elements
+        )
+    
+    
     # ------------------------------------------------------------------------
     # 2) Add local history with narrative connections
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_local_history",
-        action_description="Adding local history event: {event_name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @registered_tool(category="local_lore")    
-    async def add_local_history(
+    async def _add_local_history_impl(
         self,
         ctx,
         location_id: int,
@@ -520,27 +514,6 @@ class LocalLoreManager(BaseLoreManager):
         related_landmarks: List[int] = None,
         narrative_category: str = "historical"
     ) -> int:
-        """
-        Add a local historical event with narrative connections.
-        
-        Args:
-            ctx: Context object
-            location_id: ID of the location
-            event_name: Name of the event
-            description: Description text
-            date_description: When it happened
-            significance: Importance (1-10)
-            impact_type: Type of impact
-            notable_figures: People involved
-            current_relevance: Current importance
-            commemoration: How it's commemorated
-            connected_myths: IDs of connected myths
-            related_landmarks: IDs of related landmarks
-            narrative_category: Category for narrative
-            
-        Returns:
-            ID of the created history event
-        """
         with trace(
             "AddLocalHistory", 
             group_id=self.trace_group_id,
@@ -550,12 +523,12 @@ class LocalLoreManager(BaseLoreManager):
             notable_figures = notable_figures or []
             connected_myths = connected_myths or []
             related_landmarks = related_landmarks or []
-
+    
             description = MatriarchalThemingUtils.apply_matriarchal_theme("history", description)
-
+    
             embedding_text = f"{event_name} {description} {date_description} {narrative_category}"
             embedding = await generate_embedding(embedding_text)
-
+    
             async with self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     event_id = await conn.fetchval("""
@@ -572,7 +545,7 @@ class LocalLoreManager(BaseLoreManager):
                     significance, impact_type, notable_figures,
                     current_relevance, commemoration, connected_myths,
                     related_landmarks, narrative_category, embedding)
-
+    
                     # Create narrative connections if provided
                     if connected_myths:
                         for myth_id in connected_myths:
@@ -587,22 +560,45 @@ class LocalLoreManager(BaseLoreManager):
                                 conn, "history", event_id, "landmark", landmark_id, 
                                 "history_to_landmark", "Event occurred at landmark", 8
                             )
-
+    
                     # Invalidate relevant cache
                     self.invalidate_cache_pattern(f"local_history_{location_id}")
                     return event_id
-
+    
+     @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_local_history",
+        action_description="Adding local history event: {event_name}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="local_lore")
+    async def add_local_history(
+        self,
+        ctx,
+        location_id: int,
+        event_name: str,
+        description: str,
+        date_description: str = "Some time ago",
+        significance: int = 5,
+        impact_type: str = "cultural",
+        notable_figures: List[str] = None,
+        current_relevance: str = None,
+        commemoration: str = None,
+        connected_myths: List[int] = None,
+        related_landmarks: List[int] = None,
+        narrative_category: str = "historical"
+    ) -> int:
+        return await self._add_local_history_impl(
+            ctx, location_id, event_name, description, date_description, significance,
+            impact_type, notable_figures, current_relevance, commemoration, 
+            connected_myths, related_landmarks, narrative_category
+        )
+       
+    
     # ------------------------------------------------------------------------
     # 3) Add landmark with matriarchal significance
     # ------------------------------------------------------------------------
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_landmark",
-        action_description="Adding landmark: {name}",
-        id_from_context=lambda ctx: "local_lore_manager"
-    )
-    @registered_tool(category="local_lore")    
-    async def add_landmark(
+    async def _add_landmark_impl(
         self,
         ctx,
         name: str,
@@ -618,27 +614,6 @@ class LocalLoreManager(BaseLoreManager):
         symbolic_meaning: str = None,
         matriarchal_significance: str = "moderate"
     ) -> int:
-        """
-        Add a landmark with enhanced matriarchal and narrative elements.
-        
-        Args:
-            ctx: Context object
-            name: Landmark name
-            location_id: ID of the location
-            landmark_type: Type of landmark
-            description: Description text
-            historical_significance: Historical importance
-            current_use: Current purpose
-            controlled_by: Who controls it
-            legends: Associated legends
-            connected_histories: IDs of connected historical events
-            architectural_style: Style of architecture
-            symbolic_meaning: Symbolic significance
-            matriarchal_significance: Importance to matriarchal power
-            
-        Returns:
-            ID of the created landmark
-        """
         with trace(
             "AddLandmark", 
             group_id=self.trace_group_id,
@@ -647,12 +622,12 @@ class LocalLoreManager(BaseLoreManager):
             await self.ensure_initialized()
             legends = legends or []
             connected_histories = connected_histories or []
-
+    
             description = MatriarchalThemingUtils.apply_matriarchal_theme("landmark", description)
-
+    
             embedding_text = f"{name} {landmark_type} {description} {matriarchal_significance}"
             embedding = await generate_embedding(embedding_text)
-
+    
             async with self.get_connection_pool() as pool:
                 async with pool.acquire() as conn:
                     landmark_id = await conn.fetchval("""
@@ -669,7 +644,7 @@ class LocalLoreManager(BaseLoreManager):
                     historical_significance, current_use, controlled_by,
                     legends, connected_histories, architectural_style,
                     symbolic_meaning, matriarchal_significance, embedding)
-
+    
                     # Create narrative connections if provided
                     if connected_histories:
                         for history_id in connected_histories:
@@ -677,9 +652,39 @@ class LocalLoreManager(BaseLoreManager):
                                 conn, "history", history_id, "landmark", landmark_id, 
                                 "history_to_landmark", "Event occurred at landmark", 8
                             )
-
+    
                     self.invalidate_cache_pattern(f"landmarks_{location_id}")
                     return landmark_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_landmark",
+        action_description="Adding landmark: {name}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    @registered_tool(category="local_lore")
+    async def add_landmark(
+        self,
+        ctx,
+        name: str,
+        location_id: int,
+        landmark_type: str,
+        description: str,
+        historical_significance: str = None,
+        current_use: str = None,
+        controlled_by: str = None,
+        legends: List[str] = None,
+        connected_histories: List[int] = None,
+        architectural_style: str = None,
+        symbolic_meaning: str = None,
+        matriarchal_significance: str = "moderate"
+    ) -> int:
+        return await self._add_landmark_impl(
+            ctx, name, location_id, landmark_type, description, historical_significance,
+            current_use, controlled_by, legends, connected_histories, architectural_style,
+            symbolic_meaning, matriarchal_significance
+        )
+
 
     async def _create_narrative_connection(
         self,
