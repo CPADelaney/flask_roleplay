@@ -565,7 +565,7 @@ class LocalLoreManager(BaseLoreManager):
                     self.invalidate_cache_pattern(f"local_history_{location_id}")
                     return event_id
     
-     @with_governance(
+    @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_local_history",
         action_description="Adding local history event: {event_name}",
