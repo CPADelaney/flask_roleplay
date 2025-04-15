@@ -1699,6 +1699,37 @@ class ImaginationSimulator:
             "key_insights": result.causal_analysis.get("insights", []) if result.causal_analysis else [],
             "predicted_outcome": result.predicted_outcome or "Unknown outcome"
         }
+
+    async def get_simulation_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about simulations run so far.
+        
+        Returns:
+            Dictionary with simulation statistics
+        """
+        with custom_span("get_simulation_statistics"):
+            # Calculate average steps across all simulations in history
+            avg_steps = 0
+            if self.simulation_history:
+                avg_steps = sum(len(sim.trajectory) for sim in self.simulation_history.values()) / len(self.simulation_history)
+            
+            # Calculate success rate
+            success_rate = 0
+            if self.context.simulation_stats["total_simulations"] > 0:
+                success_rate = self.context.simulation_stats["successful_simulations"] / self.context.simulation_stats["total_simulations"]
+            
+            return {
+                "total_simulations": self.context.simulation_stats["total_simulations"],
+                "successful_simulations": self.context.simulation_stats["successful_simulations"],
+                "failed_simulations": self.context.simulation_stats["failed_simulations"],
+                "success_rate": success_rate,
+                "by_category": self.context.simulation_stats["by_category"],
+                "average_steps": avg_steps,
+                "current_history_size": len(self.simulation_history),
+                "abstraction_count": len(self.context.concept_spaces),
+                "causal_models_available": len(self.context.causal_models),
+                "reflection_available": self.reflection_engine is not None
+            }
     
     async def get_simulation_history(self, limit: int = 5) -> List[Dict[str, Any]]:
         """
