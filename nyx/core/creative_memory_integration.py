@@ -237,10 +237,10 @@ class CreativeMemoryIntegration:
         )
     
     # Tool functions for the various agents
-    
+
+    @staticmethod
     @function_tool
     async def _should_generate_wit(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         conversation_text: str,
         recognized_memories: List[Dict[str, Any]]
@@ -282,10 +282,10 @@ class CreativeMemoryIntegration:
             "suitable_memory_count": len(recognized_memories),
             "wit_types": random.sample(ctx.context.wit_types, min(3, len(ctx.context.wit_types)))
         }
-    
+
+    @staticmethod
     @function_tool
     async def _get_memory_concepts(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         memories: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -327,10 +327,10 @@ class CreativeMemoryIntegration:
             })
         
         return concepts
-    
+
+    @staticmethod
     @function_tool
     async def _create_memory_analogy(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         current_context: str,
         memory_text: str
@@ -373,10 +373,10 @@ class CreativeMemoryIntegration:
             "context_element": context_phrase,
             "analogy_type": "direct" if random.random() > 0.5 else "structural"
         }
-    
+
+    @staticmethod
     @function_tool
     async def _create_wordplay(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         memory_text: str,
         current_context: str
@@ -434,10 +434,10 @@ class CreativeMemoryIntegration:
             "wordplay_type": "common_word" if common_words else "word_association",
             "key_words": list(common_words) if common_words else []
         }
-    
+
+    @staticmethod
     @function_tool
     async def _extract_memory_patterns(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         memories: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -484,10 +484,10 @@ class CreativeMemoryIntegration:
             "memory_count": len(memories),
             "confidence": min(1.0, 0.4 + (len(memories) / 10))
         }
-    
+
+    @staticmethod
     @function_tool
     async def _abstract_principles(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         pattern: Dict[str, Any],
         current_context: str
@@ -540,10 +540,10 @@ class CreativeMemoryIntegration:
             "confidence": pattern.get("confidence", 0.5),
             "applicability": applicability
         }
-    
+
+    @staticmethod
     @function_tool
     async def _apply_creative_technique(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         memory: Dict[str, Any],
         current_context: str,
@@ -602,10 +602,10 @@ class CreativeMemoryIntegration:
             result["transformation_notes"] = "Applied general creative transformation"
         
         return result
-    
+
+    @staticmethod
     @function_tool
     async def _transform_memory(
-        self,
         ctx: RunContextWrapper[CreativeMemoryIntegrationContext],
         memory: Dict[str, Any],
         transformation_type: str
