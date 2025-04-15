@@ -23,23 +23,16 @@ class FunctionToolRegistry:
             cls._instance._dependencies = {}
         return cls._instance
         
-    def register_tool(self, function: Callable, category: str = "general", dependencies: List[str] = None):
+    def register_tool(self, function: Callable, category: str = "general", dependencies: list = None):
         """
         Register a function tool in the registry.
+        If a FunctionTool is provided, extract and register the underlying function.
         """
-        # Handle FunctionTool instances, regular functions, and bound methods.
-        is_function_tool = False
-    
         if isinstance(function, FunctionTool):
-            is_function_tool = True
-        elif inspect.ismethod(function):
-            func_obj = function.__func__
-            is_function_tool = hasattr(func_obj, "_is_function_tool") and func_obj._is_function_tool
-        else:
-            is_function_tool = hasattr(function, "_is_function_tool") and function._is_function_tool
-    
-        if not is_function_tool:
-            logging.warning(f"Attempted to register non-function tool: {getattr(function, '__name__', str(function))}")
+            logging.info(f"Unwrapping FunctionTool for registration: {getattr(function, 'name', function)}")
+            function = function.func  # or function.wrapped_func if that's the field
+        if not callable(function):
+            logging.warning(f"Attempted to register a non-callable: {function}")
             return
 
     
