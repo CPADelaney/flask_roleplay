@@ -10,7 +10,7 @@ async def create_lore_tables():
     logger = logging.getLogger(__name__)
     
     try:
-        async with await get_db_connection_context() as conn:
+        async with get_db_connection_context() as conn:
             # 1. World Lore - Core foundational elements of the world
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS WorldLore (
