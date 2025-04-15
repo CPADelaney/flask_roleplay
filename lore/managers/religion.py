@@ -9,6 +9,8 @@ from typing import Dict, List, Any, Optional
 from agents import Agent, function_tool, Runner, ModelSettings
 from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
+from agents import handoff
+from agents import InputGuardrail, GuardrailFunctionOutput
 
 # Governance
 from nyx.nyx_governance import AgentType, DirectivePriority
@@ -19,11 +21,17 @@ from embedding.vector_store import generate_embedding
 from lore.core.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
-from lore.core.cache import GLOBAL_LORE_CACHE  # If you have a global cache
+from lore.core.cache import GLOBAL_LORE_CACHE
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+class MatriarchalThemeGuardrail(BaseModel):
+    """Output schema for matriarchal theme validation."""
+    is_matriarchal: bool
+    reasoning: str
+    suggestions: List[str] = []
 
 class ReligionManager(BaseLoreManager):
     """
@@ -34,18 +42,29 @@ class ReligionManager(BaseLoreManager):
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+        self.initialized = False
+        
+        # Initialize agents with proper SDK pattern
+        self.theme_guardrail_agent = Agent(
+            name="MatriarchalThemeAgent",
+            instructions="You verify that all religious content maintains matriarchal themes. You identify elements that might contradict a female-dominant religious structure.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.2),
+            output_type=MatriarchalThemeGuardrail
+        )
 
     async def ensure_initialized(self):
         """Ensure system is initialized."""
         if not self.initialized:
             await super().ensure_initialized()
             await self.initialize_tables()
+            self.initialized = True
 
     async def initialize_tables(self):
         """Ensure all religion-related tables exist."""
         table_definitions = {
             "Deities": """
-                CREATE TABLE Deities (
+                CREATE TABLE IF NOT EXISTS Deities (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     gender TEXT NOT NULL, -- e.g. female, male, non-binary
@@ -64,9 +83,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_deities_embedding
                 ON Deities USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "Pantheons": """
-                CREATE TABLE Pantheons (
+                CREATE TABLE IF NOT EXISTS Pantheons (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL,
@@ -85,9 +103,9 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_pantheons_embedding
                 ON Pantheons USING ivfflat (embedding vector_cosine_ops);
             """,
-
+            # Additional tables as in original code...
             "ReligiousPractices": """
-                CREATE TABLE ReligiousPractices (
+                CREATE TABLE IF NOT EXISTS ReligiousPractices (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     practice_type TEXT NOT NULL,
@@ -104,9 +122,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_religiouspractices_embedding
                 ON ReligiousPractices USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "HolySites": """
-                CREATE TABLE HolySites (
+                CREATE TABLE IF NOT EXISTS HolySites (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     site_type TEXT NOT NULL,
@@ -126,9 +143,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_holysites_embedding
                 ON HolySites USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "ReligiousTexts": """
-                CREATE TABLE ReligiousTexts (
+                CREATE TABLE IF NOT EXISTS ReligiousTexts (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     text_type TEXT NOT NULL,
@@ -145,9 +161,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_religioustexts_embedding
                 ON ReligiousTexts USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "ReligiousOrders": """
-                CREATE TABLE ReligiousOrders (
+                CREATE TABLE IF NOT EXISTS ReligiousOrders (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     order_type TEXT NOT NULL,
@@ -167,9 +182,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_religiousorders_embedding
                 ON ReligiousOrders USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "ReligiousConflicts": """
-                CREATE TABLE ReligiousConflicts (
+                CREATE TABLE IF NOT EXISTS ReligiousConflicts (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     conflict_type TEXT NOT NULL,
@@ -186,9 +200,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_religiousconflicts_embedding
                 ON ReligiousConflicts USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "NationReligion": """
-                CREATE TABLE NationReligion (
+                CREATE TABLE IF NOT EXISTS NationReligion (
                     id SERIAL PRIMARY KEY,
                     nation_id INTEGER NOT NULL,
                     state_religion BOOLEAN DEFAULT FALSE,
@@ -208,9 +221,8 @@ class ReligionManager(BaseLoreManager):
                 CREATE INDEX IF NOT EXISTS idx_nationreligion_embedding
                 ON NationReligion USING ivfflat (embedding vector_cosine_ops);
             """,
-
             "RegionalReligiousPractice": """
-                CREATE TABLE RegionalReligiousPractice (
+                CREATE TABLE IF NOT EXISTS RegionalReligiousPractice (
                     id SERIAL PRIMARY KEY,
                     nation_id INTEGER NOT NULL,
                     practice_id INTEGER NOT NULL,
@@ -229,6 +241,17 @@ class ReligionManager(BaseLoreManager):
         }
 
         await self.initialize_tables_for_class(table_definitions)
+
+    # Define matriarchal guardrail
+    async def matriarchal_theme_guardrail(self, ctx: RunContextWrapper, agent, input_data: str) -> GuardrailFunctionOutput:
+        """Guardrail to ensure content maintains matriarchal themes."""
+        result = await Runner.run(self.theme_guardrail_agent, input_data, context=ctx.context)
+        validation_result = result.final_output
+        
+        return GuardrailFunctionOutput(
+            output_info=validation_result,
+            tripwire_triggered=not validation_result.is_matriarchal
+        )
 
     # ------------------------------------------------------------------------
     # Core Faith System Methods (Create/Update)
@@ -250,7 +273,7 @@ class ReligionManager(BaseLoreManager):
         rank: int = 5,
         worshippers: Optional[List[str]] = None
     ) -> int:
-        await self.initialize_tables()
+        await self.ensure_initialized()
     
         sacred_animals = sacred_animals or []
         sacred_colors = sacred_colors or []
@@ -300,10 +323,12 @@ class ReligionManager(BaseLoreManager):
         rank: int = 5,
         worshippers: Optional[List[str]] = None
     ) -> int:
+        """Add a deity to the world's religious system."""
         return await self._add_deity_impl(
             ctx, name, gender, domain, description, pantheon_id, iconography, holy_symbol,
             sacred_animals, sacred_colors, relationships, rank, worshippers
         )
+
 
 
     async def _add_pantheon_impl(
@@ -322,7 +347,7 @@ class ReligionManager(BaseLoreManager):
         primary_worshippers: Optional[List[str]] = None,
         taboos: Optional[List[str]] = None
     ) -> int:
-        await self.initialize_tables()
+        await self.ensure_initialized()
     
         major_holy_days = major_holy_days or []
         geographical_spread = geographical_spread or []
@@ -376,6 +401,7 @@ class ReligionManager(BaseLoreManager):
         primary_worshippers: Optional[List[str]] = None,
         taboos: Optional[List[str]] = None
     ) -> int:
+        """Add a pantheon to the world's religious system."""
         return await self._add_pantheon_impl(
             ctx, name, description, origin_story, matriarchal_elements,
             creation_myth, afterlife_beliefs, cosmic_structure, major_holy_days,
@@ -748,10 +774,9 @@ class ReligionManager(BaseLoreManager):
         action_description="Generating pantheon for the world",
         id_from_context=lambda ctx: "religion_manager"
     )
+    @function_tool
     async def generate_pantheon(self, ctx) -> Dict[str, Any]:
-        """
-        Generate a complete pantheon for the world with governance oversight.
-        """
+        """Generate a complete pantheon for the world with governance oversight."""
         run_ctx = RunContextWrapper(context=ctx.context)
 
         # Gather context from DB
@@ -781,6 +806,18 @@ class ReligionManager(BaseLoreManager):
                 nation_context = ""
                 for row in nations:
                     nation_context += f"{row['name']} (matriarchy level: {row['matriarchy_level']}), "
+
+        # Create pantheon generation agent
+        pantheon_agent = Agent(
+            name="PantheonGenerationAgent",
+            instructions="You create religious pantheons for matriarchal fantasy worlds. Focus on feminine divine power structures.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.8),
+            # Add input guardrail to ensure matriarchal themes
+            input_guardrails=[
+                InputGuardrail(guardrail_function=self.matriarchal_theme_guardrail)
+            ]
+        )
 
         prompt = f"""
         Generate a complete feminine-dominated pantheon for a matriarchal fantasy world.
@@ -834,12 +871,6 @@ class ReligionManager(BaseLoreManager):
           ]
         }}
         """
-
-        pantheon_agent = Agent(
-            name="PantheonGenerationAgent",
-            instructions="You create religious pantheons for matriarchal fantasy worlds.",
-            model="o3-mini"
-        )
 
         run_config = RunConfig(workflow_name="PantheonGeneration")
         result = await Runner.run(pantheon_agent, prompt, context=run_ctx.context, run_config=run_config)
@@ -2102,87 +2133,222 @@ class CompleteRitual(BaseModel):
     restrictions: List[str]
     theological_significance: str
 
-@with_governance(
-    agent_type=AgentType.NARRATIVE_CRAFTER,
-    action_type="generate_ritual",
-    action_description="Generating detailed religious ritual with structured outputs",
-    id_from_context=lambda ctx: "religion_manager"
-)
-async def generate_ritual(
-    self, 
-    ctx, 
-    pantheon_id: int, 
-    deity_id: Optional[int] = None,
-    purpose: str = "blessing",
-    formality_level: int = 5
-) -> Dict[str, Any]:
-    """Generate a detailed religious ritual with structured outputs."""
-    run_ctx = RunContextWrapper(context=ctx.context)
-    
-    # Get pantheon and deity data
-    async with self.get_connection_pool() as pool:
-        async with pool.acquire() as conn:
-            pantheon = await conn.fetchrow("""
-                SELECT * FROM Pantheons WHERE id = $1
-            """, pantheon_id)
-            
-            if not pantheon:
-                return {"error": "Pantheon not found"}
-            
-            deity = None
-            if deity_id:
-                deity = await conn.fetchrow("""
-                    SELECT * FROM Deities WHERE id = $1 AND pantheon_id = $2
-                """, deity_id, pantheon_id)
-            
-            # Get existing practices for context
-            practices = await conn.fetch("""
-                SELECT * FROM ReligiousPractices
-                WHERE pantheon_id = $1
-                LIMIT 5
-            """, pantheon_id)
-    
-    pantheon_data = dict(pantheon)
-    deity_data = dict(deity) if deity else None
-    practice_data = [dict(p) for p in practices]
-    
-    # Create ritual generation agent
-    ritual_agent = Agent(
-        name="RitualGenerationAgent",
-        instructions="You create detailed religious rituals for matriarchal fantasy religions. Focus on symbolism, required components, and theological significance.",
-        model="o3-mini",
-        model_settings=ModelSettings(temperature=0.9),
-        output_type=CompleteRitual
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_ritual",
+        action_description="Generating detailed religious ritual with structured outputs",
+        id_from_context=lambda ctx: "religion_manager"
     )
+    async def generate_ritual(
+        self, 
+        ctx, 
+        pantheon_id: int, 
+        deity_id: Optional[int] = None,
+        purpose: str = "blessing",
+        formality_level: int = 5
+    ) -> Dict[str, Any]:
+        """Generate a detailed religious ritual with structured outputs."""
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon and deity data
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheon = await conn.fetchrow("""
+                    SELECT * FROM Pantheons WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return {"error": "Pantheon not found"}
+                
+                deity = None
+                if deity_id:
+                    deity = await conn.fetchrow("""
+                        SELECT * FROM Deities WHERE id = $1 AND pantheon_id = $2
+                    """, deity_id, pantheon_id)
+                
+                # Get existing practices for context
+                practices = await conn.fetch("""
+                    SELECT * FROM ReligiousPractices
+                    WHERE pantheon_id = $1
+                    LIMIT 5
+                """, pantheon_id)
+        
+        pantheon_data = dict(pantheon)
+        deity_data = dict(deity) if deity else None
+        practice_data = [dict(p) for p in practices]
+        
+        # Create ritual generation agent
+        ritual_agent = Agent(
+            name="RitualGenerationAgent",
+            instructions="You create detailed religious rituals for matriarchal fantasy religions. Focus on symbolism, required components, and theological significance.",
+            model="o3-mini",
+            model_settings=ModelSettings(temperature=0.9),
+            output_type=CompleteRitual
+        )
+        
+        deity_str = ""
+        if deity_data:
+            deity_str = f"DEITY:\n{json.dumps(deity_data, indent=2)}"
+        
+        prompt = f"""
+            Generate a detailed {purpose} ritual for the religion of {pantheon_data['name']}.
+            
+            PANTHEON:
+            {json.dumps(pantheon_data, indent=2)}
+            
+            {deity_str}
+            
+            FORMALITY LEVEL: {formality_level}/10
+            
+            EXISTING PRACTICES:
+            {json.dumps(practice_data, indent=2)}
+            
+            Create a CompleteRitual object with detailed components, ensuring it reflects
+            matriarchal power structures and feminine divine authority.
+            """
+        
+        result = await Runner.run(ritual_agent, prompt, context=run_ctx.context)
+        ritual_data = result.final_output
+        
+        # Store the ritual in the database
+        ritual_id = await self._store_ritual(pantheon_id, deity_id, ritual_data)
+        
+        ritual_dict = ritual_data.dict()
+        ritual_dict["id"] = ritual_id
+        
+        return ritual_dict
+class TheologicalDispute:
+    """
+    Manages simulated theological disputes between religious factions.
+    """
     
-    deity_str = ""
-    if deity_data:
-        deity_str = f"DEITY:\n{json.dumps(deity_data, indent=2)}"
+    def __init__(self, debate_agents, arbiter_agent, pantheon_data, dispute_topic, max_rounds=3):
+        self.debate_agents = debate_agents
+        self.arbiter_agent = arbiter_agent
+        self.pantheon_data = pantheon_data
+        self.dispute_topic = dispute_topic
+        self.max_rounds = max_rounds
     
-    prompt = f"""
-        Generate a detailed {purpose} ritual for the religion of {pantheon_data['name']}.
+    async def run(self, context):
+        """Run the full theological dispute simulation."""
+        rounds = []
         
-        PANTHEON:
-        {json.dumps(pantheon_data, indent=2)}
+        # Setup the run configuration
+        run_config = RunConfig(
+            workflow_name="TheologicalDispute",
+            trace_metadata={"pantheon": self.pantheon_data["name"], "topic": self.dispute_topic}
+        )
         
-        {deity_str}
+        # First round - initial positions
+        first_round = []
+        for agent_data in self.debate_agents:
+            prompt = f"""
+            As {agent_data['position']['name']}, state your initial position on:
+            {self.dispute_topic}
+            
+            Clearly explain:
+            1. Your theological interpretation
+            2. Your scriptural basis
+            3. Why your position is correct
+            
+            Keep your response concise but thorough.
+            """
+            
+            result = await Runner.run(
+                agent_data["agent"], 
+                prompt, 
+                context=context,
+                run_config=run_config
+            )
+            
+            first_round.append({
+                "position": agent_data["position"]["name"],
+                "argument": result.final_output
+            })
         
-        FORMALITY LEVEL: {formality_level}/10
+        rounds.append({"round": 1, "arguments": first_round})
         
-        EXISTING PRACTICES:
-        {json.dumps(practice_data, indent=2)}
+        # Subsequent rounds - responses to other positions
+        for round_num in range(2, self.max_rounds + 1):
+            round_arguments = []
+            
+            for i, agent_data in enumerate(self.debate_agents):
+                # Get arguments from previous round
+                prev_arguments = [
+                    arg for arg in rounds[-1]["arguments"] 
+                    if arg["position"] != agent_data["position"]["name"]
+                ]
+                
+                counter_positions = "\n\n".join([
+                    f"{arg['position']} argued: {arg['argument']}" 
+                    for arg in prev_arguments
+                ])
+                
+                prompt = f"""
+                As {agent_data['position']['name']}, respond to these theological arguments:
+                
+                {counter_positions}
+                
+                Regarding the topic: {self.dispute_topic}
+                
+                Defend your position while addressing their key points.
+                Point out flaws in their reasoning while reinforcing your interpretation.
+                """
+                
+                result = await Runner.run(
+                    agent_data["agent"], 
+                    prompt, 
+                    context=context,
+                    run_config=run_config
+                )
+                
+                round_arguments.append({
+                    "position": agent_data["position"]["name"],
+                    "argument": result.final_output
+                })
+            
+            rounds.append({"round": round_num, "arguments": round_arguments})
         
-        Create a CompleteRitual object with detailed components, ensuring it reflects
-        matriarchal power structures and feminine divine authority.
+        # Arbiter summary and implications
+        all_arguments = ""
+        for r in rounds:
+            all_arguments += f"ROUND {r['round']}:\n"
+            for arg in r["arguments"]:
+                all_arguments += f"{arg['position']}: {arg['argument']}\n\n"
+        
+        arbiter_prompt = f"""
+        As the theological arbiter for {self.pantheon_data['name']}, review this theological dispute:
+        
+        TOPIC: {self.dispute_topic}
+        
+        DEBATE SUMMARY:
+        {all_arguments}
+        
+        Provide:
+        1. An impartial analysis of each position's theological merit
+        2. Your conclusion on the most sound interpretation
+        3. The religious implications for the faith's future
+        
+        Return as JSON with "conclusion" and "implications" fields.
         """
-    
-    result = await Runner.run(ritual_agent, prompt, context=run_ctx.context)
-    ritual_data = result.final_output
-    
-    # Store the ritual in the database
-    ritual_id = await self._store_ritual(pantheon_id, deity_id, ritual_data)
-    
-    ritual_dict = ritual_data.dict()
-    ritual_dict["id"] = ritual_id
-    
-    return ritual_dict
+        
+        arbiter_result = await Runner.run(
+            self.arbiter_agent, 
+            arbiter_prompt, 
+            context=context,
+            run_config=run_config
+        )
+        
+        try:
+            arbiter_judgment = json.loads(arbiter_result.final_output)
+        except json.JSONDecodeError:
+            arbiter_judgment = {
+                "conclusion": "The arbiter could not reach a definitive conclusion.",
+                "implications": "The theological dispute remains unresolved."
+            }
+        
+        return {
+            "rounds": rounds,
+            "conclusion": arbiter_judgment.get("conclusion", ""),
+            "implications": arbiter_judgment.get("implications", "")
+        }
