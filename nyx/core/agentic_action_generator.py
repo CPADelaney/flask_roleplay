@@ -2205,6 +2205,59 @@ class EnhancedAgenticActionGenerator:
         
         return action_context
 
+    async def preprocess_message(expression_system, message):
+        """
+        Apply expression patterns to an outgoing message before sending.
+        
+        Args:
+            expression_system: ExpressionSystem instance
+            message: Message to send
+            
+        Returns:
+            Modified message with expression patterns applied
+        """
+        # Update expression pattern
+        await expression_system.update_expression_pattern()
+        
+        # Apply text modifications
+        modified_message = await expression_system.apply_text_expression(message)
+        
+        # Get behavioral expressions that could be included
+        behaviors = expression_system.get_behavioral_expressions()
+        
+        # For especially strong behaviors, add them to the message
+        behavior_descriptions = []
+        
+        # Add gesture descriptions for strong gestures
+        if "gestures" in behaviors:
+            for gesture, strength in behaviors["gestures"].items():
+                if strength > 0.7 and random.random() < 0.3:
+                    # Format gestures as actions in brackets
+                    gesture_desc = f"*{gesture.replace('_', ' ')}*"
+                    behavior_descriptions.append(gesture_desc)
+        
+        # Add posture descriptions for strong postures
+        if "posture" in behaviors:
+            for posture, strength in behaviors["posture"].items():
+                if strength > 0.8 and random.random() < 0.2:
+                    posture_desc = f"*{posture.replace('_', ' ')} posture*"
+                    behavior_descriptions.append(posture_desc)
+        
+        # Combine message with behaviors
+        if behavior_descriptions and random.random() < 0.4:  # Only sometimes add behaviors
+            # Choose one behavior to add
+            behavior = random.choice(behavior_descriptions)
+            
+            # Add behavior before or after message
+            if random.random() < 0.5:
+                final_message = f"{behavior} {modified_message}"
+            else:
+                final_message = f"{modified_message} {behavior}"
+        else:
+            final_message = modified_message
+        
+        return final_message
+
 
     async def periodic_hobby_meta_loop(self, interval=3600):
         """
