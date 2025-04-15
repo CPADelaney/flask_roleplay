@@ -234,6 +234,49 @@ class ReligionManager(BaseLoreManager):
     # Core Faith System Methods (Create/Update)
     # ------------------------------------------------------------------------
 
+    async def _add_deity_impl(
+        self,
+        ctx,
+        name: str,
+        gender: str,
+        domain: List[str],
+        description: str,
+        pantheon_id: Optional[int] = None,
+        iconography: Optional[str] = None,
+        holy_symbol: Optional[str] = None,
+        sacred_animals: Optional[List[str]] = None,
+        sacred_colors: Optional[List[str]] = None,
+        relationships: Optional[Dict[str, str]] = None,
+        rank: int = 5,
+        worshippers: Optional[List[str]] = None
+    ) -> int:
+        await self.initialize_tables()
+    
+        sacred_animals = sacred_animals or []
+        sacred_colors = sacred_colors or []
+        relationships = relationships or {}
+        worshippers = worshippers or []
+    
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                deity_id = await conn.fetchval("""
+                    INSERT INTO Deities (
+                        name, gender, domain, description, pantheon_id,
+                        iconography, holy_symbol, sacred_animals, sacred_colors,
+                        relationships, rank, worshippers
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    RETURNING id
+                """,
+                name, gender, domain, description, pantheon_id,
+                iconography, holy_symbol, sacred_animals, sacred_colors,
+                json.dumps(relationships), rank, worshippers)
+    
+                embed_text = f"{name} {gender} {' '.join(domain)} {description}"
+                await self.generate_and_store_embedding(embed_text, conn, "Deities", "id", deity_id)
+                GLOBAL_LORE_CACHE.invalidate_pattern("deity")
+                return deity_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_deity",
@@ -257,38 +300,59 @@ class ReligionManager(BaseLoreManager):
         rank: int = 5,
         worshippers: Optional[List[str]] = None
     ) -> int:
-        """
-        Add a deity to the database (function tool).
-        """
+        return await self._add_deity_impl(
+            ctx, name, gender, domain, description, pantheon_id, iconography, holy_symbol,
+            sacred_animals, sacred_colors, relationships, rank, worshippers
+        )
+
+
+    async def _add_pantheon_impl(
+        self,
+        ctx,
+        name: str,
+        description: str,
+        origin_story: str,
+        matriarchal_elements: str,
+        creation_myth: Optional[str] = None,
+        afterlife_beliefs: Optional[str] = None,
+        cosmic_structure: Optional[str] = None,
+        major_holy_days: Optional[List[str]] = None,
+        geographical_spread: Optional[List[str]] = None,
+        dominant_nations: Optional[List[str]] = None,
+        primary_worshippers: Optional[List[str]] = None,
+        taboos: Optional[List[str]] = None
+    ) -> int:
         await self.initialize_tables()
-
-        sacred_animals = sacred_animals or []
-        sacred_colors = sacred_colors or []
-        relationships = relationships or {}
-        worshippers = worshippers or []
-
+    
+        major_holy_days = major_holy_days or []
+        geographical_spread = geographical_spread or []
+        dominant_nations = dominant_nations or []
+        primary_worshippers = primary_worshippers or []
+        taboos = taboos or []
+    
+        embed_text = f"{name} {description} {origin_story} {matriarchal_elements}"
+        embedding = await generate_embedding(embed_text)
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                deity_id = await conn.fetchval("""
-                    INSERT INTO Deities (
-                        name, gender, domain, description, pantheon_id,
-                        iconography, holy_symbol, sacred_animals, sacred_colors,
-                        relationships, rank, worshippers
+                pantheon_id = await conn.fetchval("""
+                    INSERT INTO Pantheons (
+                        name, description, origin_story, matriarchal_elements,
+                        creation_myth, afterlife_beliefs, cosmic_structure,
+                        major_holy_days, geographical_spread, dominant_nations,
+                        primary_worshippers, taboos, embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     RETURNING id
                 """,
-                name, gender, domain, description, pantheon_id,
-                iconography, holy_symbol, sacred_animals, sacred_colors,
-                json.dumps(relationships), rank, worshippers)
-
-                # embedding
-                embed_text = f"{name} {gender} {' '.join(domain)} {description}"
-                await self.generate_and_store_embedding(embed_text, conn, "Deities", "id", deity_id)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("deity")
-                return deity_id
-
+                name, description, origin_story, matriarchal_elements,
+                creation_myth, afterlife_beliefs, cosmic_structure,
+                major_holy_days, geographical_spread, dominant_nations,
+                primary_worshippers, taboos, embedding)
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("pantheon")
+                return pantheon_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_pantheon",
@@ -312,40 +376,54 @@ class ReligionManager(BaseLoreManager):
         primary_worshippers: Optional[List[str]] = None,
         taboos: Optional[List[str]] = None
     ) -> int:
-        """
-        Add a pantheon to the database (function tool).
-        """
+        return await self._add_pantheon_impl(
+            ctx, name, description, origin_story, matriarchal_elements,
+            creation_myth, afterlife_beliefs, cosmic_structure, major_holy_days,
+            geographical_spread, dominant_nations, primary_worshippers, taboos,
+        )
+
+
+    async def _add_religious_practice_impl(
+        self,
+        ctx,
+        name: str,
+        practice_type: str,
+        description: str,
+        purpose: str,
+        frequency: Optional[str] = None,
+        required_elements: Optional[List[str]] = None,
+        performed_by: Optional[List[str]] = None,
+        restricted_to: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None
+    ) -> int:
         await self.initialize_tables()
-
-        major_holy_days = major_holy_days or []
-        geographical_spread = geographical_spread or []
-        dominant_nations = dominant_nations or []
-        primary_worshippers = primary_worshippers or []
-        taboos = taboos or []
-
-        embed_text = f"{name} {description} {origin_story} {matriarchal_elements}"
+    
+        required_elements = required_elements or []
+        performed_by = performed_by or []
+        restricted_to = restricted_to or []
+    
+        embed_text = f"{name} {practice_type} {description} {purpose}"
         embedding = await generate_embedding(embed_text)
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                pantheon_id = await conn.fetchval("""
-                    INSERT INTO Pantheons (
-                        name, description, origin_story, matriarchal_elements,
-                        creation_myth, afterlife_beliefs, cosmic_structure,
-                        major_holy_days, geographical_spread, dominant_nations,
-                        primary_worshippers, taboos, embedding
+                practice_id = await conn.fetchval("""
+                    INSERT INTO ReligiousPractices (
+                        name, practice_type, description, purpose,
+                        frequency, required_elements, performed_by,
+                        restricted_to, deity_id, pantheon_id, embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                 """,
-                name, description, origin_story, matriarchal_elements,
-                creation_myth, afterlife_beliefs, cosmic_structure,
-                major_holy_days, geographical_spread, dominant_nations,
-                primary_worshippers, taboos, embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("pantheon")
-                return pantheon_id
-
+                name, practice_type, description, purpose,
+                frequency, required_elements, performed_by,
+                restricted_to, deity_id, pantheon_id, embedding)
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("practice")
+                return practice_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_practice",
@@ -367,36 +445,60 @@ class ReligionManager(BaseLoreManager):
         deity_id: Optional[int] = None,
         pantheon_id: Optional[int] = None
     ) -> int:
-        """
-        Add a religious practice (function tool).
-        """
+        return await self._add_religious_practice_impl(
+            ctx, name, practice_type, description, purpose, frequency, required_elements,
+            performed_by, restricted_to, deity_id, pantheon_id
+        )
+
+
+    async def _add_holy_site_impl(
+        self,
+        ctx,
+        name: str,
+        site_type: str,
+        description: str,
+        clergy_type: str,
+        location_id: Optional[int] = None,
+        location_description: Optional[str] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        clergy_hierarchy: Optional[List[str]] = None,
+        pilgrimage_info: Optional[str] = None,
+        miracles_reported: Optional[List[str]] = None,
+        restrictions: Optional[List[str]] = None,
+        architectural_features: Optional[str] = None
+    ) -> int:
         await self.initialize_tables()
-
-        required_elements = required_elements or []
-        performed_by = performed_by or []
-        restricted_to = restricted_to or []
-
-        embed_text = f"{name} {practice_type} {description} {purpose}"
+    
+        clergy_hierarchy = clergy_hierarchy or []
+        miracles_reported = miracles_reported or []
+        restrictions = restrictions or []
+    
+        embed_text = f"{name} {site_type} {description} {clergy_type}"
         embedding = await generate_embedding(embed_text)
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                practice_id = await conn.fetchval("""
-                    INSERT INTO ReligiousPractices (
-                        name, practice_type, description, purpose,
-                        frequency, required_elements, performed_by,
-                        restricted_to, deity_id, pantheon_id, embedding
+                site_id = await conn.fetchval("""
+                    INSERT INTO HolySites (
+                        name, site_type, description, clergy_type,
+                        location_id, location_description, deity_id,
+                        pantheon_id, clergy_hierarchy, pilgrimage_info,
+                        miracles_reported, restrictions, architectural_features,
+                        embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     RETURNING id
                 """,
-                name, practice_type, description, purpose,
-                frequency, required_elements, performed_by,
-                restricted_to, deity_id, pantheon_id, embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("practice")
-                return practice_id
-
+                name, site_type, description, clergy_type,
+                location_id, location_description, deity_id,
+                pantheon_id, clergy_hierarchy, pilgrimage_info,
+                miracles_reported, restrictions, architectural_features,
+                embedding)
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("site")
+                return site_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_holy_site",
@@ -421,40 +523,55 @@ class ReligionManager(BaseLoreManager):
         restrictions: Optional[List[str]] = None,
         architectural_features: Optional[str] = None
     ) -> int:
-        """
-        Add a holy site (function tool).
-        """
+        return await self._add_holy_site_impl(
+            ctx, name, site_type, description, clergy_type,
+            location_id, location_description, deity_id, pantheon_id,
+            clergy_hierarchy, pilgrimage_info, miracles_reported, restrictions, architectural_features
+        )
+
+
+    async def _add_religious_text_impl(
+        self,
+        ctx,
+        name: str,
+        text_type: str,
+        description: str,
+        key_teachings: List[str],
+        authorship: Optional[str] = None,
+        restricted_to: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        notable_passages: Optional[List[str]] = None,
+        age_description: Optional[str] = None
+    ) -> int:
         await self.initialize_tables()
-
-        clergy_hierarchy = clergy_hierarchy or []
-        miracles_reported = miracles_reported or []
-        restrictions = restrictions or []
-
-        embed_text = f"{name} {site_type} {description} {clergy_type}"
+    
+        restricted_to = restricted_to or []
+        notable_passages = notable_passages or []
+    
+        embed_text = f"{name} {text_type} {description} {' '.join(key_teachings)}"
         embedding = await generate_embedding(embed_text)
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                site_id = await conn.fetchval("""
-                    INSERT INTO HolySites (
-                        name, site_type, description, clergy_type,
-                        location_id, location_description, deity_id,
-                        pantheon_id, clergy_hierarchy, pilgrimage_info,
-                        miracles_reported, restrictions, architectural_features,
+                text_id = await conn.fetchval("""
+                    INSERT INTO ReligiousTexts (
+                        name, text_type, description, key_teachings,
+                        authorship, restricted_to, deity_id,
+                        pantheon_id, notable_passages, age_description,
                         embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                 """,
-                name, site_type, description, clergy_type,
-                location_id, location_description, deity_id,
-                pantheon_id, clergy_hierarchy, pilgrimage_info,
-                miracles_reported, restrictions, architectural_features,
+                name, text_type, description, key_teachings,
+                authorship, restricted_to, deity_id,
+                pantheon_id, notable_passages, age_description,
                 embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("site")
-                return site_id
-
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("text")
+                return text_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_text",
@@ -476,37 +593,59 @@ class ReligionManager(BaseLoreManager):
         notable_passages: Optional[List[str]] = None,
         age_description: Optional[str] = None
     ) -> int:
-        """
-        Add a religious text (function tool).
-        """
+        return await self._add_religious_text_impl(
+            ctx, name, text_type, description, key_teachings, authorship,
+            restricted_to, deity_id, pantheon_id, notable_passages, age_description
+        )
+
+    async def _add_religious_order_impl(
+        self,
+        ctx,
+        name: str,
+        order_type: str,
+        description: str,
+        gender_composition: str,
+        founding_story: Optional[str] = None,
+        headquarters: Optional[str] = None,
+        hierarchy_structure: Optional[List[str]] = None,
+        vows: Optional[List[str]] = None,
+        practices: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        special_abilities: Optional[List[str]] = None,
+        notable_members: Optional[List[str]] = None
+    ) -> int:
         await self.initialize_tables()
-
-        restricted_to = restricted_to or []
-        notable_passages = notable_passages or []
-
-        embed_text = f"{name} {text_type} {description} {' '.join(key_teachings)}"
+    
+        hierarchy_structure = hierarchy_structure or []
+        vows = vows or []
+        practices = practices or []
+        special_abilities = special_abilities or []
+        notable_members = notable_members or []
+    
+        embed_text = f"{name} {order_type} {description} {gender_composition}"
         embedding = await generate_embedding(embed_text)
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                text_id = await conn.fetchval("""
-                    INSERT INTO ReligiousTexts (
-                        name, text_type, description, key_teachings,
-                        authorship, restricted_to, deity_id,
-                        pantheon_id, notable_passages, age_description,
-                        embedding
+                order_id = await conn.fetchval("""
+                    INSERT INTO ReligiousOrders (
+                        name, order_type, description, gender_composition,
+                        founding_story, headquarters, hierarchy_structure,
+                        vows, practices, deity_id, pantheon_id,
+                        special_abilities, notable_members, embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     RETURNING id
                 """,
-                name, text_type, description, key_teachings,
-                authorship, restricted_to, deity_id,
-                pantheon_id, notable_passages, age_description,
-                embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("text")
-                return text_id
-
+                name, order_type, description, gender_composition,
+                founding_story, headquarters, hierarchy_structure,
+                vows, practices, deity_id, pantheon_id,
+                special_abilities, notable_members, embedding)
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("order")
+                return order_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_order",
@@ -531,40 +670,49 @@ class ReligionManager(BaseLoreManager):
         special_abilities: Optional[List[str]] = None,
         notable_members: Optional[List[str]] = None
     ) -> int:
-        """
-        Add a religious order (function tool).
-        """
+        return await self._add_religious_order_impl(
+            ctx, name, order_type, description, gender_composition, founding_story, headquarters,
+            hierarchy_structure, vows, practices, deity_id, pantheon_id, special_abilities,
+            notable_members
+        )
+
+    async def _add_religious_conflict_impl(
+        self,
+        ctx,
+        name: str,
+        conflict_type: str,
+        description: str,
+        parties_involved: List[str],
+        core_disagreement: str,
+        beginning_date: Optional[str] = None,
+        resolution_date: Optional[str] = None,
+        status: str = "ongoing",
+        casualties: Optional[str] = None,
+        historical_impact: Optional[str] = None
+    ) -> int:
         await self.initialize_tables()
-
-        hierarchy_structure = hierarchy_structure or []
-        vows = vows or []
-        practices = practices or []
-        special_abilities = special_abilities or []
-        notable_members = notable_members or []
-
-        embed_text = f"{name} {order_type} {description} {gender_composition}"
+    
+        embed_text = f"{name} {conflict_type} {description} {core_disagreement}"
         embedding = await generate_embedding(embed_text)
-
+    
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                order_id = await conn.fetchval("""
-                    INSERT INTO ReligiousOrders (
-                        name, order_type, description, gender_composition,
-                        founding_story, headquarters, hierarchy_structure,
-                        vows, practices, deity_id, pantheon_id,
-                        special_abilities, notable_members, embedding
+                conflict_id = await conn.fetchval("""
+                    INSERT INTO ReligiousConflicts (
+                        name, conflict_type, description, parties_involved,
+                        core_disagreement, beginning_date, resolution_date,
+                        status, casualties, historical_impact, embedding
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                 """,
-                name, order_type, description, gender_composition,
-                founding_story, headquarters, hierarchy_structure,
-                vows, practices, deity_id, pantheon_id,
-                special_abilities, notable_members, embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("order")
-                return order_id
-
+                name, conflict_type, description, parties_involved,
+                core_disagreement, beginning_date, resolution_date,
+                status, casualties, historical_impact, embedding)
+    
+                GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
+                return conflict_id
+    
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_religious_conflict",
@@ -586,31 +734,10 @@ class ReligionManager(BaseLoreManager):
         casualties: Optional[str] = None,
         historical_impact: Optional[str] = None
     ) -> int:
-        """
-        Add a religious conflict (function tool).
-        """
-        await self.initialize_tables()
-
-        embed_text = f"{name} {conflict_type} {description} {core_disagreement}"
-        embedding = await generate_embedding(embed_text)
-
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                conflict_id = await conn.fetchval("""
-                    INSERT INTO ReligiousConflicts (
-                        name, conflict_type, description, parties_involved,
-                        core_disagreement, beginning_date, resolution_date,
-                        status, casualties, historical_impact, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING id
-                """,
-                name, conflict_type, description, parties_involved,
-                core_disagreement, beginning_date, resolution_date,
-                status, casualties, historical_impact, embedding)
-
-                GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
-                return conflict_id
+        return await self._add_religious_conflict_impl(
+            ctx, name, conflict_type, description, parties_involved, core_disagreement,
+            beginning_date, resolution_date, status, casualties, historical_impact
+        )
 
     # ------------------------------------------------------------------------
     # LLM-Based Generation
