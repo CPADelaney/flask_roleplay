@@ -453,6 +453,31 @@ async def create_all_tables():
                 );
                 ''',
                 '''
+                CREATE TABLE IF NOT EXISTS nations (
+                  id SERIAL PRIMARY KEY,
+                  name TEXT NOT NULL UNIQUE,
+                  region_type TEXT,
+                  climate TEXT,
+                  resources JSONB,
+                  strategic_value INT,
+                  matriarchal_influence FLOAT DEFAULT 0.0
+                );
+                ''',
+                '''
+                CREATE INDEX IF NOT EXISTS idx_nations_name
+                ON nations (lower(name));
+                );
+                ''',
+                '''
+                CREATE TABLE IF NOT EXISTS StateUpdates (
+                  user_id INTEGER NOT NULL,
+                  conversation_id INTEGER NOT NULL,
+                  update_payload JSONB,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  PRIMARY KEY (user_id, conversation_id)
+                );
+                ''',
+                '''
                 CREATE TABLE IF NOT EXISTS FactionIdeologicalDifferences (
                     id SERIAL PRIMARY KEY,
                     struggle_id INTEGER REFERENCES InternalFactionConflicts(struggle_id),
