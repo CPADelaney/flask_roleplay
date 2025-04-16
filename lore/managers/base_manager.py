@@ -593,9 +593,10 @@ class BaseLoreManager:
         if isinstance(ctx, RunContextWrapper):
             return ctx
         return RunContextWrapper(context=ctx)
-    
+        
+    @staticmethod
     @function_tool
-    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get cache statistics.
         """
