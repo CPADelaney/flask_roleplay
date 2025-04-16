@@ -607,10 +607,11 @@ class BaseLoreManager:
         }
 
     # THIS is the ONLY agent-tool-exposed version!
-    @staticmethod
     @function_tool
-    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
-        return self._get_cache_stats()
+    async def get_cache_stats(ctx: RunContextWrapper) -> dict:
+        # retrieve manager instance from context!
+        manager = ctx.context["manager"]  # Or whatever key you use
+        return manager._get_cache_stats()
     
     async def _maintenance_loop(self):
         while True:
@@ -627,7 +628,7 @@ class BaseLoreManager:
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         })
-        stats = await self.get_cache_stats(run_ctx)
+        stats = self._get_cache_stats()
         with trace(
             "MaintenanceCheck",
             metadata={"component": "BaseLoreManager"}
