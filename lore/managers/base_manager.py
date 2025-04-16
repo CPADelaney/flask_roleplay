@@ -593,24 +593,23 @@ class BaseLoreManager:
         if isinstance(ctx, RunContextWrapper):
             return ctx
         return RunContextWrapper(context=ctx)
-        
-    @staticmethod
-    @function_tool
-    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Get cache statistics.
-        """
-        total_operations = len(self.cache)
-        hit_rate = 0.0  # Would be calculated if you track hits/misses
+
+    def _get_cache_stats(self) -> Dict[str, Any]:
+        # This is your working implementation
         return {
             "size": len(self.cache),
             "max_size": self.max_cache_size,
             "utilization": len(self.cache) / self.max_cache_size if self.max_cache_size > 0 else 0,
-            "hit_rate": hit_rate,
+            # You can add proper hit/miss rate if you track it in your cache
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
             "timestamp": datetime.now().isoformat()
         }
+
+    # THIS is the ONLY agent-tool-exposed version!
+    @function_tool
+    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        return self._get_cache_stats()
     
     async def _maintenance_loop(self):
         while True:
@@ -1303,26 +1302,6 @@ class BaseManager:
         except Exception as e:
             logger.error(f"Error invalidating cached data: {e}")
 
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_cache_stats",
-        action_description="Getting cache statistics",
-        id_from_context=lambda ctx: f"get_cache_stats_{int(datetime.now().timestamp())}"
-    )
-    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Get cache statistics with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            
-        Returns:
-            Cache statistics
-        """
-        return self.cache_manager.get_cache_stats()
-
 # ---------------------------------------------------------------------------
 # LoreCacheManager
 # ---------------------------------------------------------------------------
@@ -1483,10 +1462,6 @@ class LoreCacheManager:
         # In a real implementation, you might store this in a registry
         return {"user_data", "conversation_data", "world_data", "entity_data"}
     
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get statistics about cache usage."""
-        # Convert the CacheAnalytics data to a dict
-        stats = vars(self.cache.analytics)
         
         # Add manager-specific stats
         stats.update({
