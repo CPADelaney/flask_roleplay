@@ -277,7 +277,7 @@ class BaseLoreManager:
             await self.initialize_governance()
             
             # Start maintenance loop
-            self.maintenance_task = asyncio.create_task(self._())
+            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
             
             self.initialized = True
             logger.info(f"Initialized BaseLoreManager for user {self.user_id}")
@@ -593,23 +593,14 @@ class BaseLoreManager:
         if isinstance(ctx, RunContextWrapper):
             return ctx
         return RunContextWrapper(context=ctx)
-
-    @staticmethod
+    
     @function_tool
-    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get cache statistics.
-        
-        Args:
-            ctx: Run context wrapper
-            
-        Returns:
-            Cache statistics
         """
-        # Calculate hit/miss rate
         total_operations = len(self.cache)
-        hit_rate = 0.0  # Would be calculated based on actual hits/misses tracking
-        
+        hit_rate = 0.0  # Would be calculated if you track hits/misses
         return {
             "size": len(self.cache),
             "max_size": self.max_cache_size,
@@ -636,7 +627,6 @@ class BaseLoreManager:
             "conversation_id": self.conversation_id
         })
         stats = await self.get_cache_stats(run_ctx)
-        
         with trace(
             "MaintenanceCheck",
             metadata={"component": "BaseLoreManager"}
@@ -649,14 +639,12 @@ class BaseLoreManager:
                 "or { \"action\": \"none\" }"
             )
             run_config = RunConfig(workflow_name="MaintenanceAgentRun")
-            
             result = await Runner.run(
                 starting_agent=maintenance_agent,
                 input=prompt,
                 context=run_ctx.context,
                 run_config=run_config
             )
-            
             try:
                 if isinstance(result.final_output, dict):
                     decision = result.final_output
@@ -664,7 +652,6 @@ class BaseLoreManager:
                     decision = json.loads(result.final_output)
             except json.JSONDecodeError:
                 decision = {"action": "none"}
-            
             if decision.get("action") == "log_warning":
                 msg = decision.get("message", "Maintenance warning triggered by agent.")
                 logger.warning(msg)
@@ -674,12 +661,11 @@ class BaseLoreManager:
             # No else/else-pass needed
     
     @function_tool
-    async def maintenance_loop_tool(self):
-        """
-        Agent-exposed maintenance pass (runs ONCE).
-        """
-        result = await self._maintenance_once()
-        return {"status": "completed", "result": result}
+    async def maintenance_tool(self):
+        """Agent-accessible: run a single maintenance pass on demand."""
+        await self._maintenance_once()
+        return {"status": "completed"}
+
                 
     # Enhanced lore generation methods
     @staticmethod
@@ -1335,74 +1321,6 @@ class BaseManager:
             Cache statistics
         """
         return self.cache_manager.get_cache_stats()
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="maintenance_loop",
-        action_description="Running maintenance loop",
-        id_from_context=lambda ctx: f"maintenance_loop_{int(datetime.now().timestamp())}"
-    )
-    async def _maintenance_loop(ctx: RunContextWrapper):
-        """
-        Agent-driven background task for maintenance with governance oversight. 
-        We'll call the 'MaintenanceAgent' to interpret stats and advise next steps.
-        
-        Args:
-            ctx: Run context wrapper
-        """
-        while True:
-            try:
-                stats = self.cache_manager.get_cache_stats()
-                
-                # Evaluate with MaintenanceAgent
-                with trace(
-                    "MaintenanceCheck",
-                    metadata={"component": "BaseManager"}
-                ):
-                    run_ctx = RunContextWrapper(context={
-                        "user_id": self.user_id,
-                        "conversation_id": self.conversation_id
-                    })
-                    prompt = (
-                        "We have these cache stats:\n"
-                        f"{json.dumps(stats, indent=2)}\n\n"
-                        "Decide if any action is needed. Return JSON, e.g.:\n"
-                        "{ \"action\": \"log_warning\", \"message\": \"High miss rate\" }\n"
-                        "or { \"action\": \"none\" }"
-                    )
-                    run_config = RunConfig(workflow_name="MaintenanceAgentRun")
-                    
-                    result = await Runner.run(
-                        starting_agent=maintenance_agent,
-                        input=prompt,
-                        context=run_ctx.context,
-                        run_config=run_config
-                    )
-                    
-                    try:
-                        decision = json.loads(result.final_output)
-                    except json.JSONDecodeError:
-                        decision = {"action": "none"}
-                    
-                    if decision.get("action") == "log_warning":
-                        msg = decision.get("message", "Maintenance warning triggered by agent.")
-                        logger.warning(msg)
-                    elif decision.get("action") == "clear_cache":
-                        # For example, if the agent says to forcibly clear everything
-                        logger.warning("Agent recommended clearing entire cache. Doing so now.")
-                        await self.cache_manager.clear_all()
-                    else:
-                        # No action
-                        pass
-
-                await asyncio.sleep(300)  # Sleep 5 min
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in maintenance loop: {e}")
-                await asyncio.sleep(300)  # Sleep 5 min if error, then retry
 
 # ---------------------------------------------------------------------------
 # LoreCacheManager
