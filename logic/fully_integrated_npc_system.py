@@ -111,7 +111,7 @@ class IntegratedNPCSystem:
     memory systems, and stat progression using an agent-based architecture.
     """
     
-    def __init__(self, user_id: int, conversation_id: int):
+    def __init__(self, user_id: int, conversation_id: int, connection_pool):
         """
         Initialize the NPC system.
         
