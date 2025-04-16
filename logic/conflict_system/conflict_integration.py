@@ -47,8 +47,8 @@ class ConflictSystemIntegration:
 
         # Directive handlers (can be overridden or used by enhanced handlers)
         self.directive_handlers = {
-            DirectiveType.ACTION_REQUEST: self._handle_action_directive,
-            DirectiveType.SCENE_CHANGE: self._handle_scene_directive,
+            DirectiveType.ACTION: self._handle_action_directive,
+            DirectiveType.SCENE: self._handle_scene_directive,
             DirectiveType.PROHIBITION: self._handle_prohibition_directive,
             DirectiveType.INFORMATION: self._handle_information_directive
         }
