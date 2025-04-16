@@ -214,8 +214,14 @@ class MemoryAgentWrapper:
             return await self.instructions(run_context, self.agent)  # type: ignore[misc]
         return "You are a memory management assistant that helps manage and retrieve memories."
 
-    def get_tools(self):
-        return self.agent.get_tools() if hasattr(self.agent, "get_tools") else self.tools
+  def get_tools(self):
+      tools = super().get_tools()
+      for t in tools:
+          if t["name"] == "remember":
+              schema = t["parameters"]
+              # Force a type so the API is happy
+              schema["properties"]["ctx"] = {"type": "object"}
+      return tools
 
     def run(self, *args, **kwargs):
         if hasattr(self.agent, "run"):
