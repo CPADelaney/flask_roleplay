@@ -22,7 +22,16 @@ class MemoryAgentWrapper:
         self.instructions = agent.instructions if hasattr(agent, 'instructions') else ""
         self.tools = agent.tools if hasattr(agent, 'tools') else []
         self.input_guardrails = []
-        self.hooks = None
+        self._hooks = None
+    
+    # Fix: Add proper property getters
+    @property
+    def hooks(self):
+        return getattr(self.agent, "hooks", None)
+
+    @property
+    def model(self):
+        return getattr(self.agent, "model", None)
         
     
     async def recall(
@@ -125,6 +134,7 @@ class MemoryAgentWrapper:
         except Exception as e:
             logger.error(f"Error in remember: {str(e)}")
             return {"error": str(e), "memory_id": None}
+            
     async def create_belief(
             self,
             context,
@@ -169,14 +179,17 @@ class MemoryAgentWrapper:
                 logger.error(f"Error in create_belief: {str(e)}")
                 return {"error": str(e), "belief_id": None}
 
-    def get_system_prompt(self, *args, **kwargs):
+    # Fix: Update to pass run_context parameter
+    async def get_system_prompt(self, run_context: RunContextWrapper):
         """
         Return the system prompt for the memory agent.
         This method is needed by the recall method or its dependencies.
         """
         if hasattr(self.agent, 'get_system_prompt'):
-            return self.agent.get_system_prompt()
+            return await self.agent.get_system_prompt(run_context)
         elif hasattr(self.agent, 'instructions'):
+            if callable(self.agent.instructions):
+                return await self.agent.instructions(run_context, self.agent)
             return self.agent.instructions
         else:
             return "You are a memory management assistant that helps manage and retrieve memories."
@@ -380,11 +393,3 @@ class MemoryAgentWrapper:
         except Exception as e:
             logger.error(f"Error in generate_schemas: {str(e)}")
             return {"error": str(e), "schemas": []}
-
-@property
-def hooks(self):
-    return self.agent.hooks
-
-@property
-def model(self):
-    return getattr(self.agent, "model", None)
