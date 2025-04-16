@@ -1360,44 +1360,55 @@ class PhysicalHarmGuardrail:
             except Exception as e:
                 logger.error(f"Error in memory linking orchestration: {e}")
                 
-                # Fallback using tool directly
-                return await self._link_memory_to_sensation_tool(
-                    RunContextWrapper(context=None),
-                    memory_id=memory_id,
-                    sensation_type=sensation_type,
-                    body_region=body_region,
-                    intensity=intensity,
-                    trigger_text=trigger_text
-                ),
-                handoff(
-                    self.body_state_agent, 
-                    tool_name_override="analyze_body_state",
-                    tool_description_override="Analyze current holistic body state"
-                ),
-                handoff(
-                    self.temperature_agent,
-                    tool_name_override="analyze_temperature",
-                    tool_description_override="Analyze temperature effects on body"
+                # Fallback: Create a dedicated agent for memory linking
+                fallback_agent = Agent(
+                    name="Memory_Link_Agent",
+                    instructions="Link a memory to a physical sensation and analyze the results",
+                    handoffs=[
+                        handoff(
+                            self.body_state_agent, 
+                            tool_name_override="analyze_body_state",
+                            tool_description_override="Analyze current holistic body state"
+                        ),
+                        handoff(
+                            self.temperature_agent,
+                            tool_name_override="analyze_temperature",
+                            tool_description_override="Analyze temperature effects on body"
+                        )
+                    ],
+                    tools=[
+                        function_tool(self._process_stimulus_tool),
+                        function_tool(self._get_region_state),
+                        function_tool(self._get_all_region_states),
+                        function_tool(self._update_body_temperature),
+                        function_tool(self._calculate_overall_comfort),
+                        function_tool(self._process_memory_trigger),
+                        function_tool(self._link_memory_to_sensation_tool),
+                        function_tool(self._get_arousal_state),
+                        function_tool(self._update_arousal_state)
+                    ],
+                    input_guardrails=[
+                        InputGuardrail(guardrail_function=self._validate_input)
+                    ],
+                    model="gpt-4o",
+                    model_settings=ModelSettings(temperature=0.2),
+                    output_type=StimulusProcessingResult
                 )
-            ],
-            tools=[
-                function_tool(self._process_stimulus_tool),
-                function_tool(self._get_region_state),
-                function_tool(self._get_all_region_states),
-                function_tool(self._update_body_temperature),
-                function_tool(self._calculate_overall_comfort),
-                function_tool(self._process_memory_trigger),
-                function_tool(self._link_memory_to_sensation_tool),
-                function_tool(self._get_arousal_state),
-                function_tool(self._update_arousal_state)
-            ],
-            input_guardrails=[
-                InputGuardrail(guardrail_function=self._validate_input)
-            ],
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.2),
-            output_type=StimulusProcessingResult
-        )
+                
+                # Run the fallback agent
+                result = await Runner.run(
+                    fallback_agent,
+                    {
+                        "action": "link_memory",
+                        "memory_id": memory_id,
+                        "sensation_type": sensation_type,
+                        "body_region": body_region,
+                        "intensity": intensity,
+                        "trigger_text": trigger_text
+                    }
+                )
+                
+                return result.final_output
     
     # =============== Guardrail Functions ===============
     
