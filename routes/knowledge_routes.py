@@ -148,10 +148,19 @@ async def insert_plot_triggers():
 
 async def insert_intensity_tiers():
     """
-    Insert your IntensityTiers.doc data (0–30 = Low, 30–60 = Moderate, etc.).
+    Insert your IntensityTiers.doc data (0–30 = Low, 30–60 = Moderate, etc.)
+    Only run the insertions if the IntensityTiers table is empty.
     """
     async with get_db_connection_context() as conn:
         async with conn.cursor() as cursor:
+            # Check if the IntensityTiers table is empty
+            await cursor.execute("SELECT COUNT(*) FROM IntensityTiers")
+            result = await cursor.fetchone()
+            
+            # If table is not empty, exit the function early
+            if result and result[0] > 0:
+                return
+
             # Low Intensity
             await cursor.execute('''
                 INSERT INTO IntensityTiers (tier_name, range_min, range_max, key_features, activity_examples)
