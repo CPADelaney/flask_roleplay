@@ -3630,3 +3630,363 @@ async def calculate_coup_success_chance(
     except Exception as e:
         logger.error(f"Error calculating coup success chance: {e}", exc_info=True)
         return 30  # Default moderate chance on error
+
+@function_tool
+async def add_resolution_path(
+    ctx: RunContextWrapper,
+    conflict_id: int,
+    path_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Add a new resolution path to an existing conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the conflict
+        path_data: Dictionary with path details
+        
+    Returns:
+        Dictionary with the created resolution path
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if conflict exists
+            exists = await conn.fetchval("""
+                SELECT 1 FROM Conflicts
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            if not exists:
+                return {
+                    "success": False,
+                    "error": f"Conflict with ID {conflict_id} not found"
+                }
+            
+            # Generate path_id if not provided
+            path_id = path_data.get("path_id", f"path_{random.randint(1000, 9999)}")
+            
+            # Insert the new path
+            await conn.execute("""
+                INSERT INTO ResolutionPaths
+                (conflict_id, path_id, name, description, approach_type,
+                 difficulty, requirements, stakeholders_involved, key_challenges,
+                 progress, is_completed)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """, 
+            conflict_id, 
+            path_id,
+            path_data.get("name", "Unnamed Path"),
+            path_data.get("description", "A path to resolve the conflict"),
+            path_data.get("approach_type", "standard"),
+            path_data.get("difficulty", 5),
+            json.dumps(path_data.get("requirements", {})),
+            json.dumps(path_data.get("stakeholders_involved", [])),
+            json.dumps(path_data.get("key_challenges", [])),
+            0.0,  # Initial progress
+            False  # Not completed
+            )
+            
+            # Create a memory for this new path
+            await create_conflict_memory(
+                ctx,
+                conflict_id,
+                f"A new resolution path '{path_data.get('name', 'Unnamed Path')}' has been added to the conflict.",
+                significance=6
+            )
+            
+            return {
+                "success": True,
+                "conflict_id": conflict_id,
+                "path_id": path_id,
+                "name": path_data.get("name", "Unnamed Path"),
+                "description": path_data.get("description", "A path to resolve the conflict")
+            }
+    except Exception as e:
+        logger.error(f"Error adding resolution path to conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    @function_tool
+async def update_player_involvement(
+    ctx: RunContextWrapper,
+    conflict_id: int,
+    involvement_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Update player's involvement in a conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the conflict
+        involvement_data: Dictionary with involvement details
+        
+    Returns:
+        Dictionary with update result
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if player involvement already exists
+            involvement_exists = await conn.fetchval("""
+                SELECT 1 FROM PlayerConflictInvolvement
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            # Extract values from involvement_data
+            involvement_level = involvement_data.get("involvement_level", "observing")
+            faction = involvement_data.get("faction", "neutral")
+            money_committed = involvement_data.get("resources_committed", {}).get("money", 0)
+            supplies_committed = involvement_data.get("resources_committed", {}).get("supplies", 0)
+            influence_committed = involvement_data.get("resources_committed", {}).get("influence", 0)
+            actions_taken = json.dumps(involvement_data.get("actions_taken", []))
+            manipulated_by = json.dumps(involvement_data.get("manipulated_by")) if involvement_data.get("manipulated_by") else None
+            
+            if involvement_exists:
+                # Update existing involvement
+                await conn.execute("""
+                    UPDATE PlayerConflictInvolvement
+                    SET involvement_level = $1, faction = $2,
+                        money_committed = $3, supplies_committed = $4,
+                        influence_committed = $5, actions_taken = $6,
+                        manipulated_by = $7
+                    WHERE conflict_id = $8 AND user_id = $9 AND conversation_id = $10
+                """, 
+                involvement_level, faction, money_committed, supplies_committed, 
+                influence_committed, actions_taken, manipulated_by,
+                conflict_id, context.user_id, context.conversation_id)
+            else:
+                # Insert new involvement
+                await conn.execute("""
+                    INSERT INTO PlayerConflictInvolvement
+                    (conflict_id, user_id, conversation_id, player_name, involvement_level,
+                     faction, money_committed, supplies_committed, influence_committed,
+                     actions_taken, manipulated_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                """, 
+                conflict_id, context.user_id, context.conversation_id, "Player",
+                involvement_level, faction, money_committed, supplies_committed,
+                influence_committed, actions_taken, manipulated_by)
+            
+            # Create a memory for this involvement update
+            await create_conflict_memory(
+                ctx,
+                conflict_id,
+                f"Player's involvement in the conflict has changed to {involvement_level} with {faction} faction.",
+                significance=7
+            )
+            
+            return {
+                "success": True,
+                "conflict_id": conflict_id,
+                "involvement_level": involvement_level,
+                "faction": faction,
+                "resources_committed": {
+                    "money": money_committed,
+                    "supplies": supplies_committed,
+                    "influence": influence_committed
+                }
+            }
+    except Exception as e:
+        logger.error(f"Error updating player involvement in conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    @function_tool
+async def add_internal_conflict(
+    ctx: RunContextWrapper,
+    conflict_id: int,
+    internal_conflict_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Add an internal faction conflict to a main conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the parent conflict
+        internal_conflict_data: Dictionary with internal conflict details
+        
+    Returns:
+        Dictionary with the created internal conflict
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Extract values from internal_conflict_data
+            faction_id = internal_conflict_data.get("faction_id", 0)
+            conflict_name = internal_conflict_data.get("conflict_name", "Internal Faction Struggle")
+            description = internal_conflict_data.get("description", "A power struggle within the faction")
+            primary_npc_id = internal_conflict_data.get("primary_npc_id", 0)
+            target_npc_id = internal_conflict_data.get("target_npc_id", 0)
+            prize = internal_conflict_data.get("prize", "Leadership")
+            approach = internal_conflict_data.get("approach", "subtle")
+            public_knowledge = internal_conflict_data.get("public_knowledge", False)
+            current_phase = internal_conflict_data.get("current_phase", "brewing")
+            progress = internal_conflict_data.get("progress", 10)
+            
+            # Create the internal conflict
+            struggle_id = await conn.fetchval("""
+                INSERT INTO InternalFactionConflicts
+                (faction_id, conflict_name, description, primary_npc_id, target_npc_id,
+                 prize, approach, public_knowledge, current_phase, progress, parent_conflict_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING struggle_id
+            """, 
+            faction_id, conflict_name, description, primary_npc_id, target_npc_id,
+            prize, approach, public_knowledge, current_phase, progress, conflict_id)
+            
+            # Get faction name
+            faction_name = await get_faction_name(ctx, faction_id)
+            
+            # Get NPC names
+            primary_npc_name = await get_npc_name(ctx, primary_npc_id)
+            target_npc_name = await get_npc_name(ctx, target_npc_id)
+            
+            # Create faction members if provided
+            if "faction_members" in internal_conflict_data:
+                for member in internal_conflict_data["faction_members"]:
+                    await conn.execute("""
+                        INSERT INTO FactionStruggleMembers
+                        (struggle_id, npc_id, position, side, standing, 
+                         loyalty_strength, reason)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """, 
+                    struggle_id,
+                    member.get("npc_id", 0),
+                    member.get("position", "Member"),
+                    member.get("side", "neutral"),
+                    member.get("standing", 50),
+                    member.get("loyalty_strength", 50),
+                    member.get("reason", ""))
+            
+            # Create a memory for this internal conflict
+            await create_conflict_memory(
+                ctx,
+                conflict_id,
+                f"An internal power struggle has emerged in {faction_name} between {primary_npc_name} and {target_npc_name}.",
+                significance=7
+            )
+            
+            return {
+                "success": True,
+                "struggle_id": struggle_id,
+                "conflict_id": conflict_id,
+                "faction_id": faction_id,
+                "faction_name": faction_name,
+                "conflict_name": conflict_name,
+                "primary_npc_name": primary_npc_name,
+                "target_npc_name": target_npc_name
+            }
+    except Exception as e:
+        logger.error(f"Error adding internal conflict to conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@function_tool
+async def resolve_internal_conflict(
+    ctx: RunContextWrapper,
+    struggle_id: int,
+    resolution_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Resolve an internal faction conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        struggle_id: ID of the internal faction struggle
+        resolution_data: Dictionary with resolution details
+        
+    Returns:
+        Dictionary with resolution result
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if struggle exists
+            struggle_row = await conn.fetchrow("""
+                SELECT faction_id, conflict_name, primary_npc_id, target_npc_id, parent_conflict_id
+                FROM InternalFactionConflicts
+                WHERE struggle_id = $1
+            """, struggle_id)
+            
+            if not struggle_row:
+                return {
+                    "success": False,
+                    "error": f"Internal faction struggle with ID {struggle_id} not found"
+                }
+            
+            faction_id = struggle_row["faction_id"]
+            conflict_name = struggle_row["conflict_name"]
+            primary_npc_id = struggle_row["primary_npc_id"]
+            target_npc_id = struggle_row["target_npc_id"]
+            parent_conflict_id = struggle_row["parent_conflict_id"]
+            
+            # Get faction name
+            faction_name = await get_faction_name(ctx, faction_id)
+            
+            # Get NPC names
+            primary_npc_name = await get_npc_name(ctx, primary_npc_id)
+            target_npc_name = await get_npc_name(ctx, target_npc_id)
+            
+            # Extract resolution details
+            winner_npc_id = resolution_data.get("winner_npc_id")
+            resolution_type = resolution_data.get("resolution_type", "negotiated")
+            resolution_description = resolution_data.get("description", f"The internal conflict in {faction_name} has been resolved.")
+            
+            # Determine winner and loser
+            winner_npc_id = winner_npc_id or primary_npc_id
+            loser_npc_id = target_npc_id if winner_npc_id == primary_npc_id else primary_npc_id
+            
+            winner_name = await get_npc_name(ctx, winner_npc_id)
+            loser_name = await get_npc_name(ctx, loser_npc_id)
+            
+            # Update the struggle
+            await conn.execute("""
+                UPDATE InternalFactionConflicts
+                SET current_phase = 'resolved', progress = 100,
+                    resolution_type = $1, resolution_description = $2,
+                    winner_npc_id = $3, loser_npc_id = $4,
+                    resolved_at = CURRENT_TIMESTAMP
+                WHERE struggle_id = $5
+            """, 
+            resolution_type, resolution_description, 
+            winner_npc_id, loser_npc_id, struggle_id)
+            
+            # Create a memory for this resolution
+            memory_text = f"The internal conflict in {faction_name} has been resolved. {winner_name} has emerged victorious over {loser_name}."
+            
+            await create_conflict_memory(
+                ctx,
+                parent_conflict_id,
+                memory_text,
+                significance=8
+            )
+            
+            return {
+                "success": True,
+                "struggle_id": struggle_id,
+                "faction_name": faction_name,
+                "winner_name": winner_name,
+                "loser_name": loser_name,
+                "resolution_type": resolution_type,
+                "description": resolution_description
+            }
+    except Exception as e:
+        logger.error(f"Error resolving internal faction struggle {struggle_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    
