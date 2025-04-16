@@ -265,6 +265,148 @@ async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         return []
 
 @function_tool
+async def update_stakeholder_status(
+    ctx: RunContextWrapper,
+    conflict_id: int,
+    npc_id: int,
+    status: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Update the status of a stakeholder in a conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the conflict
+        npc_id: ID of the NPC stakeholder
+        status: Dictionary with updated status fields
+        
+    Returns:
+        Dictionary with update result
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Check if stakeholder exists
+            exists = await conn.fetchval("""
+                SELECT 1 FROM ConflictStakeholders
+                WHERE conflict_id = $1 AND npc_id = $2
+            """, conflict_id, npc_id)
+            
+            if not exists:
+                return {
+                    "success": False,
+                    "error": f"Stakeholder with NPC ID {npc_id} not found in conflict {conflict_id}"
+                }
+            
+            # Prepare update fields
+            update_fields = []
+            params = [conflict_id, npc_id]
+            param_index = 3
+            
+            # Handle each possible field to update
+            if "involvement_level" in status:
+                update_fields.append(f"involvement_level = ${param_index}")
+                params.append(status["involvement_level"])
+                param_index += 1
+                
+            if "public_motivation" in status:
+                update_fields.append(f"public_motivation = ${param_index}")
+                params.append(status["public_motivation"])
+                param_index += 1
+                
+            if "private_motivation" in status:
+                update_fields.append(f"private_motivation = ${param_index}")
+                params.append(status["private_motivation"])
+                param_index += 1
+                
+            if "desired_outcome" in status:
+                update_fields.append(f"desired_outcome = ${param_index}")
+                params.append(status["desired_outcome"])
+                param_index += 1
+                
+            if "alliances" in status:
+                update_fields.append(f"alliances = ${param_index}")
+                params.append(json.dumps(status["alliances"]))
+                param_index += 1
+                
+            if "rivalries" in status:
+                update_fields.append(f"rivalries = ${param_index}")
+                params.append(json.dumps(status["rivalries"]))
+                param_index += 1
+                
+            if "leadership_ambition" in status:
+                update_fields.append(f"leadership_ambition = ${param_index}")
+                params.append(status["leadership_ambition"])
+                param_index += 1
+                
+            if "faction_standing" in status:
+                update_fields.append(f"faction_standing = ${param_index}")
+                params.append(status["faction_standing"])
+                param_index += 1
+                
+            if "willing_to_betray_faction" in status:
+                update_fields.append(f"willing_to_betray_faction = ${param_index}")
+                params.append(status["willing_to_betray_faction"])
+                param_index += 1
+                
+            if "faction_id" in status:
+                update_fields.append(f"faction_id = ${param_index}")
+                params.append(status["faction_id"])
+                param_index += 1
+                
+            if "faction_name" in status:
+                update_fields.append(f"faction_name = ${param_index}")
+                params.append(status["faction_name"])
+                param_index += 1
+                
+            if "faction_position" in status:
+                update_fields.append(f"faction_position = ${param_index}")
+                params.append(status["faction_position"])
+                param_index += 1
+                
+            # If no fields to update, return error
+            if not update_fields:
+                return {
+                    "success": False,
+                    "error": "No valid fields provided for update"
+                }
+                
+            # Build and execute update query
+            update_query = f"""
+                UPDATE ConflictStakeholders
+                SET {", ".join(update_fields)}
+                WHERE conflict_id = $1 AND npc_id = $2
+            """
+            
+            await conn.execute(update_query, *params)
+            
+            # Get NPC name for memory
+            npc_name = await get_npc_name(ctx, npc_id)
+            
+            # Create a memory for this stakeholder update
+            await create_conflict_memory(
+                ctx,
+                conflict_id,
+                f"Stakeholder {npc_name}'s status has been updated in the conflict.",
+                significance=5
+            )
+            
+            return {
+                "success": True,
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "conflict_id": conflict_id,
+                "updated_fields": [field.split(' = ')[0] for field in update_fields]
+            }
+    except Exception as e:
+        logger.error(f"Error updating stakeholder status for NPC {npc_id} in conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@function_tool
 async def get_player_involvement(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """
     Get player's involvement in a specific conflict.
