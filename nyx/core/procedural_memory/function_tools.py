@@ -8,8 +8,7 @@ import uuid
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 # OpenAI Agents SDK imports
-from agents import function_tool, trace, custom_span
-from agents.tracing import TraceProvider
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
 from agents.exceptions import UserError
 
 from .models import Procedure, ProcedureStats, TransferStats, ProcedureTransferRecord
