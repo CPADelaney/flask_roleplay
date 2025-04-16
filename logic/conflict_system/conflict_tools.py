@@ -196,6 +196,84 @@ async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         return []
 
 @function_tool
+async def get_player_involvement(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
+    """
+    Get player's involvement in a specific conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the conflict
+        
+    Returns:
+        Dictionary with player involvement details
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get player involvement
+            involvement_row = await conn.fetchrow("""
+                SELECT involvement_level, faction, money_committed, supplies_committed, 
+                       influence_committed, actions_taken, manipulated_by
+                FROM PlayerConflictInvolvement
+                WHERE conflict_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, conflict_id, context.user_id, context.conversation_id)
+            
+            if involvement_row:
+                involvement = dict(involvement_row)
+                
+                # Parse JSON fields
+                try:
+                    actions_list = json.loads(involvement["actions_taken"]) if isinstance(involvement["actions_taken"], str) else involvement["actions_taken"] or []
+                except (json.JSONDecodeError, TypeError):
+                    actions_list = []
+                
+                try:
+                    manipulated_by_dict = json.loads(involvement["manipulated_by"]) if isinstance(involvement["manipulated_by"], str) else involvement["manipulated_by"] or None
+                except (json.JSONDecodeError, TypeError):
+                    manipulated_by_dict = None
+                
+                return {
+                    "involvement_level": involvement["involvement_level"],
+                    "faction": involvement["faction"],
+                    "resources_committed": {
+                        "money": involvement["money_committed"],
+                        "supplies": involvement["supplies_committed"],
+                        "influence": involvement["influence_committed"]
+                    },
+                    "actions_taken": actions_list,
+                    "is_manipulated": manipulated_by_dict is not None,
+                    "manipulated_by": manipulated_by_dict
+                }
+            else:
+                return {
+                    "involvement_level": "none",
+                    "faction": "neutral",
+                    "resources_committed": {
+                        "money": 0,
+                        "supplies": 0,
+                        "influence": 0
+                    },
+                    "actions_taken": [],
+                    "is_manipulated": False,
+                    "manipulated_by": None
+                }
+    except Exception as e:
+        logger.error(f"Error getting player involvement for conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "involvement_level": "none",
+            "faction": "neutral",
+            "resources_committed": {
+                "money": 0,
+                "supplies": 0,
+                "influence": 0
+            },
+            "actions_taken": [],
+            "is_manipulated": False,
+            "manipulated_by": None
+        }
+
+@function_tool
 async def get_conflict_details(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """
     Get detailed information about a specific conflict.
