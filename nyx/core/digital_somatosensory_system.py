@@ -12,8 +12,7 @@ from agents import (
     Agent, Runner, trace, function_tool, 
     RunContextWrapper, handoff, ModelSettings,
     InputGuardrail, GuardrailFunctionOutput, 
-    Handoff, RunConfig, trace_metadata,
-    custom_span, FunctionTool, BatchTraceProcessor
+    Handoff, RunConfig,FunctionTool
 )
 from pydantic import BaseModel, Field
 
