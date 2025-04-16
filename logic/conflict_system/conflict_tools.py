@@ -3710,7 +3710,7 @@ async def add_resolution_path(
             "error": str(e)
         }
 
-    @function_tool
+@function_tool
 async def update_player_involvement(
     ctx: RunContextWrapper,
     conflict_id: int,
@@ -3798,7 +3798,7 @@ async def update_player_involvement(
             "error": str(e)
         }
 
-    @function_tool
+@function_tool
 async def add_internal_conflict(
     ctx: RunContextWrapper,
     conflict_id: int,
