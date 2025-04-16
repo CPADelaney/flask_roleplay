@@ -169,17 +169,18 @@ class MemoryAgentWrapper:
                 logger.error(f"Error in create_belief: {str(e)}")
                 return {"error": str(e), "belief_id": None}
 
-    def get_system_prompt(self):
+    def get_system_prompt(self, *args, **kwargs):
         """
         Return the system prompt for the memory agent.
-        This method is needed by the recall method or its dependencies.
+        Accepts optional arguments for compatibility with agent SDKs.
         """
         if hasattr(self.agent, 'get_system_prompt'):
-            return self.agent.get_system_prompt()
+            return self.agent.get_system_prompt(*args, **kwargs)
         elif hasattr(self.agent, 'instructions'):
             return self.agent.instructions
         else:
             return "You are a memory management assistant that helps manage and retrieve memories."
+
 
     def get_tools(self):
         """
