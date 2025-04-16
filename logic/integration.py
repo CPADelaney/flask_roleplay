@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 from functools import lru_cache
 
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
-from db.connection import get_db_connection_context
+from db.connection import get_db_connection_context, get_db_connection_pool
 
 # Cache of active NPC systems
 _npc_systems = {}
