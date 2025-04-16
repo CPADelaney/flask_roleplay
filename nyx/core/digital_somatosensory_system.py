@@ -3213,7 +3213,7 @@ class PhysicalHarmGuardrail:
                     neurochemicals = emotional_state_data.get("neurochemicals", {})
                     
                     # Process neurochemical effects on body state
-                    self._process_neurochemical_effects(neurochemicals, duration)
+                    await self._process_neurochemical_effects(neurochemicals, duration)
                 except Exception as e:
                     logger.error(f"Error reflecting emotions onto body state: {e}")
 
@@ -3255,7 +3255,7 @@ class PhysicalHarmGuardrail:
                 logger.error(f"Error running body state analysis: {e}")
                 return await self.get_body_state()
     
-    def _process_neurochemical_effects(self, neurochemicals: Dict[str, Any], duration: float):
+    async def _process_neurochemical_effects(self, neurochemicals: Dict[str, Any], duration: float):
         """
         Process the effects of neurochemicals on body state
         
