@@ -169,7 +169,7 @@ class MemoryAgentWrapper:
                 logger.error(f"Error in create_belief: {str(e)}")
                 return {"error": str(e), "belief_id": None}
 
-    def get_system_prompt(self):
+    def get_system_prompt(self, *args, **kwargs):
         """
         Return the system prompt for the memory agent.
         This method is needed by the recall method or its dependencies.
