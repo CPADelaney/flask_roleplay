@@ -140,26 +140,45 @@ class ConflictSystemIntegration:
     # -------------------------- STORY CONTEXT / DATA -------------------------- #
 
     async def _get_story_context(self) -> Dict[str, Any]:
+        """
+        Gather everything needed to resume or display the current story:
+          - active NPCs
+          - lore elements for the current narrative
+          - story progression details
+          - the narrative ID itself
+        """
+        from npcs.npc_agent_system import get_active_npcs
+    
+        # Prepare a default response
+        default = {
+            "active_npcs": [],
+            "lore_context": [],
+            "story_progression": {},
+            "current_narrative_id": None,
+        }
+    
         try:
-            # Get active NPCs
-            active_npcs = await self.npc_system.get_active_npcs()
-            # Get relevant lore (try to get current narrative id)
+            active_npcs = await get_active_npcs()
+    
             narrative_id = await self._get_current_narrative_id()
             lore_context = (
                 await self.lore_system.get_narrative_elements(narrative_id)
-                if narrative_id else []
+                if narrative_id
+                else []
             )
-            # Get story progression details
+    
             story_progression = await self._get_story_progression()
+    
             return {
-                'active_npcs': active_npcs,
-                'lore_context': lore_context,
-                'story_progression': story_progression,
-                'current_narrative_id': narrative_id
+                "active_npcs": active_npcs,
+                "lore_context": lore_context,
+                "story_progression": story_progression,
+                "current_narrative_id": narrative_id,
             }
+    
         except Exception as e:
             logger.error(f"Error getting story context: {e}")
-            return {}
+            return default
 
     async def _get_current_narrative_id(self) -> Optional[int]:
         try:
