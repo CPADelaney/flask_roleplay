@@ -527,15 +527,16 @@ async def get_chatgpt_response(
         ]
         messages.extend(raw_history)
 
-        response = openai_client.chat.completions.create(
+        response = openai_client.chat.responses.create(
             model="gpt-4o",
             messages=messages,
             temperature=0.2,
-            max_tokens=10000,
+            max_tokens=10_000,
             frequency_penalty=0.0,
             functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-            function_call={"name": "apply_universal_update"}
+            function_call={"name": "apply_universal_update"},
         )
+
         msg = response.choices[0].message
         tokens_used = response.usage.total_tokens
 
@@ -598,7 +599,7 @@ DO NOT produce user-facing text here; only the JSON.
             }
         ]
 
-        reflection_response = openai_client.chat.completions.create(
+        reflection_response = openai_client.chat.responses.create(
             model="gpt-4o",
             messages=reflection_messages,
             temperature=0.2,
@@ -647,7 +648,7 @@ DO NOT produce user-facing text here; only the JSON.
         # If you want to include the prior chat history:
         # final_messages.extend(await build_message_history(conversation_id, aggregator_text, user_input, limit=15))
 
-        final_response = openai_client.chat.completions.create(
+        final_response = openai_client.chat.responses.create(
             model="gpt-4o",
             messages=final_messages,
             temperature=0.2,
