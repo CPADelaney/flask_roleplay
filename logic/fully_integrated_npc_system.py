@@ -149,7 +149,7 @@ class IntegratedNPCSystem:
         self.activity_manager = ActivityManager()
         
         # Initialize the agent system - core component for NPC agentic behavior
-        self.agent_system = NPCAgentSystem(user_id, conversation_id)
+        self.agent_system = NPCAgentSystem(user_id, conversation_id, connection_pool)
         
         # Initialize the NPC creation handler from the new system
         self.npc_creation_handler = NPCCreationHandler()
