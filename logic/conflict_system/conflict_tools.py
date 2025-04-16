@@ -16,7 +16,7 @@ from agents import function_tool, RunContextWrapper
 from db.connection import get_db_connection_context
 from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
-from logic.npc_relationship_manager import get_relationship_status, get_manipulation_leverage
+from logic.conflict_system.conflict_agents import get_relationship_status, get_manipulation_leverage
 from logic.chatgpt_integration import get_chatgpt_response
 from logic.governance_system import get_central_governance, AgentType, DirectiveType, DirectivePriority
 
