@@ -735,3 +735,5 @@ class ConflictSystemIntegration:
                     """, change, npc_id, self.user_id, self.conversation_id)
         except Exception as e:
             logger.error(f"Error applying NPC relationship changes: {e}")
+            
+register_enhanced_integration = ConflictSystemIntegration.register_enhanced_integration
