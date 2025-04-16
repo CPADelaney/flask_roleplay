@@ -31,6 +31,58 @@ logger = logging.getLogger(__name__)
 # Database Access Tools
 
 @function_tool
+async def get_resolution_paths(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    """
+    Get all resolution paths for a specific conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the conflict
+        
+    Returns:
+        List of resolution path dictionaries
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get resolution paths
+            paths_rows = await conn.fetch("""
+                SELECT path_id, name, description, approach_type, difficulty,
+                       requirements, stakeholders_involved, key_challenges,
+                       progress, is_completed
+                FROM ResolutionPaths
+                WHERE conflict_id = $1
+            """, conflict_id)
+            
+            paths = []
+            for row in paths_rows:
+                path = dict(row)
+                
+                # Parse JSON fields
+                try:
+                    path["requirements"] = json.loads(path["requirements"]) if isinstance(path["requirements"], str) else path["requirements"] or {}
+                except (json.JSONDecodeError, TypeError):
+                    path["requirements"] = {}
+                
+                try:
+                    path["stakeholders_involved"] = json.loads(path["stakeholders_involved"]) if isinstance(path["stakeholders_involved"], str) else path["stakeholders_involved"] or []
+                except (json.JSONDecodeError, TypeError):
+                    path["stakeholders_involved"] = []
+                
+                try:
+                    path["key_challenges"] = json.loads(path["key_challenges"]) if isinstance(path["key_challenges"], str) else path["key_challenges"] or []
+                except (json.JSONDecodeError, TypeError):
+                    path["key_challenges"] = []
+                
+                paths.append(path)
+            
+            return paths
+    except Exception as e:
+        logger.error(f"Error getting resolution paths for conflict {conflict_id}: {e}", exc_info=True)
+        return []
+
+@function_tool
 async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """
     Get all active conflicts for the current user and conversation.
