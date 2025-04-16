@@ -329,22 +329,6 @@ ContentType = _ContentType  # type: ignore
 CreativeContentSystem = SQLiteContentSystem  # type: ignore
 AgenticCreativitySystem = AgenticCreativitySystemV2  # type: ignore
 
-# ---------------------------------------------------------------------------
-# 8. Demo entry‑point (optional)
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import asyncio, pprint
-
-    async def _demo():
-        system = AgenticCreativitySystemV2()
-        await system.incremental_codebase_analysis()
-        res = await system.semantic_search("sqlite transaction", k=3)
-        pprint.pprint(res)
-        print("
------ prompt sample -----
-")
-        prompt = await system.prepare_prompt("sqlite transaction", "Explain how to wrap writes in a transaction.", k=2)
         print(prompt[:800], "…")
 
     asyncio.run(_demo())
