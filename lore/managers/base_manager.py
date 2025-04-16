@@ -277,7 +277,7 @@ class BaseLoreManager:
             await self.initialize_governance()
             
             # Start maintenance loop
-            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
+            self.maintenance_task = asyncio.create_task(self._())
             
             self.initialized = True
             logger.info(f"Initialized BaseLoreManager for user {self.user_id}")
@@ -620,22 +620,23 @@ class BaseLoreManager:
             "timestamp": datetime.now().isoformat()
         }
 
-    @function_tool
     async def _maintenance_loop(self):
-        """
-        Agent-driven background task for maintenance. 
-        We'll call the 'MaintenanceAgent' to interpret stats and advise next steps.
-        """
         while True:
             try:
-                # Create a run context
-                run_ctx = RunContextWrapper(context={
-                    "user_id": self.user_id,
-                    "conversation_id": self.conversation_id
-                })
-                
-                # Get cache stats
-                stats = await self.get_cache_stats(run_ctx)
+                await self._maintenance_once()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in maintenance loop: {e}")
+            await asyncio.sleep(300)
+
+    async def _maintenance_once(self):
+        # This is your old loop's body, just without 'while'
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        stats = await self.get_cache_stats(run_ctx)
                 
                 # Evaluate with MaintenanceAgent
                 with trace(
@@ -683,6 +684,14 @@ class BaseLoreManager:
             except Exception as e:
                 logger.error(f"Error in maintenance loop: {e}")
                 await asyncio.sleep(300)  # Sleep 5 min if error, then retry
+
+    @function_tool
+    async def maintenance_loop_tool(self):
+        """
+        Agent-exposed maintenance pass (runs ONCE).
+        """
+        result = await self._maintenance_once()
+        return {"status": "completed", "result": result}
                 
     # Enhanced lore generation methods
     @staticmethod
