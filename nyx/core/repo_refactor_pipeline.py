@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Optional
+from logic.chatgpt_integration import get_openai_client
 
 import openai
 from nyx.creative.agentic_system import AgenticCreativitySystem  # shim to v2.2
@@ -29,6 +30,7 @@ from nyx.creative.agentic_system import AgenticCreativitySystem  # shim to v2.2
 # ---------------------------------------------------------------------------
 # Issue dataclass
 # ---------------------------------------------------------------------------
+openai_client = get_openai_client()
 
 @dataclass
 class Issue:
@@ -98,10 +100,10 @@ async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
-
+            
     openai.api_key = api_key
-    resp = await openai.chat.responses.create(
-        model=model,
+    resp = await openai_client.chat.responses.create(
+        model=gpt-4o,
         messages=[
             {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
             {"role": "user", "content": prompt},
