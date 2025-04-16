@@ -93,7 +93,6 @@ class BaseLoreManager:
         """Initialize database tables - to be implemented by derived classes."""
         pass
     
-    @function_tool
     async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
         """
         Initialize tables using a dictionary of table definitions.
