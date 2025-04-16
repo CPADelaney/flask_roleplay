@@ -1,3 +1,5 @@
+# logic/conflict_system/conflict_integration.py
+
 import logging
 import json
 import asyncio
@@ -147,9 +149,6 @@ class ConflictSystemIntegration:
           - story progression details
           - the narrative ID itself
         """
-        from npcs.npc_agent_system import _get_active_npcs as get_active_npcs
-    
-        # Prepare a default response
         default = {
             "active_npcs": [],
             "lore_context": [],
@@ -158,15 +157,17 @@ class ConflictSystemIntegration:
         }
     
         try:
-            active_npcs = await get_active_npcs()
+            # 1) Fetch active NPCs from your instance
+            active_npcs = await self.npc_system._get_active_npcs()
     
+            # 2) Current narrative ID & lore
             narrative_id = await self._get_current_narrative_id()
             lore_context = (
                 await self.lore_system.get_narrative_elements(narrative_id)
-                if narrative_id
-                else []
+                if narrative_id else []
             )
     
+            # 3) Story progression
             story_progression = await self._get_story_progression()
     
             return {
