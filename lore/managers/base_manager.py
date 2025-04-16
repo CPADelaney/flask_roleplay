@@ -293,6 +293,10 @@ class BaseLoreManager:
                     except Exception as e:
                         logger.error(f"Error initializing table {table_name}: {e}")
 
+    async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
+        """Initialize tables for a specific class."""
+        return await self.initialize_tables_from_definitions(table_definitions)
+
     def get_connection_pool(self):
         """
         Get an async context manager for a db connection.
