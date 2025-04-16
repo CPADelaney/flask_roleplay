@@ -300,7 +300,7 @@ class EducationalSystemManager(BaseLoreManager):
                 ON TeachingContents USING ivfflat (embedding vector_cosine_ops);
             """
         }
-        await self.initialize_tables_for_class(table_definitions)
+        await self._initialize_tables_for_class_impl(table_definitions)
 
     # ------------------------------------------------------------------------
     # 1) Adding educational system (CRUD) with structured output
