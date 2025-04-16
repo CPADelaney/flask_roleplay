@@ -23,7 +23,8 @@ from logic.stats_logic import apply_stat_change
 from logic.resource_management import ResourceManager
 from logic.conflict_system.conflict_agents import get_relationship_status, get_manipulation_leverage
 from logic.chatgpt_integration import get_chatgpt_response
-from logic.governance_system import get_central_governance, AgentType, DirectiveType, DirectivePriority
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 
 logger = logging.getLogger(__name__)
 
