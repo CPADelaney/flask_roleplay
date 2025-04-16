@@ -607,8 +607,9 @@ class BaseLoreManager:
         }
 
     # THIS is the ONLY agent-tool-exposed version!
+    @staticmethod
     @function_tool
-    async def get_cache_stats(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def get_cache_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
         return self._get_cache_stats()
     
     async def _maintenance_loop(self):
