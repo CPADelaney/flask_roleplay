@@ -328,7 +328,3 @@ class _ContentType(enum.Enum):
 ContentType = _ContentType  # type: ignore
 CreativeContentSystem = SQLiteContentSystem  # type: ignore
 AgenticCreativitySystem = AgenticCreativitySystemV2  # type: ignore
-
-        print(prompt[:800], "…")
-
-    asyncio.run(_demo())
