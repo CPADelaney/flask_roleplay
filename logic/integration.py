@@ -17,24 +17,11 @@ from db.connection import get_db_connection_context
 # Cache of active NPC systems
 _npc_systems = {}
 
-async def get_npc_system(user_id: int, conversation_id: int) -> IntegratedNPCSystem:
-    """
-    Get (or create) an IntegratedNPCSystem instance for the user/conversation.
-    Uses caching to avoid repeated initialization.
-    
-    Args:
-        user_id: The user ID
-        conversation_id: The conversation ID
-        
-    Returns:
-        An IntegratedNPCSystem instance
-    """
+async def get_npc_system(user_id, conversation_id):
     key = f"{user_id}:{conversation_id}"
-    
     if key not in _npc_systems:
-        _npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id)
-        logging.info(f"Created new IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
-    
+        connection_pool = await get_db_connection_pool()
+        _npc_systems[key] = IntegratedNPCSystem(user_id, conversation_id, connection_pool)
     return _npc_systems[key]
 
 async def initialize_game_world(user_id: int, conversation_id: int, environment_desc: str) -> Dict[str, Any]:
