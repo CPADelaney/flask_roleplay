@@ -8,8 +8,8 @@ from db.connection import get_db_connection_context
 async def create_and_seed_intensity_tiers():
     """
     Creates the IntensityTiers table if it doesn't exist, then inserts the rows
-    matching the content from your design doc. 
-    If rows already exist, you can decide whether to skip, update, or override.
+    matching the content from your design doc.
+    Only seeds the table if it is empty; if rows already exist, the seeding process is skipped.
     """
     logging.info("Creating IntensityTiers table if not exists...")
 
@@ -168,8 +168,14 @@ async def create_and_seed_intensity_tiers():
 
     try:
         async with get_db_connection_context() as conn:
-            # Create table
+            # Create table if it doesn't exist
             await conn.execute(create_table_sql)
+            
+            # Check if the IntensityTiers table is empty
+            row_count = await conn.fetchval("SELECT COUNT(*) FROM IntensityTiers")
+            if row_count and row_count > 0:
+                logging.info("IntensityTiers table already contains data; skipping seeding process.")
+                return
             
             # Insert tiers data
             for tier in tiers_data:
