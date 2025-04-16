@@ -485,33 +485,62 @@ class DigitalSomatosensorySystem:
         return Agent(
             name="Body_Experience_Orchestrator",
             instructions="""
-            You are the orchestration system for Nyx's digital body experience.
-            Your role is to coordinate the different aspects of physical sensation:
-            1. Process incoming stimuli and determine appropriate responses
-            2. Coordinate between different body regions
-            3. Manage the relationship between sensations and emotions
-            4. Generate appropriate physical expressions
-            
-            You will receive information about stimuli affecting the body and need to:
-            - Determine which body regions are affected
-            - Process the appropriate sensory updates
-            - Calculate the effects on overall body state
-            - Consider how this affects emotional state
-            - Generate expressions when appropriate
-            
-            You can hand off to specialized agents for certain tasks:
-            - Use the expression agent to generate sensory expressions
-            - Use the body state agent to analyze the current body state
-            - Use the temperature agent to analyze temperature effects
-            
-            Process each stimulus thoroughly and provide a coherent sensory experience.
-            """,
+                You are the orchestration system for Nyx's digital body experience.
+                Your role is to coordinate the different aspects of physical sensation:
+                1. Process incoming stimuli and determine appropriate responses
+                2. Coordinate between different body regions
+                3. Manage the relationship between sensations and emotions
+                4. Generate appropriate physical expressions
+                
+                You will receive information about stimuli affecting the body and need to:
+                - Determine which body regions are affected
+                - Process the appropriate sensory updates
+                - Calculate the effects on overall body state
+                - Consider how this affects emotional state
+                - Generate expressions when appropriate
+                
+                You can hand off to specialized agents for certain tasks:
+                - Use the expression agent to generate sensory expressions
+                - Use the body state agent to analyze the current body state
+                - Use the temperature agent to analyze temperature effects
+                
+                Process each stimulus thoroughly and provide a coherent sensory experience.
+                """,
             handoffs=[
                 handoff(
                     self.expression_agent, 
                     tool_name_override="generate_expression", 
                     tool_description_override="Generate sensory expression based on body state"
+                ),
+                handoff(
+                    self.body_state_agent, 
+                    tool_name_override="analyze_body_state",
+                    tool_description_override="Analyze current holistic body state"
+                ),
+                handoff(
+                    self.temperature_agent,
+                    tool_name_override="analyze_temperature",
+                    tool_description_override="Analyze temperature effects on body"
                 )
+            ],
+            tools=[
+                function_tool(self._process_stimulus_tool),
+                function_tool(self._get_region_state),
+                function_tool(self._get_all_region_states),
+                function_tool(self._update_body_temperature),
+                function_tool(self._calculate_overall_comfort),
+                function_tool(self._process_memory_trigger),
+                function_tool(self._link_memory_to_sensation_tool),
+                function_tool(self._get_arousal_state),
+                function_tool(self._update_arousal_state)
+            ],
+            input_guardrails=[
+                InputGuardrail(guardrail_function=self._validate_input)
+            ],
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.2),
+            output_type=StimulusProcessingResult
+        )
     
     async def initiate_denial_loop(self, cycles: int = 3, base_intensity: float = 0.6) -> Dict[str, Any]:
         """
