@@ -4934,766 +4934,766 @@ class ReasoningCore:
                 "relations_created": relations_created
             }
         
-        async def create_creative_intervention(self, model_id: str, target_node: str,
-                                         description: str = "", 
-                                         use_blending: bool = True) -> Dict[str, Any]:
-            """Create a creative intervention using conceptual blending and causal reasoning"""
-            if model_id not in self.causal_models:
-                raise ValueError(f"Model {model_id} not found")
+    async def create_creative_intervention(self, model_id: str, target_node: str,
+                                     description: str = "", 
+                                     use_blending: bool = True) -> Dict[str, Any]:
+        """Create a creative intervention using conceptual blending and causal reasoning"""
+        if model_id not in self.causal_models:
+            raise ValueError(f"Model {model_id} not found")
+            
+        model = self.causal_models[model_id]
+        
+        if target_node not in model.nodes:
+            raise ValueError(f"Target node {target_node} not found in model {model_id}")
+        
+        target_node_obj = model.nodes[target_node]
+        
+        # Step 1: Get current state and possible states for target node
+        current_state = target_node_obj.get_current_state()
+        possible_states = target_node_obj.states.copy()
+        
+        if current_state in possible_states:
+            possible_states.remove(current_state)
+        
+        # If no states to intervene with, return error
+        if not possible_states:
+            return {"error": "No alternative states available for target node"}
+        
+        # Step 2: If blending enabled, use conceptual blending to generate creative intervention
+        blend_id = None
+        novel_intervention_value = None
+        
+        if use_blending:
+            # Check if we have a concept space for this model
+            space_id = None
+            
+            # If model is already mapped to a concept space, use that
+            if model_id in self.model_to_blend_mappings:
+                space_id = self.model_to_blend_mappings[model_id]
+            else:
+                # Create concept space from model
+                space_id = await self.convert_causal_model_to_concept_space(
+                    model_id=model_id,
+                    name=f"Concept space for {model.name}"
+                )
+            
+            # Get space
+            space = self.concept_spaces.get(space_id)
+            if space:
+                # Find concept corresponding to target node
+                target_concept_id = None
                 
-            model = self.causal_models[model_id]
-            
-            if target_node not in model.nodes:
-                raise ValueError(f"Target node {target_node} not found in model {model_id}")
-            
-            target_node_obj = model.nodes[target_node]
-            
-            # Step 1: Get current state and possible states for target node
-            current_state = target_node_obj.get_current_state()
-            possible_states = target_node_obj.states.copy()
-            
-            if current_state in possible_states:
-                possible_states.remove(current_state)
-            
-            # If no states to intervene with, return error
-            if not possible_states:
-                return {"error": "No alternative states available for target node"}
-            
-            # Step 2: If blending enabled, use conceptual blending to generate creative intervention
-            blend_id = None
-            novel_intervention_value = None
-            
-            if use_blending:
-                # Check if we have a concept space for this model
-                space_id = None
-                
-                # If model is already mapped to a concept space, use that
-                if model_id in self.model_to_blend_mappings:
-                    space_id = self.model_to_blend_mappings[model_id]
+                # Check mappings
+                if target_node in self.node_to_concept_mappings:
+                    target_concept_id = self.node_to_concept_mappings[target_node]
                 else:
-                    # Create concept space from model
-                    space_id = await self.convert_causal_model_to_concept_space(
-                        model_id=model_id,
-                        name=f"Concept space for {model.name}"
-                    )
+                    # Find by name similarity
+                    for concept_id, concept in space.concepts.items():
+                        if concept["name"] == target_node_obj.name:
+                            target_concept_id = concept_id
+                            break
                 
-                # Get space
-                space = self.concept_spaces.get(space_id)
-                if space:
-                    # Find concept corresponding to target node
-                    target_concept_id = None
-                    
-                    # Check mappings
-                    if target_node in self.node_to_concept_mappings:
-                        target_concept_id = self.node_to_concept_mappings[target_node]
-                    else:
-                        # Find by name similarity
-                        for concept_id, concept in space.concepts.items():
-                            if concept["name"] == target_node_obj.name:
-                                target_concept_id = concept_id
+                if target_concept_id:
+                    # Find other spaces to blend with
+                    blend_spaces = []
+                    for other_space_id, other_space in self.concept_spaces.items():
+                        if other_space_id != space_id and (other_space.domain == space.domain 
+                                                    or self._domains_are_related(other_space.domain, space.domain)):
+                            blend_spaces.append(other_space)
+                            if len(blend_spaces) >= 2:  # Limit to 2 additional spaces
                                 break
                     
-                    if target_concept_id:
-                        # Find other spaces to blend with
-                        blend_spaces = []
-                        for other_space_id, other_space in self.concept_spaces.items():
-                            if other_space_id != space_id and (other_space.domain == space.domain 
-                                                        or self._domains_are_related(other_space.domain, space.domain)):
-                                blend_spaces.append(other_space)
-                                if len(blend_spaces) >= 2:  # Limit to 2 additional spaces
-                                    break
-                        
-                        if blend_spaces:
-                            # Generate contrast blend for creative intervention
-                            # First, find concept mappings
-                            mappings = []
-                            for other_space in blend_spaces:
-                                for other_concept_id, other_concept in other_space.concepts.items():
-                                    # Get target concept
-                                    target_concept = space.concepts[target_concept_id]
-                                    
-                                    # Calculate similarity
-                                    similarity = self._calculate_concept_similarity(
-                                        target_concept, other_concept, space, other_space
-                                    )
-                                    
-                                    # Add mapping if above threshold
-                                    if similarity >= self.integrated_config["cross_system_mapping_threshold"]:
-                                        mappings.append({
-                                            "space1": space.id,
-                                            "concept1": target_concept_id,
-                                            "space2": other_space.id,
-                                            "concept2": other_concept_id,
-                                            "similarity": similarity,
-                                            "mapping_type": "contrast"
-                                        })
-                            
-                            if mappings:
-                                # Generate contrast blend
-                                other_space = blend_spaces[0]
-                                blend_data = self._generate_contrast_blend(space, other_space, mappings)
-                                
-                                if blend_data:
-                                    blend_id = blend_data["id"]
-                                    blend = self.blends[blend_id]
-                                    
-                                    # Extract novel state from blend
-                                    for concept in blend.concepts.values():
-                                        # Look for concept related to target
-                                        source_concepts = concept.get("source_concepts", [])
-                                        
-                                        for source in source_concepts:
-                                            if source.get("space_id") == space.id and source.get("concept_id") == target_concept_id:
-                                                # Found relevant concept
-                                                properties = concept.get("properties", {})
-                                                
-                                                # Look for novel property value that doesn't match any existing state
-                                                for prop_value in properties.values():
-                                                    if (isinstance(prop_value, (str, int, float, bool)) 
-                                                            and prop_value not in target_node_obj.states):
-                                                        novel_intervention_value = prop_value
-                                                        break
-                                                
-                                                break
-                                        
-                                        if novel_intervention_value:
-                                            break
-            
-            # Step 3: Create intervention
-            intervention_value = novel_intervention_value or random.choice(possible_states)
-            intervention_name = f"Creative intervention on {target_node_obj.name}"
-            
-            if description:
-                intervention_name = description
-            elif blend_id:
-                intervention_name = f"Blend-based intervention on {target_node_obj.name}"
-            
-            # Create the intervention
-            intervention_id = await self.define_intervention(
-                model_id=model_id,
-                target_node=target_node,
-                target_value=intervention_value,
-                name=intervention_name,
-                description=f"Generated via integrated reasoning system" + 
-                           (f" using blend {blend_id}" if blend_id else "")
-            )
-            
-            # Update statistics
-            self.stats["creative_interventions"] += 1
-            
-            # Return intervention details
-            return {
-                "intervention_id": intervention_id,
-                "model_id": model_id,
-                "target_node": target_node,
-                "target_value": intervention_value,
-                "blend_id": blend_id,
-                "is_novel": novel_intervention_value is not None
-            }
-        
-        async def perform_integrated_analysis(self, domain: str, 
-                                        query: Dict[str, Any]) -> Dict[str, Any]:
-            """Perform integrated analysis using both causal and conceptual reasoning"""
-            # Find relevant models and spaces
-            causal_models = []
-            concept_spaces = []
-            
-            # Find causal models in domain
-            for model_id, model in self.causal_models.items():
-                if model.domain == domain or self._domains_are_related(model.domain, domain):
-                    causal_models.append(model)
-            
-            # Find concept spaces in domain
-            for space_id, space in self.concept_spaces.items():
-                if space.domain == domain or self._domains_are_related(space.domain, domain):
-                    concept_spaces.append(space)
-            
-            # If no inputs, return error
-            if not causal_models and not concept_spaces:
-                return {"error": f"No causal models or concept spaces found for domain: {domain}"}
-            
-            # Process query
-            query_type = query.get("type", "causal")
-            
-            if query_type == "causal":
-                # Perform causal analysis
-                return await self._integrated_causal_analysis(causal_models, concept_spaces, query)
-            elif query_type == "conceptual":
-                # Perform conceptual analysis
-                return await self._integrated_conceptual_analysis(causal_models, concept_spaces, query)
-            elif query_type == "counterfactual":
-                # Perform counterfactual analysis
-                return await self._integrated_counterfactual_analysis(causal_models, concept_spaces, query)
-            else:
-                return {"error": f"Unknown query type: {query_type}"}
-        
-        async def _integrated_causal_analysis(self, causal_models: List[CausalModel], 
-                                      concept_spaces: List[ConceptSpace],
-                                      query: Dict[str, Any]) -> Dict[str, Any]:
-            """Perform causal analysis with integrated conceptual reasoning"""
-            # If no causal models but concept spaces, convert a space to model
-            if not causal_models and concept_spaces:
-                # Use first space
-                space = concept_spaces[0]
-                
-                # Convert to causal model
-                model_id = await self.convert_causal_model_to_concept_space(
-                    space_id=space.id,
-                    name=f"Causal model from {space.name}"
-                )
-                
-                # Get newly created model
-                causal_models = [self.causal_models[model_id]]
-            
-            # If still no models, return error
-            if not causal_models:
-                return {"error": "No causal models available for analysis"}
-            
-            # Use model with most nodes
-            model = max(causal_models, key=lambda m: len(m.nodes))
-            
-            # Get query parameters
-            target_nodes = query.get("target_nodes", [])
-            
-            # If no target nodes specified but we have nodes, use central nodes
-            if not target_nodes and model.nodes:
-                # Find central nodes by degree centrality
-                graph = model.graph
-                
-                try:
-                    centrality = nx.degree_centrality(graph)
-                    # Get top 3 nodes by centrality
-                    target_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:3]
-                except:
-                    # If network analysis fails, just use some nodes
-                    target_nodes = list(model.nodes.keys())[:3]
-            
-            # Perform causal analysis
-            result = {
-                "model_id": model.id,
-                "model_name": model.name,
-                "target_nodes": []
-            }
-            
-            for node_id in target_nodes:
-                if node_id in model.nodes:
-                    node = model.nodes[node_id]
-                    
-                    # Get node information
-                    node_info = {
-                        "id": node_id,
-                        "name": node.name,
-                        "type": node.type,
-                        "current_state": node.get_current_state(),
-                        "possible_states": node.states,
-                        "causes": [],
-                        "effects": [],
-                        "related_concepts": []
-                    }
-                    
-                    # Get causes (parents)
-                    parents = list(model.graph.predecessors(node_id))
-                    for parent_id in parents:
-                        parent = model.nodes.get(parent_id)
-                        if parent:
-                            relations = model.get_relations_between(parent_id, node_id)
-                            
-                            for relation in relations:
-                                node_info["causes"].append({
-                                    "id": parent_id,
-                                    "name": parent.name,
-                                    "relation_type": relation.type,
-                                    "strength": relation.strength,
-                                    "mechanism": relation.mechanism
-                                })
-                    
-                    # Get effects (children)
-                    children = list(model.graph.successors(node_id))
-                    for child_id in children:
-                        child = model.nodes.get(child_id)
-                        if child:
-                            relations = model.get_relations_between(node_id, child_id)
-                            
-                            for relation in relations:
-                                node_info["effects"].append({
-                                    "id": child_id,
-                                    "name": child.name,
-                                    "relation_type": relation.type,
-                                    "strength": relation.strength,
-                                    "mechanism": relation.mechanism
-                                })
-                    
-                    # Find related concepts in concept spaces
-                    if node_id in self.node_to_concept_mappings:
-                        concept_id = self.node_to_concept_mappings[node_id]
-                        
-                        for space in concept_spaces:
-                            # Find related concepts
-                            if concept_id in space.concepts:
-                                related = space.get_related_concepts(concept_id)
-                                
-                                for related_data in related:
-                                    related_concept = related_data["concept"]
-                                    relation = related_data["relation"]
-                                    
-                                    node_info["related_concepts"].append({
-                                        "id": related_concept["id"],
-                                        "name": related_concept["name"],
-                                        "space_id": space.id,
-                                        "space_name": space.name,
-                                        "relation_type": relation["type"],
-                                        "strength": relation["strength"]
-                                    })
-                    
-                    result["target_nodes"].append(node_info)
-            
-            # Update statistics
-            self.stats["integrated_analyses"] += 1
-            
-            return result
-        
-        async def _integrated_conceptual_analysis(self, causal_models: List[CausalModel], 
-                                         concept_spaces: List[ConceptSpace],
-                                         query: Dict[str, Any]) -> Dict[str, Any]:
-            """Perform conceptual analysis with integrated causal reasoning"""
-            # If no concept spaces but causal models, convert a model to space
-            if not concept_spaces and causal_models:
-                # Use first model
-                model = causal_models[0]
-                
-                # Convert to concept space
-                space_id = await self.convert_causal_model_to_concept_space(
-                    model_id=model.id,
-                    name=f"Concept space from {model.name}"
-                )
-                
-                # Get newly created space
-                concept_spaces = [self.concept_spaces[space_id]]
-            
-            # If still no spaces, return error
-            if not concept_spaces:
-                return {"error": "No concept spaces available for analysis"}
-            
-            # Use space with most concepts
-            space = max(concept_spaces, key=lambda s: len(s.concepts))
-            
-            # Get query parameters
-            concept_query = query.get("concept_query", "")
-            limit = query.get("limit", 5)
-            
-            # Find relevant concepts based on query string
-            relevant_concepts = []
-            
-            if concept_query:
-                # Find concepts by name or property match
-                for concept_id, concept in space.concepts.items():
-                    name_match = concept_query.lower() in concept["name"].lower()
-                    
-                    # Check properties
-                    property_match = False
-                    for prop_name, prop_value in concept.get("properties", {}).items():
-                        if isinstance(prop_value, str) and concept_query.lower() in prop_value.lower():
-                            property_match = True
-                            break
-                    
-                    if name_match or property_match:
-                        relevant_concepts.append(concept_id)
-            else:
-                # If no query, use random concepts
-                concept_ids = list(space.concepts.keys())
-                sample_size = min(limit, len(concept_ids))
-                relevant_concepts = random.sample(concept_ids, sample_size)
-            
-            # Perform conceptual analysis
-            result = {
-                "space_id": space.id,
-                "space_name": space.name,
-                "concepts": []
-            }
-            
-            for concept_id in relevant_concepts[:limit]:
-                concept = space.concepts[concept_id]
-                
-                # Get concept information
-                concept_info = {
-                    "id": concept_id,
-                    "name": concept["name"],
-                    "properties": concept.get("properties", {}),
-                    "related_concepts": [],
-                    "causal_factors": []
-                }
-                
-                # Get related concepts
-                related = space.get_related_concepts(concept_id)
-                
-                for related_data in related:
-                    related_concept = related_data["concept"]
-                    relation = related_data["relation"]
-                    
-                    concept_info["related_concepts"].append({
-                        "id": related_concept["id"],
-                        "name": related_concept["name"],
-                        "relation_type": relation["type"],
-                        "strength": relation["strength"]
-                    })
-                
-                # Find causal factors in causal models
-                if concept_id in self.concept_to_node_mappings:
-                    node_id = self.concept_to_node_mappings[concept_id]
-                    
-                    for model in causal_models:
-                        if node_id in model.nodes:
-                            # Get node
-                            node = model.nodes[node_id]
-                            
-                            # Get causes (parents)
-                            parents = list(model.graph.predecessors(node_id))
-                            for parent_id in parents:
-                                parent = model.nodes.get(parent_id)
-                                if parent:
-                                    relations = model.get_relations_between(parent_id, node_id)
-                                    
-                                    for relation in relations:
-                                        concept_info["causal_factors"].append({
-                                            "id": parent_id,
-                                            "name": parent.name,
-                                            "model_id": model.id,
-                                            "model_name": model.name,
-                                            "relation_type": relation.type,
-                                            "strength": relation.strength,
-                                            "direction": "cause"
-                                        })
-                            
-                            # Get effects (children)
-                            children = list(model.graph.successors(node_id))
-                            for child_id in children:
-                                child = model.nodes.get(child_id)
-                                if child:
-                                    relations = model.get_relations_between(node_id, child_id)
-                                    
-                                    for relation in relations:
-                                        concept_info["causal_factors"].append({
-                                            "id": child_id,
-                                            "name": child.name,
-                                            "model_id": model.id,
-                                            "model_name": model.name,
-                                            "relation_type": relation.type,
-                                            "strength": relation.strength,
-                                            "direction": "effect"
-                                        })
-                
-                result["concepts"].append(concept_info)
-            
-            # Update statistics
-            self.stats["integrated_analyses"] += 1
-            
-            return result
-        
-        async def _integrated_counterfactual_analysis(self, causal_models: List[CausalModel], 
-                                             concept_spaces: List[ConceptSpace],
-                                             query: Dict[str, Any]) -> Dict[str, Any]:
-            """Perform counterfactual analysis with both causal and conceptual reasoning"""
-            # Need at least one causal model
-            if not causal_models:
-                # Try to create from concept space
-                if concept_spaces:
-                    space = concept_spaces[0]
-                    
-                    # Convert to causal model
-                    model_id = await self.convert_blend_to_causal_model(
-                        space_id=space.id,
-                        name=f"Causal model from {space.name}"
-                    )
-                    
-                    # Get newly created model
-                    causal_models = [self.causal_models[model_id]]
-                else:
-                    return {"error": "No causal models or concept spaces available for counterfactual analysis"}
-            
-            # Get model for counterfactual
-            model = causal_models[0]
-            
-            # Get counterfactual parameters
-            cf_values = query.get("counterfactual_values", {})
-            
-            # If no counterfactual values, generate creative ones using conceptual blending
-            if not cf_values and self.integrated_config["enable_auto_blending"]:
-                # First, generate a concept space if needed
-                space_id = None
-                
-                if model.id in self.model_to_blend_mappings:
-                    space_id = self.model_to_blend_mappings[model.id]
-                else:
-                    space_id = await self.convert_causal_model_to_concept_space(
-                        model_id=model.id,
-                        name=f"Concept space from {model.name}"
-                    )
-                
-                # Generate blend with other spaces
-                if space_id and concept_spaces:
-                    space = self.concept_spaces[space_id]
-                    other_spaces = [s for s in concept_spaces if s.id != space_id]
-                    
-                    if other_spaces:
-                        # Find mappings
+                    if blend_spaces:
+                        # Generate contrast blend for creative intervention
+                        # First, find concept mappings
                         mappings = []
-                        other_space = other_spaces[0]
-                        
-                        for concept1_id, concept1 in space.concepts.items():
-                            for concept2_id, concept2 in other_space.concepts.items():
+                        for other_space in blend_spaces:
+                            for other_concept_id, other_concept in other_space.concepts.items():
+                                # Get target concept
+                                target_concept = space.concepts[target_concept_id]
+                                
                                 # Calculate similarity
                                 similarity = self._calculate_concept_similarity(
-                                    concept1, concept2, space, other_space
+                                    target_concept, other_concept, space, other_space
                                 )
                                 
-                                # If above threshold, add mapping
+                                # Add mapping if above threshold
                                 if similarity >= self.integrated_config["cross_system_mapping_threshold"]:
                                     mappings.append({
                                         "space1": space.id,
-                                        "concept1": concept1_id,
+                                        "concept1": target_concept_id,
                                         "space2": other_space.id,
-                                        "concept2": concept2_id,
-                                        "similarity": similarity
+                                        "concept2": other_concept_id,
+                                        "similarity": similarity,
+                                        "mapping_type": "contrast"
                                     })
                         
-                        # Generate contrast blend
                         if mappings:
+                            # Generate contrast blend
+                            other_space = blend_spaces[0]
                             blend_data = self._generate_contrast_blend(space, other_space, mappings)
                             
                             if blend_data:
                                 blend_id = blend_data["id"]
                                 blend = self.blends[blend_id]
                                 
-                                # Generate counterfactual values from blend
-                                for concept_id, concept in blend.concepts.items():
+                                # Extract novel state from blend
+                                for concept in blend.concepts.values():
+                                    # Look for concept related to target
                                     source_concepts = concept.get("source_concepts", [])
                                     
-                                    # Find source concept from model
                                     for source in source_concepts:
-                                        if source.get("space_id") == space_id:
-                                            # Get corresponding causal node
-                                            concept_id = source.get("concept_id")
+                                        if source.get("space_id") == space.id and source.get("concept_id") == target_concept_id:
+                                            # Found relevant concept
+                                            properties = concept.get("properties", {})
                                             
-                                            if concept_id in self.concept_to_node_mappings:
-                                                node_id = self.concept_to_node_mappings[concept_id]
-                                                
-                                                # Find novel property values
-                                                node = model.nodes.get(node_id)
-                                                
-                                                if node:
-                                                    for prop_name, prop_value in concept.get("properties", {}).items():
-                                                        if prop_name.startswith("contrast_") and isinstance(prop_value, (str, int, float, bool)):
-                                                            # Add as counterfactual value
-                                                            cf_values[node_id] = prop_value
-                                                            break
+                                            # Look for novel property value that doesn't match any existing state
+                                            for prop_value in properties.values():
+                                                if (isinstance(prop_value, (str, int, float, bool)) 
+                                                        and prop_value not in target_node_obj.states):
+                                                    novel_intervention_value = prop_value
+                                                    break
+                                            
+                                            break
+                                    
+                                    if novel_intervention_value:
+                                        break
+        
+        # Step 3: Create intervention
+        intervention_value = novel_intervention_value or random.choice(possible_states)
+        intervention_name = f"Creative intervention on {target_node_obj.name}"
+        
+        if description:
+            intervention_name = description
+        elif blend_id:
+            intervention_name = f"Blend-based intervention on {target_node_obj.name}"
+        
+        # Create the intervention
+        intervention_id = await self.define_intervention(
+            model_id=model_id,
+            target_node=target_node,
+            target_value=intervention_value,
+            name=intervention_name,
+            description=f"Generated via integrated reasoning system" + 
+                       (f" using blend {blend_id}" if blend_id else "")
+        )
+        
+        # Update statistics
+        self.stats["creative_interventions"] += 1
+        
+        # Return intervention details
+        return {
+            "intervention_id": intervention_id,
+            "model_id": model_id,
+            "target_node": target_node,
+            "target_value": intervention_value,
+            "blend_id": blend_id,
+            "is_novel": novel_intervention_value is not None
+        }
+        
+    async def perform_integrated_analysis(self, domain: str, 
+                                    query: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform integrated analysis using both causal and conceptual reasoning"""
+        # Find relevant models and spaces
+        causal_models = []
+        concept_spaces = []
+        
+        # Find causal models in domain
+        for model_id, model in self.causal_models.items():
+            if model.domain == domain or self._domains_are_related(model.domain, domain):
+                causal_models.append(model)
+        
+        # Find concept spaces in domain
+        for space_id, space in self.concept_spaces.items():
+            if space.domain == domain or self._domains_are_related(space.domain, domain):
+                concept_spaces.append(space)
+        
+        # If no inputs, return error
+        if not causal_models and not concept_spaces:
+            return {"error": f"No causal models or concept spaces found for domain: {domain}"}
+        
+        # Process query
+        query_type = query.get("type", "causal")
+        
+        if query_type == "causal":
+            # Perform causal analysis
+            return await self._integrated_causal_analysis(causal_models, concept_spaces, query)
+        elif query_type == "conceptual":
+            # Perform conceptual analysis
+            return await self._integrated_conceptual_analysis(causal_models, concept_spaces, query)
+        elif query_type == "counterfactual":
+            # Perform counterfactual analysis
+            return await self._integrated_counterfactual_analysis(causal_models, concept_spaces, query)
+        else:
+            return {"error": f"Unknown query type: {query_type}"}
+    
+    async def _integrated_causal_analysis(self, causal_models: List[CausalModel], 
+                                  concept_spaces: List[ConceptSpace],
+                                  query: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform causal analysis with integrated conceptual reasoning"""
+        # If no causal models but concept spaces, convert a space to model
+        if not causal_models and concept_spaces:
+            # Use first space
+            space = concept_spaces[0]
             
-            # If still no counterfactual values, generate some from model
-            if not cf_values:
-                # Find central nodes
-                try:
-                    centrality = nx.degree_centrality(model.graph)
-                    # Get top 2 nodes by centrality
-                    central_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:2]
-                    
-                    # Set counterfactual values
-                    for node_id in central_nodes:
-                        node = model.nodes.get(node_id)
-                        if node and node.states:
-                            current_state = node.get_current_state()
-                            
-                            # Choose a different state
-                            alternative_states = [s for s in node.states if s != current_state]
-                            if alternative_states:
-                                cf_values[node_id] = random.choice(alternative_states)
-                except:
-                    # If network analysis fails, just use some random nodes
-                    node_ids = list(model.nodes.keys())
-                    
-                    if node_ids:
-                        # Choose a random node
-                        node_id = random.choice(node_ids)
-                        node = model.nodes.get(node_id)
-                        
-                        if node and node.states:
-                            current_state = node.get_current_state()
-                            
-                            # Choose a different state
-                            alternative_states = [s for s in node.states if s != current_state]
-                            if alternative_states:
-                                cf_values[node_id] = random.choice(alternative_states)
-            
-            # Perform counterfactual reasoning
-            factual_values = query.get("factual_values", {})
-            target_nodes = query.get("target_nodes", [])
-            
-            result = await self.reason_counterfactually(
-                model_id=model.id,
-                query={
-                    "factual_values": factual_values,
-                    "counterfactual_values": cf_values,
-                    "target_nodes": target_nodes
-                }
+            # Convert to causal model
+            model_id = await self.convert_causal_model_to_concept_space(
+                space_id=space.id,
+                name=f"Causal model from {space.name}"
             )
             
-            # Add conceptual insights if available
-            if concept_spaces:
-                conceptual_insights = []
+            # Get newly created model
+            causal_models = [self.causal_models[model_id]]
+        
+        # If still no models, return error
+        if not causal_models:
+            return {"error": "No causal models available for analysis"}
+        
+        # Use model with most nodes
+        model = max(causal_models, key=lambda m: len(m.nodes))
+        
+        # Get query parameters
+        target_nodes = query.get("target_nodes", [])
+        
+        # If no target nodes specified but we have nodes, use central nodes
+        if not target_nodes and model.nodes:
+            # Find central nodes by degree centrality
+            graph = model.graph
+            
+            try:
+                centrality = nx.degree_centrality(graph)
+                # Get top 3 nodes by centrality
+                target_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:3]
+            except:
+                # If network analysis fails, just use some nodes
+                target_nodes = list(model.nodes.keys())[:3]
+        
+        # Perform causal analysis
+        result = {
+            "model_id": model.id,
+            "model_name": model.name,
+            "target_nodes": []
+        }
+        
+        for node_id in target_nodes:
+            if node_id in model.nodes:
+                node = model.nodes[node_id]
                 
-                # Find impacted nodes from counterfactual
-                affected_nodes = set()
+                # Get node information
+                node_info = {
+                    "id": node_id,
+                    "name": node.name,
+                    "type": node.type,
+                    "current_state": node.get_current_state(),
+                    "possible_states": node.states,
+                    "causes": [],
+                    "effects": [],
+                    "related_concepts": []
+                }
                 
-                for node_id, change in result.get("changes", {}).items():
-                    if change.get("significant", False):
-                        affected_nodes.add(node_id)
-                
-                # For each affected node, find conceptual insights
-                for node_id in affected_nodes:
-                    # If node has concept mapping, find related concepts
-                    if node_id in self.node_to_concept_mappings:
-                        concept_id = self.node_to_concept_mappings[node_id]
+                # Get causes (parents)
+                parents = list(model.graph.predecessors(node_id))
+                for parent_id in parents:
+                    parent = model.nodes.get(parent_id)
+                    if parent:
+                        relations = model.get_relations_between(parent_id, node_id)
                         
-                        for space in concept_spaces:
-                            if concept_id in space.concepts:
-                                # Get related concepts
-                                related = space.get_related_concepts(concept_id)
+                        for relation in relations:
+                            node_info["causes"].append({
+                                "id": parent_id,
+                                "name": parent.name,
+                                "relation_type": relation.type,
+                                "strength": relation.strength,
+                                "mechanism": relation.mechanism
+                            })
+                
+                # Get effects (children)
+                children = list(model.graph.successors(node_id))
+                for child_id in children:
+                    child = model.nodes.get(child_id)
+                    if child:
+                        relations = model.get_relations_between(node_id, child_id)
+                        
+                        for relation in relations:
+                            node_info["effects"].append({
+                                "id": child_id,
+                                "name": child.name,
+                                "relation_type": relation.type,
+                                "strength": relation.strength,
+                                "mechanism": relation.mechanism
+                            })
+                
+                # Find related concepts in concept spaces
+                if node_id in self.node_to_concept_mappings:
+                    concept_id = self.node_to_concept_mappings[node_id]
+                    
+                    for space in concept_spaces:
+                        # Find related concepts
+                        if concept_id in space.concepts:
+                            related = space.get_related_concepts(concept_id)
+                            
+                            for related_data in related:
+                                related_concept = related_data["concept"]
+                                relation = related_data["relation"]
                                 
-                                if related:
-                                    conceptual_insights.append({
-                                        "node_id": node_id,
-                                        "node_name": model.nodes[node_id].name if node_id in model.nodes else "",
-                                        "space_id": space.id,
-                                        "space_name": space.name,
-                                        "related_concepts": [
-                                            {
-                                                "id": r["concept"]["id"],
-                                                "name": r["concept"]["name"],
-                                                "relation_type": r["relation"]["type"],
-                                                "strength": r["relation"]["strength"]
-                                            }
-                                            for r in related[:5]  # Limit to 5 related concepts
-                                        ]
-                                    })
+                                node_info["related_concepts"].append({
+                                    "id": related_concept["id"],
+                                    "name": related_concept["name"],
+                                    "space_id": space.id,
+                                    "space_name": space.name,
+                                    "relation_type": relation["type"],
+                                    "strength": relation["strength"]
+                                })
                 
-                # Add insights to result
-                result["conceptual_insights"] = conceptual_insights
-            
-            # Update statistics
-            self.stats["integrated_analyses"] += 1
-            
-            return result
+                result["target_nodes"].append(node_info)
         
-        async def get_stats(self) -> Dict[str, Any]:
-            """Get statistics about the integrated reasoning system"""
-            return {
-                "timestamp": datetime.now().isoformat(),
-                "causal_stats": {
-                    "models": self.stats["models_created"],
-                    "nodes": self.stats["nodes_created"],
-                    "relations": self.stats["relations_created"],
-                    "interventions": self.stats["interventions_performed"],
-                    "counterfactuals": self.stats["counterfactuals_analyzed"],
-                    "discovery_runs": self.stats["discovery_runs"]
-                },
-                "conceptual_stats": {
-                    "spaces": self.stats["spaces_created"],
-                    "concepts": self.stats["concepts_created"],
-                    "concept_relations": self.stats["concept_relations_created"],
-                    "blends": self.stats["blends_created"],
-                    "blend_evaluations": self.stats["blend_evaluations"]
-                },
-                "integrated_stats": {
-                    "causal_to_conceptual": self.stats["causal_to_conceptual_conversions"],
-                    "conceptual_to_causal": self.stats["conceptual_to_causal_conversions"],
-                    "integrated_analyses": self.stats["integrated_analyses"],
-                    "creative_interventions": self.stats["creative_interventions"]
-                },
-                "configuration": {
-                    "causal": self.causal_config,
-                    "blending": self.blending_config,
-                    "integrated": self.integrated_config
-                }
+        # Update statistics
+        self.stats["integrated_analyses"] += 1
+        
+        return result
+    
+    async def _integrated_conceptual_analysis(self, causal_models: List[CausalModel], 
+                                     concept_spaces: List[ConceptSpace],
+                                     query: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform conceptual analysis with integrated causal reasoning"""
+        # If no concept spaces but causal models, convert a model to space
+        if not concept_spaces and causal_models:
+            # Use first model
+            model = causal_models[0]
+            
+            # Convert to concept space
+            space_id = await self.convert_causal_model_to_concept_space(
+                model_id=model.id,
+                name=f"Concept space from {model.name}"
+            )
+            
+            # Get newly created space
+            concept_spaces = [self.concept_spaces[space_id]]
+        
+        # If still no spaces, return error
+        if not concept_spaces:
+            return {"error": "No concept spaces available for analysis"}
+        
+        # Use space with most concepts
+        space = max(concept_spaces, key=lambda s: len(s.concepts))
+        
+        # Get query parameters
+        concept_query = query.get("concept_query", "")
+        limit = query.get("limit", 5)
+        
+        # Find relevant concepts based on query string
+        relevant_concepts = []
+        
+        if concept_query:
+            # Find concepts by name or property match
+            for concept_id, concept in space.concepts.items():
+                name_match = concept_query.lower() in concept["name"].lower()
+                
+                # Check properties
+                property_match = False
+                for prop_name, prop_value in concept.get("properties", {}).items():
+                    if isinstance(prop_value, str) and concept_query.lower() in prop_value.lower():
+                        property_match = True
+                        break
+                
+                if name_match or property_match:
+                    relevant_concepts.append(concept_id)
+        else:
+            # If no query, use random concepts
+            concept_ids = list(space.concepts.keys())
+            sample_size = min(limit, len(concept_ids))
+            relevant_concepts = random.sample(concept_ids, sample_size)
+        
+        # Perform conceptual analysis
+        result = {
+            "space_id": space.id,
+            "space_name": space.name,
+            "concepts": []
+        }
+        
+        for concept_id in relevant_concepts[:limit]:
+            concept = space.concepts[concept_id]
+            
+            # Get concept information
+            concept_info = {
+                "id": concept_id,
+                "name": concept["name"],
+                "properties": concept.get("properties", {}),
+                "related_concepts": [],
+                "causal_factors": []
             }
-        
-        async def save_state(self, file_path: str) -> bool:
-            """Save current state to file"""
-            try:
-                state = {
-                    "causal_models": {model_id: model.to_dict() for model_id, model in self.causal_models.items()},
-                    "interventions": {int_id: intervention.to_dict() for int_id, intervention in self.interventions.items()},
-                    "counterfactuals": self.counterfactuals,
-                    "observations": self.observations,
-                    "concept_spaces": {space_id: space.to_dict() for space_id, space in self.concept_spaces.items()},
-                    "blends": {blend_id: blend.to_dict() for blend_id, blend in self.blends.items()},
-                    "concept_to_node_mappings": self.concept_to_node_mappings,
-                    "node_to_concept_mappings": self.node_to_concept_mappings,
-                    "blend_to_model_mappings": self.blend_to_model_mappings,
-                    "model_to_blend_mappings": self.model_to_blend_mappings,
-                    "causal_config": self.causal_config,
-                    "blending_config": self.blending_config,
-                    "integrated_config": self.integrated_config,
-                    "stats": self.stats,
-                    "next_model_id": self.next_model_id,
-                    "next_intervention_id": self.next_intervention_id,
-                    "next_counterfactual_id": self.next_counterfactual_id,
-                    "next_space_id": self.next_space_id,
-                    "next_blend_id": self.next_blend_id,
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                with open(file_path, 'w') as f:
-                    json.dump(state, f, indent=2)
-                
-                return True
-            except Exception as e:
-                logger.error(f"Error saving integrated reasoning state: {e}")
-                return False
             
-        async def load_state(self, file_path: str) -> bool:
-            """Load state from file"""
+            # Get related concepts
+            related = space.get_related_concepts(concept_id)
+            
+            for related_data in related:
+                related_concept = related_data["concept"]
+                relation = related_data["relation"]
+                
+                concept_info["related_concepts"].append({
+                    "id": related_concept["id"],
+                    "name": related_concept["name"],
+                    "relation_type": relation["type"],
+                    "strength": relation["strength"]
+                })
+            
+            # Find causal factors in causal models
+            if concept_id in self.concept_to_node_mappings:
+                node_id = self.concept_to_node_mappings[concept_id]
+                
+                for model in causal_models:
+                    if node_id in model.nodes:
+                        # Get node
+                        node = model.nodes[node_id]
+                        
+                        # Get causes (parents)
+                        parents = list(model.graph.predecessors(node_id))
+                        for parent_id in parents:
+                            parent = model.nodes.get(parent_id)
+                            if parent:
+                                relations = model.get_relations_between(parent_id, node_id)
+                                
+                                for relation in relations:
+                                    concept_info["causal_factors"].append({
+                                        "id": parent_id,
+                                        "name": parent.name,
+                                        "model_id": model.id,
+                                        "model_name": model.name,
+                                        "relation_type": relation.type,
+                                        "strength": relation.strength,
+                                        "direction": "cause"
+                                    })
+                        
+                        # Get effects (children)
+                        children = list(model.graph.successors(node_id))
+                        for child_id in children:
+                            child = model.nodes.get(child_id)
+                            if child:
+                                relations = model.get_relations_between(node_id, child_id)
+                                
+                                for relation in relations:
+                                    concept_info["causal_factors"].append({
+                                        "id": child_id,
+                                        "name": child.name,
+                                        "model_id": model.id,
+                                        "model_name": model.name,
+                                        "relation_type": relation.type,
+                                        "strength": relation.strength,
+                                        "direction": "effect"
+                                    })
+            
+            result["concepts"].append(concept_info)
+        
+        # Update statistics
+        self.stats["integrated_analyses"] += 1
+        
+        return result
+    
+    async def _integrated_counterfactual_analysis(self, causal_models: List[CausalModel], 
+                                         concept_spaces: List[ConceptSpace],
+                                         query: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform counterfactual analysis with both causal and conceptual reasoning"""
+        # Need at least one causal model
+        if not causal_models:
+            # Try to create from concept space
+            if concept_spaces:
+                space = concept_spaces[0]
+                
+                # Convert to causal model
+                model_id = await self.convert_blend_to_causal_model(
+                    space_id=space.id,
+                    name=f"Causal model from {space.name}"
+                )
+                
+                # Get newly created model
+                causal_models = [self.causal_models[model_id]]
+            else:
+                return {"error": "No causal models or concept spaces available for counterfactual analysis"}
+        
+        # Get model for counterfactual
+        model = causal_models[0]
+        
+        # Get counterfactual parameters
+        cf_values = query.get("counterfactual_values", {})
+        
+        # If no counterfactual values, generate creative ones using conceptual blending
+        if not cf_values and self.integrated_config["enable_auto_blending"]:
+            # First, generate a concept space if needed
+            space_id = None
+            
+            if model.id in self.model_to_blend_mappings:
+                space_id = self.model_to_blend_mappings[model.id]
+            else:
+                space_id = await self.convert_causal_model_to_concept_space(
+                    model_id=model.id,
+                    name=f"Concept space from {model.name}"
+                )
+            
+            # Generate blend with other spaces
+            if space_id and concept_spaces:
+                space = self.concept_spaces[space_id]
+                other_spaces = [s for s in concept_spaces if s.id != space_id]
+                
+                if other_spaces:
+                    # Find mappings
+                    mappings = []
+                    other_space = other_spaces[0]
+                    
+                    for concept1_id, concept1 in space.concepts.items():
+                        for concept2_id, concept2 in other_space.concepts.items():
+                            # Calculate similarity
+                            similarity = self._calculate_concept_similarity(
+                                concept1, concept2, space, other_space
+                            )
+                            
+                            # If above threshold, add mapping
+                            if similarity >= self.integrated_config["cross_system_mapping_threshold"]:
+                                mappings.append({
+                                    "space1": space.id,
+                                    "concept1": concept1_id,
+                                    "space2": other_space.id,
+                                    "concept2": concept2_id,
+                                    "similarity": similarity
+                                })
+                    
+                    # Generate contrast blend
+                    if mappings:
+                        blend_data = self._generate_contrast_blend(space, other_space, mappings)
+                        
+                        if blend_data:
+                            blend_id = blend_data["id"]
+                            blend = self.blends[blend_id]
+                            
+                            # Generate counterfactual values from blend
+                            for concept_id, concept in blend.concepts.items():
+                                source_concepts = concept.get("source_concepts", [])
+                                
+                                # Find source concept from model
+                                for source in source_concepts:
+                                    if source.get("space_id") == space_id:
+                                        # Get corresponding causal node
+                                        concept_id = source.get("concept_id")
+                                        
+                                        if concept_id in self.concept_to_node_mappings:
+                                            node_id = self.concept_to_node_mappings[concept_id]
+                                            
+                                            # Find novel property values
+                                            node = model.nodes.get(node_id)
+                                            
+                                            if node:
+                                                for prop_name, prop_value in concept.get("properties", {}).items():
+                                                    if prop_name.startswith("contrast_") and isinstance(prop_value, (str, int, float, bool)):
+                                                        # Add as counterfactual value
+                                                        cf_values[node_id] = prop_value
+                                                        break
+        
+        # If still no counterfactual values, generate some from model
+        if not cf_values:
+            # Find central nodes
             try:
-                with open(file_path, 'r') as f:
-                    state = json.load(f)
+                centrality = nx.degree_centrality(model.graph)
+                # Get top 2 nodes by centrality
+                central_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:2]
                 
-                # Load causal models
-                self.causal_models = {}
-                for model_id, model_data in state["causal_models"].items():
-                    self.causal_models[model_id] = CausalModel.from_dict(model_data)
+                # Set counterfactual values
+                for node_id in central_nodes:
+                    node = model.nodes.get(node_id)
+                    if node and node.states:
+                        current_state = node.get_current_state()
+                        
+                        # Choose a different state
+                        alternative_states = [s for s in node.states if s != current_state]
+                        if alternative_states:
+                            cf_values[node_id] = random.choice(alternative_states)
+            except:
+                # If network analysis fails, just use some random nodes
+                node_ids = list(model.nodes.keys())
                 
-                # Load interventions
-                self.interventions = {}
-                for int_id, int_data in state["interventions"].items():
-                    self.interventions[int_id] = Intervention.from_dict(int_data)
-                
-                # Load concept spaces
-                self.concept_spaces = {}
-                for space_id, space_data in state["concept_spaces"].items():
-                    self.concept_spaces[space_id] = ConceptSpace.from_dict(space_data)
-                
-                # Load blends
-                self.blends = {}
-                for blend_id, blend_data in state["blends"].items():
-                    self.blends[blend_id] = ConceptualBlend.from_dict(blend_data)
-                
-                # Load mappings
-                self.concept_to_node_mappings = state["concept_to_node_mappings"]
-                self.node_to_concept_mappings = state["node_to_concept_mappings"]
-                self.blend_to_model_mappings = state["blend_to_model_mappings"]
-                self.model_to_blend_mappings = state["model_to_blend_mappings"]
-                
-                # Load other attributes
-                self.counterfactuals = state["counterfactuals"]
-                self.observations = state["observations"]
-                self.causal_config = state["causal_config"]
-                self.blending_config = state["blending_config"]
-                self.integrated_config = state["integrated_config"]
-                self.stats = state["stats"]
-                self.next_model_id = state["next_model_id"]
-                self.next_intervention_id = state["next_intervention_id"]
-                self.next_counterfactual_id = state["next_counterfactual_id"]
-                self.next_space_id = state["next_space_id"]
-                self.next_blend_id = state["next_blend_id"]
-                
-                return True
-            except Exception as e:
-                logger.error(f"Error loading integrated reasoning state: {e}")
-                return False
+                if node_ids:
+                    # Choose a random node
+                    node_id = random.choice(node_ids)
+                    node = model.nodes.get(node_id)
+                    
+                    if node and node.states:
+                        current_state = node.get_current_state()
+                        
+                        # Choose a different state
+                        alternative_states = [s for s in node.states if s != current_state]
+                        if alternative_states:
+                            cf_values[node_id] = random.choice(alternative_states)
+        
+        # Perform counterfactual reasoning
+        factual_values = query.get("factual_values", {})
+        target_nodes = query.get("target_nodes", [])
+        
+        result = await self.reason_counterfactually(
+            model_id=model.id,
+            query={
+                "factual_values": factual_values,
+                "counterfactual_values": cf_values,
+                "target_nodes": target_nodes
+            }
+        )
+        
+        # Add conceptual insights if available
+        if concept_spaces:
+            conceptual_insights = []
+            
+            # Find impacted nodes from counterfactual
+            affected_nodes = set()
+            
+            for node_id, change in result.get("changes", {}).items():
+                if change.get("significant", False):
+                    affected_nodes.add(node_id)
+            
+            # For each affected node, find conceptual insights
+            for node_id in affected_nodes:
+                # If node has concept mapping, find related concepts
+                if node_id in self.node_to_concept_mappings:
+                    concept_id = self.node_to_concept_mappings[node_id]
+                    
+                    for space in concept_spaces:
+                        if concept_id in space.concepts:
+                            # Get related concepts
+                            related = space.get_related_concepts(concept_id)
+                            
+                            if related:
+                                conceptual_insights.append({
+                                    "node_id": node_id,
+                                    "node_name": model.nodes[node_id].name if node_id in model.nodes else "",
+                                    "space_id": space.id,
+                                    "space_name": space.name,
+                                    "related_concepts": [
+                                        {
+                                            "id": r["concept"]["id"],
+                                            "name": r["concept"]["name"],
+                                            "relation_type": r["relation"]["type"],
+                                            "strength": r["relation"]["strength"]
+                                        }
+                                        for r in related[:5]  # Limit to 5 related concepts
+                                    ]
+                                })
+            
+            # Add insights to result
+            result["conceptual_insights"] = conceptual_insights
+        
+        # Update statistics
+        self.stats["integrated_analyses"] += 1
+        
+        return result
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get statistics about the integrated reasoning system"""
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "causal_stats": {
+                "models": self.stats["models_created"],
+                "nodes": self.stats["nodes_created"],
+                "relations": self.stats["relations_created"],
+                "interventions": self.stats["interventions_performed"],
+                "counterfactuals": self.stats["counterfactuals_analyzed"],
+                "discovery_runs": self.stats["discovery_runs"]
+            },
+            "conceptual_stats": {
+                "spaces": self.stats["spaces_created"],
+                "concepts": self.stats["concepts_created"],
+                "concept_relations": self.stats["concept_relations_created"],
+                "blends": self.stats["blends_created"],
+                "blend_evaluations": self.stats["blend_evaluations"]
+            },
+            "integrated_stats": {
+                "causal_to_conceptual": self.stats["causal_to_conceptual_conversions"],
+                "conceptual_to_causal": self.stats["conceptual_to_causal_conversions"],
+                "integrated_analyses": self.stats["integrated_analyses"],
+                "creative_interventions": self.stats["creative_interventions"]
+            },
+            "configuration": {
+                "causal": self.causal_config,
+                "blending": self.blending_config,
+                "integrated": self.integrated_config
+            }
+        }
+    
+    async def save_state(self, file_path: str) -> bool:
+        """Save current state to file"""
+        try:
+            state = {
+                "causal_models": {model_id: model.to_dict() for model_id, model in self.causal_models.items()},
+                "interventions": {int_id: intervention.to_dict() for int_id, intervention in self.interventions.items()},
+                "counterfactuals": self.counterfactuals,
+                "observations": self.observations,
+                "concept_spaces": {space_id: space.to_dict() for space_id, space in self.concept_spaces.items()},
+                "blends": {blend_id: blend.to_dict() for blend_id, blend in self.blends.items()},
+                "concept_to_node_mappings": self.concept_to_node_mappings,
+                "node_to_concept_mappings": self.node_to_concept_mappings,
+                "blend_to_model_mappings": self.blend_to_model_mappings,
+                "model_to_blend_mappings": self.model_to_blend_mappings,
+                "causal_config": self.causal_config,
+                "blending_config": self.blending_config,
+                "integrated_config": self.integrated_config,
+                "stats": self.stats,
+                "next_model_id": self.next_model_id,
+                "next_intervention_id": self.next_intervention_id,
+                "next_counterfactual_id": self.next_counterfactual_id,
+                "next_space_id": self.next_space_id,
+                "next_blend_id": self.next_blend_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(file_path, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving integrated reasoning state: {e}")
+            return False
+        
+    async def load_state(self, file_path: str) -> bool:
+        """Load state from file"""
+        try:
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+            
+            # Load causal models
+            self.causal_models = {}
+            for model_id, model_data in state["causal_models"].items():
+                self.causal_models[model_id] = CausalModel.from_dict(model_data)
+            
+            # Load interventions
+            self.interventions = {}
+            for int_id, int_data in state["interventions"].items():
+                self.interventions[int_id] = Intervention.from_dict(int_data)
+            
+            # Load concept spaces
+            self.concept_spaces = {}
+            for space_id, space_data in state["concept_spaces"].items():
+                self.concept_spaces[space_id] = ConceptSpace.from_dict(space_data)
+            
+            # Load blends
+            self.blends = {}
+            for blend_id, blend_data in state["blends"].items():
+                self.blends[blend_id] = ConceptualBlend.from_dict(blend_data)
+            
+            # Load mappings
+            self.concept_to_node_mappings = state["concept_to_node_mappings"]
+            self.node_to_concept_mappings = state["node_to_concept_mappings"]
+            self.blend_to_model_mappings = state["blend_to_model_mappings"]
+            self.model_to_blend_mappings = state["model_to_blend_mappings"]
+            
+            # Load other attributes
+            self.counterfactuals = state["counterfactuals"]
+            self.observations = state["observations"]
+            self.causal_config = state["causal_config"]
+            self.blending_config = state["blending_config"]
+            self.integrated_config = state["integrated_config"]
+            self.stats = state["stats"]
+            self.next_model_id = state["next_model_id"]
+            self.next_intervention_id = state["next_intervention_id"]
+            self.next_counterfactual_id = state["next_counterfactual_id"]
+            self.next_space_id = state["next_space_id"]
+            self.next_blend_id = state["next_blend_id"]
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading integrated reasoning state: {e}")
+            return False
