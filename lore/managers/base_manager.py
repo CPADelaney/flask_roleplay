@@ -284,14 +284,16 @@ class BaseLoreManager:
 
     async def initialize_tables_from_definitions(self, table_definitions: Dict[str, str]):
         """Initialize tables from provided SQL definitions."""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
+        try:
+            async with get_db_connection_context() as conn:
                 for table_name, sql in table_definitions.items():
                     try:
                         await conn.execute(sql)
                         logger.info(f"Initialized table {table_name}")
                     except Exception as e:
                         logger.error(f"Error initializing table {table_name}: {e}")
+        except Exception as e:
+            logger.error(f"Error initializing tables: {e}")
 
     async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
         """Initialize tables for a specific class."""
