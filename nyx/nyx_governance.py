@@ -60,6 +60,8 @@ class DirectiveType:
     PROHIBITION = "prohibition"
     SCENE = "scene"
     OVERRIDE = "override"
+    INFORMATION = "information"  # New addition
+
 
 
 class DirectivePriority:
