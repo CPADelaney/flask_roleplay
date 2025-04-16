@@ -607,6 +607,62 @@ class NyxUnifiedGovernor:
             ])
         
         return tasks
+
+    async def handle_directive(
+        self,
+        directive_type: str,
+        directive_data: Dict[str, Any],
+        agent_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Route a directive to the appropriate handler.
+        
+        Args:
+            directive_type: Type of directive
+            directive_data: Directive data
+            agent_type: Type of agent to handle the directive (optional)
+            
+        Returns:
+            Directive handling result
+        """
+        try:
+            # Check if we have handlers for this directive type
+            if not hasattr(self, "directive_handlers") or directive_type not in self.directive_handlers:
+                return {
+                    "success": False,
+                    "message": f"No handlers registered for directive type: {directive_type}"
+                }
+            
+            # If agent_type is specified, use that handler
+            if agent_type and agent_type in self.directive_handlers[directive_type]:
+                handler = self.directive_handlers[directive_type][agent_type]
+                return await handler.handle_directive({
+                    "type": directive_type,
+                    "data": directive_data
+                })
+            
+            # Otherwise, try all registered handlers for this directive type
+            for handler_agent_type, handler in self.directive_handlers[directive_type].items():
+                try:
+                    result = await handler.handle_directive({
+                        "type": directive_type,
+                        "data": directive_data
+                    })
+                    if result.get("success", False):
+                        return result
+                except Exception as e:
+                    logger.warning(f"Handler {handler_agent_type} failed to handle {directive_type} directive: {str(e)}")
+            
+            return {
+                "success": False,
+                "message": f"No handler successfully processed directive type: {directive_type}"
+            }
+        except Exception as e:
+            logger.error(f"Error handling directive: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Error handling directive: {str(e)}"
+            }
     
     async def _generate_success_criteria(
         self,
