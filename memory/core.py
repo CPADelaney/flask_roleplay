@@ -1031,9 +1031,9 @@ class UnifiedMemoryManager:
             "memories_archived": archived
         }
 
-    @staticmethod
+    @classmethod
     @with_transaction
-    async def create_tables(conn: Optional[asyncpg.Connection] = None) -> None:
+    async def create_tables(cls, conn: Optional[asyncpg.Connection] = None) -> None:
         """
         Static method: Initializes all required tables for unified memory.
         Must be called as UnifiedMemoryManager.create_tables(conn), NOT as an instance method.
