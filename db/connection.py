@@ -82,6 +82,14 @@ async def initialize_connection_pool():
         DB_POOL = None
         return False
 
+async def get_db_connection_pool():
+    global DB_POOL
+    if DB_POOL is None or DB_POOL._closed:
+        ok = await initialize_connection_pool()
+        if not ok or DB_POOL is None:
+            raise ConnectionError("Could not initialize DB pool.")
+    return DB_POOL
+
 
 @asynccontextmanager
 async def get_db_connection_context(timeout: Optional[float] = 30.0):
