@@ -12,7 +12,7 @@ from flask import Blueprint, request, jsonify, session
 
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from logic.conflict_system.conflict_integration import register_enhanced_integration
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
