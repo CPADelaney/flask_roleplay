@@ -83,6 +83,74 @@ async def get_resolution_paths(ctx: RunContextWrapper, conflict_id: int) -> List
         return []
 
 @function_tool
+@track_performance("update_conflict_progress")
+async def update_conflict_progress(
+    ctx, 
+    conflict_id: int, 
+    progress_increment: float
+) -> Dict[str, Any]:
+    """
+    Update the progress of a conflict.
+    
+    Args:
+        conflict_id: ID of the conflict to update
+        progress_increment: Amount to increment the progress (0-100)
+        
+    Returns:
+        Updated conflict information
+    """
+    context = ctx.context
+    conflict_manager = context.conflict_manager
+    
+    try:
+        # Get current conflict info
+        old_conflict = await conflict_manager.get_conflict(conflict_id)
+        old_phase = old_conflict['phase']
+        
+        # Update progress
+        updated_conflict = await conflict_manager.update_conflict_progress(conflict_id, progress_increment)
+        
+        # NEW: Store this update as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_importance = 0.5  # Default importance
+            
+            # Increase importance if phase changed
+            if updated_conflict['phase'] != old_phase:
+                memory_importance = 0.7
+                
+            memory_content = (
+                f"Updated conflict {updated_conflict['conflict_name']} progress by {progress_increment} points "
+                f"to {updated_conflict['progress']}%. "
+            )
+            
+            if updated_conflict['phase'] != old_phase:
+                memory_content += f"Phase advanced from {old_phase} to {updated_conflict['phase']}."
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "conflict_progression",
+                memory_importance
+            )
+        
+        return {
+            "conflict_id": conflict_id,
+            "new_progress": updated_conflict['progress'],
+            "new_phase": updated_conflict['phase'],
+            "phase_changed": updated_conflict['phase'] != old_phase,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"Error updating conflict progress: {str(e)}", exc_info=True)
+        return {
+            "conflict_id": conflict_id,
+            "new_progress": 0,
+            "new_phase": "unknown",
+            "phase_changed": False,
+            "success": False,
+            "error": str(e)
+        }
+
+@function_tool
 async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """
     Get all active conflicts for the current user and conversation.
