@@ -619,7 +619,7 @@ class BaseLoreManager:
             "conversation_id": self.conversation_id,
             "timestamp": datetime.now().isoformat()
         }
-
+    
     async def _maintenance_loop(self):
         while True:
             try:
@@ -628,17 +628,15 @@ class BaseLoreManager:
                 break
             except Exception as e:
                 logger.error(f"Error in maintenance loop: {e}")
-            await asyncio.sleep(300)
-
+            await asyncio.sleep(300)  # Sleep 5 min
+    
     async def _maintenance_once(self):
-        # This is your old loop's body, just without 'while'
         run_ctx = RunContextWrapper(context={
             "user_id": self.user_id,
             "conversation_id": self.conversation_id
         })
         stats = await self.get_cache_stats(run_ctx)
-                
-        # Evaluate with MaintenanceAgent
+        
         with trace(
             "MaintenanceCheck",
             metadata={"component": "BaseLoreManager"}
@@ -671,20 +669,10 @@ class BaseLoreManager:
                 msg = decision.get("message", "Maintenance warning triggered by agent.")
                 logger.warning(msg)
             elif decision.get("action") == "clear_cache":
-                # For example, if the agent says to forcibly clear everything
                 logger.warning("Agent recommended clearing entire cache. Doing so now.")
                 self.cache.clear()
-            else:
-                # No action
-                pass
-
-        await asyncio.sleep(300)  # Sleep 5 min
-    except asyncio.CancelledError:
-        break
-    except Exception as e:
-        logger.error(f"Error in maintenance loop: {e}")
-        await asyncio.sleep(300)  # Sleep 5 min if error, then retry
-
+            # No else/else-pass needed
+    
     @function_tool
     async def maintenance_loop_tool(self):
         """
