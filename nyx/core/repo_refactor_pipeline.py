@@ -100,7 +100,7 @@ async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
         return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
 
     openai.api_key = api_key
-    resp = await openai_client.chat.responses.create(
+    resp = await openai.chat.responses.create(
         model=model,
         messages=[
             {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
