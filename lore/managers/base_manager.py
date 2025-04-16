@@ -272,10 +272,15 @@ class BaseLoreManager:
             raise
 
     async def ensure_initialized(self):
+        """
+        Full startup: agents → governance → tables → maintenance loop.
+        """
         if self.initialized:
             return
+
         await self.initialize_agents()
         await self.initialize_governance()
+        await self._initialize_tables()                 # ← subclass provides DDLs here
         self.maintenance_task = asyncio.create_task(self._maintenance_loop())
         self.initialized = True
 
@@ -288,13 +293,13 @@ class BaseLoreManager:
                 except Exception as exc:  # noqa: BLE001
                     logger.error("init table %s failed: %s", name, exc)
 
-    # internal helper used by subclasses
     async def _initialize_tables_for_class_impl(self, defs: Dict[str, str]):
         await self.initialize_tables_from_definitions(defs)
-
+    
+    # agent‑callable tool, with a distinct name
     @staticmethod
     @function_tool
-    async def initialize_tables_for_class(ctx: RunContextWrapper, table_definitions: Dict[str, str]):
+    async def initialize_tables_tool(ctx: RunContextWrapper, table_definitions: Dict[str, str]):
         mgr = _mgr(ctx)
         await mgr._initialize_tables_for_class_impl(table_definitions)
         return {"status": "ok"}
@@ -422,6 +427,7 @@ class BaseLoreManager:
         }
 
     # THIS is the ONLY agent-tool-exposed version!
+    @staticmethod
     @function_tool
     async def get_cache_stats(ctx: RunContextWrapper) -> dict:
         # retrieve manager instance from context!
@@ -471,7 +477,8 @@ class BaseLoreManager:
                 logger.warning("Agent recommended clearing entire cache. Doing so now.")
                 self._cache.clear()
             # No else/else-pass needed
-    
+
+    @staticmethod
     @function_tool
     async def maintenance_tool(self):
         """Agent-accessible: run a single maintenance pass on demand."""
