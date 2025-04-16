@@ -129,10 +129,13 @@ class RepoRefactorPipeline:
         *,
         approve_callback: Optional[Callable[[str], bool]] = None,
         open_pr: bool = False,
-        model: str = "o3-turbo",
+        model: str = "o4-mini",
     ) -> Dict[str, Any]:
         # Step 1: ingest / embed changed files
-        changed = self.system.tracker.changed_files()
+        full_scan = os.getenv("FULL_SCAN", "false").lower() == "true"
+        changed = (list(self.system.tracker.root.rglob("*"))
+                   if full_scan
+                   else self.system.tracker.changed_files())
         await self.system.incremental_codebase_analysis()
 
         # Step 2: static analysis on changed paths
