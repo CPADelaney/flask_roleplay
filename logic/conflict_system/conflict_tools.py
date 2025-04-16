@@ -634,6 +634,74 @@ async def generate_conflict(
     return await get_conflict_details(ctx, conflict_id)
 
 @function_tool
+async def get_internal_conflicts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
+    """
+    Get internal faction conflicts for a specific conflict.
+    
+    Args:
+        ctx: RunContextWrapper with user context
+        conflict_id: ID of the parent conflict
+        
+    Returns:
+        List of internal faction conflict dictionaries
+    """
+    context = ctx.context
+    
+    try:
+        async with get_db_connection_context() as conn:
+            # Get internal faction conflicts
+            internal_conflicts_rows = await conn.fetch("""
+                SELECT struggle_id, faction_id, conflict_name, description,
+                       primary_npc_id, target_npc_id, prize, approach, 
+                       public_knowledge, current_phase, progress
+                FROM InternalFactionConflicts
+                WHERE parent_conflict_id = $1
+                ORDER BY progress DESC
+            """, conflict_id)
+            
+            internal_conflicts = []
+            for row in internal_conflicts_rows:
+                internal_conflict = dict(row)
+                
+                # Get faction name
+                faction_name = await get_faction_name(ctx, internal_conflict["faction_id"])
+                
+                # Get NPC names
+                primary_npc_name = await get_npc_name(ctx, internal_conflict["primary_npc_id"])
+                target_npc_name = await get_npc_name(ctx, internal_conflict["target_npc_id"])
+                
+                internal_conflict["faction_name"] = faction_name
+                internal_conflict["primary_npc_name"] = primary_npc_name
+                internal_conflict["target_npc_name"] = target_npc_name
+                
+                # Get faction members involved in the struggle if available
+                try:
+                    members_rows = await conn.fetch("""
+                        SELECT npc_id, position, side, standing, loyalty_strength, reason
+                        FROM FactionStruggleMembers
+                        WHERE struggle_id = $1
+                    """, internal_conflict["struggle_id"])
+                    
+                    if members_rows:
+                        members = []
+                        for member_row in members_rows:
+                            member = dict(member_row)
+                            member["npc_name"] = await get_npc_name(ctx, member["npc_id"])
+                            members.append(member)
+                        
+                        internal_conflict["faction_members"] = members
+                except Exception:
+                    # If table doesn't exist or other error, continue without members
+                    pass
+                
+                internal_conflicts.append(internal_conflict)
+            
+            return internal_conflicts
+    except Exception as e:
+        logger.error(f"Error getting internal conflicts for conflict {conflict_id}: {e}", exc_info=True)
+        return []
+
+@function_tool
 async def get_current_day(ctx: RunContextWrapper) -> int:
     """Get the current in-game day."""
     context = ctx.context
