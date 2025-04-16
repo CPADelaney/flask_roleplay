@@ -176,6 +176,16 @@ class IntegratedNPCSystem:
         # Start the task without waiting for it
         asyncio.create_task(cache_cleanup_task())
 
+    async def initialize(self):
+        """Initialize any async components that weren't initialized in the constructor."""
+        # Initialize memory system if needed
+        if MEMORY_SYSTEM_AVAILABLE and self._memory_system is None:
+            try:
+                self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+            except Exception as e:
+                logger.error(f"Failed to initialize memory system: {e}")
+        return self
+
     def _detect_memory_pressure(self):
         """Detect memory pressure in the application."""
         try:
