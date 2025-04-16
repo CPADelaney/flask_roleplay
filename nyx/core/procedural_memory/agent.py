@@ -13,7 +13,6 @@ from agents import (
     handoff, function_tool, custom_span, trace, RunHooks,
     input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper
 )
-from agents.tracing import Trace, TraceProvider
 from agents.exceptions import UserError, MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field, create_model
 
