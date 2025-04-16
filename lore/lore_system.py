@@ -92,38 +92,69 @@ class LoreSystem:
             return True
 
         try:
-            # Initialize governance
             from nyx.integrate import get_central_governance
+
+            logger.info("[LoreSystem] Initializing governance")
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
 
             # 6. Initialize the data access + integration components
+            logger.info("[LoreSystem] Initializing: NPCDataAccess")
             await self.npc_data.initialize()
+
+            logger.info("[LoreSystem] Initializing: LocationDataAccess")
             await self.location_data.initialize()
+
+            logger.info("[LoreSystem] Initializing: FactionDataAccess")
             await self.faction_data.initialize()
+
+            logger.info("[LoreSystem] Initializing: LoreKnowledgeAccess")
             await self.lore_knowledge.initialize()
 
+            logger.info("[LoreSystem] Initializing: NPCLoreIntegration")
             await self.npc_integration.initialize()
+
+            logger.info("[LoreSystem] Initializing: ConflictIntegration")
             await self.conflict_integration.initialize()
+
+            logger.info("[LoreSystem] Initializing: ContextEnhancer")
             await self.context_enhancer.initialize()
+
+            logger.info("[LoreSystem] Initializing: DynamicLoreGenerator")
             await self.generator.initialize()
 
-            # 7. Initialize the newly integrated managers
+            # 7. Initialize additional integrated managers
+            logger.info("[LoreSystem] Ensuring: EducationalSystemManager")
             await self.education_manager.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: ReligionManager")
             await self.religion_manager.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: LocalLoreManager")
             await self.local_lore_manager.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: GeopoliticalSystemManager")
             await self.geopolitical_manager.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: RegionalCultureSystem")
             await self.regional_culture_system.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: WorldPoliticsManager")
             await self.world_politics_manager.ensure_initialized()
+
+            logger.info("[LoreSystem] Ensuring: LoreDynamicsSystem")
             await self.lore_dynamics_system.ensure_initialized()
 
-            # Register with governance
+            logger.info("[LoreSystem] Registering with Nyx governance")
             await self.register_with_governance()
 
             self.initialized = True
+            logger.info("[LoreSystem] Initialization successful.")
             return True
+
         except Exception as e:
-            logger.error(f"Error initializing LoreSystem: {e}")
+            logger.exception(f"[LoreSystem] ERROR during initialization: {e}")
             return False
+
 
     async def register_with_governance(self):
         """Register the lore system with Nyx governance."""
