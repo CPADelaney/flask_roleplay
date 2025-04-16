@@ -236,7 +236,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.digital_somatosensory_system import DigitalSomatosensorySystem
             from nyx.core.needs_system import NeedsSystem
             from nyx.core.conditioning_system import ConditioningSystem
-            from nyx.core.goal_manager import GoalManager
+            from nyx.core.goal_system import GoalManager
             from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
             from nyx.api.thinking_tools import ThinkingTools
             from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
