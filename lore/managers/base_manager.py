@@ -21,6 +21,12 @@ from db.connection import get_db_connection_context
 
 logger = logging.getLogger(__name__)
 
+def _mgr(ctx: RunContextWrapper):
+    mgr = ctx.context.get("manager")
+    if mgr is None:
+        raise RuntimeError("manager instance missing from ctx.context")
+    return mgr
+
 # ------------------------------------------------------------------------
 # Function Wrapper Classes to handle Callable in Pydantic models
 # ------------------------------------------------------------------------
@@ -97,7 +103,7 @@ maintenance_agent = Agent(
         '  "message": "High cache miss rate detected"\n'
         "}"
     ),
-    model="o3-mini",
+    model="o4-mini",
     model_settings=ModelSettings(temperature=0.0)  # Typically 0 or low temp for straightforward logic
 )
 
@@ -146,9 +152,8 @@ class BaseLoreManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.db = DatabaseAccess(user_id, conversation_id)
-        self.cache = {}  # Simplified cache for demo
-        self.cache_ttl = ttl
-        self.max_cache_size = cache_size
+        self._cache: Dict[str, Any] = {}
+        self._cache_max = cache_size
         self.initialized = False
         self.trace_group_id = f"lore_{user_id}_{conversation_id}"
         self.trace_metadata = {
@@ -178,7 +183,7 @@ class BaseLoreManager:
                     "Generate detailed, cohesive world foundations including cosmology, "
                     "magic systems, social structures, and history."
                 ),
-                model="o3-mini",
+                model="o4-mini",
                 model_settings=ModelSettings(temperature=0.7)
             )
             
@@ -191,7 +196,7 @@ class BaseLoreManager:
                     "rivals, allies, and hierarchy_type. Ensure factions have clear "
                     "motivations and logical relationships with each other."
                 ),
-                model="o3-mini",
+                model="o4-mini",
                 model_settings=ModelSettings(temperature=0.7)
             )
             
@@ -204,7 +209,7 @@ class BaseLoreManager:
                     "hidden secrets, and strategic importance. Make locations feel lived-in "
                     "with history and character."
                 ),
-                model="o3-mini",
+                model="o4-mini",
                 model_settings=ModelSettings(temperature=0.7)
             )
             
@@ -216,7 +221,7 @@ class BaseLoreManager:
                     "and social practices for a game world. Each element should have a "
                     "name, type, description, who practices it, and historical origins."
                 ),
-                model="o3-mini",
+                model="o4-mini",
                 model_settings=ModelSettings(temperature=0.7)
             )
             
@@ -228,7 +233,7 @@ class BaseLoreManager:
                     "contradictions, logical issues, and areas that need improvement. "
                     "Provide specific issues and recommendations."
                 ),
-                model="o3-mini",
+                model="o4-mini",
                 model_settings=ModelSettings(temperature=0.4)
             )
             
@@ -267,37 +272,32 @@ class BaseLoreManager:
             raise
 
     async def ensure_initialized(self):
-        """Ensure system is initialized."""
-        if not self.initialized:
-            # Initialize database tables and any other required setup
-            # Initialize agents
-            await self.initialize_agents()
-            
-            # Initialize governance
-            await self.initialize_governance()
-            
-            # Start maintenance loop
-            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
-            
-            self.initialized = True
-            logger.info(f"Initialized BaseLoreManager for user {self.user_id}")
+        if self.initialized:
+            return
+        await self.initialize_agents()
+        await self.initialize_governance()
+        self.maintenance_task = asyncio.create_task(self._maintenance_loop())
+        self.initialized = True
 
-    async def initialize_tables_from_definitions(self, table_definitions: Dict[str, str]):
-        """Initialize tables from provided SQL definitions."""
-        try:
-            async with get_db_connection_context() as conn:
-                for table_name, sql in table_definitions.items():
-                    try:
-                        await conn.execute(sql)
-                        logger.info(f"Initialized table {table_name}")
-                    except Exception as e:
-                        logger.error(f"Error initializing table {table_name}: {e}")
-        except Exception as e:
-            logger.error(f"Error initializing tables: {e}")
+    async def initialize_tables_from_definitions(self, defs: Dict[str, str]):
+        async with get_db_connection_context() as conn:
+            for name, sql in defs.items():
+                try:
+                    await conn.execute(sql)
+                    logger.info("table %s ready", name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("init table %s failed: %s", name, exc)
 
-    async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
-        """Initialize tables for a specific class."""
-        return await self.initialize_tables_from_definitions(table_definitions)
+    # internal helper used by subclasses
+    async def _initialize_tables_for_class_impl(self, defs: Dict[str, str]):
+        await self.initialize_tables_from_definitions(defs)
+
+    @staticmethod
+    @function_tool
+    async def initialize_tables_for_class(ctx: RunContextWrapper, table_definitions: Dict[str, str]):
+        mgr = _mgr(ctx)
+        await mgr._initialize_tables_for_class_impl(table_definitions)
+        return {"status": "ok"}
 
     def get_connection_pool(self):
         """
@@ -305,294 +305,103 @@ class BaseLoreManager:
         """
         return get_db_connection_context()
 
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_cached_data",
-        action_description="Retrieving cached lore data",
-        id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
-    )
-    async def _get_cached_data(ctx: RunContextWrapper, cache_key: str) -> Optional[Dict[str, Any]]:
+    async def _execute_query_impl(self, query: str, *args) -> List[Dict[str, Any]]:
         """
-        Get data from cache with metrics tracking and governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            cache_key: Key to retrieve from cache
-            
-        Returns:
-            Cached data or None if not found
-        """
-        try:
-            start_time = datetime.now()
-            data = self.cache.get(cache_key)
-            duration = (datetime.now() - start_time).total_seconds()
-
-            logger.debug(f"Cache operation for {cache_key}, hit: {data is not None}, duration: {duration}s")
-
-            return data
-        except Exception as e:
-            logger.error(f"Error getting cached data: {e}")
-            return None
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="set_cached_data",
-        action_description="Setting cached lore data",
-        id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
-    )
-    async def _set_cached_data(ctx: RunContextWrapper, cache_key: str, data: Dict[str, Any]) -> bool:
-        """
-        Set data in cache with metrics tracking and governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            cache_key: Key to store in cache
-            data: Data to store
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            start_time = datetime.now()
-            self.cache[cache_key] = data
-            duration = (datetime.now() - start_time).total_seconds()
-            
-            logger.debug(f"Cache set for {cache_key}, duration: {duration}s")
-            
-            # Check if we need to evict old entries
-            if len(self.cache) > self.max_cache_size:
-                await self._evict_cache_entries()
-                
-            return True
-        except Exception as e:
-            logger.error(f"Error setting cached data: {e}")
-            return False
+        Run an arbitrary SQL statement and return the rows as plain dicts.
     
-    async def _evict_cache_entries(self):
-        """Evict old cache entries to stay within size limit."""
-        try:
-            # Simple LRU-like eviction - remove oldest items
-            # In a real implementation, you would track timestamps
-            keys = list(self.cache.keys())
-            # Remove oldest entries
-            keys_to_remove = keys[:len(keys) - self.max_cache_size]
-            for key in keys_to_remove:
-                if key in self.cache:
-                    del self.cache[key]
-            logger.debug(f"Evicted {len(keys_to_remove)} cache entries")
-        except Exception as e:
-            logger.error(f"Error evicting cache entries: {e}")
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="delete_cached_data",
-        action_description="Deleting cached lore data",
-        id_from_context=lambda ctx: f"lore_cache_{int(datetime.now().timestamp())}"
-    )
-    async def _delete_cached_data(ctx: RunContextWrapper, cache_key: str) -> bool:
-        """
-        Delete data from cache with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            cache_key: Key to delete from cache
-            
-        Returns:
-            True if successful, False otherwise
+        • Uses the classʼs shared connection‑pool helper
+        • Catches and logs all errors; returns an empty list on failure
         """
         try:
-            if cache_key in self.cache:
-                del self.cache[cache_key]
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting cached data: {e}")
-            return False
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="execute_db_query",
-        action_description="Executing database query",
-        id_from_context=lambda ctx: f"lore_db_{int(datetime.now().timestamp())}"
-    )
-    async def _execute_db_query(ctx: RunContextWrapper, query: str, *args) -> List[Dict[str, Any]]:
-        """
-        Execute database query with metrics tracking and governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            query: SQL query to execute
-            *args: Query parameters
-            
-        Returns:
-            Query results
-        """
-        try:
-            start_time = datetime.now()
-            result = await self.db._execute_query(query, *args)
-            duration = (datetime.now() - start_time).total_seconds()
-
-            # Log metrics
-            logger.debug(f"DB query executed: {query}, duration: {duration}s")
-            return result
-        except Exception as e:
-            logger.error(f"Error executing DB query: {e}")
+            async with self.get_connection_pool() as conn:
+                records = await conn.fetch(query, *args)
+                return [dict(r) for r in records]
+        except Exception as exc:
+            logger.error("DB query failed (%s): %s", query, exc)
             return []
 
-    def _get_table_name(self, query: str) -> str:
-        """Extract table name from SQL query."""
-        query_lower = query.lower()
-        if 'from' in query_lower:
-            return query_lower.split('from')[1].split()[0]
-        return 'unknown'
+    def _cache_get(self, key: str):
+        return self._cache.get(key)
+
+    def _cache_set(self, key: str, value: Any):
+        self._cache[key] = value
+        if len(self._cache) > self._cache_max:
+            # naive eviction: pop first key
+            self._cache.pop(next(iter(self._cache)))
+
+    def _cache_delete(self, key: str):
+        self._cache.pop(key, None)
+
+    @staticmethod
+    async def _set_cached_data(ctx: RunContextWrapper, cache_key: str, data: Any) -> None:
+        """
+        Agent‑friendly cache setter that just forwards to the internal store.
+        """
+        mgr = _mgr(ctx)
+        mgr._cache_set(cache_key, data)
+        
 
     @staticmethod
     @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="batch_update",
-        action_description="Performing batch database update",
-        id_from_context=lambda ctx: f"lore_batch_{int(datetime.now().timestamp())}"
-    )
-    async def _batch_update(ctx: RunContextWrapper, table: str, updates: List[Dict[str, Any]]) -> bool:
-        """
-        Perform batch update operation with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            table: Table to update
-            updates: List of updates to perform
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            start_time = datetime.now()
-            # Example usage:
-            # "UPDATE {table} SET column=$1 WHERE id=$2"
-            # We'll assume you handle the logic in db.execute_many
-            pairs_to_update = []
-            for item in updates:
-                # We'll assume item has keys 'column', 'value', 'id'
-                # e.g. item = {"column": "description", "value": "New desc", "id": 123}
-                column = item.get("column")
-                value = item.get("value")
-                row_id = item.get("id")
-                pairs_to_update.append((column, value, row_id, self.user_id))
-
-            result = await self.db.execute_many(
-                f"UPDATE {table} SET $1 = $2 WHERE id = $3 AND user_id = $4",
-                pairs_to_update
-            )
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.debug(f"Batch update on {table}, duration: {duration}s")
-            return bool(result)
-        except Exception as e:
-            logger.error(f"Error performing batch update: {e}")
-            return False
+    async def get_cached_data(ctx: RunContextWrapper, cache_key: str):
+        return _mgr(ctx)._cache_get(cache_key)
 
     @staticmethod
     @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="validate_data",
-        action_description="Validating lore data",
-        id_from_context=lambda ctx: f"lore_validate_{int(datetime.now().timestamp())}"
-    )
-    async def _validate_data(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
-        """
-        Validate data against schema with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            data: Data to validate
-            schema_type: Type of schema to validate against
-            
-        Returns:
-            Validated data
-        """
-        try:
-            # We'll use the validation agent for this
-            with trace(
-                workflow_name="ValidateData",
-                metadata=self.trace_metadata
-            ):
-                user_prompt = f"""
-                Validate this data against the {schema_type} schema:
-                {json.dumps(data, indent=2)}
-                
-                Check for:
-                1. Missing required fields
-                2. Incorrect data types
-                3. Invalid values
-                4. Logical inconsistencies
-                
-                Return JSON with these fields:
-                - is_valid: Boolean indicating if data passes validation
-                - issues: Array of specific issues found (empty if none)
-                - fixed_data: The corrected data if possible
-                """
-                
-                result = await Runner.run(
-                    self.agents["validation"],
-                    user_prompt,
-                    context=ctx.context,
-                    run_config=RunConfig(
-                        workflow_name="Data Validation",
-                        trace_metadata=self.trace_metadata
-                    )
-                )
-                
-                validation_result = result.final_output
-                if isinstance(validation_result, dict) and validation_result.get("is_valid"):
-                    # If valid, return the fixed data if provided, otherwise the original
-                    return validation_result.get("fixed_data", data)
-                else:
-                    # If not valid, log issues and raise exception
-                    issues = validation_result.get("issues", ["Unknown validation error"])
-                    logger.warning(f"Validation failed for {schema_type}: {issues}")
-                    raise ValueError(f"Validation failed: {issues[0] if issues else 'Unknown error'}")
-        except Exception as e:
-            logger.error(f"Error validating data: {e}")
-            raise
+    async def set_cached_data(ctx: RunContextWrapper, cache_key: str, data: Any):
+        _mgr(ctx)._cache_set(cache_key, data)
+        return True
 
-    # Helper methods for derived classes
-    def get_cache(self, key: str) -> Any:
-        """Get item from cache."""
-        return self.cache.get(key)
+    @staticmethod
+    @function_tool
+    async def delete_cached_data(ctx: RunContextWrapper, cache_key: str):
+        _mgr(ctx)._cache_delete(cache_key)
+        return True
+
+    @staticmethod
+    @function_tool
+    async def execute_db_query(ctx: RunContextWrapper, query: str, *args):
+        return await _mgr(ctx)._execute_query_impl(query, *args)
+
+    @staticmethod
+    @function_tool
+    async def batch_update(ctx: RunContextWrapper, table: str, updates: List[Dict[str, Any]]):
+        return await _mgr(ctx)._batch_update_impl(table, updates)
+
+    async def _batch_update_impl(self, table: str, updates: List[Dict[str, Any]]) -> int:
+        """
+        Extremely generic batch updater.
+        Each item must have:  {"column": "<col>", "value": <val>, "id": <row_id>}
+        Returns the number of rows changed.
+        """
+        if not updates:
+            return 0
     
-    def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Set cache value with optional TTL."""
-        self.cache[key] = value
-        
-        # If we're over cache size limit, remove oldest entries
-        if len(self.cache) > self.max_cache_size:
-            # This is simplistic - actual implementation would track timestamps
-            keys = list(self.cache.keys())
-            for old_key in keys[:len(keys) - self.max_cache_size]:
-                if old_key != key:  # Don't remove what we just added
-                    self.cache.pop(old_key, None)
-    
-    def invalidate_cache(self, key: str) -> None:
-        """Invalidate a specific cache key."""
-        self.cache.pop(key, None)
-    
-    def invalidate_cache_pattern(self, pattern: str) -> None:
-        """Invalidate all cache keys matching a pattern."""
-        keys_to_remove = []
-        for cache_key in self.cache.keys():
-            if pattern in cache_key:
-                keys_to_remove.append(cache_key)
-        
-        for key in keys_to_remove:
-            self.cache.pop(key, None)
+        async with self.get_connection_pool() as conn:
+            async with conn.transaction():
+                for row in updates:
+                    col  = row["column"]
+                    sql  = f'UPDATE {table} SET {col} = $1 WHERE id = $2'
+                    await conn.execute(sql, row["value"], row["id"])
+        return len(updates)
+
+    # ---------------- Validate data -----------------------------------
+    async def _validate_data_impl(self, data: Dict[str, Any], schema_type: str) -> Dict[str, Any]:
+        """Dummy validation – replace with real logic / agent call."""
+        # Example: ensure required keys exist
+        required = {"foundation": ["cosmology", "magic_system"],
+                    "faction": ["name", "type"]}.get(schema_type, [])
+        issues = [k for k in required if k not in data]
+        return {
+            "is_valid": not issues,
+            "issues": issues,
+            "fixed_data": data,
+        }
+
+    @staticmethod
+    @function_tool
+    async def validate_data(ctx: RunContextWrapper, data: Dict[str, Any], schema_type: str):
+        return await _mgr(ctx)._validate_data_impl(data, schema_type)
             
     def create_run_context(self, ctx):
         """Create a run context for agent execution."""
@@ -603,9 +412,9 @@ class BaseLoreManager:
     def _get_cache_stats(self) -> Dict[str, Any]:
         # This is your working implementation
         return {
-            "size": len(self.cache),
-            "max_size": self.max_cache_size,
-            "utilization": len(self.cache) / self.max_cache_size if self.max_cache_size > 0 else 0,
+            "size": len(self._cache),
+            "max_size": self._cache_max,
+            "utilization": len(self._cache) / self._cache_max if self._cache_max > 0 else 0,
             # You can add proper hit/miss rate if you track it in your cache
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
@@ -621,13 +430,8 @@ class BaseLoreManager:
     
     async def _maintenance_loop(self):
         while True:
-            try:
-                await self._maintenance_once()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in maintenance loop: {e}")
-            await asyncio.sleep(300)  # Sleep 5 min
+            await asyncio.sleep(300)
+            logger.debug("cache utilisation %s/%s", len(self._cache), self._cache_max)
     
     async def _maintenance_once(self):
         run_ctx = RunContextWrapper(context={
@@ -665,7 +469,7 @@ class BaseLoreManager:
                 logger.warning(msg)
             elif decision.get("action") == "clear_cache":
                 logger.warning("Agent recommended clearing entire cache. Doing so now.")
-                self.cache.clear()
+                self._cache.clear()
             # No else/else-pass needed
     
     @function_tool
@@ -674,302 +478,6 @@ class BaseLoreManager:
         await self._maintenance_once()
         return {"status": "completed"}
 
-                
-    # Enhanced lore generation methods
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_foundation_lore",
-        action_description="Generating foundation lore for environment: {environment_desc}",
-        id_from_context=lambda ctx: f"foundation_lore_{int(datetime.now().timestamp())}"
-    )
-    async def generate_foundation_lore(
-        ctx: RunContextWrapper,
-        environment_desc: str
-    ) -> Dict[str, Any]:
-        """
-        Generate foundation lore for a given environment with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            environment_desc: Environment description
-            
-        Returns:
-            Foundation lore data
-        """
-        try:
-            # Make sure we're initialized
-            await self.ensure_initialized()
-            
-            # Use the agent to generate foundation lore
-            with trace(
-                workflow_name="GenerateFoundationLore",
-                metadata=self.trace_metadata,
-            ):
-                user_prompt = f"""
-                Generate cohesive foundational world lore for this environment:
-                {environment_desc}
-
-                Return as JSON with these keys:
-                - cosmology (description of universe/planes/gods)
-                - magic_system (how magic works, limitations, schools)
-                - world_history (major eras and events)
-                - calendar_system (how time is tracked)
-                - social_structure (class systems, hierarchy)
-
-                Be creative but ensure all elements are cohesive and interconnected.
-                """
-                
-                result = await Runner.run(
-                    self.agents["foundation"],
-                    user_prompt,
-                    context=ctx.context,
-                    run_config=RunConfig(
-                        workflow_name="Foundation Lore Generation",
-                        trace_metadata=self.trace_metadata
-                    )
-                )
-                
-                # Cache the result
-                foundation_lore = result.final_output
-                await self._set_cached_data(ctx, "foundation_lore_latest", foundation_lore)
-                
-                return foundation_lore
-        except Exception as e:
-            logger.error(f"Error generating foundation lore: {str(e)}")
-            return {
-                "error": str(e),
-                "cosmology": "Error generating cosmology",
-                "magic_system": "Error generating magic system",
-                "world_history": "Error generating world history",
-                "calendar_system": "Error generating calendar system",
-                "social_structure": "Error generating social structure"
-            }
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_factions",
-        action_description="Generating factions for environment",
-        id_from_context=lambda ctx: f"factions_{int(datetime.now().timestamp())}"
-    )
-    async def generate_factions(
-        ctx: RunContextWrapper,
-        environment_desc: str,
-        foundation_lore: Dict[str, Any],
-        num_factions: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Generate factions for a given environment with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            environment_desc: Environment description
-            foundation_lore: Foundation lore data
-            num_factions: Number of factions to generate
-            
-        Returns:
-            List of faction data
-        """
-        try:
-            # Make sure we're initialized
-            await self.ensure_initialized()
-            
-            # Use the agent to generate factions
-            with trace(
-                workflow_name="GenerateFactions",
-                metadata=self.trace_metadata,
-            ):
-                social_structure = foundation_lore.get("social_structure", "")
-                world_history = foundation_lore.get("world_history", "")
-                
-                user_prompt = f"""
-                Generate {num_factions} distinct factions for this environment:
-                
-                Environment: {environment_desc}
-                Social Structure: {social_structure}
-                World History: {world_history}
-                
-                For each faction, provide:
-                - name: A unique name
-                - type: The faction type (guild, nation, cult, etc.)
-                - description: A paragraph describing the faction
-                - values: List of 3-5 values the faction holds
-                - goals: List of 2-3 current goals
-                - headquarters: Their main base of operations
-                - rivals: List of 1-3 other factions they oppose
-                - allies: List of 0-2 other factions they ally with
-                - hierarchy_type: How they're organized internally
-                
-                Return as a JSON array of faction objects.
-                Ensure factions have distinct personalities and interesting relationships.
-                """
-                
-                result = await Runner.run(
-                    self.agents["faction"],
-                    user_prompt,
-                    context=ctx.context,
-                    run_config=RunConfig(
-                        workflow_name="Faction Generation",
-                        trace_metadata=self.trace_metadata
-                    )
-                )
-                
-                # Process and cache the result
-                factions = result.final_output
-                
-                # Cache the full faction list
-                await self._set_cached_data(ctx, "factions_latest", factions)
-                
-                return factions
-        except Exception as e:
-            logger.error(f"Error generating factions: {str(e)}")
-            return [{"error": str(e), "name": "Error generating factions"}]
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_locations",
-        action_description="Generating locations for environment",
-        id_from_context=lambda ctx: f"locations_{int(datetime.now().timestamp())}"
-    )
-    async def generate_locations(
-        ctx: RunContextWrapper,
-        environment_desc: str,
-        factions: List[Dict[str, Any]],
-        num_locations: int = 8
-    ) -> List[Dict[str, Any]]:
-        """
-        Generate locations for a given environment with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            environment_desc: Environment description
-            factions: List of faction data
-            num_locations: Number of locations to generate
-            
-        Returns:
-            List of location data
-        """
-        try:
-            # Make sure we're initialized
-            await self.ensure_initialized()
-            
-            # Use the agent to generate locations
-            with trace(
-                workflow_name="GenerateLocations",
-                metadata=self.trace_metadata,
-            ):
-                faction_names = []
-                for faction in factions:
-                    if isinstance(faction, dict) and "name" in faction:
-                        faction_names.append(faction["name"])
-                
-                user_prompt = f"""
-                Generate {num_locations} significant locations for this environment:
-                
-                Environment: {environment_desc}
-                Factions: {', '.join(faction_names)}
-                
-                For each location, provide:
-                - name: A unique name
-                - type: The location type (city, dungeon, forest, etc.)
-                - description: A detailed description
-                - controlling_faction: Which faction controls this location (can be null)
-                - notable_features: List of 3-5 interesting features
-                - hidden_secrets: List of 1-3 secrets about this location
-                - strategic_importance: A number from 1-10 indicating importance
-                
-                Return as a JSON array of location objects.
-                Create a diverse mix of locations with unique characteristics.
-                Some locations should be controlled by factions, others contested or neutral.
-                """
-                
-                result = await Runner.run(
-                    self.agents["location"],
-                    user_prompt,
-                    context=ctx.context,
-                    run_config=RunConfig(
-                        workflow_name="Location Generation",
-                        trace_metadata=self.trace_metadata
-                    )
-                )
-                
-                # Process and cache the result
-                locations = result.final_output
-                
-                # Cache the full location list
-                await self._set_cached_data(ctx, "locations_latest", locations)
-                
-                return locations
-        except Exception as e:
-            logger.error(f"Error generating locations: {str(e)}")
-            return [{"error": str(e), "name": "Error generating locations"}]
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_complete_lore",
-        action_description="Generating complete lore for environment: {environment_desc}",
-        id_from_context=lambda ctx: f"complete_lore_{int(datetime.now().timestamp())}"
-    )
-    async def generate_complete_lore(
-        ctx: RunContextWrapper,
-        environment_desc: str
-    ) -> Dict[str, Any]:
-        """
-        Generate complete lore for an environment with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            environment_desc: Environment description
-            
-        Returns:
-            Complete lore data
-        """
-        try:
-            # Make sure we're initialized
-            await self.ensure_initialized()
-            
-            # Use trace to track the entire workflow
-            with trace(
-                workflow_name="GenerateCompleteLore",
-                metadata=self.trace_metadata,
-            ):
-                # 1. Generate foundation lore
-                foundation_lore = await self.generate_foundation_lore(ctx, environment_desc)
-                
-                # 2. Generate factions
-                factions = await self.generate_factions(ctx, environment_desc, foundation_lore)
-                
-                # 3. Generate locations
-                locations = await self.generate_locations(ctx, environment_desc, factions)
-                
-                # 4. Create the complete lore object
-                complete_lore = {
-                    "environment_desc": environment_desc,
-                    "foundation": foundation_lore,
-                    "factions": factions,
-                    "locations": locations,
-                    "generated_at": datetime.now().isoformat()
-                }
-                
-                # Cache the complete lore
-                await self._set_cached_data(ctx, "complete_lore_latest", complete_lore)
-                
-                return complete_lore
-        except Exception as e:
-            logger.error(f"Error generating complete lore: {str(e)}")
-            return {
-                "error": str(e),
-                "environment_desc": environment_desc,
-                "generated_at": datetime.now().isoformat()
-            }
-            
     async def close(self):
         """
         Close the manager and clean up resources.
@@ -982,6 +490,199 @@ class BaseLoreManager:
             except asyncio.CancelledError:
                 pass
 
+    def as_context(self) -> RunContextWrapper:
+        """Create a context object embedding *this* manager."""
+        return RunContextWrapper(context={"manager": self})
+
+                
+    # Enhanced lore generation methods
+    @staticmethod
+    @function_tool
+    @with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_foundation_lore",
+    action_description="Generating foundation lore for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"foundation_lore_{int(datetime.now().timestamp())}"
+    )
+    async def generate_foundation_lore(
+    ctx: RunContextWrapper,
+    environment_desc: str
+    ) -> Dict[str, Any]:
+        mgr = _mgr(ctx)
+        await mgr.ensure_initialized()
+        
+        with trace(workflow_name="GenerateFoundationLore",
+               metadata=mgr.trace_metadata):
+               user_prompt = f"""
+               Generate cohesive foundational world lore for this environment:
+               {environment_desc}
+                
+               Return as JSON with these keys:
+               - cosmology
+               - magic_system
+               - world_history
+               - calendar_system
+               - social_structure
+               """
+               result = await Runner.run(
+                   mgr.agents["foundation"],
+                   user_prompt,
+                   context=ctx.context,
+                   run_config=RunConfig(
+                       workflow_name="Foundation Lore Generation",
+                       trace_metadata=mgr.trace_metadata
+                   )
+               )
+                
+               foundation_lore = result.final_output
+               await BaseLoreManager._set_cached_data(ctx, "foundation_lore_latest", foundation_lore)
+               return foundation_lore
+    
+    @staticmethod
+    @function_tool
+    @with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_factions",
+    action_description="Generating factions for environment",
+    id_from_context=lambda ctx: f"factions_{int(datetime.now().timestamp())}"
+    )
+    async def generate_factions(
+    ctx: RunContextWrapper,
+    environment_desc: str,
+    foundation_lore: Dict[str, Any],
+    num_factions: int = 5
+    ) -> List[Dict[str, Any]]:
+        mgr = _mgr(ctx)
+        await mgr.ensure_initialized()
+        
+        social_structure = foundation_lore.get("social_structure", "")
+        world_history   = foundation_lore.get("world_history", "")
+        
+        user_prompt = f"""
+        Generate {num_factions} distinct factions for this environment:
+        
+        Environment: {environment_desc}
+        Social Structure: {social_structure}
+        World History: {world_history}
+        
+        For each faction, provide:
+        - name: A unique name
+        - type: The faction type (guild, nation, cult, etc.)
+        - description: A paragraph describing the faction
+        - values: List of 3-5 values the faction holds
+        - goals: List of 2-3 current goals
+        - headquarters: Their main base of operations
+        - rivals: List of 1-3 other factions they oppose
+        - allies: List of 0-2 other factions they ally with
+        - hierarchy_type: How they're organized internally
+        
+        Return as a JSON array of faction objects.
+        Ensure factions have distinct personalities and interesting relationships.
+        """
+        
+        result = await Runner.run(
+            mgr.agents["faction"],
+            user_prompt,
+            context=ctx.context,
+            run_config=RunConfig(
+                workflow_name="Faction Generation",
+                trace_metadata=mgr.trace_metadata
+            )
+        )
+        
+        factions = result.final_output
+        await BaseLoreManager._set_cached_data(ctx, "factions_latest", factions)
+        return factions
+    
+    @staticmethod
+    @function_tool
+    @with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_locations",
+    action_description="Generating locations for environment",
+    id_from_context=lambda ctx: f"locations_{int(datetime.now().timestamp())}"
+    )
+    async def generate_locations(
+    ctx: RunContextWrapper,
+    environment_desc: str,
+    factions: List[Dict[str, Any]],
+    num_locations: int = 8
+    ) -> List[Dict[str, Any]]:
+        mgr = _mgr(ctx)
+        await mgr.ensure_initialized()
+        
+        faction_names = [f.get("name", "") for f in factions if isinstance(f, dict)]
+        
+        
+        user_prompt = f"""
+        Generate {num_locations} significant locations for this environment:
+        
+        Environment: {environment_desc}
+        Factions: {', '.join(faction_names)}
+        
+        For each location, provide:
+        - name: A unique name
+        - type: The location type (city, dungeon, forest, etc.)
+        - description: A detailed description
+        - controlling_faction: Which faction controls this location (can be null)
+        - notable_features: List of 3-5 interesting features
+        - hidden_secrets: List of 1-3 secrets about this location
+        - strategic_importance: A number from 1-10 indicating importance
+        
+        Return as a JSON array of location objects.
+        Create a diverse mix of locations with unique characteristics.
+        Some locations should be controlled by factions, others contested or neutral.
+        """
+        
+        result = await Runner.run(
+            mgr.agents["location"],
+            user_prompt,
+            context=ctx.context,
+            run_config=RunConfig(
+                workflow_name="Location Generation",
+                trace_metadata=mgr.trace_metadata
+            )
+        )
+        
+        locations = result.final_output
+        await BaseLoreManager._set_cached_data(ctx, "locations_latest", locations)
+        return locations
+        
+    @staticmethod
+    @function_tool
+    @with_governance(
+    agent_type=AgentType.NARRATIVE_CRAFTER,
+    action_type="generate_complete_lore",
+    action_description="Generating complete lore for environment: {environment_desc}",
+    id_from_context=lambda ctx: f"complete_lore_{int(datetime.now().timestamp())}"
+    )
+    async def generate_complete_lore(
+    ctx: RunContextWrapper,
+    environment_desc: str
+    ) -> Dict[str, Any]:
+        mgr = _mgr(ctx)
+        await mgr.ensure_initialized()
+        
+        with trace(workflow_name="GenerateCompleteLore",
+                   metadata=mgr.trace_metadata):
+        
+            foundation = await BaseLoreManager.generate_foundation_lore(ctx, environment_desc)
+            factions   = await BaseLoreManager.generate_factions(ctx, environment_desc, foundation)
+            locations  = await BaseLoreManager.generate_locations(ctx, environment_desc, factions)
+        
+            complete_lore = {
+                "environment_desc": environment_desc,
+                "foundation": foundation,
+                "factions": factions,
+                "locations": locations,
+                "generated_at": datetime.now().isoformat()
+            }
+        
+        await BaseLoreManager._set_cached_data(ctx, "complete_lore_latest", complete_lore)
+        return complete_lore
+                
+
+
 # ------------------------------------------------------------------------
 # LoreCache class (simplified)
 # ------------------------------------------------------------------------
@@ -990,73 +691,58 @@ class LoreCache:
     
     def __init__(self, max_size: int = 1000, ttl: int = 3600):
         """Initialize the cache."""
-        self.cache = {}
+        self._cache = {}
         self.max_size = max_size
         self.default_ttl = ttl
         self.analytics = CacheAnalytics()
     
-    def get(self, key: str) -> Any:
-        """Get a value from the cache."""
-        if key in self.cache:
+    async def delete(self, key: str) -> None:
+        """Delete a key from the cache."""
+        if key in self._cache:
+            del self._cache[key]
+            self.analytics.deletes += 1
+
+    async def get(self, namespace: str, key: str, *, user_id:int, conversation_id:int):
+        full = f"{namespace}_{key}_{user_id}_{conversation_id}"
+        if full in self._cache:
             self.analytics.hits += 1
-            return self.cache[key]
+            return self._cache[full]
         self.analytics.misses += 1
         return None
     
-    def set(self, key: str, value: Any) -> None:
-        """Set a value in the cache."""
-        self.cache[key] = value
+    async def set(self, namespace: str, key: str, value: Any, *, user_id:int,
+                  conversation_id:int, ttl:int|None=None, priority:int=0):
+        full = f"{namespace}_{key}_{user_id}_{conversation_id}"
+        self._cache[full] = value
         self.analytics.sets += 1
-        
-        # Simple eviction if over size
-        if len(self.cache) > self.max_size:
-            keys = list(self.cache.keys())
-            for old_key in keys[:len(keys) - self.max_size]:
-                if old_key != key:
-                    self.delete(old_key)
-    
-    def delete(self, key: str) -> None:
-        """Delete a key from the cache."""
-        if key in self.cache:
-            del self.cache[key]
-            self.analytics.deletes += 1
-
-    async def get(self, namespace: str, key: str, user_id: int, conversation_id: int) -> Any:
-        """Get a value with namespace and user context."""
-        full_key = f"{namespace}_{key}_{user_id}_{conversation_id}"
-        return self.get(full_key)
-    
-    async def set(self, namespace: str, key: str, value: Any, ttl: Optional[int] = None,
-                user_id: int = 0, conversation_id: int = 0, priority: int = 0) -> None:
-        """Set a value with namespace and user context."""
-        full_key = f"{namespace}_{key}_{user_id}_{conversation_id}"
-        self.set(full_key, value)
+        if len(self._cache) > self.max_size:
+            self._cache.pop(next(iter(self._cache)))
     
     async def invalidate(self, namespace: str, key: str, user_id: int, conversation_id: int) -> None:
         """Invalidate a cache entry."""
         full_key = f"{namespace}_{key}_{user_id}_{conversation_id}"
-        self.delete(full_key)
+        await self.delete(full_key)
     
     async def clear_namespace(self, namespace: str) -> None:
         """Clear all entries in a namespace."""
         keys_to_remove = []
-        for key in self.cache.keys():
+        for key in self._cache.keys():
             if key.startswith(f"{namespace}_"):
                 keys_to_remove.append(key)
         
         for key in keys_to_remove:
-            self.delete(key)
+            await self.delete(key)
     
     async def invalidate_pattern(self, namespace: str, pattern: str) -> None:
         """Invalidate all keys matching a pattern within a namespace."""
         prefix = f"{namespace}_"
         keys_to_remove = []
-        for key in self.cache.keys():
+        for key in self._cache.keys():
             if key.startswith(prefix) and pattern in key:
                 keys_to_remove.append(key)
         
         for key in keys_to_remove:
-            self.delete(key)
+            await self.delete(key)
 
 # Global cache instance
 class CacheAnalytics:
@@ -1090,7 +776,7 @@ class BaseManager:
         self.conversation_id = conversation_id
 
         # Initialize a placeholder for the cache manager
-        self.cache_manager = LoreCacheManager(
+        self._cache_manager = LoreCacheManager(
             user_id=user_id,
             conversation_id=conversation_id,
             max_size_mb=max_size_mb,
@@ -1098,7 +784,7 @@ class BaseManager:
         )
 
         # Cache config
-        self.cache_config = {
+        self._cache_config = {
             'ttl': 3600,
             'max_size': max_size_mb,
             'redis_url': redis_url
@@ -1116,7 +802,7 @@ class BaseManager:
 
     async def start(self):
         """Start the manager and its cache, plus the agent-driven maintenance loop."""
-        await self.cache_manager.start()
+        await self._cache_manager.start()
         
         # Create an agent context for the maintenance loop
         ctx = RunContextWrapper(context={})
@@ -1126,7 +812,7 @@ class BaseManager:
 
     async def stop(self):
         """Stop the manager and its cache, cancel maintenance."""
-        await self.cache_manager.stop()
+        await self._cache_manager.stop()
         if self.maintenance_task:
             self.maintenance_task.cancel()
             try:
@@ -1134,81 +820,16 @@ class BaseManager:
             except asyncio.CancelledError:
                 pass
 
-    # This method needs a special implementation to handle the Callable parameter
-    # We'll use a non-decorated version for normal use and a decorated version for the agent
-    async def get_cached_data_impl(
-        self,
-        data_type: str,
-        data_id: str,
-        fetch_func: Optional[Callable] = None
-    ) -> Optional[Any]:
+    async def _maintenance_loop(self, ctx: RunContextWrapper) -> None:
         """
-        Implementation of get_cached_data that accepts a callable directly.
-        This version is used internally and not exposed as a function tool.
+        Very simple heartbeat – extend later if you want real logic.
         """
-        try:
-            cached_value = await self.cache_manager.get_lore(data_type, data_id)
-            if cached_value is not None:
-                return cached_value
+        while True:
+            await asyncio.sleep(300)          # every 5 min
+            size = len(self._cache_manager._cache._cache)  # type: ignore
+            logger.debug("BaseManager cache utilisation: %s entries", size)
 
-            if fetch_func:
-                value = await fetch_func()
-                if value is not None:
-                    await self.cache_manager.set_lore(data_type, data_id, value)
-                return value
-
-            return None
-        except Exception as e:
-            logger.error(f"Error getting cached data: {e}")
-            return None
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_cached_data",
-        action_description="Getting cached data {data_type}/{data_id}",
-        id_from_context=lambda ctx: f"get_cached_{ctx.data_type}_{ctx.data_id}"
-    )
-    async def get_cached_data(
-        ctx: RunContextWrapper,
-        data_type: str,
-        data_id: str,
-        function_id: Optional[str] = None  # Use a function ID instead of a direct callable
-    ) -> Optional[Any]:
-        """
-        Get data from cache or fetch if not available (function tool).
-        This version is exposed as a function tool and uses function_id instead of direct callables.
-        
-        Args:
-            ctx: Run context wrapper
-            data_type: Type of data to retrieve
-            data_id: ID of the data
-            function_id: Optional function ID to call if data is not in cache
-        
-        Returns:
-            Cached data or None if not found
-        """
-        try:
-            cached_value = await self.cache_manager.get_lore(data_type, data_id)
-            if cached_value is not None:
-                return cached_value
-
-            if function_id:
-                # Implement a registry of functions that can be looked up by ID
-                # This is a pattern to avoid passing Callables directly
-                fetch_func = self._get_function_by_id(function_id)
-                if fetch_func:
-                    value = await fetch_func()
-                    if value is not None:
-                        await self.cache_manager.set_lore(data_type, data_id, value)
-                    return value
-
-            return None
-        except Exception as e:
-            logger.error(f"Error getting cached data: {e}")
-            return None
-            
+    
     def _get_function_by_id(self, function_id: str) -> Optional[Callable]:
         """
         Get a function by its ID from a registry.
@@ -1248,68 +869,6 @@ class BaseManager:
         # Implement your actual conversation data fetch logic
         return {"conversation_id": self.conversation_id, "messages": []}
 
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="set_cached_data",
-        action_description="Setting cached data {data_type}/{data_id}",
-        id_from_context=lambda ctx: f"set_cached_{ctx.data_type}_{ctx.data_id}"
-    )
-    async def set_cached_data(
-        ctx: RunContextWrapper,
-        data_type: str,
-        data_id: str,
-        value: Any,
-        tags: Optional[Set[str]] = None
-    ) -> bool:
-        """
-        Set data in cache with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            data_type: Type of data to store
-            data_id: ID of the data
-            value: Data to store
-            tags: Optional tags for the data
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            return await self.cache_manager.set_lore(data_type, data_id, value, tags=tags)
-        except Exception as e:
-            logger.error(f"Error setting cached data: {e}")
-            return False
-
-    @staticmethod
-    @function_tool
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="invalidate_cached_data",
-        action_description="Invalidating cached data {data_type}/{data_id}",
-        id_from_context=lambda ctx: f"invalidate_cached_{ctx.data_type}_{ctx.data_id}"
-    )
-    async def invalidate_cached_data(
-        ctx: RunContextWrapper,
-        data_type: str,
-        data_id: Optional[str] = None,
-        recursive: bool = True
-    ) -> None:
-        """
-        Invalidate cached data with governance oversight.
-        
-        Args:
-            ctx: Run context wrapper
-            data_type: Type of data to invalidate
-            data_id: Optional ID of the data to invalidate
-            recursive: If True, invalidate all entries with matching pattern
-        """
-        try:
-            await self.cache_manager.invalidate_lore(data_type, data_id, recursive=recursive)
-        except Exception as e:
-            logger.error(f"Error invalidating cached data: {e}")
-
 # ---------------------------------------------------------------------------
 # LoreCacheManager
 # ---------------------------------------------------------------------------
@@ -1337,10 +896,10 @@ class LoreCacheManager:
         if redis_url:
             # If redis URL is provided, we'd set up Redis caching
             # This is a placeholder - actual Redis integration would go here
-            self.cache = LoreCache(max_size=estimated_entries)
+            self._cache = LoreCache(max_size=estimated_entries)
         else:
             # Use the global instance by default
-            self.cache = GLOBAL_LORE_CACHE
+            self._cache = GLOBAL_LORE_CACHE
     
     async def start(self):
         """Start the cache manager."""
@@ -1363,7 +922,7 @@ class LoreCacheManager:
         Returns:
             The cached data or None if not found
         """
-        return await self.cache.get(
+        return await self._cache.get(
             namespace=data_type,
             key=data_id,
             user_id=self.user_id,
@@ -1402,7 +961,7 @@ class LoreCacheManager:
             elif "frequently_accessed" in tags:
                 priority = 5
         
-        await self.cache.set(
+        await self._cache.set(
             namespace=data_type,
             key=data_id,
             value=value,
@@ -1429,7 +988,7 @@ class LoreCacheManager:
         """
         if data_id is not None:
             # Invalidate specific entry
-            await self.cache.invalidate(
+            await self._cache.invalidate(
                 namespace=data_type,
                 key=data_id,
                 user_id=self.user_id,
@@ -1437,13 +996,13 @@ class LoreCacheManager:
             )
         elif recursive:
             # Invalidate all entries in namespace
-            await self.cache.clear_namespace(namespace=data_type)
+            await self._cache.clear_namespace(namespace=data_type)
         else:
             # Invalidate entries for current user in namespace
             pattern = f".*_{self.user_id}"
             if self.conversation_id:
                 pattern += f"_{self.conversation_id}"
-            await self.cache.invalidate_pattern(
+            await self._cache.invalidate_pattern(
                 namespace=data_type,
                 pattern=pattern
             )
@@ -1458,7 +1017,7 @@ class LoreCacheManager:
         # This is a simplified approach - a real implementation
         # might be more selective
         for namespace in self._get_all_namespaces():
-            await self.cache.invalidate_pattern(
+            await self._cache.invalidate_pattern(
                 namespace=namespace,
                 pattern=pattern
             )
@@ -1470,12 +1029,3 @@ class LoreCacheManager:
         # In a real implementation, you might store this in a registry
         return {"user_data", "conversation_data", "world_data", "entity_data"}
     
-        
-        # Add manager-specific stats
-        stats.update({
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return stats
