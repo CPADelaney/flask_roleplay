@@ -920,47 +920,47 @@ class ConflictSystemIntegration:
                 'status': 'failed'
             }
 
-async def register_with_governance(user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Register the conflict system with Nyx governance.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
+    async def register_with_governance(user_id: int, conversation_id: int) -> Dict[str, Any]:
+        """
+        Register the conflict system with Nyx governance.
         
-    Returns:
-        Registration result
-    """
-    try:
-        # Get governance
-        governance = await get_central_governance(user_id, conversation_id)
-        
-        # Create conflict system instance
-        conflict_system = ConflictSystemIntegration(user_id, conversation_id)
-        await conflict_system.initialize()
-        
-        # Register with governance
-        await governance.governor.register_agent(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_instance=conflict_system,
-            agent_id="conflict_system"
-        )
-        
-        # Store in local registry
-        governance.registered_agents[AgentType.CONFLICT_ANALYST] = conflict_system
-        
-        logger.info("Conflict System registered with Nyx governance")
-        
-        return {
-            "success": True,
-            "message": "Conflict System successfully registered with governance"
-        }
-    except Exception as e:
-        logger.error(f"Error registering conflict system: {str(e)}", exc_info=True)
-        return {
-            "success": False,
-            "message": f"Failed to register Conflict System with governance: {str(e)}"
-        }
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Registration result
+        """
+        try:
+            # Get governance
+            governance = await get_central_governance(user_id, conversation_id)
+            
+            # Create conflict system instance
+            conflict_system = ConflictSystemIntegration(user_id, conversation_id)
+            await conflict_system.initialize()
+            
+            # Register with governance
+            await governance.governor.register_agent(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_instance=conflict_system,
+                agent_id="conflict_system"
+            )
+            
+            # Store in local registry
+            governance.registered_agents[AgentType.CONFLICT_ANALYST] = conflict_system
+            
+            logger.info("Conflict System registered with Nyx governance")
+            
+            return {
+                "success": True,
+                "message": "Conflict System successfully registered with governance"
+            }
+        except Exception as e:
+            logger.error(f"Error registering conflict system: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Failed to register Conflict System with governance: {str(e)}"
+            }
 
 # The enhanced integration class is retained as in the original file
 
@@ -1191,85 +1191,86 @@ class EnhancedConflictSystemIntegration:
                 "message": f"Unknown request type: {request_type}"
             }
 
-async def register_enhanced_integration(user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Register the enhanced conflict system with Nyx governance.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
+    async def register_enhanced_integration(user_id: int, conversation_id: int) -> Dict[str, Any]:
+        """
+        Register the enhanced conflict system with Nyx governance.
         
-    Returns:
-        Registration result
-    """
-    try:
-        # Get governance
-        governance = await get_central_governance(user_id, conversation_id)
-        
-        # Create a class that inherits from both integration classes
-        class NyxEnhancedConflictSystem(ConflictSystemIntegration, EnhancedConflictSystemIntegration):
-            async def initialize(self):
-                """Initialize both base and enhanced systems."""
-                await ConflictSystemIntegration.initialize(self)
-                # Any enhanced initialization would go here
-                return self
-        
-        # Create and initialize conflict system integration
-        enhanced_system = NyxEnhancedConflictSystem(user_id, conversation_id)
-        await enhanced_system.initialize()
-        
-        # Register with governance
-        await governance.governor.register_agent(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_instance=enhanced_system,
-            agent_id="conflict_analyst"        
-        )
-        
-        # Store in local registry
-        governance.registered_agents[AgentType.CONFLICT_ANALYST] = enhanced_system
-        
-        # Register conflict system's ability to handle specific directive types
-        await governance.governor.register_directive_handler(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            directive_types=[
-                DirectiveType.ACTION_REQUEST,
-                DirectiveType.SCENE_CHANGE,
-                DirectiveType.PROHIBITION,
-                DirectiveType.INFORMATION
-            ],
-            handler=enhanced_system
-        )
-        
-        # Announce the registration
-        logging.info("Enhanced Conflict System registered with Nyx governance")
-        
-        return {
-            "success": True,
-            "message": "Enhanced Conflict System successfully registered with governance",
-            "registered_directive_types": [
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Registration result
+        """
+        try:
+            # Get governance
+            governance = await get_central_governance(user_id, conversation_id)
+            
+            # Create a class that inherits from both integration classes
+            class NyxEnhancedConflictSystem(ConflictSystemIntegration, EnhancedConflictSystemIntegration):
+                async def initialize(self):
+                    """Initialize both base and enhanced systems."""
+                    await ConflictSystemIntegration.initialize(self)
+                    # Any enhanced initialization would go here
+                    return self
+            
+            # Create and initialize conflict system integration
+            enhanced_system = NyxEnhancedConflictSystem(user_id, conversation_id)
+            await enhanced_system.initialize()
+            
+            # Register with governance directly (not through .governor)
+            await governance.register_agent(
+                agent_type=AgentType.CONFLICT_ANALYST,
+                agent_instance=enhanced_system,
+                agent_id="conflict_analyst"        
+            )
+            
+            # Store in local registry
+            governance.registered_agents[AgentType.CONFLICT_ANALYST] = enhanced_system
+            
+            # Add directive handling capability
+            if not hasattr(governance, "directive_handlers"):
+                governance.directive_handlers = {}
+                
+            # Register conflict system's ability to handle specific directive types
+            directive_types = [
                 DirectiveType.ACTION_REQUEST,
                 DirectiveType.SCENE_CHANGE,
                 DirectiveType.PROHIBITION,
                 DirectiveType.INFORMATION
             ]
-        }
-    except Exception as e:
-        logger.error(f"Error registering enhanced conflict system: {str(e)}", exc_info=True)
-        return {
-            "success": False,
-            "message": f"Failed to register Enhanced Conflict System with governance: {str(e)}"
-        }
-
-@function_tool
-async def register_enhanced_conflict_system_tool(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """Register the enhanced conflict system with governance."""
-    user_id = ctx.agent_context.get("user_id")
-    conversation_id = ctx.agent_context.get("conversation_id")
-    
-    if not user_id or not conversation_id:
-        return {
-            "success": False,
-            "message": "Missing user_id or conversation_id in context"
-        }
-    
-    return await register_enhanced_integration(user_id, conversation_id)
+            
+            # Register handler for each directive type
+            for directive_type in directive_types:
+                if directive_type not in governance.directive_handlers:
+                    governance.directive_handlers[directive_type] = {}
+                governance.directive_handlers[directive_type][AgentType.CONFLICT_ANALYST] = enhanced_system
+                logger.info(f"Registered {AgentType.CONFLICT_ANALYST} to handle {directive_type} directives")
+            
+            # Announce the registration
+            logger.info("Enhanced Conflict System registered with Nyx governance")
+            
+            return {
+                "success": True,
+                "message": "Enhanced Conflict System successfully registered with governance",
+                "registered_directive_types": directive_types
+            }
+        except Exception as e:
+            logger.error(f"Error registering enhanced conflict system: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Failed to register Enhanced Conflict System with governance: {str(e)}"
+            }
+    @function_tool
+    async def register_enhanced_conflict_system_tool(ctx: RunContextWrapper) -> Dict[str, Any]:
+        """Register the enhanced conflict system with governance."""
+        user_id = ctx.agent_context.get("user_id")
+        conversation_id = ctx.agent_context.get("conversation_id")
+        
+        if not user_id or not conversation_id:
+            return {
+                "success": False,
+                "message": "Missing user_id or conversation_id in context"
+            }
+        
+        return await register_enhanced_integration(user_id, conversation_id)
