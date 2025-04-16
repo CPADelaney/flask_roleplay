@@ -1,6 +1,6 @@
 # memory/memory_agent_wrapper.py
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, Runner, function_tool, RunContextWrapper
 from typing import Dict, List, Any, Optional, Union
 import logging
 
