@@ -54,6 +54,7 @@ jobs:
           sudo apt-get -y install gh
       - name: Run Repo Steward
         run: |
-          python nyx/core/repo_refactor_pipeline.py \
+          python -m nyx.core.repo_refactor_pipeline \
             "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.refactor_goal || 'general code health' }}" \
             --pr
+
