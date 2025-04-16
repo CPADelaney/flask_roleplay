@@ -25,6 +25,7 @@ from logic.conflict_system.conflict_agents import get_relationship_status, get_m
 from logic.chatgpt_integration import get_chatgpt_response
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from context.context_performance import track_performance
 
 logger = logging.getLogger(__name__)
 
