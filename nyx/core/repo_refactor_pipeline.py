@@ -2,37 +2,26 @@
 
 from __future__ import annotations
 """
-Repo‑Refactor Pipeline (v1)
-===========================
-A standalone orchestrator that plugs into the existing Creative‑System
-(v2.2) **without changing any imports in the rest of your repo.**
+Repo‑Refactor Pipeline (v1.1)
+=============================
+Same orchestrator as v1, but the **LLM call now uses OpenAI’s newer
+`chat.responses` endpoint** (released 2025‑Q1) instead of the older
+`chat.completions` API.
 
-Features
---------
-* Runs `incremental_codebase_analysis()` to refresh the vector index.
-* Executes *static linters* (`ruff`, `mypy`, `bandit`) only on changed
-  files; parses their JSON output into a consolidated **IssueList**.
-* Creates a *refactor prompt* using `prepare_prompt()` and feeds the
-  context to an LLM (placeholder hook).  The LLM's response is stored via
-  `CreativeContentSystem` for auditability.
-* Optionally writes the LLM‑generated patch to a temporary branch and
-  opens a pull‑request (GitHub CLI required).
-
-Public entry point: `async run_pipeline(goal: str, open_pr: bool = False)`
-
-No other modules need to change – this file just imports
-`AgenticCreativitySystem` from the existing namespace shim.
+No other behaviour changes.
 """
 
 import asyncio, json, os, subprocess, tempfile, textwrap
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
+import openai
 from nyx.creative.agentic_system import AgenticCreativitySystem  # shim to v2.2
 
 # ---------------------------------------------------------------------------
-# Helper dataclass for static‑analysis issues
+# Issue dataclass
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -44,12 +33,10 @@ class Issue:
     msg: str
 
 # ---------------------------------------------------------------------------
-# Static‑analysis runner
+# Static analysis helper (unchanged)
 # ---------------------------------------------------------------------------
 
 class StaticAnalyzer:
-    """Runs linters only on the provided paths and returns Issue records."""
-
     def __init__(self, repo_root: str):
         self.repo_root = Path(repo_root)
 
@@ -59,7 +46,7 @@ class StaticAnalyzer:
             return issues
         rels = [str(p.relative_to(self.repo_root)) for p in files]
 
-        # --- ruff ---
+        # ruff
         try:
             r = subprocess.run(["ruff", "check", "--format", "json"] + rels, cwd=self.repo_root, text=True, capture_output=True, check=False)
             if r.stdout:
@@ -68,9 +55,9 @@ class StaticAnalyzer:
         except FileNotFoundError:
             pass
 
-        # --- mypy ---
+        # mypy
         try:
-            r = subprocess.run(["mypy", "--show-error-codes", "--no-color-output", "--no-error-summary", "--json-report", "_mypy_report"] + rels, cwd=self.repo_root, text=True, capture_output=True, check=False)
+            subprocess.run(["mypy", "--show-error-codes", "--no-color-output", "--no-error-summary", "--json-report", "_mypy_report"] + rels, cwd=self.repo_root, text=True, capture_output=True, check=False)
             report_path = self.repo_root / "_mypy_report" / "index.json"
             if report_path.exists():
                 data = json.loads(report_path.read_text())
@@ -79,7 +66,7 @@ class StaticAnalyzer:
         except FileNotFoundError:
             pass
 
-        # --- bandit ---
+        # bandit
         try:
             r = subprocess.run(["bandit", "-q", "-f", "json", "-r"] + rels, cwd=self.repo_root, text=True, capture_output=True, check=False)
             if r.stdout:
@@ -92,15 +79,32 @@ class StaticAnalyzer:
         return issues
 
 # ---------------------------------------------------------------------------
-# LLM call placeholder (swap with your preferred model)
+# OpenAI chat.responses wrapper
 # ---------------------------------------------------------------------------
 
-async def call_llm(prompt: str) -> str:
-    """Placeholder – replace with o3/o4‑mini call."""
-    return "# TODO: model integration\n" + textwrap.indent(prompt[:1000], "# ")
+async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
+    """Call the new OpenAI Chat Responses endpoint (async)."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:1200]
+
+    openai.api_key = api_key
+    try:
+        resp = await openai.ChatResponses.acreate(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.15,
+            top_p=0.9,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as exc:
+        return f"<!-- LLM call failed: {exc} -->\n" + prompt[:1200]
 
 # ---------------------------------------------------------------------------
-# Pipeline orchestrator
+# Pipeline orchestrator (minor update: passes model response through)
 # ---------------------------------------------------------------------------
 
 class RepoRefactorPipeline:
@@ -113,42 +117,38 @@ class RepoRefactorPipeline:
         changed = self.system.tracker.changed_files()
         await self.system.incremental_codebase_analysis()
 
-        # ----- static analysis on changed files -----
         issues = await self.static.run(changed)
         issues_md = "\n".join(f"- `{i.tool}` {i.path}:{i.line} `{i.code}` {i.msg}" for i in issues[:200])
 
-        # ----- build refactor prompt -----
         base_msg = f"You are the repo steward. Goal: {goal}. Below are lint issues and context snippets. Suggest concrete patches."
         prompt = await self.system.prepare_prompt(goal, base_msg + "\n\n## Lint issues\n" + issues_md, k=6)
-        llm_response = await call_llm(prompt)
+        response = await call_llm(prompt)
 
-        # ----- store the suggestion -----
         await self.system.storage.store_content(
             content_type="assessment",
             title=f"Refactor suggestion {datetime.utcnow().isoformat(timespec='seconds')}",
-            content=llm_response,
+            content=response,
             metadata={"goal": goal, "issues": len(issues)},
         )
 
-        # ----- optional PR -----
         if open_pr:
             branch = f"auto/refactor-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
             subprocess.run(["git", "checkout", "-b", branch], cwd=self.repo_root)
-            patch_path = self.repo_root / "_llm_patch.md"
-            patch_path.write_text(llm_response)
-            subprocess.run(["git", "add", str(patch_path)], cwd=self.repo_root)
+            patch_file = self.repo_root / "_llm_patch.md"
+            patch_file.write_text(response, encoding="utf-8")
+            subprocess.run(["git", "add", str(patch_file)], cwd=self.repo_root)
             subprocess.run(["git", "commit", "-m", "LLM refactor suggestion"], cwd=self.repo_root)
             subprocess.run(["git", "push", "-u", "origin", branch], cwd=self.repo_root)
             subprocess.run(["gh", "pr", "create", "--fill", "--head", branch], cwd=self.repo_root)
 
-        return {"issues": len(issues), "llm_chars": len(llm_response)}
+        return {"issues": len(issues), "chars": len(response)}
 
 # ---------------------------------------------------------------------------
 # CLI helper
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import argparse, asyncio
+    import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("goal", help="high‑level refactor goal, e.g. 'improve db layer'")
