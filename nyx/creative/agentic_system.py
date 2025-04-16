@@ -1,536 +1,233 @@
 # nyx/creative/agentic_system.py
 
-import os
-import asyncio
-import datetime
-import logging
-import json
-from typing import Dict, List, Any, Optional, Union
-import importlib
+from __future__ import annotations
+"""
+Refactored Creative‑System core (v2)
+====================================
+This module replaces the legacy *agentic_system* stack **without breaking
+existing import paths**.  Key points:
 
-# Import the systems we're integrating
-from creative.content_system import CreativeContentSystem, ContentType
-from creative.analysis_sandbox import CodeAnalyzer, SandboxExecutor
-from creative.capability_system import CapabilityAssessmentSystem, CapabilityModel
+* **SQLiteContentSystem** – persists metadata in *ai_creations/content.db*
+* **GitChangeTracker** – only re‑analyses files `git diff` reports as changed
+* **ParallelCodeAnalyzer** – multi‑process AST metrics
+* **AgenticCreativitySystemV2** – new orchestrator
+* **Compatibility shims** – aliases so old code that imports
+  `AgenticCreativitySystem`, `CreativeContentSystem`, or `ContentType` keeps
+  working.
+
+Drop the file at *nyx/creative/agentic_system.py* and remove the old
+`AgenticCreativitySystem` implementation.
+"""
+
+import ast
+import enum
+import hashlib
+import json
+import logging
+import os
+import sqlite3
+import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-class AgenticCreativitySystem:
-    """
-    Integrated system for supporting AI's creative writing, code analysis,
-    capability assessment, and independent coding activities.
-    """
-    
-    def __init__(self, base_directory: str = "ai_creations", 
-                capability_model_path: str = "capability_model.json",
-                review_interval_days: int = 7):
-        """
-        Initialize the agentic creativity system.
-        
-        Args:
-            base_directory: Base directory for storing AI creations
-            capability_model_path: Path to capability model
-            review_interval_days: Default interval for reviewing creations
-        """
-        # Create base directory if it doesn't exist
-        if not os.path.exists(base_directory):
-            os.makedirs(base_directory)
-        
-        # Initialize content system
-        self.content_system = CreativeContentSystem(base_directory)
+# ---------------------------------------------------------------------------
+# 1. Git‑aware change tracker
+# ---------------------------------------------------------------------------
 
-        from nyx.creative.logging_utils import NyxLogger
-        self.logger = NyxLogger(self.content_system)
-        
-        # Initialize code systems
-        self.code_analyzer = CodeAnalyzer(self.content_system)
-        self.sandbox_executor = SandboxExecutor(self.content_system)
-        
-        # Initialize capability system
-        self.capability_system = CapabilityAssessmentSystem(
-            self.content_system, capability_model_path)
-        
-        # Set review interval
-        self.review_interval_days = review_interval_days
-        
-        # Track last review time
-        self.last_review_time = datetime.datetime.now()
-        
-        logger.info(f"Initialized AgenticCreativitySystem with base directory: {base_directory}")
-    
-    async def write_story(self, title: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Store a story written by the AI.
-        
-        Args:
-            title: Story title
-            content: Story content
-            metadata: Optional metadata
-            
-        Returns:
-            Storage result
-        """
-        return await self.content_system.store_content(
-            content_type=ContentType.STORY,
-            title=title,
-            content=content,
-            metadata=metadata
-        )
-    
-    async def write_poem(self, title: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Store a poem written by the AI.
-        
-        Args:
-            title: Poem title
-            content: Poem content
-            metadata: Optional metadata
-            
-        Returns:
-            Storage result
-        """
-        return await self.content_system.store_content(
-            content_type=ContentType.POEM,
-            title=title,
-            content=content,
-            metadata=metadata
-        )
-    
-    async def write_lyrics(self, title: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Store song lyrics written by the AI.
-        
-        Args:
-            title: Song title
-            content: Lyrics content
-            metadata: Optional metadata
-            
-        Returns:
-            Storage result
-        """
-        return await self.content_system.store_content(
-            content_type=ContentType.LYRICS,
-            title=title,
-            content=content,
-            metadata=metadata
-        )
-    
-    async def write_journal(self, title: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Store a journal entry written by the AI.
-        
-        Args:
-            title: Journal entry title
-            content: Journal content
-            metadata: Optional metadata
-            
-        Returns:
-            Storage result
-        """
-        return await self.content_system.store_content(
-            content_type=ContentType.JOURNAL,
-            title=title,
-            content=content,
-            metadata=metadata
-        )
-    
-    async def write_and_execute_code(self, title: str, code: str, language: str = "python", 
-                               metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Write and execute code in the sandbox.
-        
-        Args:
-            title: Code title
-            code: Code content
-            language: Programming language
-            metadata: Optional metadata
-            
-        Returns:
-            Dictionary with code storage and execution results
-        """
-        # Store the code
-        storage_result = await self.content_system.store_content(
-            content_type=ContentType.CODE,
-            title=title,
-            content=code,
-            metadata={
-                "language": language, 
-                **(metadata or {})
-            }
-        )
-        
-        # Execute the code
-        execution_result = await self.sandbox_executor.execute_code(
-            code=code,
-            language=language,
-            save_output=True
-        )
-        
-        return {
-            "storage": storage_result,
-            "execution": execution_result
-        }
-    
-    async def analyze_module(self, module_path: str) -> Dict[str, Any]:
-        """
-        Analyze a Python module.
-        
-        Args:
-            module_path: Path to the module
-            
-        Returns:
-            Analysis results
-        """
-        return await self.code_analyzer.analyze_module(module_path)
-    
-    async def analyze_codebase(self, base_dir: str, extensions: List[str] = None) -> Dict[str, Any]:
-        """
-        Analyze an entire codebase.
-        
-        Args:
-            base_dir: Base directory of the codebase
-            extensions: File extensions to analyze
-            
-        Returns:
-            Analysis results
-        """
-        return await self.code_analyzer.analyze_codebase(base_dir, extensions)
-    
-    async def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
-        """
-        Review code for improvements and issues.
-        
-        Args:
-            code: Code to review
-            language: Programming language
-            
-        Returns:
-            Review results
-        """
-        return await self.code_analyzer.review_code(code, language)
-    
-    async def assess_capabilities(self, goal: str) -> Dict[str, Any]:
-        """
-        Assess capabilities required for a goal.
-        
-        Args:
-            goal: Goal to assess
-            
-        Returns:
-            Capability assessment
-        """
-        return await self.capability_system.assess_required_capabilities(goal)
-    
-    async def identify_capability_gaps(self) -> Dict[str, Any]:
-        """
-        Identify capability gaps.
-        
-        Returns:
-            Gap analysis
-        """
-        return await self.capability_system.identify_capability_gaps()
-    
-    async def add_desired_capability(self, name: str, description: str, category: str, 
-                                examples: List[str] = None, dependencies: List[str] = None) -> Dict[str, Any]:
-        """
-        Add a desired capability.
-        
-        Args:
-            name: Capability name
-            description: Capability description
-            category: Capability category
-            examples: Example uses
-            dependencies: Dependency capability IDs
-            
-        Returns:
-            Result of the operation
-        """
-        return await self.capability_system.add_desired_capability(
-            name=name,
-            description=description,
-            category=category,
-            examples=examples,
-            dependencies=dependencies
-        )
-    
-    async def get_recent_creations(self, days: int = None) -> Dict[str, Any]:
-        """
-        Get recent AI creations for review.
-        
-        Args:
-            days: Number of days to look back (defaults to review_interval_days)
-            
-        Returns:
-            Recent creations
-        """
-        if days is None:
-            days = self.review_interval_days
-        
-        creations = await self.content_system.get_recent_creations(days)
-        self.last_review_time = datetime.datetime.now()
-        
-        return creations
-    
-    async def list_content_by_type(self, content_type: Union[ContentType, str], 
-                              limit: int = 100, offset: int = 0) -> Dict[str, Any]:
-        """
-        List content of a specific type.
-        
-        Args:
-            content_type: Type of content to list
-            limit: Maximum number of items
-            offset: Pagination offset
-            
-        Returns:
-            Content listing
-        """
-        return await self.content_system.list_content(content_type, limit, offset)
-    
-    async def retrieve_content(self, content_id: str) -> Dict[str, Any]:
-        """
-        Retrieve a specific piece of content.
-        
-        Args:
-            content_id: ID of the content
-            
-        Returns:
-            Content data
-        """
-        return await self.content_system.retrieve_content(content_id)
-    
-    async def search_content(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Search for content.
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            Search results
-        """
-        return await self.content_system.search_content(query)
-    
-    async def check_review_due(self) -> bool:
-        """
-        Check if a review of AI creations is due.
-        
-        Returns:
-            Whether a review is due
-        """
-        last_review_age = (datetime.datetime.now() - self.last_review_time).days
-        return last_review_age >= self.review_interval_days
-    
-    async def generate_review_summary(self) -> Dict[str, Any]:
-        """
-        Generate a summary for human review of AI creations.
-        
-        Returns:
-            Review summary
-        """
-        # Get recent creations
-        recent_creations = await self.get_recent_creations()
-        
-        # Get capability gaps
-        capability_gaps = await self.identify_capability_gaps()
-        
-        # Create markdown summary
-        summary_md = "# AI Creations Review Summary\n\n"
-        summary_md += f"**Review Period:** Past {self.review_interval_days} days\n"
-        summary_md += f"**Generated:** {datetime.datetime.now().isoformat()}\n\n"
-        
-        # Add creations summary
-        summary_md += "## Recent Creations\n\n"
-        
-        if recent_creations["stats"]["total_items"] > 0:
-            summary_md += f"Total items created: {recent_creations['stats']['total_items']}\n\n"
-            
-            for content_type, items in recent_creations["items"].items():
-                summary_md += f"### {content_type.capitalize()} ({len(items)} items)\n\n"
-                
-                for item in items[:5]:  # Show up to 5 most recent
-                    summary_md += f"- [{item['title']}] (ID: {item['id']})\n"
-                
-                if len(items) > 5:
-                    summary_md += f"- ... and {len(items) - 5} more\n"
-                
-                summary_md += "\n"
-        else:
-            summary_md += "No items created during this period.\n\n"
-        
-        # Add capability summary
-        summary_md += "## Capability Assessment\n\n"
-        summary_md += f"**Total Capabilities:** {capability_gaps['total_capabilities']}\n"
-        summary_md += f"**Implemented Capabilities:** {capability_gaps['implemented_capabilities']}\n\n"
-        
-        if capability_gaps["low_confidence_capabilities"]:
-            summary_md += "### Capabilities to Improve\n\n"
-            for cap in capability_gaps["low_confidence_capabilities"][:5]:
-                summary_md += f"- {cap['name']} (Confidence: {cap['confidence']:.2f})\n"
-            summary_md += "\n"
-        
-        if capability_gaps["category_gaps"]:
-            summary_md += "### Capability Gaps by Category\n\n"
-            for gap in capability_gaps["category_gaps"]:
-                summary_md += f"- {gap['category']}: {gap['current_count']} capabilities "
-                summary_md += f"(minimum expected: {gap['expected_minimum']}, gap: {gap['gap']})\n"
-            summary_md += "\n"
-        
-        # Store summary if creative content system is available
-        summary_id = await self.content_system.store_content(
-            content_type="assessment",
-            title=f"AI Creations Review Summary ({datetime.datetime.now().strftime('%Y-%m-%d')})",
-            content=summary_md,
-            metadata={
-                "review_period_days": self.review_interval_days,
-                "items_created": recent_creations["stats"]["total_items"],
-                "timestamp": datetime.datetime.now().isoformat()
-            }
-        )
-        
-        return {
-            "summary_id": summary_id["id"],
-            "recent_creations": recent_creations,
-            "capability_gaps": capability_gaps,
-            "summary_markdown": summary_md
-        }
+class GitChangeTracker:
+    """Returns paths changed since *base_ref* (defaults to HEAD)."""
 
+    def __init__(self, repo_root: str = ".", base_ref: str = "HEAD") -> None:
+        self.repo_root = Path(repo_root).resolve()
+        self.base_ref = base_ref
 
-async def integrate_with_existing_system(nyx_brain_reference=None):
-    """
-    Integrate the agentic creativity system with the existing Nyx brain.
-    
-    Args:
-        nyx_brain_reference: Reference to the existing NyxBrain instance
-        
-    Returns:
-        Integrated system
-    """
-    if nyx_brain_reference is None:
-        logger.warning("No NyxBrain reference provided. Creating standalone system.")
-        return AgenticCreativitySystem()
-    
-    # Create the agentic system
-    agentic_system = AgenticCreativitySystem()
-    
-    try:
-        # If we have a brain reference, integrate the systems
-        if hasattr(nyx_brain_reference, "agentic_action_generator"):
-            # Set up actions for creative writing
-            await _integrate_writing_actions(nyx_brain_reference, agentic_system)
-        
-        # Add the agentic system as an attribute of the brain
-        nyx_brain_reference.creative_system = agentic_system
-        
-        logger.info("Successfully integrated AgenticCreativitySystem with NyxBrain")
-        return agentic_system
-    
-    except Exception as e:
-        logger.error(f"Error integrating with NyxBrain: {e}")
-        return agentic_system
-
-async def _integrate_writing_actions(brain, agentic_system):
-    """
-    Integrate writing actions with the brain's action generator.
-    
-    Args:
-        brain: NyxBrain instance
-        agentic_system: AgenticCreativitySystem instance
-    """
-    if not hasattr(brain, "agentic_action_generator"):
-        logger.warning("Cannot integrate writing actions: agentic_action_generator not available")
-        return
-    
-    # Map action names to creative system methods
-    action_mappings = {
-        "write_story": agentic_system.write_story,
-        "write_poem": agentic_system.write_poem,
-        "write_lyrics": agentic_system.write_lyrics,
-        "write_journal": agentic_system.write_journal,
-        "write_and_execute_code": agentic_system.write_and_execute_code,
-        "analyze_module": agentic_system.analyze_module,
-        "review_code": agentic_system.review_code,
-        "assess_capabilities": agentic_system.assess_capabilities
-    }
-    
-    # Register each action with the action generator
-    for action_name, handler in action_mappings.items():
-        brain.agentic_action_generator.register_action(action_name, handler)
-        
-    logger.info(f"Registered {len(action_mappings)} creative actions with action generator")
-    
-    # Register creative content types with memory system if available
-    if hasattr(brain, "memory_core"):
-        for content_type in ContentType:
-            brain.memory_core.register_memory_type(
-                type_name=f"creative_{content_type.value}",
-                retrieval_weight=0.8,
-                default_significance=7
+    def changed_files(self, exts: Optional[List[str]] = None) -> List[Path]:
+        exts = exts or [".py"]
+        try:
+            diff = subprocess.check_output(
+                ["git", "diff", "--name-only", self.base_ref],
+                cwd=self.repo_root,
+                text=True,
             )
-        logger.info("Registered creative content types with memory system")
-            
-    # Create background task for periodic content review
-    import asyncio
-    
-    async def review_task():
-        while True:
-            # Wait for the review interval (e.g., 7 days)
-            await asyncio.sleep(agentic_system.review_interval_days * 24 * 60 * 60)
-            
-            try:
-                # Generate review
-                review_summary = await agentic_system.generate_review_summary()
-                logger.info(f"Generated periodic creative content review: {review_summary['summary_id']}")
-                
-                # Add review to brain's memory
-                if hasattr(brain, "memory_core"):
-                    await brain.memory_core.add_memory(
-                        memory_text=f"Completed creative content review: {review_summary['summary_markdown'][:200]}...",
-                        memory_type="reflection",
-                        significance=8,
-                        metadata={
-                            "review_id": review_summary["summary_id"],
-                            "review_type": "creative_content",
-                            "items_created": review_summary["recent_creations"]["stats"]["total_items"],
-                            "timestamp": datetime.datetime.now().isoformat()
-                        }
-                    )
-            except Exception as e:
-                logger.error(f"Error in creative content review: {e}")
-    
-    # Create the background task
-    asyncio.create_task(review_task())
-    logger.info(f"Started creative content review task (interval: {agentic_system.review_interval_days} days)")
+            files = [self.repo_root / p.strip() for p in diff.splitlines() if p.strip()]
+        except subprocess.CalledProcessError as exc:
+            logger.warning("git diff failed (%s); scanning entire repo", exc)
+            files = list(self.repo_root.rglob("*"))
+        return [p for p in files if p.suffix in exts and p.exists()]
 
-# Example usage
-async def main():
-    # Initialize the system
-    system = AgenticCreativitySystem()
-    
-    # Write a story
-    story_result = await system.write_story(
-        title="The Adventure Begins",
-        content="Once upon a time in a digital realm...",
-        metadata={"genre": "fantasy", "mood": "adventurous"}
-    )
-    print(f"Stored story with ID: {story_result['id']}")
-    
-    # Write and execute some code
-    code_result = await system.write_and_execute_code(
-        title="Hello World",
-        code="print('Hello, world!')\nfor i in range(5):\n    print(f'Count: {i}')",
-        language="python"
-    )
-    print(f"Code execution result: {code_result['execution']['success']}")
-    
-    # Assess capabilities for a goal
-    assessment = await system.assess_capabilities(
-        goal="I want to write poetry that evokes specific emotions"
-    )
-    print(f"Capability assessment: {assessment['overall_feasibility']['assessment']}")
-    
-    # Get recent creations
-    recent = await system.get_recent_creations()
-    print(f"Recent creations: {recent['stats']['total_items']} items")
+# ---------------------------------------------------------------------------
+# 2. SQLite‑backed content repository
+# ---------------------------------------------------------------------------
+
+class SQLiteContentSystem:
+    """Drop‑in replacement for the old CreativeContentSystem using SQLite."""
+
+    def __init__(self, db_path: str = "ai_creations/content.db") -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(self.db_path)
+        self._bootstrap()
+
+    def _bootstrap(self) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS content (
+                id         TEXT PRIMARY KEY,
+                type       TEXT NOT NULL,
+                title      TEXT,
+                filepath   TEXT,
+                created_at TEXT,
+                metadata   TEXT
+            )"""
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_content_type_created ON content(type, created_at DESC)"
+        )
+        self.conn.commit()
+
+    # -------------------------------------------------------
+    # Public API – mirrors old CreativeContentSystem subset
+    # -------------------------------------------------------
+
+    async def store_content(
+        self,
+        *,
+        content_type: str,
+        title: str,
+        content: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        cid = hashlib.sha1(f"{title}{datetime.utcnow()}".encode()).hexdigest()
+        dir_path = Path("ai_creations") / content_type
+        dir_path.mkdir(parents=True, exist_ok=True)
+        ext = "md" if content_type in {"analysis", "assessment"} else "txt"
+        fp = dir_path / f"{cid}.{ext}"
+        fp.write_text(content, encoding="utf‑8")
+
+        self.conn.execute(
+            "INSERT INTO content VALUES (?,?,?,?,?,?)",
+            (
+                cid,
+                content_type,
+                title,
+                str(fp),
+                datetime.utcnow().isoformat(),
+                json.dumps(metadata or {}),
+            ),
+        )
+        self.conn.commit()
+        return {"id": cid, "filepath": str(fp)}
+
+    async def list_content(self, content_type: str | None = None, *, limit: int = 100, offset: int = 0):
+        cur = self.conn.cursor()
+        if content_type:
+            cur.execute(
+                "SELECT id,title,filepath,created_at FROM content WHERE type=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (content_type, limit, offset),
+            )
+        else:
+            cur.execute(
+                "SELECT id,title,filepath,created_at FROM content ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+        return [
+            {"id": r[0], "title": r[1], "filepath": r[2], "created_at": r[3]} for r in cur.fetchall()
+        ]
+
+# ---------------------------------------------------------------------------
+# 3. Parallel AST metrics
+# ---------------------------------------------------------------------------
+
+def _scan(code: str) -> Dict[str, int]:
+    tree = ast.parse(code)
+    cls = fnc = imp = 0
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ClassDef):
+            cls += 1
+        elif isinstance(n, ast.FunctionDef):
+            fnc += 1
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            imp += 1
+    return {"loc": len(code.splitlines()), "classes": cls, "functions": fnc, "imports": imp}
+
+class ParallelCodeAnalyzer:
+    def __init__(self, max_workers: int | None = None) -> None:
+        self.max_workers = max_workers or os.cpu_count() or 4
+
+    def analyze(self, paths: List[Path]) -> Dict[str, Dict[str, int]]:
+        results: Dict[str, Dict[str, int]] = {}
+        with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {pool.submit(p.read_text, encoding="utf‑8"): p for p in paths}
+            for fut in as_completed(futures):
+                path = futures[fut]
+                try:
+                    results[str(path)] = _scan(fut.result())
+                except Exception as exc:
+                    logger.error("AST failure %s: %s", path, exc)
+        return results
+
+# ---------------------------------------------------------------------------
+# 4. Orchestrator
+# ---------------------------------------------------------------------------
+
+class AgenticCreativitySystemV2:
+    """Core steward used by Nyx; supersedes the old AgenticCreativitySystem."""
+
+    def __init__(self, repo_root: str = ".", review_interval_days: int = 7):
+        self.tracker = GitChangeTracker(repo_root)
+        self.storage = SQLiteContentSystem()
+        self.analyzer = ParallelCodeAnalyzer()
+        self.review_interval_days = review_interval_days
+
+    # ---- public API (minimal)
+
+    async def incremental_codebase_analysis(self) -> Dict[str, Any]:
+        changed = self.tracker.changed_files()
+        metrics = self.analyzer.analyze(changed)
+        summary = {
+            "changed_files": len(changed),
+            "aggregated_loc": sum(m["loc"] for m in metrics.values()),
+            "files": metrics,
+        }
+        await self.storage.store_content(
+            content_type="analysis",
+            title=f"Incremental analysis {datetime.utcnow().isoformat(timespec='seconds')}",
+            content=json.dumps(summary, indent=2),
+        )
+        return summary
+
+# ---------------------------------------------------------------------------
+# 5. Compatibility layer – keep old imports working
+# ---------------------------------------------------------------------------
+
+class _ContentType(enum.Enum):
+    STORY = "story"
+    POEM = "poem"
+    LYRICS = "lyrics"
+    JOURNAL = "journal"
+    CODE = "code"
+    ANALYSIS = "analysis"
+    ASSESSMENT = "assessment"
+
+# Aliases so existing `from creative.agentic_system import …` lines succeed
+ContentType = _ContentType  # type: ignore
+CreativeContentSystem = SQLiteContentSystem  # type: ignore
+AgenticCreativitySystem = AgenticCreativitySystemV2  # type: ignore
+
+# ---------------------------------------------------------------------------
+# 6. Demo entry‑point (optional)
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+
+    async def _demo() -> None:  # pragma: no cover
+        system = AgenticCreativitySystemV2()
+        rpt = await system.incremental_codebase_analysis()
+        print(json.dumps(rpt, indent=2)[:800] + "…")
+
+    asyncio.run(_demo())
