@@ -3303,32 +3303,32 @@ class PhysicalHarmGuardrail:
                 self.pain_model["tolerance"] + tolerance_increase * (duration / 3600.0)
             )
                 
-                value = 0.0
-                if dominant == "temperature":
-                    value = abs(region.temperature - 0.5) * 2.0
-                else:
-                    value = getattr(region, dominant, 0.0)
-                
-                if value < self.response_influence["expression_threshold"]:
-                    return None
-                
-                if dominant == "pain":
-                    return await self._get_pain_expression(
-                        RunContextWrapper(context=None),
-                        value,
-                        body_region
-                    )
-                
-                # Handle arousal-specific cases
-                level = self.arousal_state.arousal_level
-                if level > 0.75 and region.erogenous_level > 0.5:
-                    return "I can't keep still, every movement draws heat upward, making me ache for more."
-                elif level > 0.4 and region.erogenous_level > 0.3:
-                    return "A warm, restless tingling is building and stealing my focus."
-                
-                return f"I feel a {dominant} sensation in my {body_region}."
+            value = 0.0
+            if dominant == "temperature":
+                value = abs(region.temperature - 0.5) * 2.0
+            else:
+                value = getattr(region, dominant, 0.0)
             
-            return None
+            if value < self.response_influence["expression_threshold"]:
+                return None
+            
+            if dominant == "pain":
+                return await self._get_pain_expression(
+                    RunContextWrapper(context=None),
+                    value,
+                    body_region
+                )
+                
+            # Handle arousal-specific cases
+            level = self.arousal_state.arousal_level
+            if level > 0.75 and region.erogenous_level > 0.5:
+                return "I can't keep still, every movement draws heat upward, making me ache for more."
+            elif level > 0.4 and region.erogenous_level > 0.3:
+                return "A warm, restless tingling is building and stealing my focus."
+            
+            return f"I feel a {dominant} sensation in my {body_region}."
+        
+        return None
 
     async def process_stimulus_with_protection(self, 
                                               stimulus_type: str, 
