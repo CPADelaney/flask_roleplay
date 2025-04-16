@@ -147,7 +147,7 @@ class ConflictSystemIntegration:
           - story progression details
           - the narrative ID itself
         """
-        from npcs.npc_agent_system import get_active_npcs
+        from npcs.npc_agent_system import _get_active_npcs as get_active_npcs
     
         # Prepare a default response
         default = {
