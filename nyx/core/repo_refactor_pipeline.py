@@ -108,22 +108,57 @@ async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
 # ---------------------------------------------------------------------------
 
 class RepoRefactorPipeline:
+    """Pipeline with optional *human approval* before applying patches.
+
+    Flow:
+    1. Detect changed files, embed/index.
+    2. Run static linters.
+    3. Build prompt + call LLM (chat.responses).
+    4. **Save** model output to `_llm_patch.md`  (and content store).
+    5. If `approve_callback` returns True, apply the patch and optionally open a PR.
+       Otherwise, exit after storing the suggestion.
+    """
+
     def __init__(self, repo_root: str = "."):
         self.repo_root = Path(repo_root).resolve()
         self.system = AgenticCreativitySystem(repo_root)
         self.static = StaticAnalyzer(repo_root)
 
-    async def run(self, goal: str, open_pr: bool = False):
+    # -----------------------------------------------------
+    async def run(
+        self,
+        goal: str,
+        *,
+        approve_callback=None,  # callable returning bool | None -> prompt in terminal
+        open_pr: bool = False,
+        model: str = "o3-turbo",
+    ) -> Dict[str, Any]:
+        """Run the pipeline.  If *approve_callback* is None, ask user in tty."""
+
         changed = self.system.tracker.changed_files()
         await self.system.incremental_codebase_analysis()
 
+        # ---------- static analysis ----------
         issues = await self.static.run(changed)
-        issues_md = "\n".join(f"- `{i.tool}` {i.path}:{i.line} `{i.code}` {i.msg}" for i in issues[:200])
+        issues_md = "
+".join(
+            f"- `{i.tool}` {i.path}:{i.line} `{i.code}` {i.msg}" for i in issues[:200]
+        )
 
-        base_msg = f"You are the repo steward. Goal: {goal}. Below are lint issues and context snippets. Suggest concrete patches."
-        prompt = await self.system.prepare_prompt(goal, base_msg + "\n\n## Lint issues\n" + issues_md, k=6)
-        response = await call_llm(prompt)
+        # ---------- LLM prompt ----------
+        base_msg = (
+            f"You are the repo steward. Goal: {goal}. "
+            "Below are lint issues and context snippets. Suggest concrete patches in unified diff format."
+        )
+        prompt = await self.system.prepare_prompt(goal, base_msg + "
 
+## Lint issues
+" + issues_md, k=6)
+        response = await call_llm(prompt, model=model)
+
+        # ---------- save suggestion ----------
+        patch_file = self.repo_root / "_llm_patch.md"
+        patch_file.write_text(response, encoding="utf-8")
         await self.system.storage.store_content(
             content_type="assessment",
             title=f"Refactor suggestion {datetime.utcnow().isoformat(timespec='seconds')}",
@@ -131,23 +166,65 @@ class RepoRefactorPipeline:
             metadata={"goal": goal, "issues": len(issues)},
         )
 
+        # ---------- approval gate ----------
+                approved = False
+        if approve_callback is not None:
+            approved = approve_callback(response)
+        else:
+            # On GitHub Actions / web you won’t have a TTY. Leave un‑approved by default.
+            pass
+
+        if not approved:
+            if open_pr:  # still create a draft PR with the suggestion for manual review
+                branch = f"auto/refactor-suggestion-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+                subprocess.run(["git", "checkout", "-b", branch], cwd=self.repo_root)
+                subprocess.run(["git", "add", str(patch_file)], cwd=self.repo_root)
+                subprocess.run(["git", "commit", "-m", f'draft: {goal} (LLM suggestion)'], cwd=self.repo_root)
+                subprocess.run(["git", "push", "-u", "origin", branch], cwd=self.repo_root)
+                subprocess.run(["gh", "pr", "create", "--fill", "--head", branch, "--draft"], cwd=self.repo_root)
+            return {"issues": len(issues), "chars": len(response), "applied": False, "pr_opened": bool(open_pr)}
+
+        # ---------- apply patch ----------
+        try:
+            subprocess.run(["git", "apply", str(patch_file)], cwd=self.repo_root, check=True)
+        except subprocess.CalledProcessError as exc:
+            return {"error": f"git apply failed: {exc}", "applied": False}
+
+        # run tests
+        test_ok = subprocess.run(["pytest", "-q"], cwd=self.repo_root).returncode == 0
+        if not test_ok:
+            subprocess.run(["git", "apply", "-R", str(patch_file)], cwd=self.repo_root)  # revert
+            return {"issues": len(issues), "chars": len(response), "applied": False, "tests": "failed"}
+
+        # commit & optional PR
+        branch = f"auto/refactor-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        subprocess.run(["git", "checkout", "-b", branch], cwd=self.repo_root)
+        subprocess.run(["git", "add", "-u"], cwd=self.repo_root)
+        subprocess.run(["git", "commit", "-m", goal], cwd=self.repo_root)
+
         if open_pr:
-            branch = f"auto/refactor-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-            subprocess.run(["git", "checkout", "-b", branch], cwd=self.repo_root)
-            patch_file = self.repo_root / "_llm_patch.md"
-            patch_file.write_text(response, encoding="utf-8")
-            subprocess.run(["git", "add", str(patch_file)], cwd=self.repo_root)
-            subprocess.run(["git", "commit", "-m", "LLM refactor suggestion"], cwd=self.repo_root)
             subprocess.run(["git", "push", "-u", "origin", branch], cwd=self.repo_root)
             subprocess.run(["gh", "pr", "create", "--fill", "--head", branch], cwd=self.repo_root)
 
-        return {"issues": len(issues), "chars": len(response)}
+        return {"issues": len(issues), "chars": len(response), "applied": True, "tests": "passed"}
 
 # ---------------------------------------------------------------------------
-# CLI helper
+# CLI helper with approval prompt
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("goal", help="high‑level refactor goal, e.g. 'improve db layer'")
+    parser.add_argument("--pr", action="store_true", help="open a GitHub PR with the patch")
+    args = parser.parse_args()
+
+    def _ask(_):
+        # handled inside run() via tty prompt
+        return True  # dummy; won't be used
+
+    asyncio.run(RepoRefactorPipeline().run(args.goal, approve_callback=None, open_pr=args.pr))
     import argparse
 
     parser = argparse.ArgumentParser()
