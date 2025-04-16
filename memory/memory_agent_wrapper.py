@@ -23,6 +23,7 @@ class MemoryAgentWrapper:
         self.tools = agent.tools if hasattr(agent, 'tools') else []
         self.input_guardrails = []
         self._hooks = None
+        self.model_settings = agent.model_settings if hasattr(agent, 'model_settings') else None
     
     # Fix: Add proper property getters
     @property
