@@ -828,6 +828,7 @@ class ReasoningCore:
     Core system for causal reasoning, inference, and explanation.
     Extended with conceptual blending capabilities for creative reasoning.
     """
+    from nyx.core.multimodal_integrator import MultimodalIntegratorContext, MultimodalIntegrator
     
     def __init__(self, knowledge_core=None):
         """
