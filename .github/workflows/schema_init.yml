@@ -24,7 +24,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Initialize DB schema
-         env:
-           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-         run: |
-           python init_db_script.py
+        env:           # Correct indentation (2 spaces)
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |         # Correct indentation (2 spaces)
+          python init_db_script.py
