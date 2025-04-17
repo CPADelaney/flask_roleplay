@@ -23,7 +23,7 @@ jobs:
           # plus any other requirements your script needs
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run Database Initialization Script
+      - name: Initialize DB schema
          env:
            DATABASE_URL: ${{ secrets.DATABASE_URL }}
          run: |
