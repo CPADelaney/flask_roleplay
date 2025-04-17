@@ -109,16 +109,18 @@ async def call_llm(prompt: str, model: str = "gpt-4o"):
     if not api_key:
         return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
     
-    client = AsyncOpenAI(api_key=api_key)
+    # Use the OpenAIResponsesModel from agents package
+    model_instance = OpenAIResponsesModel(model_name=model)
     
-    response = await client.chat.responses.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.15,
-        top_p=0.9,
+    # Check the correct method signature based on the agents package documentation
+    response = await model_instance.get_response(
+        system_instructions="You are an autonomous repo steward AI that suggests minimal, high‑impact patches.",
+        input=prompt,
+        model_settings=ModelSettings(temperature=0.15, top_p=0.9),
+        tools=[],  # Add any tools if needed
+        output_schema=None,  # Set if needed
+        handoffs=[],  # Set if needed
+        tracing=ModelTracing.ENABLED,  # You'll need to import this
     )
     
     result = ""
