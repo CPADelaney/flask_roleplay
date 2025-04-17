@@ -1,6 +1,6 @@
 # routes/knowledge_routes.py
 
-from flask import Blueprint, jsonify
+from quart import Blueprint, jsonify
 from db.connection import get_db_connection_context
 import json
 
