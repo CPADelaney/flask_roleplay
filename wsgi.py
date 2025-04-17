@@ -1,9 +1,5 @@
 # wsgi.py
 
-# Import eventlet first and monkey patch BEFORE other imports like socketio or quart
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import logging
 from dotenv import load_dotenv
@@ -36,7 +32,7 @@ logging.info("quart app instance created.")
 # Initialize SocketIO with the app using the factory
 # This should also assign the instance to the global `socketio` variable in main.py
 logging.info("Creating SocketIO instance...")
-socketio_instance = create_socketio(app) # Use the return value if needed, but relies on global assignment in main
+socketio = create_socketio(app)
 logging.info("SocketIO instance created.")
 
 # Gunicorn or other ASGI servers will import 'app' from this module.
