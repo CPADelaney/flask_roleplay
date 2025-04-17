@@ -23,6 +23,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Callable, Optional
 from logic.chatgpt_integration import get_openai_client
+from agents import (
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool,
+    RunContextWrapper,
+    AsyncOpenAI,
+    OpenAIResponsesModel
+)
 
 import openai
 from nyx.creative.agentic_system import AgenticCreativitySystem  # shim to v2.2
