@@ -1,3 +1,5 @@
+# db/schema_and_seed.py
+
 import json
 import logging
 # Import connection and pool management functions
