@@ -8,7 +8,7 @@ import logging
 import json
 from functools import wraps
 from typing import Dict, Any
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
