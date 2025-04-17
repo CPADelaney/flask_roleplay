@@ -7,16 +7,17 @@ import json
 import asyncio
 from typing import Dict, Any, Optional
 
-# Flask and related imports
-from flask import Flask, render_template, session, request, jsonify, redirect
-from flask_socketio import SocketIO, emit, join_room
-from flask_cors import CORS
+# quart and related imports
+from quart import quart, render_template, session, request, jsonify, redirect
+from quart_socketio import SocketIO, emit, join_room
+from quart_cors import CORS
 # Removed WsgiToAsgi as we use eventlet
-from flask_talisman import Talisman
-from flask_wtf.csrf import CSRFProtect
-from prometheus_flask_exporter import PrometheusMetrics
+from quart_talisman import Talisman
+from quart_wtf.csrf import CSRFProtect
+from prometheus_quart_exporter import PrometheusMetrics
 from flasgger import Swagger
 from datetime import timedelta
+from quart import Quart
 
 # Security
 import bcrypt
@@ -243,7 +244,7 @@ async def initialize_systems(app):
     try:
         # --- Database Schema/Seed ---
         # !! IMPORTANT !!: Schema creation/migration and seeding should ideally
-        # be done via separate CLI commands (e.g., using Flask-Migrate, Alembic, or your init_db_script.py)
+        # be done via separate CLI commands (e.g., using quart-Migrate, Alembic, or your init_db_script.py)
         # BEFORE starting the application server, not during runtime initialization.
         # Doing it here is risky and slows down startup.
         # Commenting out the direct calls:
@@ -257,7 +258,7 @@ async def initialize_systems(app):
         logger.warning("Skipping DB schema/seed/migration checks in app startup. Run these manually/via deployment script.")
 
         # --- Initialize DB Pool ---
-        # This *should* be done here or early in create_flask_app
+        # This *should* be done here or early in create_quart_app
         if not await initialize_connection_pool():
             raise RuntimeError("Database pool initialization failed")
         else:
@@ -388,19 +389,19 @@ async def initialize_systems(app):
         raise # Prevent app from starting if critical systems fail
 
 ###############################################################################
-# FLASK APP CREATION
+# quart APP CREATION
 ###############################################################################
 
-def create_flask_app():
-    """Create and configure a Flask application."""
-    app = Flask(__name__, static_folder='static', template_folder='templates')
+def create_quart_app():
+    """Create and configure a quart application."""
+    app = Quart(__name__, static_folder='static', template_folder='templates')
 
     # --- Basic Config ---
     try:
         # Use environment variables with defaults for security keys
         app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-insecure-secret-key-please-change')
         if app.config['SECRET_KEY'] == 'default-insecure-secret-key-please-change':
-             logger.warning("FLASK_SECRET_KEY is not set or is using the insecure default!")
+             logger.warning("quart_SECRET_KEY is not set or is using the insecure default!")
 
         # Secure defaults for production, allow override via env vars for dev
         app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'True').lower() == 'true'
@@ -409,7 +410,7 @@ def create_flask_app():
         app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(seconds=int(os.environ.get('PERMANENT_SESSION_LIFETIME', 2592000))) # Default 30 days
         logger.info(f"Session cookie settings: Secure={app.config['SESSION_COOKIE_SECURE']}, HttpOnly={app.config['SESSION_COOKIE_HTTPONLY']}, SameSite={app.config['SESSION_COOKIE_SAMESITE']}")
     except Exception as config_err:
-        logger.error(f"Error setting basic Flask config: {config_err}", exc_info=True)
+        logger.error(f"Error setting basic quart config: {config_err}", exc_info=True)
         # Handle error - maybe raise or use safe defaults
 
 
@@ -429,10 +430,10 @@ def create_flask_app():
         "specs_route": "/docs" # Recommend /docs or /api/docs
     }
     template = {
-        "swagger": "2.0", # Consider OpenAPI 3+ using apispec directly or flask-smorest
+        "swagger": "2.0", # Consider OpenAPI 3+ using apispec directly or quart-smorest
         "info": {
             "title": "Roleplay Bot API", # Updated Title
-            "description": "API for managing roleplay sessions, NPCs, memories, and interactions via Flask and SocketIO.",
+            "description": "API for managing roleplay sessions, NPCs, memories, and interactions via quart and SocketIO.",
             "version": "1.0.0",
             "contact": {"email": "support@example.com"} # Replace with actual contact
         },
@@ -511,7 +512,7 @@ def create_flask_app():
         logger.critical(f"Application initialization failed: {init_err}", exc_info=True)
         # Exit or raise prevents the app from being returned in a broken state
         raise RuntimeError("Failed to initialize application systems.") from init_err
-    logger.info("Async initializations complete. Flask app creation finished.")
+    logger.info("Async initializations complete. quart app creation finished.")
 
 
     ###########################################################################
@@ -1066,7 +1067,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080)) # Use 8080 as default dev port
 
     # Create app and socketio instances
-    app = create_flask_app()
+    app = create_quart_app()
     # create_socketio needs the app instance
     socketio_instance = create_socketio(app) # This assigns to the global 'socketio'
 
@@ -1076,6 +1077,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=os.getenv("FLASK_DEBUG", "False").lower() == "true", # Enable Flask debug mode via env var
-        use_reloader=os.getenv("FLASK_USE_RELOADER", "True").lower() == "true" # Enable reloader for dev
+        debug=os.getenv("quart_DEBUG", "False").lower() == "true", # Enable quart debug mode via env var
+        use_reloader=os.getenv("quart_USE_RELOADER", "True").lower() == "true" # Enable reloader for dev
     )
