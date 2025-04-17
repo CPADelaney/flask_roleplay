@@ -25,6 +25,8 @@ quart-wtf
 asyncio-extras
 hypercorn
 smolagents>=1.0.0
+werkzeug
+starlette
 
 # Web framework
 flask==3.0.0
