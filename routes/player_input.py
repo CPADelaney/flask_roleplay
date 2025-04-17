@@ -1,11 +1,11 @@
 # routes/player_input.py
 
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context
 # If you want meltdown logic tracking (e.g., record_meltdown_dialog):
 # from logic.meltdown_logic import record_meltdown_dialog, append_meltdown_file
 
-from flask_socketio import emit
+from quart_socketio import emit
 import logging
 
 player_input_bp = Blueprint("player_input", __name__)
