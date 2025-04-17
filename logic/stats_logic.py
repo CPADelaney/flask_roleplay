@@ -21,7 +21,7 @@ def insert_or_update_game_rules():
     If a rule_name already exists, we update the condition/effect.
     Otherwise we insert a new record.
     """
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     # Example rules:
@@ -71,7 +71,7 @@ def insert_stat_definitions():
     Inserts all NPC and Player stat definitions (from your 'Stat Dynamics Knowledge Document')
     into the StatDefinitions table, if they don't already exist.
     """
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     # NPC Stats
@@ -279,7 +279,7 @@ def insert_default_player_stats_chase(user_id, conversation_id):
     """
     Insert row for 'Chase' in PlayerStats, scoping by user_id + conversation_id.
     """
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     chase_stats = {
@@ -343,7 +343,7 @@ def handle_player_stats(player_name):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -459,7 +459,7 @@ def handle_npc_stats(npc_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     if request.method == 'GET':
@@ -602,7 +602,7 @@ def check_social_link_milestones():
     Currently just uses a broad 'player is involved' approach.
     """
     from logic.social_links import add_link_event
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -708,7 +708,7 @@ def get_player_current_tier(user_id, conversation_id, stat_name):
     Determine which tier a player is in for a given stat
     Returns the threshold dict with level, name and behaviors
     """
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
     try:
         cursor.execute(f"""
@@ -740,7 +740,7 @@ def check_for_combination_triggers(user_id, conversation_id):
     Check if player stats trigger any special combination states
     Returns a list of triggered combinations
     """
-    conn = get_db_connection()
+    conn = get_db_connection_context()
     cursor = conn.cursor()
     try:
         cursor.execute("""
