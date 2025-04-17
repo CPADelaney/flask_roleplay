@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timedelta
 import time
 from functools import wraps
-from flask import Blueprint, request, jsonify, session, current_app, g
+from quart import Blueprint, request, jsonify, session, current_app, g
 from werkzeug.exceptions import TooManyRequests, InternalServerError
 import redis
 from utils.performance import timed_function
