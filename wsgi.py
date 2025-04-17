@@ -5,7 +5,6 @@ import logging
 from dotenv import load_dotenv
 from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
-from quart_socketio_compat import emit, join_room
 from quart_cors import CORS
 
 
@@ -22,7 +21,7 @@ logging.basicConfig(
 logging.info(f"Logging level set to: {log_level_name}")
 
 # Import the app creation functions AFTER patching and logging setup
-from main import create_quart_app
+from main import create_quart_app, create_socketio
 
 # Create the quart app instance using the factory
 logging.info("Creating quart app instance...")
@@ -32,7 +31,7 @@ logging.info("quart app instance created.")
 # Initialize SocketIO with the app using the factory
 # This should also assign the instance to the global `socketio` variable in main.py
 logging.info("Creating SocketIO instance...")
-socketio = create_socketio(app)
+sio = create_socketio(app)
 logging.info("SocketIO instance created.")
 
 # Gunicorn or other ASGI servers will import 'app' from this module.
