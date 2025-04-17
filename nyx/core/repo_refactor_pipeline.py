@@ -105,45 +105,45 @@ class StaticAnalyzer:
 # ---------------------------------------------------------------------------
 
 
-async def call_llm(prompt: str, model: str = "gpt-4o"):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
+    async def call_llm(prompt: str, model: str = "gpt-4o"):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
+        
+        client = AsyncOpenAI(api_key=api_key)
+        
+        # Create the base parameters
+        params = {
+            "model": model,
+            "input": prompt,
+            "instructions": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."
+        }
+        
+        # Only add temperature for models that support it
+        # O-series models (like o4-mini) don't support temperature
+        if not model.startswith("o"):
+            params["temperature"] = 0.15
+            params["top_p"] = 0.9
     
-    client = AsyncOpenAI(api_key=api_key)
-    
-    # Create the base parameters
-    params = {
-        "model": model,
-        "input": prompt,
-        "instructions": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."
-    }
-    
-    # Only add temperature for models that support it
-    # O-series models (like o4-mini) don't support temperature
-    if not model.startswith("o"):
-        params["temperature"] = 0.15
-        params["top_p"] = 0.9
-
-    # Add before the call_llm line
-    print(f"Prompt length: {len(prompt)}")
-    print(f"Lint issues found: {len(issue)}")
-    # For debugging, you could temporarily save the prompt
-    Path("debug_prompt.txt").write_text(prompt, encoding="utf-8")
-    
-    # Make the API call
-    response = await client.responses.create(**params)
-    
-    # Process the response
-    result = ""
-    for item in response.output:
-        if item.type == "message":
-            for content in item.content:
-                if content.type == "output_text":
-                    result += content.text
-    
-    return result
-  
+        # Add before the call_llm line
+        print(f"Prompt length: {len(prompt)}")
+        print(f"Lint issues found: {len(issues)}")
+        # For debugging, you could temporarily save the prompt
+        Path("debug_prompt.txt").write_text(prompt, encoding="utf-8")
+        
+        # Make the API call
+        response = await client.responses.create(**params)
+        
+        # Process the response
+        result = ""
+        for item in response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if content.type == "output_text":
+                        result += content.text
+        
+        return result
+      
 
 
 # ---------------------------------------------------------------------------
