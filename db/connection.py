@@ -20,17 +20,28 @@ DEFAULT_MAX_CONNECTIONS = 20
 def get_db_dsn() -> str:
     """
     Returns the database connection string (DSN) from environment variables.
+    Checks for DB_DSN first, then falls back to DATABASE_URL if DB_DSN is not set.
 
     Returns:
         str: PostgreSQL connection string (DSN).
 
     Raises:
-        EnvironmentError: If DB_DSN environment variable is not set.
+        EnvironmentError: If neither DB_DSN nor DATABASE_URL environment variable is set.
     """
+    # First check for DB_DSN
     dsn = os.getenv("DB_DSN")
+    
+    # If DB_DSN is not set, check for DATABASE_URL
     if not dsn:
-        logger.critical("DB_DSN environment variable not set.")
-        raise EnvironmentError("DB_DSN environment variable not set.")
+        dsn = os.getenv("DATABASE_URL")
+        if dsn:
+            logger.info("Using DATABASE_URL as connection string (DB_DSN not found).")
+    
+    # If still not set, raise an error
+    if not dsn:
+        logger.critical("Neither DB_DSN nor DATABASE_URL environment variables are set.")
+        raise EnvironmentError("Neither DB_DSN nor DATABASE_URL environment variables are set.")
+    
     # asyncpg generally works well with standard postgresql:// DSNs
     return dsn
 
