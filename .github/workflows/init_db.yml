@@ -1,20 +1,24 @@
 name: CI/CD Pipeline
 
+# Add permissions at the workflow level
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
   push:
     branches: [ main ]
-  # every 6 h
+  # every 6 h
   schedule:
-    - cron: "0 */6 * * *"
-    # weekly deep scan – Sunday 03:00 UTC
-    - cron: "0 3 * * 0"
+    - cron: "0 */6 * * *"  # Fixed syntax (was missing a space)
+    # weekly deep scan – Sunday 03:00 UTC
+    - cron: "0 3 * * 0"    # Fixed syntax (was missing a space)
   workflow_dispatch:
     inputs:
       refactor_goal:
         description: "High‑level refactor goal"
         default: "general code health"
         required: true
-
 jobs:
   init-db:
     runs-on: ubuntu-latest
@@ -30,10 +34,13 @@ jobs:
           pip install -r requirements.txt
       - run: python init_db_script.py
           
-
   repo-steward:
     runs-on: ubuntu-latest
     needs: init-db
+    # You can also set permissions at the job level if needed
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,9 +59,15 @@ jobs:
           pip install -r requirements.txt
           pip install ruff mypy bandit pytest
           sudo apt-get -y install gh
+          
+      # Add Git identity configuration before running the repo steward
+      - name: Configure Git identity
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "github-actions@github.com"
+          
       - name: Run Repo Steward
         run: |
           python -m nyx.core.repo_refactor_pipeline \
             "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.refactor_goal || 'general code health' }}" \
             --pr
-
