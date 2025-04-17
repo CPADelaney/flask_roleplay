@@ -521,12 +521,12 @@ def create_quart_app():
 
     # --- Authentication Routes ---
     @app.route("/login_page", methods=["GET"])
-    def login_page():
-        return render_template("login.html") # Ensure login.html exists
+    async def login_page():
+        return await render_template("login.html") # Ensure login.html exists
 
     @app.route("/register_page", methods=["GET"])
-    def register_page():
-        return render_template("register.html") # Ensure register.html exists
+    async def register_page():
+        return await render_template("register.html") # Ensure register.html exists
 
     @app.route("/login", methods=["POST"])
     @rate_limit(limit=5, period=60) # Example rate limit
