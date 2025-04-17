@@ -27,7 +27,6 @@ hypercorn
 smolagents>=1.0.0
 werkzeug
 starlette
-quart-socketio
 
 # Web framework
 flask==3.0.0
