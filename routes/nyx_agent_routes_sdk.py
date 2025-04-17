@@ -4,7 +4,7 @@ import logging
 import json
 import time
 import contextlib
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from typing import Dict, Any, Optional
 
 from nyx.nyx_agent_sdk import process_user_input, generate_reflection, initialize_agents
