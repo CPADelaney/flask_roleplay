@@ -4,7 +4,7 @@ import os
 import json
 import logging
 import random
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 
@@ -28,35 +28,34 @@ async def insert_missing_settings():
         return
 
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute("SELECT name FROM Settings")
-            rows = await cursor.fetchall()
-            existing = {row[0] for row in rows}
+        # Fetch existing settings
+        rows = await conn.fetch("SELECT name FROM Settings")
+        existing = {row['name'] for row in rows}
 
-            inserted_count = 0
-            for s in settings_data:
-                sname = s["name"]
-                if sname not in existing:
-                    ef = json.dumps(s["enhanced_features"])
-                    sm = json.dumps(s["stat_modifiers"])
-                    ae = json.dumps(s["activity_examples"])
+        inserted_count = 0
+        for s in settings_data:
+            sname = s["name"]
+            if sname not in existing:
+                ef = json.dumps(s["enhanced_features"])
+                sm = json.dumps(s["stat_modifiers"])
+                ae = json.dumps(s["activity_examples"])
 
-                    await cursor.execute("""
-                        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        sname,
-                        s["mood_tone"],
-                        ef,
-                        sm,
-                        ae
-                    ))
-                    logging.info(f"Inserted new setting: {sname}")
-                    inserted_count += 1
-                else:
-                    logging.debug(f"Skipped existing setting: {sname}")
+                # Use the asyncpg parameter style ($1, $2, etc.)
+                await conn.execute("""
+                    INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, 
+                    sname,
+                    s["mood_tone"],
+                    ef,
+                    sm,
+                    ae
+                )
+                logging.info(f"Inserted new setting: {sname}")
+                inserted_count += 1
+            else:
+                logging.debug(f"Skipped existing setting: {sname}")
 
-        await conn.commit()
     logging.info(f"[insert_missing_settings] Done. Inserted {inserted_count} new settings.")
 
 
@@ -70,17 +69,13 @@ async def insert_settings_route():
         return jsonify({"error": str(e)}), 500
 
 
-
-def generate_mega_setting_logic():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
-        FROM Settings
-    """)
-    rows = cursor.fetchall()
-    conn.close()
+async def generate_mega_setting_logic():
+    """Asynchronous version of generate_mega_setting_logic that uses asyncpg"""
+    async with get_db_connection_context() as conn:
+        rows = await conn.fetch("""
+            SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
+            FROM Settings
+        """)
 
     if not rows:
         return {
@@ -93,15 +88,15 @@ def generate_mega_setting_logic():
         }
 
     all_settings = []
-    for row_id, row_name, row_mood, row_ef, row_sm, row_ae in rows:
+    for row in rows:
         # Ensure proper type conversion
-        ef_list = row_ef if isinstance(row_ef, list) else json.loads(row_ef)
-        sm_dict = row_sm if isinstance(row_sm, dict) else json.loads(row_sm)
-        ae_list = row_ae if isinstance(row_ae, list) else json.loads(row_ae)
+        ef_list = row['enhanced_features'] if isinstance(row['enhanced_features'], list) else json.loads(row['enhanced_features'])
+        sm_dict = row['stat_modifiers'] if isinstance(row['stat_modifiers'], dict) else json.loads(row['stat_modifiers'])
+        ae_list = row['activity_examples'] if isinstance(row['activity_examples'], list) else json.loads(row['activity_examples'])
         all_settings.append({
-            "id": row_id,
-            "name": row_name,
-            "mood_tone": row_mood,
+            "id": row['id'],
+            "name": row['name'],
+            "mood_tone": row['mood_tone'],
             "enhanced_features": ef_list,
             "stat_modifiers": sm_dict,
             "activity_examples": ae_list
@@ -191,14 +186,13 @@ async def generate_mega_setting_route():
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        data = request.get_json() or {}
+        data = await request.get_json() or {}
         conversation_id = data.get("conversation_id")
         if not conversation_id:
             return jsonify({"error": "No conversation_id provided"}), 400
 
-        # Note: generate_mega_setting_logic still uses the synchronous approach
-        # It would need its own refactoring, which we're skipping for now
-        result = generate_mega_setting_logic()  # This is still synchronous
+        # Now calling the async version
+        result = await generate_mega_setting_logic()
         if "error" in result:
             return jsonify(result), 404
         return jsonify(result), 200
