@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 
 # quart and related imports
 from quart import Quart, render_template, session, request, jsonify, redirect
-from quart_socketio import SocketIO, emit, join_room
+import socketio
 from quart_cors import CORS
 # Removed WsgiToAsgi as we use eventlet
 
@@ -395,23 +395,46 @@ def create_quart_app():
     app = Quart(__name__, static_folder='static', template_folder='templates')
     QuartSchema(app)
 
-    # --- Basic Config ---
-    try:
-        # Use environment variables with defaults for security keys
-        app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-insecure-secret-key-please-change')
-        if app.config['SECRET_KEY'] == 'default-insecure-secret-key-please-change':
-             logger.warning("quart_SECRET_KEY is not set or is using the insecure default!")
+    # --- Socket.IO setup (using python-socketio) ---
+    sio = socketio.AsyncServer(
+        async_mode="quart",
+        cors_allowed_origins="*",
+        logger=True,
+        engineio_logger=True,
+        ping_timeout=20,
+        ping_interval=10,
+        message_queue=os.getenv("SOCKETIO_MESSAGE_QUEUE", None)
+    )
+    sio.init_app(app)
 
-        # Secure defaults for production, allow override via env vars for dev
-        app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'True').lower() == 'true'
-        app.config['SESSION_COOKIE_HTTPONLY'] = os.environ.get('SESSION_COOKIE_HTTPONLY', 'True').lower() == 'true'
-        app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax') # Lax is often a good default
-        app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(seconds=int(os.environ.get('PERMANENT_SESSION_LIFETIME', 2592000))) # Default 30 days
-        logger.info(f"Session cookie settings: Secure={app.config['SESSION_COOKIE_SECURE']}, HttpOnly={app.config['SESSION_COOKIE_HTTPONLY']}, SameSite={app.config['SESSION_COOKIE_SAMESITE']}")
-    except Exception as config_err:
-        logger.error(f"Error setting basic quart config: {config_err}", exc_info=True)
-        # Handle error - maybe raise or use safe defaults
+    # Event handlers on the same API as Flask‑SocketIO
+    @sio.event
+    async def connect(sid, environ):
+        user = session.get("user_id", "anonymous")
+        app.logger.info(f"Socket.IO connect: SID={sid}, user={user}")
+        await sio.emit("response", {"data": "Connected successfully!"}, to=sid)
 
+    @sio.on("join")
+    async def handle_join(sid, data):
+        conv = data.get("conversation_id")
+        user = session.get("user_id")
+        if not user or not conv:
+            return await sio.emit("error", {"error": "Auth or conv missing"}, to=sid)
+        room = str(conv)
+        sio.enter_room(sid, room)
+        await sio.emit("joined", {"room": room}, to=sid)
+
+    @sio.on("message")
+    async def handle_message(sid, data):
+        # replicate your old logic, but use `await sio.emit(...)` instead of `emit(...)`
+        user = session.get("user_id")
+        if not user:
+            return await sio.emit("error", {"error": "Authentication required"}, to=sid)
+        # store & background task...
+        await sio.emit("message_received", {"status": "processing"}, to=sid)
+
+    # keep a reference if you need it elsewhere
+    app.socketio = sio
 
     # --- Security ---
     # Configure CSP more securely if possible (avoid 'unsafe-inline', 'unsafe-eval')
