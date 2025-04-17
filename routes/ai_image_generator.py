@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import requests
 from werkzeug.utils import secure_filename
 from db.connection import get_db_connection_context
-from flask import Blueprint, request, jsonify, session, current_app
+from quart import Blueprint, request, jsonify, session, current_app
 from logic.addiction_system_sdk import check_addiction_status
 from logic.chatgpt_integration import get_openai_client, safe_json_loads
 from dotenv import load_dotenv
