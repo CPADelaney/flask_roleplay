@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from quart import Blueprint, jsonify
 import traceback
 import logging
 from db.connection import get_db_connection_context
