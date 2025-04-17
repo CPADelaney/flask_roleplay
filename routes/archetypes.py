@@ -3,8 +3,8 @@
 import os
 import logging
 import json
-import asyncio
-from flask import Blueprint, jsonify
+import random
+from quart import Blueprint, jsonify
 from db.connection import get_db_connection_context
 
 logging.basicConfig(level=logging.DEBUG)
@@ -12,53 +12,74 @@ logging.basicConfig(level=logging.DEBUG)
 archetypes_bp = Blueprint('archetypes', __name__)
 
 async def insert_missing_archetypes():
+    """
+    Asynchronously inserts or updates archetypes from a JSON data file into the database
+    Uses proper asyncpg patterns.
+    """
+    logging.info("[insert_missing_archetypes] Starting...")
+    
+    # Load archetypes data from JSON file
     current_dir = os.path.dirname(os.path.abspath(__file__))
     archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
     archetypes_json_path = os.path.normpath(archetypes_json_path)
 
-    with open(archetypes_json_path, "r", encoding="utf-8") as f:
-        loaded = json.load(f)
-        # loaded is {"archetypes": [ {...}, {...} ] }
+    try:
+        with open(archetypes_json_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            # loaded is {"archetypes": [ {...}, {...} ] }
+    except FileNotFoundError:
+        logging.error(f"Archetypes file not found at {archetypes_json_path}!")
+        return
+    except json.JSONDecodeError as e:
+        logging.error(f"Error decoding JSON in {archetypes_json_path}: {e}")
+        return
 
     # Use .get("archetypes", []) so we actually get the list
     table = loaded.get("archetypes", [])
 
     async with get_db_connection_context() as conn:
-        # set() of existing names
-        async with conn.cursor() as cursor:
-            await cursor.execute("SELECT name FROM Archetypes")
-            rows = await cursor.fetchall()
-            existing = {row[0] for row in rows}
+        # Get existing archetype names
+        rows = await conn.fetch("SELECT name FROM Archetypes")
+        existing = {row['name'] for row in rows}
 
+        inserted_count = 0
+        updated_count = 0
+        
         for arc in table:  # arc is now a dict with keys: name, baseline_stats, ...
             name = arc["name"]
 
+            # Serialize JSON data
             bs_json = json.dumps(arc["baseline_stats"])
             prog_rules_json = json.dumps(arc.get("progression_rules", []))
             setting_ex_json = json.dumps(arc.get("setting_examples", []))
             unique_traits_json = json.dumps(arc.get("unique_traits", []))
 
-            # Insert or update, etc.
+            # Insert or update, using asyncpg pattern
             if name not in existing:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        INSERT INTO Archetypes (name, baseline_stats, progression_rules, setting_examples, unique_traits)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (name, bs_json, prog_rules_json, setting_ex_json, unique_traits_json))
+                await conn.execute("""
+                    INSERT INTO Archetypes 
+                    (name, baseline_stats, progression_rules, setting_examples, unique_traits)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, 
+                    name, bs_json, prog_rules_json, setting_ex_json, unique_traits_json
+                )
                 logging.info(f"Inserted archetype: {name}")
+                inserted_count += 1
             else:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        UPDATE Archetypes
-                        SET baseline_stats=%s,
-                            progression_rules=%s,
-                            setting_examples=%s,
-                            unique_traits=%s
-                        WHERE name=%s
-                    """, (bs_json, prog_rules_json, setting_ex_json, unique_traits_json, name))
+                await conn.execute("""
+                    UPDATE Archetypes
+                    SET baseline_stats=$1,
+                        progression_rules=$2,
+                        setting_examples=$3,
+                        unique_traits=$4
+                    WHERE name=$5
+                """, 
+                    bs_json, prog_rules_json, setting_ex_json, unique_traits_json, name
+                )
                 logging.info(f"Updated existing archetype: {name}")
+                updated_count += 1
 
-        await conn.commit()
+    logging.info(f"[insert_missing_archetypes] Done. Inserted {inserted_count} new archetypes, updated {updated_count}.")
 
 
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
@@ -78,25 +99,25 @@ async def assign_archetypes_to_npc(npc_id):
     """
     Picks 4 random archetypes from the DB and stores them in NPCStats.archetypes (JSON).
     Example usage:
-        npc_id = create_npc_in_db(...)
-        assign_archetypes_to_npc(npc_id)
+        npc_id = await create_npc_in_db(...)
+        await assign_archetypes_to_npc(npc_id)
     """
     async with get_db_connection_context() as conn:
-        async with conn.cursor() as cursor:
-            await cursor.execute("SELECT id, name FROM Archetypes")
-            archetype_rows = await cursor.fetchall()
-            if not archetype_rows:
-                raise ValueError("No archetypes found in DB.")
+        # Get all available archetypes
+        archetype_rows = await conn.fetch("SELECT id, name FROM Archetypes")
+        
+        if not archetype_rows:
+            raise ValueError("No archetypes found in DB.")
 
-            import random
-            assigned = random.sample(archetype_rows, min(4, len(archetype_rows)))
-            assigned_list = [{"id": row[0], "name": row[1]} for row in assigned]
+        # Select random archetypes
+        assigned = random.sample(archetype_rows, min(4, len(archetype_rows)))
+        assigned_list = [{"id": row['id'], "name": row['name']} for row in assigned]
 
-            await cursor.execute("""
-                UPDATE NPCStats
-                SET archetypes = %s
-                WHERE npc_id = %s
-            """, (json.dumps(assigned_list), npc_id))
-
-        await conn.commit()
+        # Update NPC with assigned archetypes
+        await conn.execute("""
+            UPDATE NPCStats
+            SET archetypes = $1
+            WHERE npc_id = $2
+        """, json.dumps(assigned_list), npc_id)
+        
     return assigned_list
