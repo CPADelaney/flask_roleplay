@@ -10,7 +10,7 @@ This module demonstrates:
 6. Hybrid approach with advanced effects, intensity tiers, GPT generation, meltdown synergy.
 """
 
-from flask import Blueprint, request, jsonify
+from quart import Blueprint, request, jsonify
 from db.connection import get_db_connection_context
 import json, random, asyncio
 import logging
