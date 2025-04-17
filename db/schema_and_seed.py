@@ -1344,7 +1344,7 @@ async def create_all_tables():
                     nyx_response TEXT,
                     score FLOAT DEFAULT 0.0,
                     marked_for_review BOOLEAN DEFAULT FALSE,
-                    dismissed BOOLEAN DEFAULT FALSE,
+                    dismissed BOOLEAN DEFAULT FALSE
                 );
                 ''',
                 '''
