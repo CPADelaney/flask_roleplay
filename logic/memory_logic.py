@@ -8,7 +8,7 @@ import logging
 # Removed: import psycopg2
 import asyncpg # Added
 import asyncio # Added (potentially needed for to_thread if OpenAI client is sync)
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from contextlib import asynccontextmanager # Added just in case, though not used directly here
 from db.connection import get_db_connection_context
 from logic.chatgpt_integration import get_openai_client # Ensure this provides an ASYNC client or use asyncio.to_thread
