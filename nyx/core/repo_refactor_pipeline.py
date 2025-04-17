@@ -104,6 +104,7 @@ class StaticAnalyzer:
 # OpenAI chat.responses helper
 # ---------------------------------------------------------------------------
 
+
 async def call_llm(prompt: str, model: str = "gpt-4o"):
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -123,6 +124,12 @@ async def call_llm(prompt: str, model: str = "gpt-4o"):
     if not model.startswith("o"):
         params["temperature"] = 0.15
         params["top_p"] = 0.9
+
+    # Add before the call_llm line
+    print(f"Prompt length: {len(prompt)}")
+    print(f"Lint issues found: {len(issues)}")
+    # For debugging, you could temporarily save the prompt
+    Path("debug_prompt.txt").write_text(prompt, encoding="utf-8")
     
     # Make the API call
     response = await client.responses.create(**params)
