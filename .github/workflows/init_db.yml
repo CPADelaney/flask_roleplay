@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      DB_DSN: ${{ secrets.DATABASE_URL }}
+      DB_DSN: ${{ secrets.DB_DSN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
