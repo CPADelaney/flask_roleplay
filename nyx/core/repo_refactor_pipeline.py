@@ -103,7 +103,7 @@ async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
             
     openai.api_key = api_key
     resp = await openai_client.chat.responses.create(
-        model=gpt-4o,
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
             {"role": "user", "content": prompt},
