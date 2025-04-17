@@ -17,7 +17,7 @@ celery
 gunicorn
 eventlet>=0.24.1
 asgiref
-quart
+quart ≥ 0.20
 python-socketio
 python-engineio
 quart-cors
