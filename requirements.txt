@@ -20,8 +20,8 @@ asgiref
 quart>=0.20.0
 python-socketio
 python-engineio
-quart-cors
-quart-wtf
+quart-cors>=0.8
+quart-schema
 asyncio-extras
 hypercorn
 smolagents>=1.0.0
