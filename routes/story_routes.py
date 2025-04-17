@@ -8,7 +8,7 @@ import time
 import random
 import contextlib
 from datetime import datetime, date, timedelta
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from logic.activity_analyzer import ActivityAnalyzer
 
