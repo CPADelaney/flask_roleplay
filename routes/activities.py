@@ -1,7 +1,8 @@
 # routes/activities.py
 
-from flask import Blueprint, jsonify
+from quart import Blueprint, jsonify
 import json
+import logging
 from db.connection import get_db_connection_context
 
 activities_bp = Blueprint('activities', __name__)
@@ -10,8 +11,9 @@ async def insert_missing_activities():
     """
     Inserts a curated list of Activities into the Activities table,
     if they don't already exist (based on unique activity name).
+    Uses asyncpg properly for database operations.
     """
-
+    logging.info("[insert_missing_activities] Starting...")
     activities_data = [
         {
             "name": "Ass Worship",
@@ -1677,44 +1679,50 @@ async def insert_missing_activities():
     # ---------------------------------
     async with get_db_connection_context() as conn:
         # Check existing activity names
-        existing = set()
-        async with conn.cursor() as cursor:
-            await cursor.execute("SELECT name FROM Activities")
-            rows = await cursor.fetchall()
-            existing = {row[0] for row in rows}
+        rows = await conn.fetch("SELECT name FROM Activities")
+        existing = {row['name'] for row in rows}
 
-        # Insert new activities
+        inserted_count = 0
         for activity in activities_data:
             # Make sure 'name' is in the activity
-            if activity.get("name") not in existing:
-                async with conn.cursor() as cursor:
-                    await cursor.execute("""
-                        INSERT INTO Activities
-                          (name, purpose, stat_integration, intensity_tiers, setting_variants)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        activity["name"],
-                        json.dumps(activity["purpose"]),
-                        json.dumps(activity["stat_integration"]),
-                        json.dumps(activity["intensity_tiers"]),
-                        json.dumps(activity["setting_variants"])
-                    ))
-                    print(f"Inserted activity: {activity['name']}")
+            activity_name = activity.get("name")
+            if activity_name not in existing:
+                # Convert JSON structures to strings for storage
+                purpose_json = json.dumps(activity.get("purpose", []))
+                stat_integration_json = json.dumps(activity.get("stat_integration", []))
+                intensity_tiers_json = json.dumps(activity.get("intensity_tiers", []))
+                setting_variants_json = json.dumps(activity.get("setting_variants", []))
+                
+                # Use asyncpg parameter style ($1, $2, etc.)
+                await conn.execute("""
+                    INSERT INTO Activities
+                      (name, purpose, stat_integration, intensity_tiers, setting_variants)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, 
+                    activity_name,
+                    purpose_json,
+                    stat_integration_json,
+                    intensity_tiers_json,
+                    setting_variants_json
+                )
+                logging.info(f"Inserted activity: {activity_name}")
+                inserted_count += 1
             else:
-                print(f"Skipped existing activity: {activity['name']}")
+                logging.debug(f"Skipped existing activity: {activity_name}")
+                
+    logging.info(f"All activities processed. Inserted {inserted_count} new activities.")
 
-        await conn.commit()
-    print("All activities processed or skipped (already existed).")
 
 
 @activities_bp.route('/insert_activities', methods=['POST'])
 async def insert_activities_route():
     """
     Route to trigger the insertion (or update) of the Activities table with the
-    curated set of references above.
+    curated set of references.
     """
     try:
         await insert_missing_activities()
         return jsonify({"message": "Activities inserted/updated successfully"}), 200
     except Exception as e:
+        logging.exception("Error inserting activities.")
         return jsonify({"error": str(e)}), 500
