@@ -1,12 +1,13 @@
 # wsgi.py
 
-# Import eventlet first and monkey patch BEFORE other imports like socketio or flask
+# Import eventlet first and monkey patch BEFORE other imports like socketio or quart
 import eventlet
 eventlet.monkey_patch()
 
 import os
 import logging
 from dotenv import load_dotenv
+
 
 # Load environment variables from .env file if it exists (good for Gunicorn)
 load_dotenv()
@@ -21,12 +22,12 @@ logging.basicConfig(
 logging.info(f"Logging level set to: {log_level_name}")
 
 # Import the app creation functions AFTER patching and logging setup
-from main import create_flask_app, create_socketio
+from main import create_quart_app, create_socketio
 
-# Create the Flask app instance using the factory
-logging.info("Creating Flask app instance...")
-app = create_flask_app()
-logging.info("Flask app instance created.")
+# Create the quart app instance using the factory
+logging.info("Creating quart app instance...")
+app = create_quart_app()
+logging.info("quart app instance created.")
 
 # Initialize SocketIO with the app using the factory
 # This should also assign the instance to the global `socketio` variable in main.py
