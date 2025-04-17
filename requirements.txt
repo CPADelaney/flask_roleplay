@@ -21,7 +21,6 @@ quart
 python-socketio
 python-engineio
 quart-cors
-quart-talisman
 quart-wtf
 asyncio-extras
 hypercorn
