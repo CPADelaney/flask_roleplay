@@ -1,6 +1,6 @@
 # routes/universal_update.py
 
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 import asyncio
 import asyncpg
 import os
