@@ -18,7 +18,8 @@ gunicorn
 eventlet>=0.24.1
 asgiref
 quart
-quart_socketio
+python-socketio
+python-engineio
 quart-cors
 quart-talisman
 quart-wtf
