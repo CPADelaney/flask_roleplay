@@ -1,6 +1,6 @@
 # meltdown.py
 
-from flask import Blueprint, request, jsonify
+from quart import Blueprint, request, jsonify
 from db.connection import get_db_connection_context
 from logic.meltdown_logic import (
     record_meltdown_dialog, 
