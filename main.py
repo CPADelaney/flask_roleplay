@@ -14,6 +14,8 @@ from quart_cors import CORS
 # Removed WsgiToAsgi as we use eventlet
 from quart_talisman import Talisman
 from quart_wtf.csrf import CSRFProtect
+from quart_socketio import SocketIO, emit, join_room
+from quart_cors import CORS
 from prometheus_quart_exporter import PrometheusMetrics
 from flasgger import Swagger
 from datetime import timedelta
