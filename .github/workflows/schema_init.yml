@@ -42,4 +42,4 @@ jobs:
           # point your script at the running Postgres
           DATABASE_URL: postgres://myuser:mypass@localhost:5432/mydb
         run: |
-          python path/to/your/db_init_script.py
+          python db_init_script.py
