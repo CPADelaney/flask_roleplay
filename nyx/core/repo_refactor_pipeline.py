@@ -95,7 +95,7 @@ class StaticAnalyzer:
 # OpenAI chat.responses helper
 # ---------------------------------------------------------------------------
 
-async def call_llm_with_tools(prompt: str, model: str = "gpt-4o"):
+async def call_llm(prompt: str, model: str = "gpt-4o"):
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
