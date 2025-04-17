@@ -11,7 +11,6 @@ from typing import Dict, Any, Optional
 from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
 from quart_cors import CORS
-# Removed WsgiToAsgi as we use eventlet
 
 from prometheus_quart_exporter import PrometheusMetrics
 from quart_schema import QuartSchema
@@ -82,9 +81,6 @@ from logic.aggregator_sdk import init_singletons
 
 logger = logging.getLogger(__name__)
 
-# Global placeholder for SocketIO instance
-socketio = None
-
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
@@ -103,10 +99,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
     Background task for processing chat messages using Nyx agent with OpenAI integration.
     Uses asyncpg for database operations.
     """
-    global socketio # Need access to socketio instance to emit
-    if not socketio:
-        logger.error("SocketIO instance not available in background_chat_task")
-        return
+    from quart import current_app
 
     logger.info(f"[BG Task {conversation_id}] Starting for user {user_id}")
     try:
@@ -142,11 +135,11 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as update_db_err:
                  logger.error(f"[BG Task {conversation_id}] DB Error applying universal updates: {update_db_err}", exc_info=True)
                  # Decide if to continue or emit error and stop
-                 socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 await current_app.socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
                  return
             except Exception as update_err:
                  logger.error(f"[BG Task {conversation_id}] Error applying universal updates: {update_err}", exc_info=True)
-                 socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
+                 await current_app.socketio.emit('error', {'error': 'Failed to apply world updates.'}, room=str(conversation_id))
                  return
 
         # Process the user_input with OpenAI-enhanced Nyx agent
@@ -159,7 +152,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         if not response or not response.get("success", False):
             error_msg = response.get("error", "Unknown error from Nyx agent") if response else "Empty response from Nyx agent"
             logger.error(f"[BG Task {conversation_id}] Nyx agent failed: {error_msg}")
-            socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
+            await current_app.socketio.emit('error', {'error': error_msg}, room=str(conversation_id))
             return
 
         # Extract the message content
@@ -206,7 +199,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
                     prompt_used = res.get('prompt_used', '')
                     reason = img_data["image_generation"].get("reason", "Narrative moment")
                     logger.info(f"[BG Task {conversation_id}] Image generated: {image_url}")
-                    socketio.emit('image', {
+                    await current_app.socketio.emit('image', {
                         'image_url': image_url, 'prompt_used': prompt_used, 'reason': reason
                     }, room=str(conversation_id))
                 else:
@@ -221,18 +214,18 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
             delay = 0.01 # Small delay between chunks
             for i in range(0, len(message_content), chunk_size):
                 token = message_content[i:i+chunk_size]
-                socketio.emit('new_token', {'token': token}, room=str(conversation_id))
+                await current_app.socketio.emit('new_token', {'token': token}, room=str(conversation_id))
                 await asyncio.sleep(delay) # Use asyncio.sleep in async task
 
-            socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
+            await current_app.socketio.emit('done', {'full_text': message_content}, room=str(conversation_id))
             logger.info(f"[BG Task {conversation_id}] Finished streaming response.")
         else:
              logger.warning(f"[BG Task {conversation_id}] No message content to stream.")
-             socketio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
+             await current_app.socketio.emit('done', {'full_text': ''}, room=str(conversation_id)) # Still signal done
 
     except Exception as e:
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
-        socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
+        await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
 async def initialize_systems(app):
     """Initialize systems required for the application AFTER app creation."""
@@ -872,194 +865,3 @@ def create_quart_app():
     # --- Return the configured app ---
     return app
 
-
-###############################################################################
-# SOCKET.IO SETUP
-###############################################################################
-
-def create_socketio(app):
-    global socketio # Assign to global variable
-
-    # Configure SocketIO
-    # Use Redis or RabbitMQ for message queue in production with multiple workers
-    message_queue_url = os.getenv("SOCKETIO_MESSAGE_QUEUE", None) # e.g., redis://localhost:6379/1
-    if not message_queue_url:
-         logger.warning("SOCKETIO_MESSAGE_QUEUE not set. SocketIO will only work correctly with a single web worker.")
-
-    socketio = SocketIO(
-        app,
-        cors_allowed_origins="*", # Restrict in production
-        async_mode='eventlet',
-        logger=True, # Enable SocketIO logging
-        engineio_logger=True, # Enable EngineIO logging (can be verbose)
-        ping_timeout=20, # Lower ping timeout
-        ping_interval=10, # Lower ping interval
-        message_queue=message_queue_url # Enable message queue for multi-worker setups
-    )
-
-    # --- SocketIO Event Handlers ---
-
-    @socketio.on('connect')
-    def handle_connect():
-        user_id = session.get("user_id", "anonymous") # Get user_id from session if available
-        logger.info(f"SocketIO: Client connected - SID: {request.sid}, User: {user_id}")
-        emit('response', {'data': 'Connected successfully!'}) # Send confirmation to client
-
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        user_id = session.get("user_id", "anonymous")
-        logger.info(f"SocketIO: Client disconnected - SID: {request.sid}, User: {user_id}")
-        # Clean up user-specific resources or rooms if necessary
-
-    @socketio.on('join')
-    def handle_join(data):
-        if not isinstance(data, dict):
-            logger.warning(f"Invalid 'join' data received from SID {request.sid}: {data}")
-            emit('error', {'error': 'Invalid join data format'})
-            return
-
-        conversation_id = data.get('conversation_id')
-        user_id = session.get('user_id') # Get user from secure session
-
-        if not user_id:
-            logger.warning(f"Unauthorized attempt to join room from SID {request.sid}")
-            emit('error', {'error': 'Authentication required to join room'})
-            return
-
-        if conversation_id:
-            try:
-                # Convert to string for room name consistency
-                room_name = str(conversation_id)
-
-                # TODO: Add authorization check: Does this user_id have access to this conversation_id?
-                # Need an async DB call here
-                # async def check_auth():
-                #    async with get_db_connection_context() as conn:
-                #        auth = await conn.fetchval("SELECT 1 FROM conversations WHERE id=$1 AND user_id=$2", conversation_id, user_id)
-                #        return bool(auth)
-                # is_authorized = asyncio.run(check_auth()) # Problematic with eventlet, better to do in async handler if possible
-                # if not is_authorized:
-                #     logger.warning(f"User {user_id} forbidden to join room {room_name} (SID: {request.sid})")
-                #     emit('error', {'error': 'Forbidden'})
-                #     return
-
-                join_room(room_name)
-                logger.info(f"SocketIO: Client SID {request.sid} (User: {user_id}) joined room {room_name}")
-
-                # Send confirmation back to the specific client
-                emit('joined', {'room': room_name}, room=request.sid)
-
-                # Optionally, broadcast to room that user joined (if desired)
-                # emit('user_joined', {'user_id': user_id}, room=room_name, include_self=False)
-
-                # Initialize conversation state in background if needed (using async task)
-                # socketio.start_background_task(initialize_conversation_state_async, conversation_id, user_id)
-
-            except Exception as e:
-                 logger.error(f"Error joining room {conversation_id} for SID {request.sid}: {e}", exc_info=True)
-                 emit('error', {'error': 'Server error joining room'})
-        else:
-            logger.warning(f"Client SID {request.sid} (User: {user_id}) attempted to join room without conversation_id")
-            emit('error', {'error': 'Missing conversation_id'})
-
-    @socketio.on('message')
-    async def handle_message(data): # Make handler async
-        """Handles incoming chat messages from the client."""
-        user_id = session.get('user_id')
-        if not user_id:
-            logger.warning(f"Unauthorized message received from SID {request.sid}")
-            emit('error', {'error': 'Authentication required'}, room=request.sid)
-            return
-
-        if not isinstance(data, dict):
-            logger.warning(f"Invalid 'message' data received from SID {request.sid} (User: {user_id}): {data}")
-            emit('error', {'error': 'Invalid message data format'}, room=request.sid)
-            return
-
-        conversation_id = data.get('conversation_id')
-        message_text = data.get('message')
-        universal_update = data.get('universal_update') # Optional
-
-        if not conversation_id or not message_text:
-            logger.warning(f"Incomplete message data from SID {request.sid} (User: {user_id}): conv={conversation_id}, msg='{message_text}'")
-            emit('error', {'error': 'Invalid message data (missing conversation_id or message)'}, room=request.sid)
-            return
-
-        # Convert conv_id for consistency
-        conversation_id = int(conversation_id)
-        room_name = str(conversation_id)
-
-        # TODO: Authorization check: Does this user own this conversation? (Similar to 'join')
-
-        # 1. Store user message asynchronously
-        try:
-            async with get_db_connection_context() as conn:
-                await conn.execute(
-                    """INSERT INTO messages (conversation_id, sender, content, created_at)
-                       VALUES ($1, $2, $3, NOW())""",
-                    conversation_id, f"user:{user_id}", message_text # Include user ID in sender field
-                )
-            logger.info(f"Stored user message from User {user_id} in Conv {conversation_id}")
-        except Exception as db_err:
-            logger.error(f"DB Error storing user message for User {user_id}, Conv {conversation_id}: {db_err}", exc_info=True)
-            emit('error', {'error': 'Failed to save your message'}, room=request.sid)
-            return # Stop processing if saving failed
-
-        # 2. Start the async background task for processing the message
-        # Pass socketio instance or make it globally accessible if needed inside the task
-        logger.debug(f"Starting background chat task for User {user_id}, Conv {conversation_id}")
-        socketio.start_background_task(
-            background_chat_task, # Ensure this task is async and uses asyncpg
-            conversation_id=conversation_id,
-            user_input=message_text,
-            user_id=user_id,
-            universal_update=universal_update
-        )
-        # Optionally acknowledge receipt to the user immediately
-        emit('message_received', {'status': 'processing'}, room=request.sid)
-
-    # Remove handle_storybeat - Refactor this into a standard 'message' handler
-    # or create a new event type like 'action' or 'command' if it's distinct.
-    # The logic inside handle_storybeat was very complex and mixed sync/async DB calls.
-    # Refactor its core logic into async helper functions or agents called from
-    # the main 'message' handler or a dedicated event handler, ensuring all DB
-    # access uses asyncpg.
-
-    return socketio
-
-###############################################################################
-# MAIN ENTRY (Use wsgi.py for deployment)
-###############################################################################
-
-# This block is primarily for local development using `python main.py`
-if __name__ == "__main__":
-    import eventlet
-    eventlet.monkey_patch() # Monkey patch for eventlet worker
-
-    logging.basicConfig(
-        level=logging.INFO, # Use DEBUG for more verbose local dev logging
-        format='%(asctime)s - %(name)s - %(levelname)s - %(threadName)s - %(message)s' # Added threadName
-    )
-
-    # Load environment variables from .env file for local development
-    from dotenv import load_dotenv
-    load_dotenv()
-    logger.info("Loaded environment variables from .env file (if found).")
-
-
-    port = int(os.getenv("PORT", 8080)) # Use 8080 as default dev port
-
-    # Create app and socketio instances
-    app = create_quart_app()
-    # create_socketio needs the app instance
-    socketio_instance = create_socketio(app) # This assigns to the global 'socketio'
-
-    logger.info(f"Starting development server on http://0.0.0.0:{port}")
-    # Use socketio.run() for development, which handles eventlet/gevent setup
-    socketio_instance.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        debug=os.getenv("quart_DEBUG", "False").lower() == "true", # Enable quart debug mode via env var
-        use_reloader=os.getenv("quart_USE_RELOADER", "True").lower() == "true" # Enable reloader for dev
-    )
