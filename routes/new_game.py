@@ -6,7 +6,7 @@ import random
 import time
 import os
 import asyncio
-from flask import Blueprint, request, jsonify, session
+from quart import Blueprint, request, jsonify, session
 import asyncpg
 
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
