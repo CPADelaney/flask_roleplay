@@ -7,6 +7,7 @@ eventlet.monkey_patch()
 import os
 import logging
 from dotenv import load_dotenv
+from quart import Quart, render_template, session, request, jsonify, redirect
 
 
 # Load environment variables from .env file if it exists (good for Gunicorn)
