@@ -23,6 +23,7 @@ quart-cors
 quart-talisman
 quart-wtf
 asyncio-extras
+hypercorn
 smolagents>=1.0.0
 
 # Web framework
