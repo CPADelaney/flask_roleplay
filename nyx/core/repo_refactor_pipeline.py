@@ -127,7 +127,7 @@ async def call_llm(prompt: str, model: str = "gpt-4o"):
 
     # Add before the call_llm line
     print(f"Prompt length: {len(prompt)}")
-    print(f"Lint issues found: {len(issues)}")
+    print(f"Lint issues found: {len(issue)}")
     # For debugging, you could temporarily save the prompt
     Path("debug_prompt.txt").write_text(prompt, encoding="utf-8")
     
