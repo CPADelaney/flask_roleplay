@@ -30,7 +30,6 @@ from nyx.creative.agentic_system import AgenticCreativitySystem  # shim to v2.2
 # ---------------------------------------------------------------------------
 # Issue dataclass
 # ---------------------------------------------------------------------------
-openai_client = get_openai_client()
 
 @dataclass
 class Issue:
@@ -96,14 +95,15 @@ class StaticAnalyzer:
 # OpenAI chat.responses helper
 # ---------------------------------------------------------------------------
 
-async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
+async def call_llm_with_tools(prompt: str, model: str = "gpt-4o"):
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return "<!-- OPENAI_API_KEY not set – returning prompt for debug -->\n" + prompt[:800]
-            
-    openai.api_key = api_key
-    resp = await openai_client.chat.responses.create(
-        model="gpt-4o",
+    
+    client = AsyncOpenAI(api_key=api_key)
+    
+    response = await client.chat.responses.create(
+        model=model,
         messages=[
             {"role": "system", "content": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."},
             {"role": "user", "content": prompt},
@@ -111,7 +111,18 @@ async def call_llm(prompt: str, model: str = "o3-turbo") -> str:
         temperature=0.15,
         top_p=0.9,
     )
-    return resp.choices[0].message.content.strip()
+    
+    result = ""
+    for item in response.items:
+        if item.type == "text":
+            result += item.text
+        elif item.type == "tool_use":
+            # Handle tool use if needed
+            pass
+    
+    return result
+
+
 
 # ---------------------------------------------------------------------------
 # Pipeline orchestrator
