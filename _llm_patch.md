@@ -1,0 +1,1 @@
+I’m ready to draft minimal unified‑diff patches, but I need the specific lint warnings and relevant code snippets to work from. Could you please share the reported lint issues and the surrounding context so I can propose precise fixes?
