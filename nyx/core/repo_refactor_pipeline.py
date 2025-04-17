@@ -111,16 +111,23 @@ async def call_llm(prompt: str, model: str = "gpt-4o"):
     
     client = AsyncOpenAI(api_key=api_key)
     
-    # Use responses directly, not under chat
-    response = await client.responses.create(
-        model=model,
-        input=prompt,  # Note: use 'input' not 'messages'
-        instructions="You are an autonomous repo steward AI that suggests minimal, high‑impact patches.",
-        temperature=0.15,
-        top_p=0.9,
-    )
+    # Create the base parameters
+    params = {
+        "model": model,
+        "input": prompt,
+        "instructions": "You are an autonomous repo steward AI that suggests minimal, high‑impact patches."
+    }
     
-    # Process the response - structure is different from chat completions
+    # Only add temperature for models that support it
+    # O-series models (like o4-mini) don't support temperature
+    if not model.startswith("o"):
+        params["temperature"] = 0.15
+        params["top_p"] = 0.9
+    
+    # Make the API call
+    response = await client.responses.create(**params)
+    
+    # Process the response
     result = ""
     for item in response.output:
         if item.type == "message":
