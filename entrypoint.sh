@@ -8,5 +8,5 @@ else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
     # Use the "eventlet" worker class with only 1 worker
-    exec gunicorn --bind 0.0.0.0:$PORT --worker-class eventlet --workers 1 --log-level info --timeout 120 wsgi:app
+    exec hypercorn --bind 0.0.0.0:$PORT --worker-class eventlet --workers 1 --log-level info --timeout 120 wsgi:app
 fi
