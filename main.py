@@ -12,12 +12,9 @@ from quart import Quart, render_template, session, request, jsonify, redirect
 from quart_socketio import SocketIO, emit, join_room
 from quart_cors import CORS
 # Removed WsgiToAsgi as we use eventlet
-from quart_talisman import Talisman
-from quart_wtf.csrf import CSRFProtect
-from quart_socketio import SocketIO, emit, join_room
-from quart_cors import CORS
+
 from prometheus_quart_exporter import PrometheusMetrics
-from flasgger import Swagger
+from quart_schema import QuartSchema
 from datetime import timedelta
 
 # Security
@@ -396,6 +393,7 @@ async def initialize_systems(app):
 def create_quart_app():
     """Create and configure a quart application."""
     app = Quart(__name__, static_folder='static', template_folder='templates')
+    QuartSchema(app)
 
     # --- Basic Config ---
     try:
@@ -415,59 +413,20 @@ def create_quart_app():
         # Handle error - maybe raise or use safe defaults
 
 
-    # --- Swagger ---
-    swagger_config = {
-        "headers": [],
-        "specs": [
-            {
-                "endpoint": 'apispec',
-                "route": '/apispec.json',
-                "rule_filter": lambda rule: True,
-                "model_filter": lambda tag: True,
-            }
-        ],
-        "static_url_path": "/flasgger_static",
-        "swagger_ui": True,
-        "specs_route": "/docs" # Recommend /docs or /api/docs
-    }
-    template = {
-        "swagger": "2.0", # Consider OpenAPI 3+ using apispec directly or quart-smorest
-        "info": {
-            "title": "Roleplay Bot API", # Updated Title
-            "description": "API for managing roleplay sessions, NPCs, memories, and interactions via quart and SocketIO.",
-            "version": "1.0.0",
-            "contact": {"email": "support@example.com"} # Replace with actual contact
-        },
-        "securityDefinitions": {
-            "Bearer": {
-                "type": "apiKey",
-                "name": "Authorization",
-                "in": "header",
-                "description": "JWT token in format: Bearer <token>" # If using JWT
-            },
-            # Add session cookie auth definition if applicable for Swagger UI
-            "cookieAuth": {
-                "type": "apiKey",
-                "name": "session", # Or your actual cookie name
-                "in": "cookie"
-            }
-        },
-        "security": [{"cookieAuth": []}] # Default to cookie auth if that's primary
-    }
-    Swagger(app, config=swagger_config, template=template)
-
     # --- Security ---
     # Configure CSP more securely if possible (avoid 'unsafe-inline', 'unsafe-eval')
     # This often requires changes to frontend JS/CSS.
-    csp = {
-        'default-src': "'self'",
-        'script-src': ["'self'"], # Remove 'unsafe-inline', 'unsafe-eval' if possible
-        'style-src': ["'self'"], # Remove 'unsafe-inline' if possible
-        'img-src': ["'self'", "data:"], # Allow data URIs if needed for images
-        'connect-src': ["'self'", "ws://*", "wss://*"], # Allow self and websockets
-    }
-    Talisman(app, content_security_policy=csp)
-    csrf = CSRFProtect(app)
+    # --- Security headers (manual CSP) ---
+    @app.after_request
+    async def set_security_headers(response):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws://* wss://*"
+        )
+        return response
 
     # --- Metrics ---
     metrics = PrometheusMetrics(app)
@@ -479,9 +438,9 @@ def create_quart_app():
     CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True)
     logger.info(f"CORS configured for origins: {cors_origins}")
 
-
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
+    app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(new_game_bp, url_prefix='/new_game')
     app.register_blueprint(player_input_bp, url_prefix='/player_input')
     app.register_blueprint(player_input_root_bp)
