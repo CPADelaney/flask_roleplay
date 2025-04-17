@@ -465,7 +465,7 @@ async def create_all_tables():
                 ''',
                 '''
                 CREATE INDEX IF NOT EXISTS idx_nations_name
-                ON nations (lower(name));
+                ON nations (lower(name)
                 );
                 ''',
                 '''
