@@ -8,7 +8,7 @@ It allows monitoring and managing how NPCs learn from player interactions and ad
 """
 
 import logging
-from flask import Blueprint, request, jsonify, render_template
+from quart import Blueprint, request, jsonify, render_template
 import json
 import asyncio
 import time
