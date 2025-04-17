@@ -8,7 +8,7 @@ import asyncio
 from typing import Dict, Any, Optional
 
 # quart and related imports
-from quart import quart, render_template, session, request, jsonify, redirect
+from quart import Quart, render_template, session, request, jsonify, redirect
 from quart_socketio import SocketIO, emit, join_room
 from quart_cors import CORS
 # Removed WsgiToAsgi as we use eventlet
@@ -17,7 +17,6 @@ from quart_wtf.csrf import CSRFProtect
 from prometheus_quart_exporter import PrometheusMetrics
 from flasgger import Swagger
 from datetime import timedelta
-from quart import Quart
 
 # Security
 import bcrypt
