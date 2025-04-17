@@ -17,11 +17,11 @@ celery
 gunicorn
 eventlet>=0.24.1
 asgiref
-quart>=0.18.0
-quart-socketio>=0.6.0
-quart-cors>=0.5.0
-quart-talisman>=0.1.0
-quart-wtf>=0.4.0
+quart
+quart-socketio
+quart-cors
+quart-talisman
+quart-wtf
 asyncio-extras
 smolagents>=1.0.0
 
