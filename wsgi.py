@@ -8,6 +8,10 @@ import os
 import logging
 from dotenv import load_dotenv
 from quart import Quart, render_template, session, request, jsonify, redirect
+from quart_socketio import SocketIO, emit, join_room
+from quart_cors import CORS
+from quart_talisman import Talisman
+from quart_wtf.csrf import CSRFProtect
 
 
 # Load environment variables from .env file if it exists (good for Gunicorn)
