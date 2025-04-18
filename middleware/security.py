@@ -7,7 +7,7 @@ import json
 import logging
 import bleach
 from functools import wraps
-from flask import request, abort, current_app
+from quart import request, abort, current_app
 from marshmallow import ValidationError
 from typing import Dict, Any, Callable, Optional
 
