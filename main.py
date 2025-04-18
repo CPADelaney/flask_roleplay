@@ -396,17 +396,16 @@ def create_quart_app():
     # 3) Metrics (aioprometheus)
     registry = Registry()
     http_requests = Counter(
-        "http_requests_total",
+        "http_requests_total", 
         "Total HTTP requests",
         const_labels={"service": "my‑quart‑app"}
     )
     registry.register(http_requests)
-    from aioprometheus.asgi.starlette import metrics_middleware
-    app.asgi_app = metrics_middleware(registry)(app.asgi_app)
+
     @app.route("/metrics")
     async def metrics_endpoint():
-        return Response(render(registry),  
-                        mimetype="text/plain; version=0.0.4")
+        from aioprometheus import render
+        return Response(await render(registry), mimetype="text/plain; version=0.0.4")
 
     # 4) CORS
     # make sure you have `pip install quart-cors`
