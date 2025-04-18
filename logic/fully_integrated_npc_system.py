@@ -186,6 +186,23 @@ class IntegratedNPCSystem:
                 logger.error(f"Failed to initialize memory system: {e}")
         return self
 
+    async def _get_active_npcs(self) -> List[Dict[str, Any]]:
+        """Get all active NPCs in the current conversation."""
+        try:
+            # Using get_db_connection_context() instead of connection_pool.acquire()
+            async with get_db_connection_context() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, schedule
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND is_active = true
+                """, self.user_id, self.conversation_id)
+                
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting active NPCs: {e}")
+            return []
+
     def _detect_memory_pressure(self):
         """Detect memory pressure in the application."""
         try:
