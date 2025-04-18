@@ -8,7 +8,7 @@ import threading
 import logging
 # Removed asyncio import as it's not needed for the core logic here anymore
 from functools import wraps
-from flask import request, jsonify, current_app, g, abort # Added abort
+from quart import request, jsonify, current_app, g, abort # Added abort
 from typing import Dict, Optional, Tuple, Set
 import redis
 from dataclasses import dataclass
