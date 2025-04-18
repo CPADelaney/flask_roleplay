@@ -5,7 +5,7 @@ Error handling utilities for consistent error responses and logging.
 import time
 import random
 import logging
-from flask import jsonify
+from quart import jsonify
 
 # Configure logging
 logger = logging.getLogger(__name__)
