@@ -6,7 +6,7 @@ import re
 import html
 import json
 from functools import wraps
-from flask import request, jsonify
+from quart import request, jsonify
 import logging
 
 # Configure logging
