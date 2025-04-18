@@ -11,7 +11,8 @@ from agents import (
     ModelSettings, 
     function_tool,
     InputGuardrail,
-    GuardrailFunctionOutput
+    GuardrailFunctionOutput,
+    RunContextWrapper  # Added import for RunContextWrapper
 )
 
 from memory.memory_agent_wrapper import MemoryAgentWrapper
@@ -62,13 +63,14 @@ class MemorySystemContext:
 
 # Function tools for memory operations
 @function_tool
-async def remember(ctx, entity_type: str, entity_id: int, memory_text: str, 
+async def remember(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, memory_text: str, 
                   importance: str = "medium", emotional: bool = True, 
                   tags: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Record a new memory for an entity.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         memory_text: The memory text to record
@@ -111,12 +113,13 @@ async def remember(ctx, entity_type: str, entity_id: int, memory_text: str,
     return formatted_result
 
 @function_tool
-async def recall(ctx, entity_type: str, entity_id: int, query: Optional[str] = None,
+async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, query: Optional[str] = None,
                 context: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
     """
     Recall memories for an entity, optionally filtered by a query.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         query: Optional search query
@@ -170,12 +173,13 @@ async def recall(ctx, entity_type: str, entity_id: int, query: Optional[str] = N
     return formatted_result
 
 @function_tool
-async def create_belief(ctx, entity_type: str, entity_id: int, 
+async def create_belief(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, 
                        belief_text: str, confidence: float = 0.7) -> Dict[str, Any]:
     """
     Create a belief for an entity based on their experiences.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         belief_text: The belief statement
@@ -203,12 +207,13 @@ async def create_belief(ctx, entity_type: str, entity_id: int,
     }
 
 @function_tool
-async def get_beliefs(ctx, entity_type: str, entity_id: int, 
+async def get_beliefs(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, 
                      topic: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Get beliefs held by an entity.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         topic: Optional topic filter
@@ -230,11 +235,12 @@ async def get_beliefs(ctx, entity_type: str, entity_id: int,
     return beliefs
 
 @function_tool
-async def run_maintenance(ctx, entity_type: str, entity_id: int) -> Dict[str, Any]:
+async def run_maintenance(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int) -> Dict[str, Any]:
     """
     Run maintenance tasks on an entity's memories (consolidation, decay, etc.).
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         
@@ -254,11 +260,12 @@ async def run_maintenance(ctx, entity_type: str, entity_id: int) -> Dict[str, An
     return result
 
 @function_tool
-async def analyze_memories(ctx, entity_type: str, entity_id: int) -> Dict[str, Any]:
+async def analyze_memories(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int) -> Dict[str, Any]:
     """
     Perform a comprehensive analysis of an entity's memories.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         
@@ -278,11 +285,12 @@ async def analyze_memories(ctx, entity_type: str, entity_id: int) -> Dict[str, A
     return result
 
 @function_tool
-async def generate_schemas(ctx, entity_type: str, entity_id: int) -> Dict[str, Any]:
+async def generate_schemas(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int) -> Dict[str, Any]:
     """
     Generate schemas by analyzing memory patterns.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         entity_type: Type of entity ("player", "nyx", etc.)
         entity_id: ID of the entity
         
@@ -302,14 +310,15 @@ async def generate_schemas(ctx, entity_type: str, entity_id: int) -> Dict[str, A
     return result
 
 @function_tool
-async def add_journal_entry(ctx, player_name: str, entry_text: str,
+async def add_journal_entry(ctx: RunContextWrapper[MemorySystemContext], player_name: str, entry_text: str,
                            entry_type: str = "observation",
                            fantasy_flag: bool = False,
-                           intensity_level: int = 0) -> int:
+                           intensity_level: int = 0) -> Dict[str, Any]:
     """
     Add a journal entry to a player's memory.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         player_name: Name of the player
         entry_text: The journal entry text
         entry_type: Type of entry
@@ -317,7 +326,7 @@ async def add_journal_entry(ctx, player_name: str, entry_text: str,
         intensity_level: Emotional intensity (0-5)
         
     Returns:
-        ID of the created journal entry
+        Information about the created journal entry
     """
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
@@ -340,12 +349,13 @@ async def add_journal_entry(ctx, player_name: str, entry_text: str,
     }
 
 @function_tool
-async def get_journal_history(ctx, player_name: str, entry_type: Optional[str] = None,
+async def get_journal_history(ctx: RunContextWrapper[MemorySystemContext], player_name: str, entry_type: Optional[str] = None,
                              limit: int = 10) -> List[Dict[str, Any]]:
     """
     Get a player's journal entries.
     
     Args:
+        ctx: Run context wrapper containing memory system context
         player_name: Name of the player
         entry_type: Optional filter by entry type
         limit: Maximum number of entries to return
@@ -367,8 +377,18 @@ async def get_journal_history(ctx, player_name: str, entry_type: Optional[str] =
     return journal_entries
 
 # Input validation guardrail
-async def validate_entity_input(ctx, agent, input_data):
-    """Validate entity information in input."""
+async def validate_entity_input(ctx: RunContextWrapper[MemorySystemContext], agent: Agent[MemorySystemContext], input_data: str):
+    """
+    Validate entity information in input.
+    
+    Args:
+        ctx: Run context wrapper containing memory system context
+        agent: The memory manager agent
+        input_data: User's input message
+    
+    Returns:
+        Guardrail validation result
+    """
     input_text = input_data
     
     # Check if there's mention of entity but without clear entity_id
@@ -436,7 +456,6 @@ def create_memory_agent(user_id: int, conversation_id: int):
         model_settings=ModelSettings(temperature=0.3)
     )
     
-    # Now use base_agent instead of undefined variable
     memory_agent = MemoryAgentWrapper(base_agent, memory_context)
     return memory_agent
 
