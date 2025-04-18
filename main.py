@@ -389,7 +389,7 @@ def create_quart_app():
     QuartSchema(app)
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
-    sio = socketio.AsyncServer(async_mode="quart", cors_allowed_origins="*")
+    sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
     sio.init_app(app)
     app.socketio = sio
 
