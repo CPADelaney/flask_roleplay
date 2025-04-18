@@ -401,7 +401,8 @@ def create_quart_app():
         const_labels={"service": "my‑quart‑app"}
     )
     registry.register(http_requests)
-    app.asgi_app = metrics_middleware(registry=registry)(app.asgi_app)
+    from aioprometheus.asgi.starlette import metrics
+    app.asgi_app = metrics(app.asgi_app)
     @app.route("/metrics")
     async def metrics_endpoint():
         return Response(render(registry),  
