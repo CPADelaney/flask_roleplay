@@ -1,6 +1,6 @@
 # routes/npc_routes.py
 
-from flask import Blueprint, request, jsonify
+from quart import Blueprint, request, jsonify
 from flasgger import swag_from
 from npcs.npc_creation import NPCCreationHandler
 from middleware.error_handling import create_error_response
