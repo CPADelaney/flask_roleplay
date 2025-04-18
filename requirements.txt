@@ -27,7 +27,7 @@ hypercorn
 smolagents>=1.0.0
 werkzeug
 starlette
-quart-prometheus-exporter
+aioprometheus
 
 # Database
 SQLAlchemy==2.0.23
