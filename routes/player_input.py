@@ -5,7 +5,6 @@ from db.connection import get_db_connection_context
 # If you want meltdown logic tracking (e.g., record_meltdown_dialog):
 # from logic.meltdown_logic import record_meltdown_dialog, append_meltdown_file
 
-from quart_socketio import emit
 import logging
 
 player_input_bp = Blueprint("player_input", __name__)
