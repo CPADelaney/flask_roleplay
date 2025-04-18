@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
 
-from prometheus_quart_exporter import PrometheusMetrics
+from quart_prometheus_exporter import PrometheusMetrics
 from quart_schema import QuartSchema
 from datetime import timedelta
 
