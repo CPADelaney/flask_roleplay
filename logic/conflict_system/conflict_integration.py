@@ -17,6 +17,7 @@ from logic.conflict_system.conflict_agents import (
     triage_agent, conflict_generation_agent, stakeholder_agent,
     manipulation_agent, resolution_agent, ConflictContext, initialize_agents
 )
+from npcs.npc_agent_system import NPCAgentSystem
 from logic.conflict_system.conflict_tools import (
     get_active_conflicts, get_conflict_details, get_conflict_stakeholders,
     get_resolution_paths, get_player_involvement, get_internal_conflicts,
