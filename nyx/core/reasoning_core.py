@@ -12,6 +12,7 @@ import networkx as nx
 import random
 import re
 from collections import defaultdict
+from nyx.core.multimodal_integrator import ExpectationSignal
 
 logger = logging.getLogger(__name__)
 
@@ -999,7 +1000,6 @@ class ReasoningCore:
         Returns:
             List of expectation signals to influence perception
         """
-        from nyx.core.brain.models import ExpectationSignal
         expectations = []
         
         # 1. Generate expectations from active causal models
