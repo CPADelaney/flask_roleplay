@@ -8,10 +8,12 @@ import asyncio
 from typing import Dict, Any, Optional
 
 # quart and related imports
-from quart import Quart, render_template, session, request, jsonify, redirect
+from quart import Quart, render_template, session, request, jsonify, redirect, Response
 import socketio
 
-from quart_prometheus_exporter import PrometheusMetrics
+from aioprometheus import Registry, Counter, render
+from aioprometheus.asgi.starlette import metrics as metrics_middleware
+
 from quart_schema import QuartSchema
 from datetime import timedelta
 
@@ -383,9 +385,28 @@ async def initialize_systems(app):
 ###############################################################################
 
 def create_quart_app():
-    """Create and configure a quart application."""
-    app = Quart(__name__, static_folder='static', template_folder='templates')
+    # 1) Create your Quart app
+    app = Quart(__name__, static_folder="static", template_folder="templates")
     QuartSchema(app)
+
+    # 2) Build and register your Prometheus registry + counter
+    registry = Registry()
+    http_requests = Counter(
+        "http_requests_total",
+        "Total HTTP requests",
+        const_labels={"service": "my-quart-app"},
+        label_names=["method", "path"],
+    )
+    registry.register(http_requests)
+
+    # 3) Wrap the ASGI app in the metrics middleware
+    app.asgi_app = metrics_middleware(registry=registry)(app.asgi_app)
+
+    # 4) Expose a /metrics endpoint
+    @app.route("/metrics")
+    async def metrics_endpoint():
+        data = render(registry)
+        return Response(data, mimetype="text/plain; version=0.0.4")
 
     # Event handlers on the same API as Flask‑SocketIO
     @sio.event
