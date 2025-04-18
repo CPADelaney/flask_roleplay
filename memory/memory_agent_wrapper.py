@@ -51,7 +51,7 @@ class MemoryAgentWrapper:
         self.name = getattr(agent, "name", "MemoryAgent")
         self.instructions = getattr(agent, "instructions", "")
         self.tools = getattr(agent, "tools", [])
-        self.input_guardrails: list[Any] = []
+        self.input_guardrails = getattr(agent, "input_guardrails", [])
         self._hooks = None
         self.model_settings = getattr(agent, "model_settings", None)
 
@@ -215,13 +215,18 @@ class MemoryAgentWrapper:
         return "You are a memory management assistant that helps manage and retrieve memories."
 
     def get_tools(self):
-        tools = super().get_tools()
-        for t in tools:
-            if t["name"] == "remember":
-                schema = t["parameters"]
-                # Force a type so the API is happy
-                schema["properties"]["ctx"] = {"type": "object"}
-        return tools
+        """Get the tools and ensure all ctx parameters have proper type annotations."""
+        try:
+            tools = self.agent.tools  # Get tools directly from the agent
+            for t in tools:
+                if "parameters" in t and "properties" in t["parameters"] and "ctx" in t["parameters"]["properties"]:
+                    # Ensure the ctx parameter has a type
+                    if "type" not in t["parameters"]["properties"]["ctx"]:
+                        t["parameters"]["properties"]["ctx"] = {"type": "object"}
+            return tools
+        except Exception as e:
+            logger.error(f"Error in get_tools: {e}")
+            return self.agent.tools if hasattr(self.agent, "tools") else []
 
     def run(self, *args, **kwargs):
         if hasattr(self.agent, "run"):
@@ -248,4 +253,3 @@ def _coerce_to_dict(obj: Any) -> Dict[str, Any]:
             return {"message": obj}
     # Fallback – wrap any other type so callers can see *something*
     return {"data": obj}
-
