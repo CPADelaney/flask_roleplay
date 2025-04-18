@@ -27,6 +27,7 @@ hypercorn
 smolagents>=1.0.0
 werkzeug
 starlette
+quart-prometheus-exporter
 
 # Web framework
 flask==3.0.0
