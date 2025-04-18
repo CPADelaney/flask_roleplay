@@ -21,7 +21,7 @@ logging.basicConfig(
 logging.info(f"Logging level set to: {log_level_name}")
 
 # Import the app creation functions AFTER patching and logging setup
-from main import create_quart_app, create_socketio
+from main import create_quart_app
 
 # Create the quart app instance using the factory
 logging.info("Creating quart app instance...")
@@ -36,13 +36,5 @@ app = cors(
   allow_headers="*"           # optional
 )
 
-# Initialize SocketIO with the app using the factory
-# This should also assign the instance to the global `socketio` variable in main.py
-logging.info("Creating SocketIO instance...")
-sio = create_socketio(app)
-logging.info("SocketIO instance created.")
-
-# Gunicorn or other ASGI servers will import 'app' from this module.
-# For local dev, main.py's __main__ block runs socketio.run()
 
 logging.info("wsgi.py loaded successfully.")
