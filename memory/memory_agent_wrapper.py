@@ -107,7 +107,7 @@ class MemoryAgentWrapper:
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Error in recall: %s", e)
             return {"error": str(e), "memories": []}
-
+          
     async def remember(
         self,
         context: Any,
@@ -123,8 +123,8 @@ class MemoryAgentWrapper:
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "memory_text": memory_text,
-                "importance": importance,
-                "emotional": emotional,
+                "importance": importance,  # These will now be required by the function
+                "emotional": emotional,    # Make sure to pass them all
                 "tags": tags or [],
             }
             result = await self._run(self._build_input("user", "remember", **meta), trace_meta=meta)
