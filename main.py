@@ -10,7 +10,6 @@ from typing import Dict, Any, Optional
 # quart and related imports
 from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
-from quart_cors import CORS
 
 from prometheus_quart_exporter import PrometheusMetrics
 from quart_schema import QuartSchema
@@ -388,18 +387,6 @@ def create_quart_app():
     app = Quart(__name__, static_folder='static', template_folder='templates')
     QuartSchema(app)
 
-    # --- Socket.IO setup (using python-socketio) ---
-    sio = socketio.AsyncServer(
-        async_mode="quart",
-        cors_allowed_origins="*",
-        logger=True,
-        engineio_logger=True,
-        ping_timeout=20,
-        ping_interval=10,
-        message_queue=os.getenv("SOCKETIO_MESSAGE_QUEUE", None)
-    )
-    sio.init_app(app)
-
     # Event handlers on the same API as Flask‑SocketIO
     @sio.event
     async def connect(sid, environ):
@@ -447,12 +434,6 @@ def create_quart_app():
     # --- Metrics ---
     metrics = PrometheusMetrics(app)
     metrics.info('app_info', 'Application info', version='1.0.0')
-
-    # --- CORS ---
-    # Be more specific with origins in production
-    cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(',')
-    CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True)
-    logger.info(f"CORS configured for origins: {cors_origins}")
 
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
