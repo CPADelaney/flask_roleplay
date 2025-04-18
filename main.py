@@ -399,7 +399,7 @@ def create_quart_app():
         "http_requests_total",
         "Total HTTP requests",
         const_labels={"service": "my‑quart‑app"},
-        label_names=["method", "path"],
+        labels=["method", "path"],  # Changed from label_names to labels
     )
     registry.register(http_requests)
     app.asgi_app = metrics_middleware(registry=registry)(app.asgi_app)
