@@ -1,0 +1,1 @@
+It looks like the “Lint issues” section is empty. Could you please paste in the specific lint errors (and any relevant code snippets) you’d like me to address? Once I have those, I can draft minimal unified‑diff patches to fix them.
