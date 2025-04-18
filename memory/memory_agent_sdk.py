@@ -12,7 +12,7 @@ from agents import (
     function_tool,
     InputGuardrail,
     GuardrailFunctionOutput,
-    RunContextWrapper  # Added import for RunContextWrapper
+    RunContextWrapper
 )
 
 from memory.memory_agent_wrapper import MemoryAgentWrapper
@@ -61,11 +61,11 @@ class MemorySystemContext:
         self.conversation_id = conversation_id
         self.memory_system = None
 
-# Function tools for memory operations
+# Function tools for memory operations - REMOVED DEFAULT VALUES
 @function_tool
 async def remember(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, memory_text: str, 
-                  importance: str = "medium", emotional: bool = True, 
-                  tags: Optional[List[str]] = None) -> Dict[str, Any]:
+                  importance: str, emotional: bool, 
+                  tags: Optional[List[str]]) -> Dict[str, Any]:
     """
     Record a new memory for an entity.
     
@@ -81,6 +81,10 @@ async def remember(ctx: RunContextWrapper[MemorySystemContext], entity_type: str
     Returns:
         Information about the created memory
     """
+    # Handle defaults inside the function
+    importance = importance or "medium"
+    emotional = True if emotional is None else emotional
+    
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
@@ -113,8 +117,8 @@ async def remember(ctx: RunContextWrapper[MemorySystemContext], entity_type: str
     return formatted_result
 
 @function_tool
-async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, query: Optional[str] = None,
-                context: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
+async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, query: Optional[str], 
+                context: Optional[str], limit: int) -> Dict[str, Any]:
     """
     Recall memories for an entity, optionally filtered by a query.
     
@@ -129,6 +133,9 @@ async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, 
     Returns:
         Retrieved memories and related information
     """
+    # Handle defaults inside the function
+    limit = limit or 5
+    
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
@@ -174,7 +181,7 @@ async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, 
 
 @function_tool
 async def create_belief(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, 
-                       belief_text: str, confidence: float = 0.7) -> Dict[str, Any]:
+                       belief_text: str, confidence: float) -> Dict[str, Any]:
     """
     Create a belief for an entity based on their experiences.
     
@@ -188,6 +195,9 @@ async def create_belief(ctx: RunContextWrapper[MemorySystemContext], entity_type
     Returns:
         Created belief information
     """
+    # Handle defaults inside the function
+    confidence = confidence or 0.7
+    
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
@@ -208,7 +218,7 @@ async def create_belief(ctx: RunContextWrapper[MemorySystemContext], entity_type
 
 @function_tool
 async def get_beliefs(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, 
-                     topic: Optional[str] = None) -> List[Dict[str, Any]]:
+                     topic: Optional[str]) -> List[Dict[str, Any]]:
     """
     Get beliefs held by an entity.
     
@@ -311,9 +321,8 @@ async def generate_schemas(ctx: RunContextWrapper[MemorySystemContext], entity_t
 
 @function_tool
 async def add_journal_entry(ctx: RunContextWrapper[MemorySystemContext], player_name: str, entry_text: str,
-                           entry_type: str = "observation",
-                           fantasy_flag: bool = False,
-                           intensity_level: int = 0) -> Dict[str, Any]:
+                           entry_type: str, fantasy_flag: bool,
+                           intensity_level: int) -> Dict[str, Any]:
     """
     Add a journal entry to a player's memory.
     
@@ -328,6 +337,11 @@ async def add_journal_entry(ctx: RunContextWrapper[MemorySystemContext], player_
     Returns:
         Information about the created journal entry
     """
+    # Handle defaults inside the function
+    entry_type = entry_type or "observation"
+    fantasy_flag = fantasy_flag if fantasy_flag is not None else False
+    intensity_level = intensity_level or 0
+    
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
@@ -349,8 +363,8 @@ async def add_journal_entry(ctx: RunContextWrapper[MemorySystemContext], player_
     }
 
 @function_tool
-async def get_journal_history(ctx: RunContextWrapper[MemorySystemContext], player_name: str, entry_type: Optional[str] = None,
-                             limit: int = 10) -> List[Dict[str, Any]]:
+async def get_journal_history(ctx: RunContextWrapper[MemorySystemContext], player_name: str, entry_type: Optional[str],
+                             limit: int) -> List[Dict[str, Any]]:
     """
     Get a player's journal entries.
     
@@ -363,6 +377,9 @@ async def get_journal_history(ctx: RunContextWrapper[MemorySystemContext], playe
     Returns:
         List of journal entries
     """
+    # Handle defaults inside the function
+    limit = limit or 10
+    
     if ctx.context.memory_system is None:
         ctx.context.memory_system = await MemorySystem.get_instance(
             ctx.context.user_id, ctx.context.conversation_id
