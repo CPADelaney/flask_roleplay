@@ -1,14 +1,12 @@
 # Integration of Enhanced Nyx Memory System into existing codebase
 
-# Integration of Enhanced Nyx Memory System into existing codebase
-
 import logging
 import asyncio
 from datetime import datetime
 import json
 import os
 from celery_config import celery_app
-from flask_socketio import emit, socketio  # Properly import socketio for streaming
+from quart import Blueprint, current_app, jsonify
 
 # Updated imports using newer modules
 from nyx.nyx_agent_sdk import (
@@ -310,16 +308,16 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
             # Stream the response token by token
             for i in range(0, len(ai_response), 3):
                 token = ai_response[i:i+3]
-                emit('new_token', {'token': token}, room=conversation_id)
+                await current_app.socketio.emit('new_token', {'token': token}, room=conversation_id)
                 await asyncio.sleep(0.05)  # Use asyncio.sleep instead of socketio.sleep
                 
             # Signal completion
-            emit('done', {'full_text': ai_response}, room=conversation_id)
+            await current_app.socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
             logging.info(f"Completed streaming response for conversation {conversation_id}")
         except Exception as socket_err:
             logging.error(f"Error emitting response: {socket_err}", exc_info=True)
             try:
-                emit('error', {'error': str(socket_err)}, room=conversation_id)
+                await current_app.socketio.emit('error', {'error': str(socket_err)}, room=conversation_id)
             except:
                 pass
         
@@ -360,7 +358,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                 
                 # Emit image to the client via SocketIO
                 if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                    emit('image', {
+                    await current_app.socketio.emit('image', {
                         'image_url': image_result["image_urls"][0],
                         'prompt_used': image_result.get('prompt_used', ''),
                         'reason': "Narrative moment"
@@ -369,7 +367,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
             except Exception as img_err:
                 logging.error(f"Error generating image: {img_err}", exc_info=True)
                 try:
-                    emit('error', {'error': f"Image generation failed: {str(img_err)}"}, room=conversation_id)
+                    await current_app.socketio.emit('error', {'error': f"Image generation failed: {str(img_err)}"}, room=conversation_id)
                 except:
                     pass
         
@@ -442,7 +440,7 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
         logging.error(f"Critical error in enhanced_background_chat_task: {str(e)}", exc_info=True)
         # Attempt to notify the client about the error
         try:
-            emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+            await current_app.socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
         except Exception as notify_err:
             logging.error(f"Failed to send error notification: {notify_err}")
 
