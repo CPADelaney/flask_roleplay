@@ -401,8 +401,8 @@ def create_quart_app():
         const_labels={"service": "my‑quart‑app"}
     )
     registry.register(http_requests)
-    from aioprometheus.asgi.starlette import metrics
-    app.asgi_app = metrics(app.asgi_app)
+    from aioprometheus.asgi.starlette import metrics_middleware
+    app.asgi_app = metrics_middleware(registry)(app.asgi_app)
     @app.route("/metrics")
     async def metrics_endpoint():
         return Response(render(registry),  
@@ -452,7 +452,6 @@ def create_quart_app():
 
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
-    app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(new_game_bp, url_prefix='/new_game')
     app.register_blueprint(player_input_bp, url_prefix='/player_input')
     app.register_blueprint(player_input_root_bp)
