@@ -5,7 +5,7 @@ import logging
 from dotenv import load_dotenv
 from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
-from quart_cors import CORS
+from quart_cors import cors
 
 
 # Load environment variables from .env file if it exists (good for Gunicorn)
@@ -27,6 +27,14 @@ from main import create_quart_app, create_socketio
 logging.info("Creating quart app instance...")
 app = create_quart_app()
 logging.info("quart app instance created.")
+
+app = cors(
+  app,
+  allow_origin="*",           # or a list/pattern of origins
+  allow_credentials=True,     # optional
+  allow_methods="*",          # optional
+  allow_headers="*"           # optional
+)
 
 # Initialize SocketIO with the app using the factory
 # This should also assign the instance to the global `socketio` variable in main.py
