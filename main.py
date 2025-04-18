@@ -385,62 +385,58 @@ async def initialize_systems(app):
 ###############################################################################
 
 def create_quart_app():
-    # 1) Create your Quart app
     app = Quart(__name__, static_folder="static", template_folder="templates")
     QuartSchema(app)
+    
+    # 2) Create & attach Socket.IO _before_ any @sio.event handlers
+    sio = socketio.AsyncServer(async_mode="quart", cors_allowed_origins="*")
+    sio.init_app(app)
+    app.socketio = sio
 
-    # 2) Build and register your Prometheus registry + counter
+    # 3) Metrics (aioprometheus)
     registry = Registry()
     http_requests = Counter(
         "http_requests_total",
         "Total HTTP requests",
-        const_labels={"service": "my-quart-app"},
+        const_labels={"service": "my‑quart‑app"},
         label_names=["method", "path"],
     )
     registry.register(http_requests)
-
-    # 3) Wrap the ASGI app in the metrics middleware
     app.asgi_app = metrics_middleware(registry=registry)(app.asgi_app)
-
-    # 4) Expose a /metrics endpoint
     @app.route("/metrics")
     async def metrics_endpoint():
-        data = render(registry)
-        return Response(data, mimetype="text/plain; version=0.0.4")
+        return Response(render(registry),  
+                        mimetype="text/plain; version=0.0.4")
 
-    # Event handlers on the same API as Flask‑SocketIO
+    # 4) CORS
+    # make sure you have `pip install quart-cors`
+    from quart_cors import cors
+    cors(app,
+         allow_origin=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
+         allow_credentials=True,
+         allow_methods="*",
+         allow_headers="*")
+
+
+    # 5) Socket.IO event handlers
     @sio.event
     async def connect(sid, environ):
         user = session.get("user_id", "anonymous")
-        app.logger.info(f"Socket.IO connect: SID={sid}, user={user}")
-        await sio.emit("response", {"data": "Connected successfully!"}, to=sid)
+        app.logger.info(f"connect: {sid}/{user}")
+        await sio.emit("response", {"data": "Connected!"}, to=sid)
 
     @sio.on("join")
-    async def handle_join(sid, data):
-        conv = data.get("conversation_id")
-        user = session.get("user_id")
-        if not user or not conv:
-            return await sio.emit("error", {"error": "Auth or conv missing"}, to=sid)
-        room = str(conv)
+    async def on_join(sid, data):
+        room = str(data.get("conversation_id"))
         sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room}, to=sid)
 
     @sio.on("message")
-    async def handle_message(sid, data):
-        # replicate your old logic, but use `await sio.emit(...)` instead of `emit(...)`
-        user = session.get("user_id")
-        if not user:
-            return await sio.emit("error", {"error": "Authentication required"}, to=sid)
-        # store & background task...
+    async def on_message(sid, data):
         await sio.emit("message_received", {"status": "processing"}, to=sid)
+        # … your background task kick‑off here …
 
-    # keep a reference if you need it elsewhere
-    app.socketio = sio
-
-    # --- Security ---
-    # Configure CSP more securely if possible (avoid 'unsafe-inline', 'unsafe-eval')
-    # This often requires changes to frontend JS/CSS.
-    # --- Security headers (manual CSP) ---
+    # 6) Security headers
     @app.after_request
     async def set_security_headers(response):
         response.headers["Content-Security-Policy"] = (
@@ -452,9 +448,7 @@ def create_quart_app():
         )
         return response
 
-    # --- Metrics ---
-    metrics = PrometheusMetrics(app)
-    metrics.info('app_info', 'Application info', version='1.0.0')
+    # (Removed stray PrometheusMetrics import & metrics.info — we’re using aioprometheus now)
 
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
@@ -475,6 +469,7 @@ def create_quart_app():
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
     app.before_request(ip_block_middleware)
+    register_auth_routes(app)
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
     init_chat_routes(app) # Ensure this uses asyncpg if needed
