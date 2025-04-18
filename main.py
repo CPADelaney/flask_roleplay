@@ -390,7 +390,7 @@ def create_quart_app():
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
     sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-    sio.init_app(app)
+    app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
 
     # 3) Metrics (aioprometheus)
