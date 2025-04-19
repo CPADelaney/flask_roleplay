@@ -117,8 +117,14 @@ async def remember(ctx: RunContextWrapper[MemorySystemContext], entity_type: str
     return formatted_result
 
 @function_tool
-async def recall(ctx: RunContextWrapper[MemorySystemContext], entity_type: str, entity_id: int, query: Optional[str], 
-                context: Optional[str], limit: int) -> Dict[str, Any]:
+async def recall(
+    ctx: RunContextWrapper[MemorySystemContext], 
+    entity_type: str, 
+    entity_id: int, 
+    query: Optional[str] = None, 
+    context: Optional[str] = None, 
+    limit: Optional[int] = None
+) -> Dict[str, Any]:
     """
     Recall memories for an entity, optionally filtered by a query.
     
@@ -394,19 +400,30 @@ async def get_journal_history(ctx: RunContextWrapper[MemorySystemContext], playe
     return journal_entries
 
 # Input validation guardrail
-async def validate_entity_input(ctx: RunContextWrapper[MemorySystemContext], agent: Agent[MemorySystemContext], input_data: str):
+async def validate_entity_input(ctx: RunContextWrapper[MemorySystemContext], agent: Agent[MemorySystemContext], input_data):
     """
     Validate entity information in input.
     
     Args:
         ctx: Run context wrapper containing memory system context
         agent: The memory manager agent
-        input_data: User's input message
+        input_data: User's input message (can be string or list)
     
     Returns:
         Guardrail validation result
     """
-    input_text = input_data
+    # Handle input_data that might be a list or a string
+    if isinstance(input_data, list):
+        # Extract text content if possible from a list of messages
+        input_text = ""
+        for item in input_data:
+            if isinstance(item, dict) and "content" in item:
+                input_text += item["content"] + " "
+            elif isinstance(item, str):
+                input_text += item + " "
+        input_text = input_text.strip()
+    else:
+        input_text = str(input_data)
     
     # Check if there's mention of entity but without clear entity_id
     if ("entity" in input_text.lower() or 
