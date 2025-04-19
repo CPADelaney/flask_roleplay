@@ -84,7 +84,7 @@ class MemoryAgentWrapper:
     # ------------------------------------------------------------------
     # Public API – Memory operations
     # ------------------------------------------------------------------
-
+    
     async def recall(
         self,
         context: Any,
@@ -104,7 +104,7 @@ class MemoryAgentWrapper:
             }
             result = await self._run(self._build_input("user", "recall", **meta), trace_meta=meta)
             return _coerce_to_dict(result.final_output)
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:
             logger.error("Error in recall: %s", e)
             return {"error": str(e), "memories": []}
           
