@@ -546,9 +546,9 @@ Always explain how the integration of different reasoning approaches enhances un
     ],
     handoffs=[
         handoff(causal_reasoning_agent, 
-                tool_description="Transfer to the causal reasoning agent for detailed causal modeling and analysis"),
+                tool_description_override=="Transfer to the causal reasoning agent for detailed causal modeling and analysis"),
         handoff(conceptual_reasoning_agent, 
-                tool_description="Transfer to the conceptual reasoning agent for conceptual space creation and blending")
+                tool_description_override=="Transfer to the conceptual reasoning agent for conceptual space creation and blending")
     ]
 )
 
@@ -586,11 +586,11 @@ Always help the user understand which type of reasoning would be most beneficial
 """,
     handoffs=[
         handoff(causal_reasoning_agent, 
-                tool_description="Transfer to the causal reasoning specialist for causal modeling and analysis"),
+                tool_description_override=="Transfer to the causal reasoning specialist for causal modeling and analysis"),
         handoff(conceptual_reasoning_agent, 
-                tool_description="Transfer to the conceptual reasoning specialist for conceptual space creation and blending"),
+                tool_description_override=="Transfer to the conceptual reasoning specialist for conceptual space creation and blending"),
         handoff(integrated_reasoning_agent, 
-                tool_description="Transfer to the integrated reasoning specialist that combines causal and conceptual approaches")
+                tool_description_override=="Transfer to the integrated reasoning specialist that combines causal and conceptual approaches")
     ],
     input_guardrails=[
         InputGuardrail(guardrail_function=homework_guardrail)
