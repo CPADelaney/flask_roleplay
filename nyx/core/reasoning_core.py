@@ -12,7 +12,9 @@ import networkx as nx
 import random
 import re
 from collections import defaultdict
-from nyx.core.multimodal_integrator import ExpectationSignal
+from nyx.core.multimodal_integrator import (
+    MultimodalIntegrator, Modality, SensoryInput, ExpectationSignal, IntegratedPercept
+)
 
 logger = logging.getLogger(__name__)
 
