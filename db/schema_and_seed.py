@@ -200,6 +200,7 @@ async def create_all_tables():
                     current_location TEXT,
                     age INT,
                     birthdate TEXT,
+                    is_active BOOLEAN DEFAULT FALSE,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
