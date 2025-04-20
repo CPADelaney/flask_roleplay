@@ -19,7 +19,7 @@ from nyx.governance_helpers import with_governance
 from utils.embedding_service import get_embedding
 
 from lore.core.base_manager import BaseLoreManager
-from lore.managers.base_manger import initialize_tables_from_definitions
+from lore.managers.base_manager import initialize_tables_from_definitions
 from lore.utils.theming import MatriarchalThemingUtils
 
 logger = logging.getLogger(__name__)
