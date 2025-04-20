@@ -43,15 +43,15 @@ class MemoryAgentWrapper:
     def __init__(self, agent: Agent, context: Any | None = None):
         self.agent = agent
         self.context = context
-
-        # Expose a subset of the agent's attributes so existing code that
-        # accessed them directly keeps working.
+    
+        # Expose a subset of the agent's attributes
         self.handoffs = getattr(agent, "handoffs", [])
         self.output_type = getattr(agent, "output_type", None)
         self.name = getattr(agent, "name", "MemoryAgent")
         self.instructions = getattr(agent, "instructions", "")
         self.tools = getattr(agent, "tools", [])
         self.input_guardrails = getattr(agent, "input_guardrails", [])
+        self.output_guardrails = getattr(agent, "output_guardrails", [])  # Add this line
         self._hooks = None
         self.model_settings = getattr(agent, "model_settings", None)
 
@@ -76,6 +76,10 @@ class MemoryAgentWrapper:
 
     async def _run(self, input_msg: Dict[str, Any], *, trace_meta: dict[str, Any] | None = None):
         """Thin wrapper around :pyfunc:`Runner.run` that sets trace data."""
+        # Convert entity_id to string in trace_meta if it exists
+        if trace_meta and 'entity_id' in trace_meta:
+            trace_meta['entity_id'] = str(trace_meta['entity_id'])
+        
         return await Runner.run(
             self.agent, [input_msg], context=self.context,
             run_config=RunConfig(trace_metadata=trace_meta or {})
