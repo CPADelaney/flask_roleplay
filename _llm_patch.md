@@ -1,0 +1,1 @@
+It looks like the specific lint errors and context snippets didn’t come through—could you please paste them here so I can craft the precise unified‐diff patch(es) you need?
