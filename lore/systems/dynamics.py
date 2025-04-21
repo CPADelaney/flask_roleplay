@@ -148,7 +148,7 @@ class LoreDynamicsSystem(BaseLoreManager):
         """Ensure required tables exist"""
         table_definitions = {
             "LoreChangeHistory": """
-                CREATE TABLE LoreChangeHistory (
+                CREATE TABLE IF NOT EXISTS LoreChangeHistory (
                     id SERIAL PRIMARY KEY,
                     lore_type TEXT NOT NULL,
                     lore_id TEXT NOT NULL,
@@ -159,7 +159,7 @@ class LoreDynamicsSystem(BaseLoreManager):
                 );
             """,
             "WorldState": """
-                CREATE TABLE WorldState (
+                CREATE TABLE IF NOT EXISTS WorldState (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
