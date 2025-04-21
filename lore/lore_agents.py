@@ -76,7 +76,7 @@ R = TypeVar('R')
 # Lore Agent Context and Directive Handler
 # -------------------------------------------------------------------------------
 
-class LoreAgentContext(BaseManager):
+class LoreAgentContext(BaseLoreManager):
     """Context for lore agents with resource management support."""
     
     def __init__(
