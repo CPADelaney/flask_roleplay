@@ -19,7 +19,7 @@ import os
 import json
 import sys
 import gc
-from lore.managers.base_manager import BaseManager, BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 import aiofiles
 
 from lore.metrics import MetricsManager, metrics_manager
