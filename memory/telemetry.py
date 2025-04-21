@@ -263,11 +263,7 @@ class MemoryTelemetry:
                     },
                     "realtime_metrics": realtime_metrics
                 }
-                
-            finally:
-                # Release connection back to pool
-                await DBConnectionManager.release(conn)
-                
+
         except Exception as e:
             logger.error(f"Error getting metrics: {e}")
             return {"error": str(e)}
