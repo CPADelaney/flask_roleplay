@@ -163,7 +163,7 @@ class RegionalCultureSystem(BaseLoreManager):
         """Ensure regional culture tables exist"""
         table_definitions = {
             "Languages": """
-                CREATE TABLE Languages (
+                CREATE TABLE IF NOT EXISTS Languages (
                     id SERIAL PRIMARY KEY,
                     name TEXT NOT NULL,
                     language_family TEXT,
@@ -183,7 +183,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 ON Languages USING ivfflat (embedding vector_cosine_ops);
             """,
             "CulturalNorms": """
-                CREATE TABLE CulturalNorms (
+                CREATE TABLE IF NOT EXISTS CulturalNorms (
                     id SERIAL PRIMARY KEY,
                     nation_id INTEGER NOT NULL,
                     category TEXT NOT NULL,
@@ -206,7 +206,7 @@ class RegionalCultureSystem(BaseLoreManager):
                 ON CulturalNorms(nation_id);
             """,
             "Etiquette": """
-                CREATE TABLE Etiquette (
+                CREATE TABLE IF NOT EXISTS Etiquette (
                     id SERIAL PRIMARY KEY,
                     nation_id INTEGER NOT NULL,
                     context TEXT NOT NULL,
