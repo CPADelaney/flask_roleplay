@@ -274,36 +274,39 @@ class MemoryTelemetry:
         Get recent slow operations exceeding the threshold.
         """
         try:
-            # Get database connection using the proper context manager
             async with await get_connection_context() as conn:
-                rows = await conn.fetch("""
+                rows = await conn.fetch(
+                    """
                     SELECT timestamp, operation, duration, data_size, metadata
-                    FROM memory_telemetry
-                    WHERE duration > $1
-                    ORDER BY duration DESC
-                    LIMIT $2
-                """, threshold_ms / 1000.0, limit)
-                
-                result = []
-                for row in rows:
-                    metadata = row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"] or "{}")
-                    result.append({
-                        "timestamp": row["timestamp"].isoformat(),
-                        "operation": row["operation"],
-                        "duration_ms": row["duration"] * 1000,
-                        "data_size": row["data_size"],
-                        "metadata": metadata
-                    })
-                
-                return result
-                
-            finally:
-                # Release connection back to pool
-                await DBConnectionManager.release(conn)
-                
+                      FROM memory_telemetry
+                     WHERE duration > $1
+                  ORDER BY duration DESC
+                     LIMIT $2
+                    """,
+                    threshold_ms / 1000.0,
+                    limit
+                )
+
+            result = []
+            for row in rows:
+                metadata = (
+                    row["metadata"]
+                    if isinstance(row["metadata"], dict)
+                    else json.loads(row["metadata"] or "{}")
+                )
+                result.append({
+                    "timestamp": row["timestamp"].isoformat(),
+                    "operation": row["operation"],
+                    "duration_ms": row["duration"] * 1000,
+                    "data_size": row["data_size"],
+                    "metadata": metadata
+                })
+            return result
+
         except Exception as e:
             logger.error(f"Error getting slow operations: {e}")
             return []
+
     
     @classmethod
     async def cleanup_old_telemetry(cls, days_to_keep: int = 30) -> int:
@@ -311,24 +314,21 @@ class MemoryTelemetry:
         Clean up old telemetry data.
         """
         try:
-            # Get database connection using the proper context manager
             async with await get_connection_context() as conn:
                 cutoff = datetime.now() - timedelta(days=days_to_keep)
-                
-                result = await conn.execute("""
+                result = await conn.execute(
+                    """
                     DELETE FROM memory_telemetry
-                    WHERE timestamp < $1
-                """, cutoff)
-                
-                # Extract number of deleted rows
-                deleted = int(result.split(" ")[-1]) if " " in result else 0
-                
-                return deleted
-                
-            finally:
-                # Release connection back to pool
-                await DBConnectionManager.release(conn)
-                
+                     WHERE timestamp < $1
+                    """,
+                    cutoff
+                )
+
+            # result is something like "DELETE <n>"
+            deleted = int(result.split(" ")[-1]) if " " in result else 0
+            return deleted
+
         except Exception as e:
             logger.error(f"Error cleaning up old telemetry: {e}")
             return 0
+
