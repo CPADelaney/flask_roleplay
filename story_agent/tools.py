@@ -31,12 +31,12 @@ from logic.narrative_progression import (
     add_moment_of_clarity,
     NARRATIVE_STAGES
 )
-from logic.social_links_agentic import (
-    get_social_link,
-    get_relationship_summary,
-    check_for_relationship_crossroads,
-    check_for_relationship_ritual,
-    apply_crossroads_choice
+from logic.social_links import (
+    get_social_link_tool,
+    get_relationship_summary_tool,
+    check_for_crossroads_tool,
+    check_for_ritual_tool,
+    apply_crossroads_choice_tool
 )
 
 # NEW: Context system imports
@@ -428,8 +428,8 @@ async def get_story_state(ctx) -> Dict[str, Any]:
             })
         
         # Check for relationship events
-        crossroads = await check_for_relationship_crossroads(user_id, conversation_id)
-        ritual = await check_for_relationship_ritual(user_id, conversation_id)
+        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
+        ritual = await check_for_ritual_tool(user_id, conversation_id)
         
         # NEW: Get relevant memories
         relevant_memories = []
@@ -556,7 +556,7 @@ async def get_key_npcs(ctx, limit: int = 5) -> List[Dict[str, Any]]:
                 closeness, trust, respect = row['closeness'], row['trust'], row['respect']
                 
                 # Get relationship with player
-                relationship = await get_relationship_summary(
+                relationship = await get_relationship_summary_tool(
                     user_id, conversation_id, 
                     "player", user_id, "npc", npc_id
                 )
@@ -1628,10 +1628,10 @@ async def check_relationship_events(ctx) -> Dict[str, Any]:
     
     try:
         # Check for crossroads
-        crossroads = await check_for_relationship_crossroads(user_id, conversation_id)
+        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
         
         # Check for rituals
-        ritual = await check_for_relationship_ritual(user_id, conversation_id)
+        ritual = await check_for_ritual_tool(user_id, conversation_id)
         
         # NEW: Store this as a memory if crossroads or ritual found
         if (crossroads or ritual) and hasattr(context, 'add_narrative_memory'):
@@ -1667,8 +1667,8 @@ async def check_relationship_events(ctx) -> Dict[str, Any]:
         }
 
 @function_tool
-@track_performance("apply_crossroads_choice")
-async def apply_crossroads_choice(
+@track_performance("apply_crossroads_choice_tool")
+async def apply_crossroads_choice_tool(
     ctx,
     link_id: int,
     crossroads_name: str,
@@ -1690,7 +1690,7 @@ async def apply_crossroads_choice(
     conversation_id = context.conversation_id
     
     try:
-        result = await apply_crossroads_choice(
+        result = await apply_crossroads_choice_tool(
             user_id, conversation_id, link_id, crossroads_name, choice_index
         )
         
@@ -1776,7 +1776,7 @@ async def check_npc_relationship(
     conversation_id = context.conversation_id
     
     try:
-        relationship = await get_relationship_summary(
+        relationship = await get_relationship_summary_tool(
             user_id, conversation_id, 
             "player", user_id, "npc", npc_id
         )
@@ -1791,7 +1791,7 @@ async def check_npc_relationship(
                 )
                 
                 # Fetch again
-                relationship = await get_relationship_summary(
+                relationship = await get_relationship_summary_tool(
                     user_id, conversation_id, 
                     "player", user_id, "npc", npc_id
                 )
@@ -2431,7 +2431,7 @@ narrative_tools = [
     generate_personal_revelation,
     generate_dream_sequence,
     check_relationship_events,
-    apply_crossroads_choice,
+    apply_crossroads_choice_tool,
     check_npc_relationship,
     add_moment_of_clarity,
     get_player_journal_entries
