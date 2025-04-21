@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Set
 import weakref
 
 from nyx.agent_session import NyxAgentSession
-from nyx.nyx_brain import NyxBrain
+from nyx.core.brain.base import NyxBrain
 
 logger = logging.getLogger(__name__)
 
