@@ -10,7 +10,7 @@ from typing import Dict, List, Any, Optional
 from nyx.nyx_governance import AgentType, DirectivePriority
 from nyx.governance_helpers import with_governance
 
-from lore.core.base_manager import BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 from lore.core.registry import ManagerRegistry
 from lore.utils.theming import MatriarchalThemingUtils
 
