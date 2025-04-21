@@ -684,6 +684,216 @@ async def analyze_narrative_and_activity(
             "conflict_progression": []
         }
 
+@function_tool
+@track_performance("get_relationship_summary_wrapper")
+async def get_relationship_summary_wrapper(
+    ctx,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int
+) -> Dict[str, Any]:
+    """
+    Get a summary of a relationship between two entities.
+    
+    Args:
+        entity1_type: Type of the first entity (player, npc)
+        entity1_id: ID of the first entity
+        entity2_type: Type of the second entity (player, npc)
+        entity2_id: ID of the second entity
+        
+    Returns:
+        Relationship summary
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.social_links import get_relationship_summary_tool
+        result = await get_relationship_summary_tool(
+            user_id, conversation_id, 
+            entity1_type, entity1_id, 
+            entity2_type, entity2_id
+        )
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            entity1_name = entity1_type
+            entity2_name = entity2_type
+            
+            if entity1_type == "player":
+                entity1_name = "player"
+            elif entity1_type == "npc":
+                try:
+                    # Try to get NPC name
+                    from logic.relationship_integration import RelationshipIntegration
+                    integration = RelationshipIntegration(user_id, conversation_id)
+                    entity1_name = await integration.get_entity_name(entity1_type, entity1_id)
+                except:
+                    pass
+                    
+            if entity2_type == "player":
+                entity2_name = "player"
+            elif entity2_type == "npc":
+                try:
+                    # Try to get NPC name
+                    from logic.relationship_integration import RelationshipIntegration
+                    integration = RelationshipIntegration(user_id, conversation_id)
+                    entity2_name = await integration.get_entity_name(entity2_type, entity2_id)
+                except:
+                    pass
+            
+            memory_content = f"Retrieved relationship summary between {entity1_name} and {entity2_name}"
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "relationship_analysis",
+                0.4
+            )
+        
+        return result or {
+            "error": "No relationship found",
+            "entity1_type": entity1_type,
+            "entity1_id": entity1_id,
+            "entity2_type": entity2_type,
+            "entity2_id": entity2_id
+        }
+    except Exception as e:
+        logger.error(f"Error getting relationship summary: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "entity1_type": entity1_type,
+            "entity1_id": entity1_id,
+            "entity2_type": entity2_type,
+            "entity2_id": entity2_id
+        }
+
+@function_tool
+@track_performance("update_relationship_dimensions")
+async def update_relationship_dimensions(
+    ctx,
+    link_id: int,
+    dimension_changes: Dict[str, int],
+    reason: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update specific dimensions of a relationship.
+    
+    Args:
+        link_id: ID of the relationship link
+        dimension_changes: Dictionary of dimension changes
+        reason: Reason for the changes
+        
+    Returns:
+        Result of the update
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.relationship_integration import RelationshipIntegration
+        integration = RelationshipIntegration(user_id, conversation_id)
+        
+        result = await integration.update_dimensions(link_id, dimension_changes, reason)
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_content = f"Updated relationship dimensions for link {link_id}: {dimension_changes}"
+            if reason:
+                memory_content += f" Reason: {reason}"
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "relationship_update",
+                0.5
+            )
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error updating relationship dimensions: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "link_id": link_id
+        }
+
+@function_tool
+@track_performance("get_player_relationships")
+async def get_player_relationships(
+    ctx
+) -> Dict[str, Any]:
+    """
+    Get all relationships for the player.
+    
+    Returns:
+        List of player relationships
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.relationship_integration import RelationshipIntegration
+        integration = RelationshipIntegration(user_id, conversation_id)
+        
+        relationships = await integration.get_player_relationships()
+        
+        return {
+            "relationships": relationships,
+            "count": len(relationships)
+        }
+    except Exception as e:
+        logger.error(f"Error getting player relationships: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "relationships": [],
+            "count": 0
+        }
+
+@function_tool
+@track_performance("generate_relationship_evolution")
+async def generate_relationship_evolution(
+    ctx,
+    link_id: int
+) -> Dict[str, Any]:
+    """
+    Generate relationship evolution information.
+    
+    Args:
+        link_id: ID of the relationship link
+        
+    Returns:
+        Relationship evolution information
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.relationship_integration import RelationshipIntegration
+        integration = RelationshipIntegration(user_id, conversation_id)
+        
+        result = await integration.generate_relationship_evolution(link_id)
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_content = f"Generated relationship evolution for link {link_id}"
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "relationship_evolution",
+                0.6
+            )
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error generating relationship evolution: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "link_id": link_id
+        }
+
 # ----- Conflict Tools -----
 
 @function_tool
@@ -2444,4 +2654,14 @@ context_tools = [
     store_narrative_memory,
     search_by_vector,
     get_summarized_narrative_context
+]
+
+relationship_tools = [
+    check_relationship_events,
+    apply_crossroads_choice_tool,
+    check_npc_relationship,
+    get_relationship_summary_wrapper,
+    update_relationship_dimensions,
+    get_player_relationships,
+    generate_relationship_evolution
 ]
