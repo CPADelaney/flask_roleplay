@@ -10,7 +10,7 @@ logger = logging.getLogger("memory_config")
 # Default configuration values
 DEFAULT_CONFIG = {
     "database": {
-        "dsn": os.getenv("DB_DSN")
+        "dsn": os.getenv("DB_DSN") or os.getenv("DATABASE_URL") 
         "min_connections": 5,
         "max_connections": 20,
         "command_timeout": 60,
