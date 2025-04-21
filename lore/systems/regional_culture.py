@@ -25,7 +25,7 @@ from nyx.governance_helpers import with_governance
 
 # ------------------ PROJECT IMPORTS ------------------
 from embedding.vector_store import generate_embedding
-from lore.core.base_manager import BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 from lore.managers.geopolitical import GeopoliticalSystemManager
 from lore.utils.theming import MatriarchalThemingUtils
 from lore.core.cache import GLOBAL_LORE_CACHE
