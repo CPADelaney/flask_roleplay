@@ -248,6 +248,7 @@ class MemoryManager:
     
     async def initialize(self):
         """Initialize the memory manager asynchronously."""
+        with trace(workflow_name="memory_manager_init"):
         async with self._init_lock:
             if self.is_initialized:
                 logger.debug(f"MemoryManager for {self.user_id}:{self.conversation_id} already initialized.")
