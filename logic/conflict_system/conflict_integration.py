@@ -709,5 +709,37 @@ class ConflictSystemIntegration:
             logger.error(f"Error applying conflict rewards: {str(e)}", exc_info=True)
             raise
 
+    @classmethod
+    async def register_enhanced_integration(cls, user_id: int, conversation_id: int):
+        """
+        Register this conflict system integration with the central governance system.
+        
+        Args:
+            user_id: The user ID
+            conversation_id: The conversation ID
+            
+        Returns:
+            The registered ConflictSystemIntegration instance
+        """
+        logger.info(f"Registering conflict system integration for user={user_id}, conversation={conversation_id}")
+        
+        # Get the central governance
+        central_governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create and initialize the integration
+        integration = cls(user_id, conversation_id)
+        await integration.initialize()
+        
+        # Register with governance
+        await central_governance.register_agent_integration(
+            integration.agent_id,
+            AgentType.CONFLICT_ANALYST,
+            integration
+        )
+        
+        logger.info(f"Successfully registered conflict system integration for user={user_id}, conversation={conversation_id}")
+        
+        return integration
+
 # Registration method remains the same
 register_enhanced_integration = ConflictSystemIntegration.register_enhanced_integration
