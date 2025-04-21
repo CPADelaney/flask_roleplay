@@ -10,7 +10,7 @@ logger = logging.getLogger("memory_config")
 # Default configuration values
 DEFAULT_CONFIG = {
     "database": {
-        "dsn": "postgresql://username:password@localhost:5432/memory_db",
+        "dsn": os.getenv("DB_DSN")
         "min_connections": 5,
         "max_connections": 20,
         "command_timeout": 60,
