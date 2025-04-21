@@ -19,7 +19,7 @@ from nyx.governance_helpers import with_governance
 
 # Project imports
 from embedding.vector_store import generate_embedding
-from lore.core.base_manager import BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 from lore.utils.theming import MatriarchalThemingUtils
 
 logger = logging.getLogger(__name__)
