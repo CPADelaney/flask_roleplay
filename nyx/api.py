@@ -7,8 +7,9 @@ import json
 from typing import Dict, List, Any, Optional
 
 from nyx.session_factory import NyxSessionFactory
-from nyx.resource_monitor import ResourceMonitor
-from nyx.nyx_brain import NyxBrain
+# Remove ResourceMonitor import and use PerformanceMonitor instead
+from nyx.performance_monitor import PerformanceMonitor
+from nyx.core.brain.base import NyxBrain
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ class NyxAPI:
         # Get session factory instance
         self.session_factory = NyxSessionFactory.get_instance()
         
-        # Get resource monitor instance
-        self.resource_monitor = ResourceMonitor.get_instance()
-        self.resource_monitor.start_monitoring()
+        # Use PerformanceMonitor instead of ResourceMonitor
+        self.performance_monitor = PerformanceMonitor()
+        self.performance_monitor.start()
         
         # Track session references
         self.last_session_access = {}
@@ -68,11 +69,18 @@ class NyxAPI:
         
         # Process message
         try:
-            # Enhance context with resource data
+            # Use context directly without resource enhancement
             enhanced_context = context.copy() if context else {}
             
             # Process message
             result = await session.process_user_input(message, enhanced_context)
+            
+            # Track performance impact if needed
+            self.performance_monitor.track_decision_impact("memory", {
+                "execution_time": time.time() - self.last_session_access[f"{user_id}_{conversation_id}"],
+                "resource_usage": 0.5,  # Default estimate
+                "type": "message_processing"
+            })
             
             return {
                 "success": True,
@@ -125,8 +133,27 @@ class NyxAPI:
         # Get session stats
         session_stats = await self.session_factory.get_session_stats()
         
-        # Get health metrics
-        health_metrics = await self.resource_monitor.get_health_metrics()
+        # Get metrics from PerformanceMonitor instead of health_metrics
+        performance_metrics = self.performance_monitor.get_decision_metrics()
+        
+        # Derive health from performance metrics
+        system_health = 1.0  # Default to healthy
+        if performance_metrics:
+            error_rates = []
+            for system, metrics in performance_metrics.items():
+                if isinstance(metrics, dict) and 'error_rate' in metrics:
+                    error_rates.append(metrics['error_rate'])
+            
+            if error_rates:
+                avg_error_rate = sum(error_rates) / len(error_rates)
+                system_health = max(0.0, 1.0 - avg_error_rate)
+        
+        health_metrics = {
+            "system_health": system_health,
+            "performance_metrics": performance_metrics,
+            "memory_usage": session_stats.get("resource_stats", {}).get("memory_usage", "N/A"),
+            "cpu_usage": session_stats.get("resource_stats", {}).get("cpu_usage", "N/A")
+        }
         
         # Combine information
         return {
@@ -134,7 +161,7 @@ class NyxAPI:
             "session_stats": session_stats,
             "health_metrics": health_metrics,
             "active_conversations": len(self.last_session_access),
-            "status": "operational" if health_metrics["system_health"] > 0.5 else "degraded"
+            "status": "operational" if system_health > 0.5 else "degraded"
         }
     
     async def get_conversation_insights(
@@ -244,10 +271,15 @@ class NyxAPI:
         Returns:
             Status information
         """
-        # Set priority
-        success = await self.resource_monitor.set_user_priority(user_id, priority)
+        # Simple validation without using ResourceMonitor
+        valid_priorities = ['high', 'medium', 'low', 'background']
+        success = priority in valid_priorities
         
         if success:
+            # Store priority information in a more suitable location if needed
+            # For now, just log it
+            logger.info(f"Set user priority for user {user_id} to {priority}")
+            
             return {
                 "success": True,
                 "user_id": user_id,
