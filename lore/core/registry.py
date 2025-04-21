@@ -7,7 +7,7 @@ import importlib
 import inspect
 from typing import Dict, Any, List, Type, Optional, Callable
 
-from lore.core.base_manager import BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 
 from agents import (
     Agent, function_tool, Runner, trace, GuardrailFunctionOutput, 
