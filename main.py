@@ -412,11 +412,48 @@ def create_quart_app():
     # 4) CORS
     # make sure you have `pip install quart-cors`
     from quart_cors import cors
-    cors(app,
-         allow_origin=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
-         allow_credentials=True,
-         allow_methods="*",
-         allow_headers="*")
+    
+    def parse_cors_origins(origins_str):
+        """Parse comma-separated or JSON-like origins string into a list."""
+        if not origins_str or origins_str == "*":
+            return "*"
+        
+        # Remove any quotes and spaces from the beginning and end
+        cleaned = origins_str.strip('" ')
+        
+        # Try to handle the format "url1","url2","url3"
+        if '","' in cleaned:
+            return [url.strip('" ') for url in cleaned.split('","')]
+        
+        # Handle normal comma-separated format
+        return [url.strip() for url in cleaned.split(',')]
+    
+    origins = parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS", ""))
+    
+    # If origins is still empty after parsing, use a default
+    if not origins or origins == [""]:
+        # For development, you might want to use localhost
+        origins = ["http://localhost:3000", "https://nyx-m85p.onrender.com"]
+        # Log a warning
+        logger.warning(f"No valid CORS origins found in environment. Using defaults: {origins}")
+    
+    # Configure CORS - if using specific origins, don't use wildcard
+    if origins == "*":
+        # When using wildcard, cannot use credentials
+        cors(app,
+             allow_origin="*",
+             allow_credentials=False,  # Must be False with wildcard
+             allow_methods="*",
+             allow_headers="*")
+        logger.info("CORS configured with wildcard origin (credentials disabled)")
+    else:
+        # When using specific origins, can use credentials
+        cors(app,
+             allow_origin=origins,
+             allow_credentials=True,
+             allow_methods="*",
+             allow_headers="*")
+        logger.info(f"CORS configured with specific origins: {origins}")
 
 
     # 5) Socket.IO event handlers
