@@ -860,14 +860,14 @@ async def create_all_tables():
                     -- Foreign key constraints
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                );
                 
                 -- Create indices for frequently queried columns
                 CREATE INDEX IF NOT EXISTS player_journal_user_conversation_idx ON PlayerJournal(user_id, conversation_id);
                 CREATE INDEX IF NOT EXISTS player_journal_importance_idx ON PlayerJournal(importance);
                 CREATE INDEX IF NOT EXISTS player_journal_created_at_idx ON PlayerJournal(created_at);
                 CREATE INDEX IF NOT EXISTS player_journal_entry_type_idx ON PlayerJournal(entry_type);
-                '''
+                );
+                ''',
                 CREATE TABLE IF NOT EXISTS NPCEvolution (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
