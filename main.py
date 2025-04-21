@@ -849,7 +849,7 @@ def create_quart_app():
 
 
         # --- Redis Check (Sync - consider async if heavily used) ---
-        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_host = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
         redis_port = int(os.getenv("REDIS_PORT", 6379))
         try:
             # Use short timeout for readiness check
