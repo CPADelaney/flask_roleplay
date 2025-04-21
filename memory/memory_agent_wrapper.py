@@ -76,9 +76,16 @@ class MemoryAgentWrapper:
 
     async def _run(self, input_msg: Dict[str, Any], *, trace_meta: dict[str, Any] | None = None):
         """Thin wrapper around :pyfunc:`Runner.run` that sets trace data."""
-        # Convert entity_id to string in trace_meta if it exists
-        if trace_meta and 'entity_id' in trace_meta:
-            trace_meta['entity_id'] = str(trace_meta['entity_id'])
+        # Convert all numeric values to strings in trace_meta
+        if trace_meta:
+            for key, value in list(trace_meta.items()):
+                if isinstance(value, (int, float)):
+                    trace_meta[key] = str(value)
+        
+        return await Runner.run(
+            self.agent, [input_msg], context=self.context,
+            run_config=RunConfig(trace_metadata=trace_meta or {})
+        )
         
         return await Runner.run(
             self.agent, [input_msg], context=self.context,
