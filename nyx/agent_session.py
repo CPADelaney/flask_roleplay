@@ -639,25 +639,25 @@ class NyxAgentSession:
         
         return safe_result
         
-     async def validate_action(self, action_type: str, action_data: Dict[str, Any]) -> bool:
-            """Validate critical actions with the brain before execution."""
-            try:
-                # Get validation from brain
-                validation_result = await self._brain_request(
-                    "validate_action",
-                    {
-                        "session_id": self.session_id,
-                        "action_type": action_type,
-                        "action_data": action_data,
-                        "timestamp": datetime.datetime.now().isoformat()
-                    }
-                )
-                
-                return validation_result.get("valid", False)
-            except Exception as e:
-                logger.error(f"Error validating action with brain: {e}")
-                # Default to rejecting the action if validation fails
-                return False
+    async def validate_action(self, action_type: str, action_data: Dict[str, Any]) -> bool:
+        """Validate critical actions with the brain before execution."""
+        try:
+            # Get validation from brain
+            validation_result = await self._brain_request(
+                "validate_action",
+                {
+                    "session_id": self.session_id,
+                    "action_type": action_type,
+                    "action_data": action_data,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            )
+            
+            return validation_result.get("valid", False)
+        except Exception as e:
+            logger.error(f"Error validating action with brain: {e}")
+            # Default to rejecting the action if validation fails
+            return False
 
     async def _safe_brain_request(self, method: str, data: Dict[str, Any]) -> Any:
         """Make a brain request with error handling."""
