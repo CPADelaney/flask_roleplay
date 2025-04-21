@@ -209,6 +209,48 @@ class UnifiedCache:
         self.last_cleanup = now
         asyncio.create_task(self._cleanup())
 
+    async def get(
+        self,
+        key: str,
+        fetch_func: Callable,
+        cache_level: int = 1,
+        importance: float = 0.5,
+        ttl_override: Optional[int] = None
+    ) -> Any:
+        """Get an item from cache or fetch it if not present."""
+        request = CacheOperationRequest(
+            key=key,
+            cache_level=cache_level,
+            importance=importance,
+            ttl_override=ttl_override
+        )
+        return await self._get_item(request, fetch_func)
+    
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        cache_level: int = 1,
+        importance: float = 0.5,
+        ttl_override: Optional[int] = None
+    ) -> bool:
+        """Set an item in the cache."""
+        request = CacheOperationRequest(
+            key=key,
+            cache_level=cache_level,
+            importance=importance,
+            ttl_override=ttl_override
+        )
+        return await self._set_item(request, value)
+    
+    async def delete(
+        self,
+        key_prefix: Optional[str] = None
+    ) -> int:
+        """Delete cache entries matching the key prefix."""
+        request = CacheInvalidateRequest(key_prefix=key_prefix)
+        return await self._invalidate(request)
+
     def _get_cache_by_level(self, level: int) -> Dict[str, "CacheItem"]:
         """Get cache dictionary by level."""
         if level == 1:
