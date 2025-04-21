@@ -249,35 +249,35 @@ class MemoryManager:
     async def initialize(self):
         """Initialize the memory manager asynchronously."""
         with trace(workflow_name="memory_manager_init"):
-        async with self._init_lock:
-            if self.is_initialized:
-                logger.debug(f"MemoryManager for {self.user_id}:{self.conversation_id} already initialized.")
-                return
-                
-            logger.info(f"Initializing MemoryManager for {self.user_id}:{self.conversation_id}...")
-            try:
-                # Get config using the async method
-                self.config = await get_config()
-                
-                # Initialize Vector Service if needed
-                if self.config.is_enabled("use_vector_search"):
-                    self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-                    logger.info("Vector service initialized for MemoryManager.")
-
-                # Initialize Nyx integration
-                await self._initialize_nyx_integration(self.user_id, self.conversation_id)
-
-                # Load important memories from DB into cache
-                await self._load_important_memories()
-
-                # Build memory indices from the loaded cache
-                self._build_memory_indices()
-
-                self.is_initialized = True
-                logger.info(f"MemoryManager initialized successfully for {self.user_id}:{self.conversation_id}.")
-            except Exception as e:
-                logger.exception(f"Error initializing memory manager for {self.user_id}:{self.conversation_id}: {e}")
-                raise
+            async with self._init_lock:
+                if self.is_initialized:
+                    logger.debug(f"MemoryManager for {self.user_id}:{self.conversation_id} already initialized.")
+                    return
+                    
+                logger.info(f"Initializing MemoryManager for {self.user_id}:{self.conversation_id}...")
+                try:
+                    # Get config using the async method
+                    self.config = await get_config()
+                    
+                    # Initialize Vector Service if needed
+                    if self.config.is_enabled("use_vector_search"):
+                        self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+                        logger.info("Vector service initialized for MemoryManager.")
+    
+                    # Initialize Nyx integration
+                    await self._initialize_nyx_integration(self.user_id, self.conversation_id)
+    
+                    # Load important memories from DB into cache
+                    await self._load_important_memories()
+    
+                    # Build memory indices from the loaded cache
+                    self._build_memory_indices()
+    
+                    self.is_initialized = True
+                    logger.info(f"MemoryManager initialized successfully for {self.user_id}:{self.conversation_id}.")
+                except Exception as e:
+                    logger.exception(f"Error initializing memory manager for {self.user_id}:{self.conversation_id}: {e}")
+                    raise
 
     async def _initialize_nyx_integration(self, user_id: int, conversation_id: int):
         """Initialize Nyx governance integration asynchronously."""
