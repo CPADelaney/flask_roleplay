@@ -158,8 +158,8 @@ class StoryDirectorContext:
     def __post_init__(self):
         """Synchronous post-init; cannot contain 'await'."""
         if not self.conflict_manager:
-            from logic.conflict_system.conflict_manager import ConflictManager
-            self.conflict_manager = ConflictManager(self.user_id, self.conversation_id)
+            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+            self.conflict_manager = ConflictSystemIntegration(self.user_id, self.conversation_id)
         if not self.resource_manager:
             from logic.resource_management import ResourceManager
             self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
