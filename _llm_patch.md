@@ -1,0 +1,1 @@
+I’m ready to draft minimal, high‐impact diffs, but I don’t see the specific lint errors or code snippets. Could you please paste in the reported lint issues and the relevant code contexts so I can propose concrete patches?
