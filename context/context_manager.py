@@ -589,7 +589,6 @@ def prioritize_context_tool(
 
 def create_context_manager_agent() -> Agent:
     """Create an agent for the context manager"""
-    context_manager = ContextManager()
     
     # Create an agent for the context manager
     agent = Agent(
@@ -606,10 +605,10 @@ def create_context_manager_agent() -> Agent:
         efficient use of the token budget.
         """,
         tools=[
-            context_manager.get_context,
-            context_manager.update_context,
-            context_manager.apply_targeted_change,
-            context_manager._prioritize_context,
+            get_context_tool,
+            update_context_tool,
+            apply_targeted_change_tool,
+            prioritize_context_tool,
         ]
     )
     
