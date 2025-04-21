@@ -292,36 +292,38 @@ async def initialize_systems(app):
         print(">>> NyxBrain MRO:", NyxBrain.__mro__)
 
         try:
-
             system_user_id = 0
             system_conversation_id = 0
             
-            # In main.py, right before the line causing the error
-            print(f"NyxBrain dir: {dir(NyxBrain)}")
-            print(f"Does NyxBrain have get_instance? {'get_instance' in dir(NyxBrain)}") 
+            # Check if get_instance method exists before trying to use it
+            if hasattr(NyxBrain, "get_instance"):
+                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+                await app.nyx_brain.initialize()
+                logger.info("Global NyxBrain instance initialized.")
             
-            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-            await app.nyx_brain.initialize()
-            logger.info("Global NyxBrain instance initialized.")
-        
-            # RESTORE ONLY FROM THE DISTRIBUTED CHECKPOINT LOGIC:
-            await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+                # RESTORE ONLY FROM THE DISTRIBUTED CHECKPOINT LOGIC:
+                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+                    
+                asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))          
                 
-            asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))          
-            
-            # Register processors (ensure handlers are async)
-            from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-            
-            app.nyx_brain.response_processors = {
-                "default": background_chat_task, # Use the main background task
-                "openai": process_user_input_with_openai, # Assuming async
-                "base": process_user_input # Assuming async
-            }
-            logger.info("Response processors registered with NyxBrain.")
+                # Register processors (ensure handlers are async)
+                from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+                
+                app.nyx_brain.response_processors = {
+                    "default": background_chat_task,
+                    "openai": process_user_input_with_openai,
+                    "base": process_user_input
+                }
+                logger.info("Response processors registered with NyxBrain.")
+            else:
+                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
+                app.nyx_brain = None
         except ImportError as e:
              logger.error(f"Could not import NyxBrain: {e}. Skipping init.")
+             app.nyx_brain = None
         except Exception as e:
-             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)     
+             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
+             app.nyx_brain = None
 
         # MCP orchestrator (assuming async)
         try:
