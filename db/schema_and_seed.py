@@ -834,22 +834,39 @@ async def create_all_tables():
                 );
                 ''',
                 # ---------- ENHANCED SYSTEMS ----------
-                '''
                 CREATE TABLE IF NOT EXISTS PlayerJournal (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
                     conversation_id INTEGER NOT NULL,
                     entry_type TEXT NOT NULL,
                     entry_text TEXT NOT NULL,
+                    
+                    -- Original additional columns
                     revelation_types TEXT,
                     narrative_moment TEXT,
                     fantasy_flag BOOLEAN DEFAULT FALSE,
                     intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    -- Required columns for MemoryManager
+                    entry_metadata JSONB DEFAULT '{}',
+                    importance FLOAT DEFAULT 0.5,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSONB DEFAULT '[]',
+                    consolidated BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    -- Foreign key constraints
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
-                ''',
+                
+                -- Create indices for frequently queried columns
+                CREATE INDEX IF NOT EXISTS player_journal_user_conversation_idx ON PlayerJournal(user_id, conversation_id);
+                CREATE INDEX IF NOT EXISTS player_journal_importance_idx ON PlayerJournal(importance);
+                CREATE INDEX IF NOT EXISTS player_journal_created_at_idx ON PlayerJournal(created_at);
+                CREATE INDEX IF NOT EXISTS player_journal_entry_type_idx ON PlayerJournal(entry_type);
                 '''
                 CREATE TABLE IF NOT EXISTS NPCEvolution (
                     id SERIAL PRIMARY KEY,
