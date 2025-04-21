@@ -20,7 +20,7 @@ from agents.run_context import RunContextWrapper
 from agents.run import RunConfig
 
 # Project-specific import
-from lore.core.base_manager import BaseLoreManager
+from lore.managers.base_manager import BaseLoreManager
 
 # Define Pydantic models for structured outputs
 class PowerHierarchy(BaseModel):
