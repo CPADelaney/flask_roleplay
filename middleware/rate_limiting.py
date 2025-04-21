@@ -63,16 +63,15 @@ class RateLimiter:
         self.local_buckets: Dict[str, TokenBucket] = {}
         self.lock = threading.Lock()
 
-    # --- Made Synchronous ---
     def _get_redis(self) -> Optional[redis.Redis]:
         """Get or create Redis connection (synchronous)."""
         try:
             if not hasattr(g, 'rate_limit_redis'):
-                redis_url = current_app.config.get('REDIS_URL', 'redis://localhost:6379/0')
-                # Use decode_responses=True for easier handling later
+                # Use os.environ directly to get REDIS_URL as a fallback
+                redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
                 g.rate_limit_redis = redis.from_url(redis_url, decode_responses=True)
                 g.rate_limit_redis.ping() # Test connection
-                logger.debug("Redis connection established for RateLimiter")
+                logger.debug(f"Redis connection established for RateLimiter using {redis_url}")
             return g.rate_limit_redis
         except redis.RedisError as e:
             logger.error(f"Failed to connect to Redis for RateLimiter: {e}")
@@ -354,10 +353,11 @@ class IPBlockList:
         try:
             # Use a different key for g to avoid conflicts if needed
             if not hasattr(g, 'ip_block_redis_conn'):
-                redis_url = current_app.config.get('REDIS_URL', 'redis://localhost:6379/0')
+                # Use os.environ directly to get REDIS_URL as a fallback
+                redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
                 g.ip_block_redis_conn = redis.from_url(redis_url, decode_responses=True)
                 g.ip_block_redis_conn.ping() # Test connection
-                logger.debug("Redis connection established for IPBlockList")
+                logger.debug(f"Redis connection established for IPBlockList using {redis_url}")
             return g.ip_block_redis_conn
         except redis.RedisError as e:
             logger.error(f"Failed to connect to Redis for IPBlockList: {e}")
