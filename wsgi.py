@@ -28,13 +28,4 @@ logging.info("Creating quart app instance...")
 app = create_quart_app()
 logging.info("quart app instance created.")
 
-app = cors(
-  app,
-  allow_origin="*",           # or a list/pattern of origins
-  allow_credentials=True,     # optional
-  allow_methods="*",          # optional
-  allow_headers="*"           # optional
-)
-
-
 logging.info("wsgi.py loaded successfully.")
