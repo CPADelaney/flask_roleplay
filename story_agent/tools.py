@@ -320,6 +320,521 @@ async def get_summarized_narrative_context(
             "arcs": []
         }
 
+@function_tool
+@track_performance("analyze_activity")
+async def analyze_activity(
+    ctx,
+    activity_text: str,
+    setting_context: Optional[str] = None,
+    apply_effects: bool = False
+) -> Dict[str, Any]:
+    """
+    Analyze an activity to determine its resource effects.
+    
+    Args:
+        activity_text: Description of the activity
+        setting_context: Optional context about the current setting
+        apply_effects: Whether to immediately apply the determined effects
+        
+    Returns:
+        Dict with activity analysis and effects
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.activity_analyzer import ActivityAnalyzer
+        analyzer = ActivityAnalyzer(user_id, conversation_id)
+        
+        result = await analyzer.analyze_activity(activity_text, setting_context, apply_effects)
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            effects_description = []
+            for resource_type, value in result.get("effects", {}).items():
+                if value:
+                    direction = "increased" if value > 0 else "decreased"
+                    effects_description.append(f"{resource_type} {direction} by {abs(value)}")
+                    
+            effects_text = ", ".join(effects_description) if effects_description else "no significant effects"
+            
+            memory_content = (
+                f"Analyzed activity: {activity_text[:100]}... with effects: {effects_text}"
+            )
+            
+            await context.add_narrative_memory(
+                memory_content,
+                "activity_analysis",
+                0.5
+            )
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error analyzing activity: {str(e)}", exc_info=True)
+        return {
+            "activity_type": "unknown",
+            "activity_details": "",
+            "effects": {},
+            "description": f"Error analyzing activity: {str(e)}",
+            "error": str(e)
+        }
+
+@function_tool
+@track_performance("get_filtered_activities")
+async def get_filtered_activities(
+    ctx,
+    npc_archetypes: List[str] = [],
+    meltdown_level: int = 0,
+    setting: str = ""
+) -> List[Dict[str, Any]]:
+    """
+    Get a list of activities filtered by NPC archetypes, meltdown level, and setting.
+    
+    Args:
+        npc_archetypes: List of NPC archetypes (e.g., "Giantess", "Mommy Domme")
+        meltdown_level: Meltdown level (0-5)
+        setting: Current setting/location
+        
+    Returns:
+        List of filtered activities
+    """
+    try:
+        from logic.activities_logic import filter_activities_for_npc
+        
+        # Get user stats for better filtering
+        user_stats = None
+        if hasattr(ctx.context, 'resource_manager'):
+            try:
+                resources = await ctx.context.resource_manager.get_resources()
+                vitals = await ctx.context.resource_manager.get_vitals()
+                
+                user_stats = {
+                    **resources,
+                    **vitals
+                }
+            except Exception as stats_error:
+                logger.warning(f"Could not get user stats: {stats_error}")
+        
+        activities = await filter_activities_for_npc(
+            npc_archetypes=npc_archetypes,
+            meltdown_level=meltdown_level,
+            user_stats=user_stats,
+            setting=setting
+        )
+        
+        # Build short summaries for easy reference
+        from logic.activities_logic import build_short_summary
+        
+        for activity in activities:
+            activity["short_summary"] = build_short_summary(activity)
+        
+        return activities
+    except Exception as e:
+        logger.error(f"Error getting filtered activities: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+@track_performance("apply_activity_effects")
+async def apply_activity_effects(
+    ctx,
+    activity_text: str,
+    effects: Optional[Dict[str, int]] = None
+) -> Dict[str, Any]:
+    """
+    Apply the effects of an activity to player resources.
+    
+    Args:
+        activity_text: Description of the activity
+        effects: Optional pre-determined effects to apply
+        
+    Returns:
+        Dict with the results of applying effects
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.activity_analyzer import ActivityAnalyzer
+        analyzer = ActivityAnalyzer(user_id, conversation_id)
+        
+        if effects:
+            # Apply provided effects
+            results = await analyzer._apply_resource_effects(effects)
+            
+            # Store this as a memory if possible
+            if hasattr(context, 'add_narrative_memory'):
+                effects_description = []
+                for resource_type, value in effects.items():
+                    if value:
+                        direction = "increased" if value > 0 else "decreased"
+                        effects_description.append(f"{resource_type} {direction} by {abs(value)}")
+                        
+                effects_text = ", ".join(effects_description) if effects_description else "no effects"
+                
+                memory_content = (
+                    f"Applied effects to activity: {activity_text[:100]}... with {effects_text}"
+                )
+                
+                await context.add_narrative_memory(
+                    memory_content,
+                    "activity_effects",
+                    0.6
+                )
+            
+            return {
+                "activity_text": activity_text,
+                "effects_applied": effects,
+                "results": results,
+                "success": True
+            }
+        else:
+            # Analyze and apply
+            result = await analyzer.analyze_activity(activity_text, apply_effects=True)
+            
+            # Store this as a memory if possible
+            if hasattr(context, 'add_narrative_memory'):
+                memory_content = (
+                    f"Analyzed and applied effects for activity: {activity_text[:100]}..."
+                )
+                
+                await context.add_narrative_memory(
+                    memory_content,
+                    "activity_effects",
+                    0.6
+                )
+            
+            return result
+    except Exception as e:
+        logger.error(f"Error applying activity effects: {str(e)}", exc_info=True)
+        return {
+            "activity_text": activity_text,
+            "effects_applied": {},
+            "results": {},
+            "success": False,
+            "error": str(e)
+        }
+
+@function_tool
+@track_performance("analyze_activity_impact")
+async def analyze_activity_impact(
+    ctx,
+    activity_text: str,
+    check_conflicts: bool = True,
+    check_relationships: bool = True
+) -> Dict[str, Any]:
+    """
+    Analyze the comprehensive impact of an activity across multiple systems.
+    
+    Args:
+        activity_text: Description of the activity
+        check_conflicts: Whether to check impact on active conflicts
+        check_relationships: Whether to check impact on relationships
+        
+    Returns:
+        Dict with comprehensive impact analysis
+    """
+    context = ctx.context
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    
+    try:
+        from logic.activity_analyzer import ActivityAnalyzer
+        analyzer = ActivityAnalyzer(user_id, conversation_id)
+        
+        # Analyze basic effects
+        base_analysis = await analyzer.analyze_activity(activity_text, apply_effects=False)
+        
+        results = {
+            "resource_effects": base_analysis.get("effects", {}),
+            "description": base_analysis.get("description", ""),
+            "conflict_impacts": [],
+            "relationship_impacts": []
+        }
+        
+        # Check impact on conflicts if requested
+        if check_conflicts and hasattr(context, 'conflict_manager'):
+            try:
+                conflict_manager = context.conflict_manager
+                active_conflicts = await conflict_manager.get_active_conflicts()
+                
+                for conflict in active_conflicts:
+                    # Simple relevance check - see if keywords from conflict appear in activity
+                    conflict_keywords = [
+                        conflict.get('conflict_name', ''),
+                        conflict.get('faction_a_name', ''),
+                        conflict.get('faction_b_name', '')
+                    ]
+                    
+                    # Filter out empty keywords
+                    conflict_keywords = [k for k in conflict_keywords if k]
+                    
+                    relevant = False
+                    matching_keywords = []
+                    
+                    for keyword in conflict_keywords:
+                        if keyword.lower() in activity_text.lower():
+                            relevant = True
+                            matching_keywords.append(keyword)
+                    
+                    if relevant:
+                        # Determine an approximate impact
+                        impact_level = 1  # Default low impact
+                        
+                        # Increase impact if resource effects are significant
+                        resource_sum = sum(abs(effect) for effect in base_analysis.get("effects", {}).values())
+                        if resource_sum > 20:
+                            impact_level = 3  # High impact
+                        elif resource_sum > 10:
+                            impact_level = 2  # Medium impact
+                        
+                        # Add to results
+                        results["conflict_impacts"].append({
+                            "conflict_id": conflict.get('conflict_id'),
+                            "conflict_name": conflict.get('conflict_name', ''),
+                            "is_relevant": True,
+                            "matching_keywords": matching_keywords,
+                            "estimated_impact_level": impact_level,
+                            "suggested_progress_change": impact_level * 2  # Simple formula for progress impact
+                        })
+            except Exception as conflict_error:
+                logger.warning(f"Error checking conflict impacts: {conflict_error}")
+        
+        # Check impact on relationships if requested
+        if check_relationships:
+            try:
+                # Try to extract NPCs mentioned in the activity
+                from db.connection import get_db_connection_context
+                
+                async with get_db_connection_context() as conn:
+                    npcs = await conn.fetch("""
+                        SELECT npc_id, npc_name
+                        FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                    """, user_id, conversation_id)
+                    
+                    # Check which NPCs are mentioned in the activity
+                    mentioned_npcs = []
+                    for npc in npcs:
+                        npc_name = npc['npc_name']
+                        if npc_name and npc_name.lower() in activity_text.lower():
+                            mentioned_npcs.append({
+                                "npc_id": npc['npc_id'],
+                                "npc_name": npc_name
+                            })
+                    
+                    # For each mentioned NPC, estimate relationship impact
+                    for npc in mentioned_npcs:
+                        # Simple impact estimation
+                        impact_level = 1  # Default low impact
+                        
+                        # Check for keywords that might indicate stronger relationship impact
+                        if any(word in activity_text.lower() for word in ["help", "assist", "support", "gift"]):
+                            impact_level = 2  # Positive impact
+                        elif any(word in activity_text.lower() for word in ["refuse", "reject", "ignore", "insult"]):
+                            impact_level = -2  # Negative impact
+                        
+                        results["relationship_impacts"].append({
+                            "npc_id": npc["npc_id"],
+                            "npc_name": npc["npc_name"],
+                            "estimated_impact": impact_level,
+                            "suggested_relationship_change": impact_level * 3  # Simple formula for relationship impact
+                        })
+            except Exception as relationship_error:
+                logger.warning(f"Error checking relationship impacts: {relationship_error}")
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_content = (
+                f"Analyzed comprehensive impact of activity: {activity_text[:100]}..."
+            )
+            
+            await context.add_narrative_memory(
+                memory_content,
+                "activity_impact_analysis",
+                0.6
+            )
+        
+        return results
+    except Exception as e:
+        logger.error(f"Error analyzing activity impact: {str(e)}", exc_info=True)
+        return {
+            "resource_effects": {},
+            "description": f"Error analyzing activity impact: {str(e)}",
+            "conflict_impacts": [],
+            "relationship_impacts": [],
+            "error": str(e)
+        }
+
+@function_tool
+@track_performance("get_all_activities")
+async def get_all_activities(ctx) -> List[Dict[str, Any]]:
+    """
+    Get a list of all available activities from the database.
+    
+    Returns:
+        List of all activities
+    """
+    try:
+        from logic.activities_logic import get_all_activities as get_activities
+        
+        activities = await get_activities()
+        
+        # Build short summaries for easy reference
+        from logic.activities_logic import build_short_summary
+        
+        for activity in activities:
+            activity["short_summary"] = build_short_summary(activity)
+        
+        return activities
+    except Exception as e:
+        logger.error(f"Error getting all activities: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+@track_performance("generate_activity_suggestion")
+async def generate_activity_suggestion(
+    ctx,
+    npc_name: str,
+    intensity_level: int = 2,
+    archetypes: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Generate a suggested activity for an NPC interaction based on archetypes and intensity.
+    
+    Args:
+        npc_name: Name of the NPC
+        intensity_level: Desired intensity level (1-5)
+        archetypes: Optional list of NPC archetypes
+        
+    Returns:
+        Dict with suggested activity details
+    """
+    context = ctx.context
+    
+    try:
+        # If no archetypes provided, try to get them from NPC info
+        if not archetypes and hasattr(context, 'conflict_manager'):
+            try:
+                from db.connection import get_db_connection_context
+                
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow("""
+                        SELECT archetype
+                        FROM NPCStats
+                        WHERE npc_name=$1 AND user_id=$2 AND conversation_id=$3
+                    """, npc_name, context.user_id, context.conversation_id)
+                    
+                    if row and row['archetype']:
+                        if isinstance(row['archetype'], str):
+                            try:
+                                archetype_data = json.loads(row['archetype'])
+                                if isinstance(archetype_data, list):
+                                    archetypes = archetype_data
+                                elif isinstance(archetype_data, dict) and "types" in archetype_data:
+                                    archetypes = archetype_data["types"]
+                            except:
+                                # If not valid JSON, treat as single archetype
+                                archetypes = [row['archetype']]
+                        else:
+                            # Assume it's already a list or dict
+                            if isinstance(row['archetype'], list):
+                                archetypes = row['archetype']
+                            elif isinstance(row['archetype'], dict) and "types" in row['archetype']:
+                                archetypes = row['archetype']["types"]
+            except Exception as archetype_error:
+                logger.warning(f"Error getting NPC archetypes: {archetype_error}")
+        
+        # Default archetypes if still none
+        if not archetypes:
+            archetypes = ["Dominance", "Femdom"]
+        
+        # Get setting
+        setting = "Default"
+        if hasattr(context, 'get_comprehensive_context'):
+            try:
+                comprehensive_context = await context.get_comprehensive_context()
+                current_location = comprehensive_context.get("current_location")
+                if current_location:
+                    setting = current_location
+            except Exception as context_error:
+                logger.warning(f"Error getting location from context: {context_error}")
+        
+        # Get filtered activities
+        from logic.activities_logic import filter_activities_for_npc, build_short_summary
+        
+        activities = await filter_activities_for_npc(
+            npc_archetypes=archetypes,
+            meltdown_level=max(0, intensity_level-1),  # Convert 1-5 to 0-4
+            setting=setting
+        )
+        
+        if not activities:
+            # Fallback - get all activities
+            from logic.activities_logic import get_all_activities as get_activities
+            activities = await get_activities()
+            
+            # Just take a random sample
+            import random
+            activities = random.sample(activities, min(3, len(activities)))
+        
+        # Select one activity
+        import random
+        selected_activity = random.choice(activities) if activities else None
+        
+        if not selected_activity:
+            return {
+                "npc_name": npc_name,
+                "success": False,
+                "error": "No suitable activities found"
+            }
+        
+        # Get the appropriate intensity tier based on level
+        intensity_tiers = selected_activity.get("intensity_tiers", [])
+        tier_text = ""
+        
+        if intensity_tiers:
+            # Adjust for 1-indexed intensity
+            idx = min(intensity_level - 1, len(intensity_tiers) - 1)
+            idx = max(0, idx)  # Ensure non-negative
+            tier_text = intensity_tiers[idx]
+        
+        # Build a suggestion
+        suggestion = {
+            "npc_name": npc_name,
+            "activity_name": selected_activity.get("name", ""),
+            "purpose": selected_activity.get("purpose", [])[0] if selected_activity.get("purpose") else "",
+            "intensity_tier": tier_text,
+            "intensity_level": intensity_level,
+            "short_summary": build_short_summary(selected_activity),
+            "archetypes_used": archetypes,
+            "setting": setting,
+            "success": True
+        }
+        
+        # Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_content = (
+                f"Generated activity suggestion for {npc_name}: {suggestion['activity_name']} "
+                f"(Intensity: {intensity_level})"
+            )
+            
+            await context.add_narrative_memory(
+                memory_content,
+                "activity_suggestion",
+                0.5
+            )
+        
+        return suggestion
+    except Exception as e:
+        logger.error(f"Error generating activity suggestion: {str(e)}", exc_info=True)
+        return {
+            "npc_name": npc_name,
+            "success": False,
+            "error": str(e)
+        }
+
 # ----- Story State Tools -----
 
 @function_tool
@@ -2664,4 +3179,13 @@ relationship_tools = [
     update_relationship_dimensions,
     get_player_relationships,
     generate_relationship_evolution
+]
+
+activity_tools = [
+    analyze_activity,
+    get_filtered_activities,
+    apply_activity_effects,
+    analyze_activity_impact,
+    get_all_activities,
+    generate_activity_suggestion
 ]
