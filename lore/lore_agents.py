@@ -55,7 +55,7 @@ from .lore_system import LoreSystem
 from .lore_validation import LoreValidator
 from .error_handler import ErrorHandler
 from .lore_cache_manager import LoreCacheManager
-from .base_manager import BaseManager
+from lore.managers.base_manager import BaseLoreManager
 from .resource_manager import resource_manager
 from .dynamic_lore_generator import DynamicLoreGenerator
 from .unified_validation import ValidationManager
