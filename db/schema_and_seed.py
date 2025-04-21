@@ -463,7 +463,8 @@ async def create_all_tables():
                   climate TEXT,
                   resources JSONB,
                   strategic_value INT,
-                  matriarchal_influence FLOAT DEFAULT 0.0
+                  matriarchal_influence FLOAT DEFAULT 0.0,
+                  embedding VECTOR(1536)
                 );
                 ''',
                 '''
