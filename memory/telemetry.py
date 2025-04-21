@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 
 from .connection import DBConnectionManager
 
+from memory.connection import get_connection_context
+
 logger = logging.getLogger("memory_telemetry")
 
 class MemoryTelemetry:
@@ -151,35 +153,28 @@ class MemoryTelemetry:
             return
             
         try:
-            # Get database connection
-            conn = await DBConnectionManager.acquire()
-            
-            try:
-                # Start transaction
-                async with conn.transaction():
-                    # Insert records in batch
-                    await conn.executemany("""
-                        INSERT INTO memory_telemetry 
-                        (timestamp, operation, success, duration, data_size, error, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    """, [
-                        (
-                            record["timestamp"],
-                            record["operation"],
-                            record["success"],
-                            record["duration"],
-                            record["data_size"],
-                            record["error"],
-                            json.dumps(record["metadata"])
-                        )
-                        for record in batch
-                    ])
+            # Get database connection using the proper context manager
+            async with await get_connection_context() as conn:
+                # No need to start a transaction explicitly - use the connection directly
+                # Insert records in batch
+                await conn.executemany("""
+                    INSERT INTO memory_telemetry 
+                    (timestamp, operation, success, duration, data_size, error, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, [
+                    (
+                        record["timestamp"],
+                        record["operation"],
+                        record["success"],
+                        record["duration"],
+                        record["data_size"],
+                        record["error"],
+                        json.dumps(record["metadata"])
+                    )
+                    for record in batch
+                ])
                 
                 logger.debug(f"Flushed {len(batch)} telemetry records to database")
-                
-            finally:
-                # Release connection back to pool
-                await DBConnectionManager.release(conn)
                 
         except Exception as e:
             logger.error(f"Error flushing telemetry batch: {e}")
@@ -190,10 +185,8 @@ class MemoryTelemetry:
         Get metrics for recent operations.
         """
         try:
-            # Get database connection
-            conn = await DBConnectionManager.acquire()
-            
-            try:
+            # Get database connection using the proper context manager
+            async with await get_connection_context() as conn:
                 cutoff = datetime.now() - timedelta(minutes=time_window_minutes)
                 
                 # Get operation counts
@@ -285,10 +278,8 @@ class MemoryTelemetry:
         Get recent slow operations exceeding the threshold.
         """
         try:
-            # Get database connection
-            conn = await DBConnectionManager.acquire()
-            
-            try:
+            # Get database connection using the proper context manager
+            async with await get_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT timestamp, operation, duration, data_size, metadata
                     FROM memory_telemetry
@@ -324,10 +315,8 @@ class MemoryTelemetry:
         Clean up old telemetry data.
         """
         try:
-            # Get database connection
-            conn = await DBConnectionManager.acquire()
-            
-            try:
+            # Get database connection using the proper context manager
+            async with await get_connection_context() as conn:
                 cutoff = datetime.now() - timedelta(days=days_to_keep)
                 
                 result = await conn.execute("""
