@@ -1358,19 +1358,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         await self.replay_events(since_time=since)
 
     @classmethod
-    async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
+    async def get_instance(cls, user_id: int, conversation_id: int, nyx_id=None) -> 'NyxBrain':
         """
         Get or create a singleton instance for the specified user and conversation.
         
         Args:
             user_id: User ID
             conversation_id: Conversation ID
+            nyx_id: Optional Nyx ID
             
         Returns:
             Brain instance
         """
-        # Use a key for the specific user/conversation
-        key = f"brain_{user_id}_{conversation_id}"
+        # Use a key for the specific user/conversation or nyx_id if provided
+        key = f"brain_{nyx_id}" if nyx_id else f"brain_{user_id}_{conversation_id}"
         
         # Check if instance exists in a global registry
         if not hasattr(cls, '_instances'):
@@ -1393,7 +1394,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             # Store reference to registry
             instance.instance_registry = cls._user_instances
         
-        return cls._instances[key]    
+        return cls._instances[key]
         
     async def trace_operation(self, source_module: str, operation: str, **kwargs):
         """
