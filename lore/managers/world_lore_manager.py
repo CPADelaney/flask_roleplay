@@ -46,7 +46,7 @@ RESOURCE_OPS_AGENT = Agent(
     model="o3-mini"
 )
 
-class WorldLoreManager(BaseManager):
+class WorldLoreManager(BaseLoreManager):
     """
     Manager for world lore with resource management support.
     Now includes function_tool decorators so you can orchestrate
