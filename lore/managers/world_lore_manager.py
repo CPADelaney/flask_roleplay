@@ -31,7 +31,7 @@ DB_DSN = os.getenv("DB_DSN")
 
 logger = logging.getLogger(__name__)
 
-from lore.managers.base_manager import BaseManager
+from lore.managers.base_manager import BaseLoreManager
 from lore.resource_manager import resource_manager
 
 # Because we might want to store or retrieve data from an LLM orchestrator
