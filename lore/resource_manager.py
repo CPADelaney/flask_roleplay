@@ -128,7 +128,7 @@ def track_operation(operation: str):
 # Resource Manager Class
 #---------------------------
 
-class ResourceManager(BaseManager):
+class ResourceManager(BaseLoreManager):
     """Unified Resource Management System with monitoring and optimization capabilities."""
     
     def __init__(
