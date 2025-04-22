@@ -24,7 +24,7 @@ except ImportError:
 from os import environ
 
 # --- Define General Cache Constants --- <<< ADD THESE LINES >>>
-CACHE_TTL: int = 3600  # Default TTL of 1 hour (in seconds)
+# CACHE_TTL: int = 3600  # Default TTL of 1 hour (in seconds)
 # Initialize as actual dictionaries for caching
 NPC_DIRECTIVE_CACHE: dict = {}  # Cache for NPC directives
 AGENT_DIRECTIVE_CACHE: dict = {}  # Cache for agent directives
@@ -923,6 +923,15 @@ async def delete_cache(key: str):
 logger.info("Added wrapper functions: get_cache, set_cache, delete_cache")
 USER_MODEL_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
 MEMORY_CACHE = MemoryCache(name="user_model", max_size=100, default_ttl=300)
+
+# --- Define General Cache Constants ---
+class CACHE_TTL:
+    """Time-to-live constants for cache entries in seconds."""
+    DIRECTIVES = 300    # 5 minutes for directives
+    AGENT_STATE = 60    # 1 minute for agent state
+    NPC_STATE = 120     # 2 minutes for NPC state
+    MEMORY = 600        # 10 minutes for memory
+    DEFAULT = 3600      # Default TTL of 1 hour (in seconds)
 
 
 class CacheDecorator:
