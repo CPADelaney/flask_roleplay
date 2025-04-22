@@ -750,26 +750,27 @@ class NyxUnifiedGovernor:
         # Try to get from cache first, fall back to fetching
         if AGENT_DIRECTIVE_CACHE is not None:
             try:
-                # Safely get TTL value, defaulting to 300 seconds (5 minutes) if DIRECTIVES attribute doesn't exist
-                ttl_value = 300  # Default value
-                if hasattr(CACHE_TTL, 'DIRECTIVES'):
-                    ttl_value = CACHE_TTL.DIRECTIVES
-                elif not isinstance(CACHE_TTL, int):
-                    # If CACHE_TTL is not an int and doesn't have DIRECTIVES attribute
-                    ttl_value = 300
+                # Don't use keyword arguments with dict.get
+                ttl_value = getattr(CACHE_TTL, 'DIRECTIVES', 300)
+                
+                # Use a cache method that supports TTL properly
+                if hasattr(AGENT_DIRECTIVE_CACHE, 'get_with_ttl'):
+                    directives = await AGENT_DIRECTIVE_CACHE.get_with_ttl(
+                        cache_key, 
+                        fetch_agent_directives,
+                        ttl_value
+                    )
+                # Or implement a fallback approach
+                elif cache_key in AGENT_DIRECTIVE_CACHE:
+                    directives = AGENT_DIRECTIVE_CACHE[cache_key]
                 else:
-                    # If CACHE_TTL is an int, use it directly
-                    ttl_value = CACHE_TTL
-                    
-                directives = await AGENT_DIRECTIVE_CACHE.get(
-                    cache_key, 
-                    fetch_agent_directives,
-                    ttl=ttl_value
-                )
+                    directives = await fetch_agent_directives()
+                    AGENT_DIRECTIVE_CACHE[cache_key] = directives
+                    # Set expiration separately if needed
+                
                 return directives
             except Exception as e:
                 logger.error(f"Error fetching agent directives from cache: {e}")
-                # Fall through to direct fetch
         
         # Direct fetch if cache fails or isn't available
         return await fetch_agent_directives()
