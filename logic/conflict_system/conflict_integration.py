@@ -77,22 +77,31 @@ class ConflictSystemIntegration:
     async def initialize(self):
         if not self.is_initialized:
             logger.info(f"Initializing conflict system for user {self.user_id}")
-            self.agents = await initialize_agents()
-            self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
-            self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
             
-            # Initialize context-related systems
-            self.context_service = await get_context_service(self.user_id, self.conversation_id)
-            self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
-            self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
-            
-            # Initialize story director
-            self.story_director, self.story_director_context = await initialize_story_director(
-                self.user_id, self.conversation_id
-            )
-            
-            self.story_context = await self._get_story_context()
-            self.is_initialized = True
+            # Start a trace for the initialization process
+            with trace(workflow_name="ConflictSystemInit", group_id=f"conflict_{self.conversation_id}"):
+                # Initialize core components
+                self.agents = await initialize_agents()
+                self.lore_system = await self.get_lore_system(self.user_id, self.conversation_id)
+                self.npc_system = await self.get_npc_system(self.user_id, self.conversation_id)
+                
+                # Initialize player stats if needed
+                from logic.narrative_progression import initialize_player_stats
+                await initialize_player_stats(self.user_id, self.conversation_id)
+                
+                # Initialize context-related systems properly
+                self.context_service = await get_context_service(self.user_id, self.conversation_id)
+                self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+                self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+                
+                # Initialize story director with proper context handling
+                self.story_director, self.story_director_context = await initialize_story_director(
+                    self.user_id, self.conversation_id
+                )
+                
+                self.story_context = await self._get_story_context()
+                self.is_initialized = True
+                
         return self
 
     @staticmethod
