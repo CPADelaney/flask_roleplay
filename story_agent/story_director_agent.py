@@ -500,6 +500,25 @@ async def reset_story_director(ctx: RunContextWrapper[StoryDirectorContext]) -> 
     context.__post_init__()  # re-run sync init to wipe references
     await context.initialize_context_components()
 
+@function_tool
+async def get_story_state(ctx: RunContextWrapper[Any]) -> str:
+    """
+    Get the current state of the story for the user in the conversation.
+    
+    Returns a structured representation of the current narrative stage, conflicts, and other story elements.
+    """
+    # Access the context from ctx
+    context = ctx.context
+    
+    # Create or retrieve the agent
+    agent = create_story_director_agent()
+    
+    # Call the existing function
+    result = await get_current_story_state(agent, context)
+    
+    # Return the result as a string (or convert to JSON if needed)
+    return json.dumps(result) if not isinstance(result, str) else result
+
 @track_performance("get_story_state")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state")
 async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> Any:
