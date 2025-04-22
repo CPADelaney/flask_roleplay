@@ -731,7 +731,7 @@ class ConflictSystemIntegration:
         await integration.initialize()
         
         # Register with governance
-        await central_governance.register_agent_integration(
+        await central_governance.register_agent(
             integration.agent_id,
             AgentType.CONFLICT_ANALYST,
             integration
