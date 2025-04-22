@@ -502,10 +502,14 @@ async def reset_story_director(ctx: RunContextWrapper[StoryDirectorContext]) -> 
 
 @track_performance("get_story_state")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state")
-async def get_current_story_state(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext]) -> Any:
-    # Extract the actual context from the wrapper
-    context = ctx.context
+async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> Any:
     """Get the current state of the story with caching"""
+    # Extract the actual context from the wrapper or use directly if already a StoryDirectorContext
+    if isinstance(ctx, RunContextWrapper):
+        context = ctx.context
+    else:
+        context = ctx
+        
     cached_state = context.get_from_cache("current_state", max_age_seconds=60)
     if cached_state:
         logger.info(f"Using cached story state for user {context.user_id}, conversation {context.conversation_id}")
