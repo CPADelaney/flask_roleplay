@@ -750,10 +750,21 @@ class NyxUnifiedGovernor:
         # Try to get from cache first, fall back to fetching
         if AGENT_DIRECTIVE_CACHE is not None:
             try:
+                # Safely get TTL value, defaulting to 300 seconds (5 minutes) if DIRECTIVES attribute doesn't exist
+                ttl_value = 300  # Default value
+                if hasattr(CACHE_TTL, 'DIRECTIVES'):
+                    ttl_value = CACHE_TTL.DIRECTIVES
+                elif not isinstance(CACHE_TTL, int):
+                    # If CACHE_TTL is not an int and doesn't have DIRECTIVES attribute
+                    ttl_value = 300
+                else:
+                    # If CACHE_TTL is an int, use it directly
+                    ttl_value = CACHE_TTL
+                    
                 directives = await AGENT_DIRECTIVE_CACHE.get(
                     cache_key, 
                     fetch_agent_directives,
-                    ttl=CACHE_TTL.DIRECTIVES
+                    ttl=ttl_value
                 )
                 return directives
             except Exception as e:
