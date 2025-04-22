@@ -2,7 +2,8 @@
 
 import logging
 from typing import Dict, Any, Optional
-from agents import trace, trace_metadata, custom_span
+from agents import trace, custom_span
+from agents.tracing import get_current_trace
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class NyxTracing:
         # Create and return trace object
         return trace(
             workflow_name=full_workflow_name,
-            trace_metadata=meta
+            metadata=meta
         )
     
     @staticmethod
@@ -37,4 +38,5 @@ class NyxTracing:
     @staticmethod
     def add_metadata(metadata: Dict[str, Any]):
         """Add metadata to the current trace."""
-        trace_metadata(metadata)
+        # Create a custom span with the metadata
+        return custom_span(name="metadata_update", data=metadata)
