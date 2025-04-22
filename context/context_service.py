@@ -92,7 +92,7 @@ class ContextService:
             self.narrative_manager = RPGNarrativeManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                db_connection_string=get_db_connection()
+                db_connection_string=get_db_connection_context()
             )
             await self.narrative_manager.initialize()
         except ImportError:
@@ -267,7 +267,7 @@ class ContextService:
                 from db.connection import get_db_connection_context
                 import asyncpg
                 
-                conn = await asyncpg.connect(dsn=get_db_connection())
+                conn = await asyncpg.connect(dsn=get_db_connection_context())
                 try:
                     time_info = {
                         "year": "1040",
