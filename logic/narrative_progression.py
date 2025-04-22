@@ -461,43 +461,44 @@ async def check_for_narrative_moments(user_id: int, conversation_id: int) -> Opt
         logger.error(f"Unexpected error checking for narrative moments for user {user_id}, convo {conversation_id}: {e}", exc_info=True)
         return None
 
-    async def initialize_player_stats(user_id: int, conversation_id: int):
-        """Ensure player stats exist for the given user/conversation."""
-        try:
-            async with get_db_connection_context() as conn:
-                # First check if the conversation exists
-                conversation_exists = await conn.fetchval(
-                    "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2)",
-                    conversation_id, user_id
-                )
+async def initialize_player_stats(user_id: int, conversation_id: int):
+    """Ensure player stats exist for the given user/conversation."""
+    try:
+        async with get_db_connection_context() as conn:
+            # First check if the conversation exists
+            conversation_exists = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2)",
+                conversation_id, user_id
+            )
+            
+            if not conversation_exists:
+                logger.warning(f"Cannot initialize player stats: Conversation {conversation_id} doesn't exist for user {user_id}")
+                return False
                 
-                if not conversation_exists:
-                    logger.warning(f"Cannot initialize player stats: Conversation {conversation_id} doesn't exist for user {user_id}")
-                    return False
-                    
-                # Check if stats already exist
-                row = await conn.fetchrow(
-                    "SELECT * FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'",
+            # Check if stats already exist
+            row = await conn.fetchrow(
+                "SELECT * FROM PlayerStats WHERE user_id = $1 AND conversation_id = $2 AND player_name = 'Chase'",
+                user_id, conversation_id
+            )
+            
+            if not row:
+                # Insert default stats
+                await conn.execute(
+                    """
+                    INSERT INTO PlayerStats 
+                    (user_id, conversation_id, player_name, corruption, dependency, confidence, 
+                     willpower, obedience, lust, timestamp)
+                    VALUES ($1, $2, 'Chase', 0, 0, 50, 50, 0, 0, CURRENT_TIMESTAMP)
+                    """,
                     user_id, conversation_id
                 )
-                
-                if not row:
-                    # Insert default stats
-                    await conn.execute(
-                        """
-                        INSERT INTO PlayerStats 
-                        (user_id, conversation_id, player_name, corruption, dependency, confidence, 
-                         willpower, obedience, lust, timestamp)
-                        VALUES ($1, $2, 'Chase', 0, 0, 50, 50, 0, 0, CURRENT_TIMESTAMP)
-                        """,
-                        user_id, conversation_id
-                    )
-                    logger.info(f"Initialized default PlayerStats for user {user_id}, convo {conversation_id}")
-                    return True
-                return False
-        except Exception as e:
-            logger.error(f"Error initializing player stats: {e}")
+                logger.info(f"Initialized default PlayerStats for user {user_id}, convo {conversation_id}")
+                return True
             return False
+    except Exception as e:
+        logger.error(f"Error initializing player stats: {e}")
+        return False
+
 
 async def check_for_npc_revelations(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
