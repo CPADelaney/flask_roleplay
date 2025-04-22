@@ -709,6 +709,59 @@ class NyxUnifiedGovernor:
             })
         
         return criteria
+
+    async def get_agent_directives(self, agent_type: str, agent_id: Union[int, str]) -> List[Dict[str, Any]]:
+        """
+        Get directives for a specific agent.
+        
+        Args:
+            agent_type: Type of agent
+            agent_id: ID of agent
+            
+        Returns:
+            List of active directives for the agent
+        """
+        # Get the cache key for this agent
+        cache_key = f"agent_directives:{agent_type}:{agent_id}"
+        
+        # Define the function to fetch directives if not in cache
+        async def fetch_agent_directives():
+            active_directives = []
+            now = datetime.now()
+            
+            # Filter directives for this agent type and ID
+            for directive_id, directive in self.directives.items():
+                if (directive.get("agent_type") == agent_type and 
+                    str(directive.get("agent_id")) == str(agent_id) and
+                    directive.get("status") == "active"):
+                    
+                    # Check if still active (not expired)
+                    if "expires_at" in directive:
+                        expires_at = datetime.fromisoformat(directive["expires_at"])
+                        if expires_at <= now:
+                            continue  # Skip expired directives
+                    
+                    active_directives.append(directive)
+            
+            # Sort by priority (highest first)
+            active_directives.sort(key=lambda d: d.get("priority", 0), reverse=True)
+            return active_directives
+    
+        # Try to get from cache first, fall back to fetching
+        if AGENT_DIRECTIVE_CACHE is not None:
+            try:
+                directives = await AGENT_DIRECTIVE_CACHE.get(
+                    cache_key, 
+                    fetch_agent_directives,
+                    ttl=CACHE_TTL.DIRECTIVES
+                )
+                return directives
+            except Exception as e:
+                logger.error(f"Error fetching agent directives from cache: {e}")
+                # Fall through to direct fetch
+        
+        # Direct fetch if cache fails or isn't available
+        return await fetch_agent_directives()
     
     async def _execute_coordination_plan(
         self,
