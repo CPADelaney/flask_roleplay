@@ -62,22 +62,19 @@ class DirectiveHandler:
     async def get_directives(self) -> List[Dict[str, Any]]:
         """
         Get all active directives for this agent.
-
         Returns:
             List of active directives
         """
+        # Lazy‐initialize governance if it wasn’t provided at construction
         if not self.governance:
-            logger.error("DirectiveHandler has no governance object set!")
-            return []
-
+            from nyx.integrate import get_central_governance
+            self.governance = await get_central_governance(self.user_id, self.conversation_id)
+    
         try:
-            # Using self.governance instead of get_central_governance
             if self.agent_type == AgentType.NPC:
-                directives = await self.governance.get_npc_directives(int(self.agent_id))
+                return await self.governance.get_npc_directives(int(self.agent_id))
             else:
-                directives = await self.governance.get_agent_directives(self.agent_type, self.agent_id)
-
-            return directives
+                return await self.governance.get_agent_directives(self.agent_type, self.agent_id)
         except Exception as e:
             logger.error(f"Error getting directives: {e}", exc_info=True)
             return []
