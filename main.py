@@ -371,6 +371,18 @@ async def initialize_systems(app):
         await init_singletons()  # Initialize aggregator_sdk singletons here
         logger.info("Aggregator SDK singletons are ready.")
 
+        from story_agent.story_director_agent import initialize_story_director, register_with_governance
+    
+        story_user_id = 1
+        story_conversation_id = 1
+    
+        # 1) Build & start your director (agent + context + directive loop)
+        await initialize_story_director(story_user_id, story_conversation_id)
+    
+        # 2) THEN register it once with Nyx governance
+        await register_with_governance(story_user_id, story_conversation_id)
+        logger.info("StoryDirector initialized and registered with governance.")
+
         from nyx.core.brain import base as nyx_base
         print('Dir on NyxBrain:', dir(nyx_base.NyxBrain))
         print('NyxBrain.__dict__:', nyx_base.NyxBrain.__dict__.keys())
