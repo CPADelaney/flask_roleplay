@@ -7,9 +7,8 @@ import asyncio
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
-from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings
+from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings, gen_trace_id, TraceLevel
 from agents.run import RunConfig
-from agents.tracing import trace_method, TraceLevel, gen_trace_id
 
 logger = logging.getLogger(__name__)
 
