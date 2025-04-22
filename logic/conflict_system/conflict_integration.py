@@ -723,28 +723,29 @@ class ConflictSystemIntegration:
         Returns:
             The registered ConflictSystemIntegration instance
         """
-        logger.info(f"Registering conflict system integration for user={user_id}, conversation={conversation_id}")
-        
-        # Get the central governance
-        central_governance = await get_central_governance(user_id, conversation_id)
-        
-        # Create and initialize the integration
-        integration = cls(user_id, conversation_id)
-        await integration.initialize()
-        
-        # Register with governance
-        await central_governance.register_agent(
-            integration.agent_id,
-            AgentType.CONFLICT_ANALYST,
-            integration
-        )
-        
-        logger.info(f"Successfully registered conflict system integration for user={user_id}, conversation={conversation_id}")
-        
-        return {"success": True, "integration": integration}
-    except Exception as e:
-        logger.error(f"Error registering conflict system integration: {e}")
-        return {"success": False, "message": str(e)}
+        try:
+            logger.info(f"Registering conflict system integration for user={user_id}, conversation={conversation_id}")
+            
+            # Get the central governance
+            central_governance = await get_central_governance(user_id, conversation_id)
+            
+            # Create and initialize the integration
+            integration = cls(user_id, conversation_id)
+            await integration.initialize()
+            
+            # Register with governance
+            await central_governance.register_agent(
+                integration.agent_id,
+                AgentType.CONFLICT_ANALYST,
+                integration
+            )
+            
+            logger.info(f"Successfully registered conflict system integration for user={user_id}, conversation={conversation_id}")
+            
+            return {"success": True, "integration": integration}
+        except Exception as e:
+            logger.error(f"Error registering conflict system integration: {e}")
+            return {"success": False, "message": str(e)}
 
 # Registration method remains the same
 register_enhanced_integration = ConflictSystemIntegration.register_enhanced_integration
