@@ -253,13 +253,8 @@ class ContextService:
         
         return results
     
-    async def _get_base_context(
-        self, 
-        location: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Internal method: get base context from database or fallback.
-        """
+    async def _get_base_context(self, location: Optional[str] = None) -> Dict[str, Any]:
+        """Internal method: get base context from database or fallback."""
         cache_key = f"base_context:{self.user_id}:{self.conversation_id}:{location or 'none'}"
         
         async def fetch_base_context():
@@ -267,8 +262,9 @@ class ContextService:
                 from db.connection import get_db_connection_context
                 import asyncpg
                 
-                conn = await asyncpg.connect(dsn=get_db_connection_context())
-                try:
+                # Use proper async context manager syntax
+                async with get_db_connection_context() as conn:
+                    # Rest of the database queries remain unchanged
                     time_info = {
                         "year": "1040",
                         "month": "6",
@@ -340,36 +336,20 @@ class ContextService:
                         "narrative_stage": narrative_stage_info
                     }
                     return context
-                finally:
-                    await conn.close()
             except Exception as e:
                 logger.error(f"Error getting base context: {e}")
+                # Fallback return
                 return {
-                    "time_info": {
-                        "year": "1040",
-                        "month": "6",
-                        "day": "15",
-                        "time_of_day": "Morning"
-                    },
+                    "time_info": {"year": "1040", "month": "6", "day": "15", "time_of_day": "Morning"},
                     "player_stats": {},
                     "current_roleplay": {},
                     "current_location": location or "Unknown",
                     "error": str(e)
                 }
         
-        return await context_cache.get(
-            cache_key, 
-            fetch_base_context, 
-            cache_level=1,
-            importance=0.7,
-            ttl_override=30
-        )
+        return await context_cache.get(cache_key, fetch_base_context, cache_level=1, importance=0.7, ttl_override=30)
     
-    async def _get_relevant_npcs(
-        self,
-        input_text: str,
-        location: Optional[str] = None
-    ) -> List[NPCData]:
+    async def _get_relevant_npcs(self, input_text: str, location: Optional[str] = None) -> List[NPCData]:
         """
         Internal method: get NPCs relevant to current input & location 
         (fallback to DB if vector search not available).
@@ -401,12 +381,12 @@ class ContextService:
             except Exception as e:
                 logger.error(f"Error getting NPCs from vector service: {e}")
         
-        # Fallback to database
         try:
             from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection_context())
-            try:
+            
+            # Use proper async context manager syntax
+            async with get_db_connection_context() as conn:
                 params = [self.user_id, self.conversation_id]
                 query = """
                     SELECT npc_id, npc_name,
@@ -440,16 +420,11 @@ class ContextService:
                         relevance=0.7 if row["current_location"] == location else 0.5
                     ))
                 return npcs
-            finally:
-                await conn.close()
         except Exception as e:
             logger.error(f"Error getting NPCs from database: {e}")
             return []
     
-    async def _get_location_details(
-        self,
-        location: Optional[str] = None
-    ) -> LocationData:
+    async def _get_location_details(self, location: Optional[str] = None) -> LocationData:
         """
         Internal method: get details about the current location 
         (fallback to DB if vector not available).
@@ -481,8 +456,9 @@ class ContextService:
         try:
             from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection_context())
-            try:
+            
+            # Use proper async context manager syntax
+            async with get_db_connection_context() as conn:
                 row = await conn.fetchrow("""
                     SELECT id, location_name, description
                     FROM Locations
@@ -496,8 +472,6 @@ class ContextService:
                         description=row["description"]
                     )
                 return LocationData(location_name=location)
-            finally:
-                await conn.close()
         except Exception as e:
             logger.error(f"Error in get_location_details: {e}")
             return LocationData(location_name=location)
@@ -507,8 +481,9 @@ class ContextService:
         try:
             from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection_context())
-            try:
+            
+            # Use proper async context manager syntax
+            async with get_db_connection_context() as conn:
                 rows = await conn.fetch("""
                     SELECT quest_id, quest_name, status, progress_detail,
                            quest_giver, reward
@@ -529,8 +504,6 @@ class ContextService:
                         reward=row["reward"]
                     ))
                 return quests
-            finally:
-                await conn.close()
         except Exception as e:
             logger.error(f"Error getting quest info: {e}")
             return []
