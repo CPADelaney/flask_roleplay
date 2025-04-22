@@ -238,7 +238,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.conditioning_system import ConditioningSystem
             from nyx.core.goal_system import GoalManager
             from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
-            from nyx.apitools.thinking_tools import ThinkingTools
+            from nyx.apitools.thinking_tools import should_use_extended_thinking, should_use_extended_thinking, generate_reasoned_response 
             from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
             from nyx.core.mood_manager import MoodManager
             from nyx.core.theory_of_mind import TheoryOfMind
