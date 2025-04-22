@@ -5,9 +5,8 @@ import asyncio
 from typing import Dict, List, Any, Optional
 import datetime
 
-from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings
+from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings, gen_trace_id
 from agents.run import RunConfig
-from agents.tracing import trace_id, gen_trace_id
 
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
 
