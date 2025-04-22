@@ -4,9 +4,8 @@ import logging
 import asyncio
 from typing import Dict, List, Any, Optional
 
-from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings
+from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapper, ModelSettings, TraceLevel, gen_trace_id
 from agents.run import RunConfig
-from agents.tracing import trace_method, TraceLevel, gen_trace_id
 
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
 from nyx.core.integration.integrated_tracer import trace_method as original_trace_method
