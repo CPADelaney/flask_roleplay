@@ -481,10 +481,6 @@ async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple
     # Start background processing of directives
     await context.directive_handler.start_background_processing()
     
-    # Register with governance system
-    # We'll do a local import to avoid circular dependency
-    await register_with_governance(user_id, conversation_id)
-    
     return agent, context
 
 from nyx.governance_helpers import with_governance_permission
