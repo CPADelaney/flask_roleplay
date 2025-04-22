@@ -88,7 +88,7 @@ class ContextService:
         # Initialize narrative manager if available
         try:
             from story_agent.progressive_summarization import RPGNarrativeManager
-            from db.connection import get_db_connection
+            from db.connection import get_db_connection_context
             self.narrative_manager = RPGNarrativeManager(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
@@ -264,7 +264,7 @@ class ContextService:
         
         async def fetch_base_context():
             try:
-                from db.connection import get_db_connection
+                from db.connection import get_db_connection_context
                 import asyncpg
                 
                 conn = await asyncpg.connect(dsn=get_db_connection())
@@ -403,9 +403,9 @@ class ContextService:
         
         # Fallback to database
         try:
-            from db.connection import get_db_connection
+            from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection())
+            conn = await asyncpg.connect(dsn=get_db_connection_context())
             try:
                 params = [self.user_id, self.conversation_id]
                 query = """
@@ -479,9 +479,9 @@ class ContextService:
         
         # Fallback to DB
         try:
-            from db.connection import get_db_connection
+            from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection())
+            conn = await asyncpg.connect(dsn=get_db_connection_context())
             try:
                 row = await conn.fetchrow("""
                     SELECT id, location_name, description
@@ -505,9 +505,9 @@ class ContextService:
     async def _get_quest_information(self) -> List[QuestData]:
         """Internal method: get info about active quests."""
         try:
-            from db.connection import get_db_connection
+            from db.connection import get_db_connection_context
             import asyncpg
-            conn = await asyncpg.connect(dsn=get_db_connection())
+            conn = await asyncpg.connect(dsn=get_db_connection_context())
             try:
                 rows = await conn.fetch("""
                     SELECT quest_id, quest_name, status, progress_detail,
