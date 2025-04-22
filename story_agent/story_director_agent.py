@@ -486,7 +486,8 @@ async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple
 from nyx.governance_helpers import with_governance_permission
 
 @with_governance_permission(AgentType.STORY_DIRECTOR, "reset_story_director")
-async def reset_story_director(context: StoryDirectorContext) -> None:
+async def reset_story_director(ctx: RunContextWrapper[StoryDirectorContext]) -> None:
+    context = ctx.context
     """Reset the Story Director's state"""
     context.invalidate_cache()
     context.metrics = StoryDirectorMetrics()
@@ -501,7 +502,9 @@ async def reset_story_director(context: StoryDirectorContext) -> None:
 
 @track_performance("get_story_state")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state")
-async def get_current_story_state(agent: Agent, context: StoryDirectorContext) -> Any:
+async def get_current_story_state(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext]) -> Any:
+    # Extract the actual context from the wrapper
+    context = ctx.context
     """Get the current state of the story with caching"""
     cached_state = context.get_from_cache("current_state", max_age_seconds=60)
     if cached_state:
@@ -562,7 +565,8 @@ async def get_current_story_state(agent: Agent, context: StoryDirectorContext) -
 
 @track_performance("process_narrative_input")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="process_narrative_input")
-async def process_narrative_input(agent: Agent, context: StoryDirectorContext, narrative_text: str) -> Any:
+async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext], narrative_text: str) -> Any:
+    context = ctx.context
     """Process narrative input to determine if it should generate conflicts or narrative events"""
     context.invalidate_cache("current_state")
     
@@ -635,7 +639,8 @@ async def process_narrative_input(agent: Agent, context: StoryDirectorContext, n
 
 @track_performance("advance_story")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="advance_story")
-async def advance_story(agent: Agent, context: StoryDirectorContext, player_actions: str) -> Any:
+async def advance_story(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext], player_actions: str) -> Any:
+    context = ctx.context
     """Advance the story based on player actions"""
     context.invalidate_cache("current_state")
     
