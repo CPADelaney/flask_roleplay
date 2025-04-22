@@ -510,6 +510,7 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
     else:
         context = ctx
         
+    # Rest of the function remains the same
     cached_state = context.get_from_cache("current_state", max_age_seconds=60)
     if cached_state:
         logger.info(f"Using cached story state for user {context.user_id}, conversation {context.conversation_id}")
