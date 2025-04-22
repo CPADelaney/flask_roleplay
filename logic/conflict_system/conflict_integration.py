@@ -137,16 +137,8 @@ class ConflictSystemIntegration:
             "story_progression": {},
             "current_narrative_id": None,
         }
-    
+        
         try:
-            # Wrap story director calls with trace
-            with trace("story_context_retrieval", workflow_name="ConflictSystem"):
-                if self.story_director and self.story_director_context:
-                    try:
-                        story_state = await get_current_story_state(
-                            self.story_director, 
-                            self.story_director_context
-                        )
             # 1) Get comprehensive context from context service
             comprehensive_context = await self.context_service.get_context()
             
@@ -155,17 +147,17 @@ class ConflictSystemIntegration:
             if not active_npcs:
                 # Fallback to NPC system if needed
                 active_npcs = await self.npc_system._get_active_npcs()
-    
+        
             # 3) Current narrative ID & lore
             narrative_id = await self._get_current_narrative_id()
             lore_context = (
                 await self.lore_system.get_narrative_elements(narrative_id)
                 if narrative_id else []
             )
-    
+        
             # 4) Story progression from story director or context
             story_progression = await self._get_story_progression()
-    
+        
             return {
                 "active_npcs": active_npcs,
                 "lore_context": lore_context,
@@ -173,7 +165,7 @@ class ConflictSystemIntegration:
                 "current_narrative_id": narrative_id,
                 "comprehensive_context": comprehensive_context
             }
-    
+        
         except Exception as e:
             logger.error(f"Error getting story context: {e}")
             return default
