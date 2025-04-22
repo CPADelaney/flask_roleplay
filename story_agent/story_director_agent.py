@@ -343,7 +343,7 @@ class StoryDirectorContext:
         if not self.context_service:
             await self.initialize_context_components()
         
-        config = get_config()
+        config = await get_config()
         context_budget = config.get_token_budget("default")
         use_vector = config.is_enabled("use_vector_search")
         
