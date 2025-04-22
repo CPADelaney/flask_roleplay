@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from agents import (
     Agent, Runner, trace, function_tool, InputGuardrail, 
     OutputGuardrail, GuardrailFunctionOutput, RunContextWrapper,
-    handoff, trace_metadata, custom_span
+    handoff, custom_span
 )
 
 logger = logging.getLogger(__name__)
