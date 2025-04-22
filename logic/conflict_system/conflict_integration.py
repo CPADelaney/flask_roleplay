@@ -130,6 +130,14 @@ class ConflictSystemIntegration:
         }
     
         try:
+            # Wrap story director calls with trace
+            with trace("story_context_retrieval", workflow_name="ConflictSystem"):
+                if self.story_director and self.story_director_context:
+                    try:
+                        story_state = await get_current_story_state(
+                            self.story_director, 
+                            self.story_director_context
+                        )
             # 1) Get comprehensive context from context service
             comprehensive_context = await self.context_service.get_context()
             
