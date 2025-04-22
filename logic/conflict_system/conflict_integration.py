@@ -739,7 +739,10 @@ class ConflictSystemIntegration:
         
         logger.info(f"Successfully registered conflict system integration for user={user_id}, conversation={conversation_id}")
         
-        return integration
+        return {"success": True, "integration": integration}
+    except Exception as e:
+        logger.error(f"Error registering conflict system integration: {e}")
+        return {"success": False, "message": str(e)}
 
 # Registration method remains the same
 register_enhanced_integration = ConflictSystemIntegration.register_enhanced_integration
