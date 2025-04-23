@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class MemoryOrchestrator:
             user's query parameters. Return the most relevant memories with appropriate formatting.""",
             tools=[
                 function_tool(self.memory_core.retrieve_memories),
-                function_tool(self.memory_core.get_memory),
+                function_tool(get_memory),
                 function_tool(self.memory_core.retrieve_memories_with_formatting),
                 function_tool(self.memory_core.retrieve_relevant_experiences)
             ],
