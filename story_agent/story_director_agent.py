@@ -444,30 +444,27 @@ def create_story_director_agent():
     from story_agent.specialized_agents import initialize_specialized_agents
     from story_agent.tools import context_tools
     
+    from story_agent.story_director_agent import get_story_state_tool
+
     all_tools = [
+        get_story_state_tool,
         *story_tools,
         *conflict_tools,
         *resource_tools,
         *narrative_tools,
-        *context_tools
+        *context_tools,
     ]
-    
-    specialized_agents = initialize_specialized_agents()
-    
+
     agent = Agent(
         name="Story Director",
         instructions=agent_instructions,
         tools=all_tools,
         handoffs=list(specialized_agents.values()),
         model="gpt-4o",
-        model_settings=ModelSettings(
-            temperature=0.2,
-            max_tokens=2048
-        )
+        model_settings=ModelSettings(temperature=0.2, max_tokens=2048),
     )
-    
     return agent
-
+    
 # ----- Functional Interface -----
 
 async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple[Agent, StoryDirectorContext]:
@@ -499,6 +496,43 @@ async def reset_story_director(ctx: RunContextWrapper[StoryDirectorContext]) -> 
     
     context.__post_init__()  # re-run sync init to wipe references
     await context.initialize_context_components()
+
+async def _invoke_get_story_state(
+    ctx: RunContextWrapper[Any],
+    args_json: str
+) -> str:
+    # pull out your StoryDirectorContext
+    context = ctx.context
+    # build (or re-use) your Story Director agent
+    agent = create_story_director_agent()
+    # call your existing logic
+    result = await get_current_story_state(agent, context)
+    # ensure we return a string
+    return json.dumps(result) if not isinstance(result, str) else result
+
+# 2) Manual FunctionTool with a fully-declared JSON schema
+get_story_state_tool = FunctionTool(
+    name="get_story_state",
+    description=(
+        "Returns the current state of the story for the user "
+        "in the conversation as a JSON string."
+    ),
+    params_json_schema={
+        "type": "object",
+        "properties": {
+            "ctx": {
+                "type": "object",
+                "description": (
+                    "The context wrapper object containing user and "
+                    "conversation information"
+                )
+            }
+        },
+        "required": ["ctx"],
+    },
+    on_invoke_tool=_invoke_get_story_state,
+)
+
 
 @function_tool
 async def get_story_state(ctx: RunContextWrapper[Any]) -> str:
