@@ -793,8 +793,7 @@ class InteractionModeManager:
 
     @staticmethod
     @function_tool
-    async def _analyze_distribution_transition(self, 
-        ctx: RunContextWrapper[ModeManagerContext],
+    async def _analyze_distribution_transition(ctx: RunContextWrapper[ModeManagerContext],
         from_distribution: ModeDistribution,
         to_distribution: ModeDistribution
     ) -> Dict[str, Any]:
