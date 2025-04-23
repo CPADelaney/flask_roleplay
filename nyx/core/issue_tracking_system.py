@@ -460,7 +460,7 @@ class IssueTrackingSystem:
             OBSERVATION:
             {observation}
             
-            {f"CONTEXT:\n{context}" if context else ""}
+            {f"CONTEXT:\\n{context}" if context else ""}
             
             Determine if this contains an actionable issue, efficiency idea, or feature request.
             If yes, extract the relevant details and categorize appropriately.
