@@ -178,50 +178,73 @@ async def retrieve_relevant_memories(
     except Exception as e:
         logger.error(f"Error retrieving relevant memories: {str(e)}", exc_info=True)
         return [] # Return empty list on error as per original logic
+        
 @function_tool
+# @track_performance("store_narrative_memory") # Uncomment if track_performance is defined/imported
 async def store_narrative_memory(
     ctx: RunContextWrapper[ContextType],
     content: str,
-    memory_type: str = "observation",
-    importance: float = 0.6,
-    tags: Optional[List[str]] = None
+    # 1. Change parameters with defaults to Optional[Type] = None
+    memory_type: Optional[str] = None,
+    importance: Optional[float] = None,
+    tags: Optional[List[str]] = None # This one was already correct
 ) -> Dict[str, Any]:
     """
     Store a narrative memory in the memory system.
 
     Args:
-        content: Content of the memory
-        memory_type: Type of memory
-        importance: Importance score (0.0-1.0)
-        tags: Optional tags for categorization
+        content: Content of the memory.
+        memory_type: Type of memory. Defaults to "observation" if not provided. # 2. Update docstrings
+        importance: Importance score (0.0-1.0). Defaults to 0.6 if not provided.
+        tags: Optional tags for categorization. Defaults to [memory_type, "story_director"].
 
     Returns:
-        Stored memory information
+        Stored memory information or error dictionary.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle default values inside the function
+    actual_memory_type = memory_type if memory_type is not None else "observation"
+    actual_importance = importance if importance is not None else 0.6
+    # Handle default for tags based on actual_memory_type
+    actual_tags = tags if tags is not None else [actual_memory_type, "story_director"]
+
     try:
         memory_manager = await get_memory_manager(user_id, conversation_id)
+
+        # 4. Use the 'actual_' variables in the function call
         memory_id = await memory_manager.add_memory(
             content=content,
-            memory_type=memory_type,
-            importance=importance,
-            tags=tags or [memory_type, "story_director"],
+            memory_type=actual_memory_type,
+            importance=actual_importance,
+            tags=actual_tags, # Use handled tags default
             metadata={"source": "story_director_tool", "timestamp": datetime.now().isoformat()}
         )
 
+        # Safely check for narrative_manager
         if hasattr(context, 'narrative_manager') and context.narrative_manager:
-            await context.narrative_manager.add_interaction(
-                content=content, importance=importance, tags=tags or [memory_type, "story_director"]
-            )
+            try:
+                await context.narrative_manager.add_interaction(
+                    content=content,
+                    importance=actual_importance, # Use actual_
+                    tags=actual_tags # Use actual_
+                )
+            except Exception as nm_err:
+                 logger.warning(f"Error calling narrative_manager.add_interaction: {nm_err}")
 
-        return {"memory_id": memory_id, "content": content, "memory_type": memory_type, "importance": importance, "success": True}
+
+        return {
+            "memory_id": memory_id,
+            "content": content,
+            "memory_type": actual_memory_type, # Return actual used value
+            "importance": actual_importance, # Return actual used value
+            "success": True
+        }
     except Exception as e:
         logger.error(f"Error storing narrative memory: {str(e)}", exc_info=True)
         return {"error": str(e), "success": False}
-
 @function_tool
 async def search_by_vector(
     ctx: RunContextWrapper[ContextType],
