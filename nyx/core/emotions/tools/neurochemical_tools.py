@@ -15,7 +15,7 @@ from nyx.core.emotions.schemas import (
     ChemicalSource
 )
 
-from nyx.core.emotions.tools.emotion_tools import derive_emotional_state, get_emotional_state_matrix
+from nyx.core.emotions.tools.emotion_tools import EmotionTools
 
 from nyx.core.emotions.utils import handle_errors, EmotionalToolUtils
 
