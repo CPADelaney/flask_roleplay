@@ -1741,40 +1741,82 @@ async def analyze_npc_manipulation_potential(ctx: RunContextWrapper[ContextType]
         return {"npc_id": npc_id, "conflict_id": conflict_id, "manipulation_potential": {}, "makes_sense": False, "reason": f"Error: {str(e)}", "recommended_goal": {}, "current_involvement": None}
 
 @function_tool
+# @track_performance("generate_manipulation_attempt") # Uncomment if track_performance is defined/imported
 async def generate_manipulation_attempt(
     ctx: RunContextWrapper[ContextType],
     conflict_id: int,
     npc_id: int,
     manipulation_type: str,
-    goal: Dict[str, Any]
+    # 1. Change signature: goal: Optional[Dict[str, Any]] = None
+    goal: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Generate a manipulation attempt by an NPC in a conflict.
 
     Args:
-        conflict_id: ID of the conflict
-        npc_id: ID of the NPC
-        manipulation_type: Type of manipulation (domination, blackmail, seduction, etc.)
-        goal: What the NPC wants the player to do
+        conflict_id: ID of the conflict.
+        npc_id: ID of the NPC.
+        manipulation_type: Type of manipulation (domination, blackmail, seduction, etc.).
+        goal: What the NPC wants the player to do (required dictionary). # 3. Update docstring
 
     Returns:
-        Generated manipulation attempt
+        Generated manipulation attempt details or error dictionary.
     """
-    context = ctx.context # Use attribute access
+    context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 2. Add internal check for the required parameter
+    if goal is None:
+        logger.error("generate_manipulation_attempt called without 'goal' parameter.")
+        return {
+            "generated": False,
+            "reason": "Missing required 'goal' parameter.",
+            "npc_id": npc_id,
+            "manipulation_type": manipulation_type
+        }
+
     try:
+        # Now proceed with the original logic, using the validated 'goal' dict
+        # Assuming ConflictSystemIntegration is imported correctly
         from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-        suggestion = await conflict_integration.suggest_manipulation_content(npc_id, conflict_id, manipulation_type, goal) # Assuming this method exists
-        attempt = await conflict_integration.create_manipulation_attempt(conflict_id, npc_id, manipulation_type, suggestion["content"], goal, suggestion["leverage_used"], suggestion["intimacy_level"]) # Assuming this method exists
 
-        return {"generated": True, "attempt": attempt, "npc_id": npc_id, "npc_name": suggestion["npc_name"], "manipulation_type": manipulation_type, "content": suggestion["content"]}
+        # Assuming these methods exist and work
+        suggestion = await conflict_integration.suggest_manipulation_content(
+            npc_id, conflict_id, manipulation_type, goal
+        )
+        attempt = await conflict_integration.create_manipulation_attempt(
+            conflict_id,
+            npc_id,
+            manipulation_type,
+            suggestion["content"],
+            goal, # Use the validated goal
+            suggestion["leverage_used"],
+            suggestion["intimacy_level"]
+        )
+
+        # Ensure suggestion has expected keys before accessing
+        npc_name = suggestion.get("npc_name", "Unknown NPC")
+        content = suggestion.get("content", "No content generated.")
+
+        return {
+            "generated": True,
+            "attempt": attempt,
+            "npc_id": npc_id,
+            "npc_name": npc_name,
+            "manipulation_type": manipulation_type,
+            "content": content
+        }
     except Exception as e:
-        logging.error(f"Error generating manipulation attempt: {e}")
-        return {"generated": False, "reason": f"Error: {str(e)}", "npc_id": npc_id, "manipulation_type": manipulation_type}
-
+        # Log the specific error with context
+        logger.error(f"Error generating manipulation attempt for NPC {npc_id} in conflict {conflict_id}: {e}", exc_info=True)
+        return {
+            "generated": False,
+            "reason": f"Error: {str(e)}",
+            "npc_id": npc_id,
+            "manipulation_type": manipulation_type
+        }
 @function_tool
 async def track_conflict_story_beat(
     ctx: RunContextWrapper[ContextType],
