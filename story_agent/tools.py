@@ -879,56 +879,106 @@ async def set_player_involvement(
     ctx: RunContextWrapper[ContextType],
     conflict_id: int,
     involvement_level: str,
-    faction: str = "neutral",
-    money_committed: int = 0,
-    supplies_committed: int = 0,
-    influence_committed: int = 0,
-    action: Optional[str] = None
+    # 1. Change parameters with defaults to Optional[Type] = None
+    faction: Optional[str] = None,
+    money_committed: Optional[int] = None,
+    supplies_committed: Optional[int] = None,
+    influence_committed: Optional[int] = None,
+    action: Optional[str] = None # This one was already correct
 ) -> Dict[str, Any]:
     """
     Set the player's involvement in a conflict.
 
     Args:
-        conflict_id: ID of the conflict
-        involvement_level: Level of involvement (none, observing, participating, leading)
-        faction: Which faction to support (a, b, neutral)
-        money_committed: Money committed to the conflict
-        supplies_committed: Supplies committed to the conflict
-        influence_committed: Influence committed to the conflict
-        action: Optional specific action taken
+        conflict_id: ID of the conflict.
+        involvement_level: Level of involvement (none, observing, participating, leading).
+        faction: Which faction to support (a, b, neutral). Defaults to 'neutral'. # 2. Update docstrings
+        money_committed: Money committed to the conflict. Defaults to 0.
+        supplies_committed: Supplies committed to the conflict. Defaults to 0.
+        influence_committed: Influence committed to the conflict. Defaults to 0.
+        action: Optional specific action taken. Defaults to None.
 
     Returns:
-        Updated conflict information
+        Updated conflict information or error dictionary.
     """
     context = ctx.context
+    # Ensure managers are available on the context
+    if not hasattr(context, 'conflict_manager') or not hasattr(context, 'resource_manager'):
+         logger.error("Context missing conflict_manager or resource_manager in set_player_involvement")
+         return {"conflict_id": conflict_id, "error": "Internal context setup error", "success": False}
+
     conflict_manager = context.conflict_manager
+    resource_manager = context.resource_manager
+
+    # 3. Handle default values inside the function
+    actual_faction = faction if faction is not None else "neutral"
+    actual_money = money_committed if money_committed is not None else 0
+    actual_supplies = supplies_committed if supplies_committed is not None else 0
+    actual_influence = influence_committed if influence_committed is not None else 0
+    # 'action' is already Optional, no need for 'actual_action' unless you want to default it differently
 
     try:
-        resource_manager = context.resource_manager
-        resource_check = await resource_manager.check_resources(money_committed, supplies_committed, influence_committed)
-        if not resource_check['has_resources']:
-            return {"error": "Insufficient resources to commit", "missing": resource_check.get('missing', {}), "current": resource_check.get('current', {}), "success": False}
+        # 4. Use the 'actual_' variables in function logic
+        resource_check = await resource_manager.check_resources(
+            actual_money, actual_supplies, actual_influence
+        )
+        if not resource_check.get('has_resources', False):
+            # Ensure 'success' field exists for consistency
+            resource_check['success'] = False
+            resource_check['error'] = "Insufficient resources to commit"
+            return resource_check
 
         conflict_info = await conflict_manager.get_conflict(conflict_id)
-        result = await conflict_manager.set_player_involvement(conflict_id, involvement_level, faction, money_committed, supplies_committed, influence_committed, action)
+        result = await conflict_manager.set_player_involvement(
+            conflict_id,
+            involvement_level,
+            actual_faction, # Use actual_
+            actual_money, # Use actual_
+            actual_supplies, # Use actual_
+            actual_influence, # Use actual_
+            action # Use original optional action
+        )
 
+        # Add memory log using 'actual_' values
         if hasattr(context, 'add_narrative_memory'):
             resources_text = []
-            if money_committed > 0: resources_text.append(f"{money_committed} money")
-            if supplies_committed > 0: resources_text.append(f"{supplies_committed} supplies")
-            if influence_committed > 0: resources_text.append(f"{influence_committed} influence")
+            if actual_money > 0: resources_text.append(f"{actual_money} money")
+            if actual_supplies > 0: resources_text.append(f"{actual_supplies} supplies")
+            if actual_influence > 0: resources_text.append(f"{actual_influence} influence")
             resources_committed = ", ".join(resources_text) if resources_text else "no resources"
+
             conflict_name = conflict_info.get('conflict_name', f'ID: {conflict_id}') if conflict_info else f'ID: {conflict_id}'
-            memory_content = f"Player set involvement in conflict {conflict_name} to {involvement_level}, supporting {faction} faction with {resources_committed}."
+            memory_content = (
+                f"Player set involvement in conflict {conflict_name} "
+                f"to {involvement_level}, supporting {actual_faction} faction " # Use actual_
+                f"with {resources_committed}."
+            )
             if action: memory_content += f" Action taken: {action}"
             await context.add_narrative_memory(memory_content, "conflict_involvement", 0.7)
 
-        if isinstance(result, dict): result["success"] = True
-        else: result = {"conflict_id": conflict_id, "involvement_level": involvement_level, "faction": faction, "resources_committed": {"money": money_committed, "supplies": supplies_committed, "influence": influence_committed}, "action": action, "success": True}
+        # Ensure result format consistency
+        if isinstance(result, dict):
+            result["success"] = True # Ensure success flag is present
+        else:
+            # If the underlying call didn't return a dict, construct one
+            result = {
+                "conflict_id": conflict_id,
+                "involvement_level": involvement_level,
+                "faction": actual_faction,
+                "resources_committed": {
+                    "money": actual_money,
+                    "supplies": actual_supplies,
+                    "influence": actual_influence
+                },
+                "action": action,
+                "success": True,
+                # Add any other relevant info if the underlying call returned something else
+                "raw_result": result
+            }
 
         return result
     except Exception as e:
-        logger.error(f"Error setting involvement: {str(e)}", exc_info=True)
+        logger.error(f"Error setting involvement for conflict {conflict_id}: {str(e)}", exc_info=True)
         return {"conflict_id": conflict_id, "error": str(e), "success": False}
 
 @function_tool
