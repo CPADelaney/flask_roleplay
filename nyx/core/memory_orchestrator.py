@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences, update_memory, delete_memory, apply_memory_decay, retrieve_memories, create_reflection_from_memories, create_abstraction_from_memories, retrieve_relevant_experiences, generate_conversational_recall,construct_narrative_from_memories, consolidate_memory_clusters
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +93,9 @@ class MemoryOrchestrator:
             appropriate metadata, tags, and significance levels. Ensure the memory is properly
             categorized and indexed.""",
             tools=[
-                function_tool(self.memory_core.add_memory),
-                function_tool(self.memory_core.update_memory),
-                function_tool(self.memory_core.delete_memory)
+                function_tool(add_memory),
+                function_tool(update_memory),
+                function_tool(delete_memory)
             ],
             output_type=Dict[str, Any]
         )
@@ -108,9 +108,9 @@ class MemoryOrchestrator:
             from Nyx's memories. Your role is to analyze memories, find patterns, and create
             higher-level insights that connect individual experiences.""",
             tools=[
-                function_tool(self.memory_core.create_reflection_from_memories),
-                function_tool(self.memory_core.create_abstraction_from_memories),
-                function_tool(self.memory_core.retrieve_memories)
+                function_tool(create_reflection_from_memories),
+                function_tool(create_abstraction_from_memories),
+                function_tool(retrieve_memories)
             ],
             output_type=Dict[str, Any]
         )
@@ -123,9 +123,9 @@ class MemoryOrchestrator:
             Your role is to retrieve relevant experiences, generate natural conversational
             recalls, and construct coherent narratives from memories.""",
             tools=[
-                function_tool(self.memory_core.retrieve_relevant_experiences),
-                function_tool(self.memory_core.generate_conversational_recall),
-                function_tool(self.memory_core.construct_narrative_from_memories)
+                function_tool(retrieve_relevant_experiences),
+                function_tool(generate_conversational_recall),
+                function_tool(construct_narrative_from_memories)
             ],
             output_type=Dict[str, Any]
         )
@@ -139,8 +139,8 @@ class MemoryOrchestrator:
             memories, archive old memories, and ensure the overall system stays optimized.""",
             tools=[
                 function_tool(self.memory_core.run_maintenance),
-                function_tool(self.memory_core.apply_memory_decay),
-                function_tool(self.memory_core.consolidate_memory_clusters),
+                function_tool(apply_memory_decay),
+                function_tool(consolidate_memory_clusters),
                 function_tool(self.memory_core.get_memory_stats)
             ],
             output_type=Dict[str, Any]
