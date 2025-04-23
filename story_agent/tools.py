@@ -1084,60 +1084,97 @@ async def check_resources(
     except Exception as e:
         logger.error(f"Error checking resources: {str(e)}", exc_info=True)
         return {"has_resources": False, "error": str(e), "current": {}}
+        
 @function_tool
 @track_performance("commit_resources_to_conflict")
 async def commit_resources_to_conflict(
     ctx: RunContextWrapper[ContextType],
     conflict_id: int,
-    money: int = 0,
-    supplies: int = 0,
-    influence: int = 0
+    # 1. Change parameters with defaults to Optional[Type] = None
+    money: Optional[int] = None,
+    supplies: Optional[int] = None,
+    influence: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Commit player resources to a conflict.
 
     Args:
-        conflict_id: ID of the conflict
-        money: Amount of money to commit
-        supplies: Amount of supplies to commit
-        influence: Amount of influence to commit
+        conflict_id: ID of the conflict.
+        money: Amount of money to commit. Defaults to 0 if not provided. # 2. Update docstrings
+        supplies: Amount of supplies to commit. Defaults to 0 if not provided.
+        influence: Amount of influence to commit. Defaults to 0 if not provided.
 
     Returns:
-        Result of committing resources
+        Result of committing resources or error dictionary.
     """
     context = ctx.context
+    # Ensure managers are available on the context
+    if not hasattr(context, 'resource_manager'):
+         logger.error("Context missing resource_manager in commit_resources_to_conflict")
+         return {"success": False, "error": "Internal context setup error"}
     resource_manager = context.resource_manager
+
+    # 3. Handle default values inside the function
+    actual_money = money if money is not None else 0
+    actual_supplies = supplies if supplies is not None else 0
+    actual_influence = influence if influence is not None else 0
 
     try:
         conflict_info = None
-        if hasattr(context, 'conflict_manager'):
-            try: conflict_info = await context.conflict_manager.get_conflict(conflict_id)
-            except Exception as conflict_error: logger.warning(f"Could not get conflict info: {conflict_error}")
+        # Check for conflict_manager safely
+        if hasattr(context, 'conflict_manager') and context.conflict_manager:
+            try:
+                conflict_info = await context.conflict_manager.get_conflict(conflict_id)
+            except Exception as conflict_error:
+                logger.warning(f"Could not get conflict info for conflict {conflict_id}: {conflict_error}")
+        else:
+             logger.warning("Context missing conflict_manager in commit_resources_to_conflict")
 
-        result = await resource_manager.commit_resources_to_conflict(conflict_id, money, supplies, influence)
 
-        if money > 0 and result.get('money_result'):
+        # 4. Use the 'actual_' variables in the function call
+        result = await resource_manager.commit_resources_to_conflict(
+            conflict_id, actual_money, actual_supplies, actual_influence
+        )
+
+        # Format money if money was committed and result is successful
+        if actual_money > 0 and result.get('success', False) and result.get('money_result'):
             money_result = result['money_result']
+            # Check if old/new values exist before formatting
             if 'old_value' in money_result and 'new_value' in money_result:
-                old_formatted = await resource_manager.get_formatted_money(money_result['old_value'])
-                new_formatted = await resource_manager.get_formatted_money(money_result['new_value'])
-                money_result['formatted_old_value'] = old_formatted; money_result['formatted_new_value'] = new_formatted
-                money_result['formatted_change'] = await resource_manager.get_formatted_money(money_result['change'])
-                result['money_result'] = money_result
+                try:
+                    old_formatted = await resource_manager.get_formatted_money(money_result['old_value'])
+                    new_formatted = await resource_manager.get_formatted_money(money_result['new_value'])
+                    # Ensure change exists before formatting
+                    change_val = money_result.get('change')
+                    formatted_change = await resource_manager.get_formatted_money(change_val) if change_val is not None else None
 
+                    money_result['formatted_old_value'] = old_formatted
+                    money_result['formatted_new_value'] = new_formatted
+                    if formatted_change is not None:
+                        money_result['formatted_change'] = formatted_change
+                    result['money_result'] = money_result
+                except Exception as format_err:
+                    logger.warning(f"Could not format money in commit_resources_to_conflict: {format_err}")
+
+        # Add memory log using 'actual_' values
         if hasattr(context, 'add_narrative_memory'):
             resources_text = []
-            if money > 0: resources_text.append(f"{money} money")
-            if supplies > 0: resources_text.append(f"{supplies} supplies")
-            if influence > 0: resources_text.append(f"{influence} influence")
+            if actual_money > 0: resources_text.append(f"{actual_money} money")
+            if actual_supplies > 0: resources_text.append(f"{actual_supplies} supplies")
+            if actual_influence > 0: resources_text.append(f"{actual_influence} influence")
             resources_committed = ", ".join(resources_text) if resources_text else "No resources"
+
             conflict_name = conflict_info.get('conflict_name', f"ID: {conflict_id}") if conflict_info else f"ID: {conflict_id}"
             memory_content = f"Committed {resources_committed} to conflict {conflict_name}"
             await context.add_narrative_memory(memory_content, "resource_commitment", 0.6)
 
+        # Ensure success flag is present in the final result
+        if 'success' not in result:
+             result['success'] = True # Assume success if no error occurred
+
         return result
     except Exception as e:
-        logger.error(f"Error committing resources: {str(e)}", exc_info=True)
+        logger.error(f"Error committing resources for conflict {conflict_id}: {str(e)}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 @function_tool
