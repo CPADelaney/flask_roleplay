@@ -288,7 +288,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.input_processor import BlendedInputProcessor  # Import input processor
             
     
-            from nyx.dev_log.storage import get_dev_log_storage
+            from dev_log.storage import get_dev_log_storage
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
             
