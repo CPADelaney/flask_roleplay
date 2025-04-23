@@ -726,9 +726,10 @@ class InteractionModeManager:
                 function_tool(self._adjust_goal_priorities)
             ]
         )
-    
+
+    @staticmethod
     @function_tool
-    async def _get_current_context(self, ctx: RunContextWrapper[ModeManagerContext]) -> Dict[str, Any]:
+    async def _get_current_context(ctx: RunContextWrapper[ModeManagerContext]) -> Dict[str, Any]:
         """
         Get the current context from the context awareness system.
         
@@ -754,10 +755,10 @@ class InteractionModeManager:
             "active_contexts": [],
             "overall_confidence": 0.0
         }
-    
+
+    @staticmethod
     @function_tool
     async def _generate_mode_distribution(
-        self, 
         ctx: RunContextWrapper[ModeManagerContext],
         context_distribution: Dict[str, float],
         overall_confidence: float
@@ -789,10 +790,10 @@ class InteractionModeManager:
             mode_dist = ctx.context.mode_distribution.blend_with(mode_dist, 1.0 - persistence_factor)
             
         return mode_dist
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_distribution_transition(
-        self, 
+    async def _analyze_distribution_transition(self, 
         ctx: RunContextWrapper[ModeManagerContext],
         from_distribution: ModeDistribution,
         to_distribution: ModeDistribution
@@ -850,10 +851,10 @@ class InteractionModeManager:
             "previous_primary": prev_primary,
             "new_primary": new_primary
         }
-    
+
+    @staticmethod
     @function_tool
     async def _check_blend_coherence(
-        self, 
         ctx: RunContextWrapper[ModeManagerContext],
         distribution: ModeDistribution
     ) -> Dict[str, Any]:
@@ -933,10 +934,10 @@ class InteractionModeManager:
             "active_modes": [mode for mode, _ in active_modes],
             "incoherent_pairs": incoherent_pairs
         }
-    
+
+    @staticmethod
     @function_tool
     async def _get_mode_parameters(
-        self,
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
     ) -> Dict[str, Any]:
@@ -954,10 +955,10 @@ class InteractionModeManager:
             return ctx.context.mode_parameters.get(mode_enum, {})
         except ValueError:
             return {}
-    
+
+    @staticmethod
     @function_tool
     async def _get_conversation_style(
-        self,
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
     ) -> Dict[str, Any]:
@@ -975,10 +976,10 @@ class InteractionModeManager:
             return ctx.context.conversation_styles.get(mode_enum, {})
         except ValueError:
             return {}
-    
+
+    @staticmethod
     @function_tool
     async def _get_vocalization_patterns(
-        self,
         ctx: RunContextWrapper[ModeManagerContext],
         mode: str
     ) -> Dict[str, Any]:
@@ -996,10 +997,10 @@ class InteractionModeManager:
             return ctx.context.vocalization_patterns.get(mode_enum, {})
         except ValueError:
             return {}
-    
+
+    @staticmethod
     @function_tool
     async def _calculate_weighted_blend(
-        self,
         ctx: RunContextWrapper[ModeManagerContext],
         mode_distribution: ModeDistribution,
         parameter_name: str
@@ -1078,10 +1079,10 @@ class InteractionModeManager:
             "contributing_modes": contributing_modes,
             "primary_influence": primary_influence
         }
-    
+
+    @staticmethod
     @function_tool
     async def _blend_text_elements(
-        self,
         ctx: RunContextWrapper[ModeManagerContext],
         mode_distribution: ModeDistribution,
         element_type: str,
@@ -1169,10 +1170,10 @@ class InteractionModeManager:
             "mode_influences": mode_influences,
             "element_weights": {e[0]: e[1] for e in selected_elements}
         }
-    
+
+    @staticmethod
     @function_tool
     async def _apply_emotional_effects(
-        self, 
         ctx: RunContextWrapper[ModeManagerContext],
         mode_distribution: ModeDistribution
     ) -> bool:
@@ -1240,10 +1241,10 @@ class InteractionModeManager:
                 logger.error(f"Error applying emotional effects: {e}")
         
         return False
-    
+
+    @staticmethod
     @function_tool
     async def _adjust_reward_parameters(
-        self, 
         ctx: RunContextWrapper[ModeManagerContext],
         mode_distribution: ModeDistribution
     ) -> bool:
@@ -1274,10 +1275,10 @@ class InteractionModeManager:
                 logger.error(f"Error adjusting reward parameters: {e}")
         
         return False
-    
+
+    @staticmethod
     @function_tool
-    async def _adjust_goal_priorities(
-        self, 
+    async def _adjust_goal_priorities( 
         ctx: RunContextWrapper[ModeManagerContext],
         mode_distribution: ModeDistribution
     ) -> bool:
