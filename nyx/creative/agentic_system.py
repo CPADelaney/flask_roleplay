@@ -311,44 +311,44 @@ class AgenticCreativitySystemV2:
         context = "\n\n".join(ctx_parts)
         return f"{context}\n\n# User question\n{user_msg}"
 
-    async def integrate_with_existing_system(nyx_brain=None):
-        """
-        Integrates the creativity system with an existing NyxBrain instance.
+async def integrate_with_existing_system(nyx_brain=None):
+    """
+    Integrates the creativity system with an existing NyxBrain instance.
+    
+    Args:
+        nyx_brain: Optional reference to a NyxBrain instance
         
-        Args:
-            nyx_brain: Optional reference to a NyxBrain instance
-            
-        Returns:
-            Initialized AgenticCreativitySystemV2 instance
-        """
-        # Initialize the creativity system
-        repo_root = getattr(nyx_brain, "creative_system_root", ".") if nyx_brain else "."
-        system = AgenticCreativitySystemV2(repo_root=repo_root)
+    Returns:
+        Initialized AgenticCreativitySystemV2 instance
+    """
+    # Initialize the creativity system
+    repo_root = getattr(nyx_brain, "creative_system_root", ".") if nyx_brain else "."
+    system = AgenticCreativitySystemV2(repo_root=repo_root)
+    
+    # If nyx_brain is provided, set up the integration
+    if nyx_brain:
+        # Run initial analysis on codebase
+        await system.incremental_codebase_analysis()
         
-        # If nyx_brain is provided, set up the integration
-        if nyx_brain:
-            # Run initial analysis on codebase
-            await system.incremental_codebase_analysis()
+        # Connect to nyx_brain's systems if needed
+        if hasattr(nyx_brain, "memory_core") and nyx_brain.memory_core:
+            # Store reference to creativity content in memory
+            await nyx_brain.memory_core.add_memory(
+                memory_text="Initialized creative system for content generation",
+                memory_type="system",
+                significance=3,
+                tags=["creativity", "initialization"]
+            )
+        
+        # Hook up event listeners if the brain has an event system
+        if hasattr(nyx_brain, "event_bus") and nyx_brain.event_bus:
+            # Example: Register for relevant events
+            await nyx_brain.event_bus.subscribe("creativity_request", 
+                                               system.semantic_search)
             
-            # Connect to nyx_brain's systems if needed
-            if hasattr(nyx_brain, "memory_core") and nyx_brain.memory_core:
-                # Store reference to creativity content in memory
-                await nyx_brain.memory_core.add_memory(
-                    memory_text="Initialized creative system for content generation",
-                    memory_type="system",
-                    significance=3,
-                    tags=["creativity", "initialization"]
-                )
+        logger.info(f"Creative system integrated with NyxBrain instance")
             
-            # Hook up event listeners if the brain has an event system
-            if hasattr(nyx_brain, "event_bus") and nyx_brain.event_bus:
-                # Example: Register for relevant events
-                await nyx_brain.event_bus.subscribe("creativity_request", 
-                                                   system.semantic_search)
-                
-            logger.info(f"Creative system integrated with NyxBrain instance")
-                
-        return system
+    return system
 
 # ---------------------------------------------------------------------------
 # 7. Compatibility shims
