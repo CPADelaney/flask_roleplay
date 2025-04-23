@@ -1,0 +1,1 @@
+I’ll need the specific lint errors and the relevant code snippets to propose targeted diffs. Could you please share the lint messages and the surrounding code context? Once I have those, I can craft concrete unified‑diff patches to address each issue.
