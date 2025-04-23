@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,8 @@ class MemoryOrchestrator:
             tools=[
                 function_tool(self.memory_core.retrieve_memories),
                 function_tool(get_memory),
-                function_tool(self.memory_core.retrieve_memories_with_formatting),
-                function_tool(self.memory_core.retrieve_relevant_experiences)
+                function_tool(retrieve_memories_with_formatting),
+                function_tool(retrieve_relevant_experiences)
             ],
             output_type=Dict[str, Any]
         )
