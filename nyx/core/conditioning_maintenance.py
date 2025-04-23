@@ -47,14 +47,35 @@ class AssociationConsolidationOutput(BaseModel):
     reasoning: str = Field(..., description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
-    """Output schema for maintenance run summary"""
-    tasks_performed: List[Dict[str, Any]] = Field(..., description="Tasks performed")
-    time_taken_seconds: float = Field(..., description="Time taken in seconds")
-    associations_modified: int = Field(..., description="Number of associations modified")
-    traits_adjusted: int = Field(..., description="Number of traits adjusted")
-    extinction_count: int = Field(..., description="Number of extinctions applied")
-    improvements: List[str] = Field(..., description="Improvements made to the system")
-    next_maintenance_recommendation: str = Field(..., description="Recommendation for next maintenance")
+    """Output schema for maintenance run summary. Fields have defaults to avoid schema validation issues."""
+    tasks_performed: List[Dict[str, Any]] = Field(
+        default_factory=list, # Use default_factory for mutable types like list/dict
+        description="Tasks performed during the maintenance run."
+    )
+    time_taken_seconds: float = Field(
+        default=0.0,
+        description="Total time taken for the maintenance run in seconds."
+    )
+    associations_modified: int = Field(
+        default=0,
+        description="Number of conditioning associations modified (created, deleted, updated)."
+    )
+    traits_adjusted: int = Field(
+        default=0,
+        description="Number of personality traits adjusted."
+    )
+    extinction_count: int = Field(
+        default=0,
+        description="Number of associations removed due to extinction."
+    )
+    improvements: List[str] = Field(
+        default_factory=list,
+        description="List of key improvements or changes made to the system during the run."
+    )
+    next_maintenance_recommendation: str = Field(
+        default="Perform standard maintenance checks.",
+        description="Recommendation for the focus of the next maintenance run."
+    )
 
 class MaintenanceContext:
     """Context object for conditioning maintenance operations"""
