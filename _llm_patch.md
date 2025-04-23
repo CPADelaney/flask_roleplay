@@ -1,0 +1,1 @@
+I’ll need the specific lint warnings/errors and the relevant code snippets to craft precise diffs. Could you please paste the lint messages along with the surrounding code so I can suggest minimal high‑impact patches?
