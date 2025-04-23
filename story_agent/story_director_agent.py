@@ -822,134 +822,101 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
 @track_performance("get_current_story_state_wrapper") # Renamed for clarity
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state_analysis") # Renamed action type
 async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> Any:
-    """
-    Analyzes the current story state using the agent and the get_story_state tool.
-    Uses caching.
-    """
-    # Ensure we have the raw context object
-    if isinstance(ctx, RunContextWrapper): context = ctx.context
-    else: context = ctx
+    """Get the current state of the story with caching using UnifiedCache."""
+    if isinstance(ctx, RunContextWrapper):
+        context = ctx.context
+    else:
+        context = ctx # Assuming ctx is StoryDirectorContext
 
-    # --- FIX: Removed the problematic 'if not context.initialized' check ---
-    # Initialization is handled by the StoryDirector class or initialize_story_director function before this is called.
-    # Dependencies within the context (like managers) should be checked for existence if needed,
-    # or assumed to be present due to prior initialization steps.
+    # Define the cache key
+    cache_key = f"story_state:{context.user_id}:{context.conversation_id}"
+    cache_ttl = 60 # Example TTL
 
-    # Check cache
-    cache_key = f"story_state:{context.user_id}:{context.conversation_id}" # More specific cache key
-    cached_state = context_cache.get(cache_key) # Use unified cache
-    # cached_state = context.get_from_cache("current_state", max_age_seconds=60) # Or use context internal cache
+    # Define the function to execute on cache miss
+    async def _fetch_and_process_story_state():
+        logger.debug(f"Cache miss for {cache_key}. Fetching fresh story state.")
+        start_time = time.time()
+        success = False
+        tokens = {"prompt": 0, "completion": 0, "total": 0}
+        fetched_result = None
+        try:
+            # --- This is the core logic from your original function ---
+            comprehensive_context = await context.get_comprehensive_context()
+            prompt = """
+            Analyze the current state of the story and provide a detailed report.
+            Include information about:
+            1. The narrative stage
+            2. Active conflicts
+            3. Player resources
+            4. Potential narrative events that might occur soon
+            5. Key NPCs and their relationships
+            """
+            with trace(workflow_name="StoryDirector", group_id=DEFAULT_TRACING_GROUP):
+                # Note: retry_operation might be complex to put directly here.
+                # Consider if the core operation needs retry or if the cache handles it.
+                # For simplicity here, directly calling Runner.run.
+                # If retry is essential, wrap the Runner.run call.
+                operation = lambda: Runner.run(agent, prompt, context=context)
+                # fetched_result = await retry_operation(operation) # Original retry call
+                fetched_result = await operation() # Simpler call for example
 
-    if cached_state and isinstance(cached_state, StoryStateUpdate): # Verify type
-        logger.info(f"Using cached story state for user {context.user_id}")
-        # Potentially update timestamp if needed, or just return
-        # cached_state.last_updated = datetime.now(timezone.utc) # If cache implies freshness
-        return cached_state
+            if hasattr(fetched_result, 'raw_responses') and fetched_result.raw_responses:
+                for response in fetched_result.raw_responses:
+                    if hasattr(response, 'usage'):
+                        usage_data = getattr(response, 'usage', None)
+                        if usage_data:
+                             tokens = {
+                                 "prompt": getattr(usage_data, 'prompt_tokens', 0),
+                                 "completion": getattr(usage_data, 'completion_tokens', 0),
+                                 "total": getattr(usage_data, 'total_tokens', 0)
+                             }
+                             break # Assuming one usage object is enough
 
-    logger.info(f"Cache miss or invalid type for story state, running analysis for user {context.user_id}")
-    start_time = time.time()
-    success = False
-    tokens = {"prompt": 0, "completion": 0, "total": 0}
-    result = None
-    final_state = None # Initialize final_state
+            success = True
+            context.last_state_update = datetime.now()
 
+            await context.add_narrative_memory(
+                "Analyzed current story state and identified key elements",
+                "story_analysis", 0.5
+            )
+            # --- End of core logic ---
+            return fetched_result # Return the fetched result
+
+        except Exception as e:
+            logger.error(f"Error fetching story state for cache: {str(e)}", exc_info=True)
+            context.metrics.last_error = str(e)
+            # Decide what to return on fetch error: None, raise, or an error object?
+            # Returning None might cause issues if None is a valid cached value.
+            # Raising might be better if the caller handles it. Let's raise.
+            raise
+        finally:
+            # Record metrics even during fetch
+            execution_time = time.time() - start_time
+            # Ensure context.metrics exists
+            if hasattr(context, 'metrics'):
+                 context.metrics.record_run(success, execution_time, tokens)
+            # Ensure performance_monitor exists
+            if hasattr(context, 'performance_monitor'):
+                 context.performance_monitor.record_token_usage(tokens.get("total", 0))
+
+
+    # --- Call the UnifiedCache.get method CORRECTLY ---
     try:
-        # Get comprehensive context to provide to the agent if needed (optional, depends on agent strategy)
-        # comprehensive_context = await context.get_comprehensive_context() # Use context method
-
-        # Define the prompt asking the agent *specifically* to use the tool
-        prompt = """
-        Your primary task is to determine the current story state. Use the `get_story_state` tool function to retrieve all necessary details (narrative stage, conflicts, resources, NPCs, events). Do not summarize or guess; execute the tool to get the precise current state.
-        """
-
-        with trace(workflow_name="StoryDirectorState", group_id=DEFAULT_TRACING_GROUP): # More specific name
-            # Pass the context object directly to Runner.run
-            operation = lambda: Runner.run(agent, prompt, context=context)
-            result = await retry_operation(operation)
-
-        # --- TOKEN COUNTING ---
-        if result and hasattr(result, 'raw_responses') and result.raw_responses:
-            for response in result.raw_responses:
-                 if response and hasattr(response, 'usage') and response.usage:
-                     current_prompt_tokens = getattr(response.usage, 'prompt_tokens', getattr(response.usage, 'input_tokens', 0)) # Handle different naming
-                     current_completion_tokens = getattr(response.usage, 'completion_tokens', getattr(response.usage, 'output_tokens', 0))
-                     current_total_tokens = getattr(response.usage, 'total_tokens', 0)
-
-                     tokens["prompt"] += current_prompt_tokens
-                     tokens["completion"] += current_completion_tokens
-                     # Recalculate total from parts if necessary
-                     tokens["total"] += (current_prompt_tokens + current_completion_tokens) if current_total_tokens == 0 else current_total_tokens
-                     logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={tokens['total']}")
-                 else:
-                      logger.warning("ModelResponse found without valid usage object in raw_responses.")
-        # --- END TOKEN COUNTING ---
-
-        # --- RESULT HANDLING ---
-        # Check if the agent correctly called the get_story_state tool.
-        # The result.final_output should be the output of the tool if called.
-        if result and isinstance(result.final_output, StoryStateUpdate):
-             final_state = result.final_output
-             logger.info(f"Successfully retrieved story state via tool call for user {context.user_id}")
-             success = True
-             # Add a memory about the successful analysis
-             # await context.add_narrative_memory("Analyzed current story state via tool.", "story_analysis", 0.5)
-
-        elif result:
-             # Agent might have returned text instead of calling the tool, or tool failed earlier.
-             logger.warning(f"Agent did not return StoryStateUpdate. Final output type: {type(result.final_output)}. Content: {str(result.final_output)[:200]}...")
-             logger.info("Attempting direct call to get_story_state tool as fallback.")
-             # Fallback: Call the tool directly if the agent didn't
-             # Need to wrap context for direct tool call if it's not already wrapped
-             tool_ctx = ctx if isinstance(ctx, RunContextWrapper) else RunContextWrapper(context=context)
-             final_state = await get_story_state(tool_ctx) # Call the actual tool function
-             if isinstance(final_state, StoryStateUpdate) and "Error" not in final_state.key_observations[0]:
-                 success = True # Mark as success even on fallback if it works and not an error state
-                 logger.info(f"Successfully retrieved story state via direct tool call for user {context.user_id}")
-             else:
-                 logger.error("Direct call to get_story_state tool also failed or returned error state.")
-                 success = False # Fallback failed
-        else:
-             logger.error("Agent run failed to produce any result.")
-             success = False
-
-
-        # --- CACHING & RETURN ---
-        if success and final_state:
-            context_cache.set(cache_key, final_state, ttl=60) # Cache the successful state
-            # context.add_to_cache("current_state", final_state) # Update context internal cache too
-            context.last_state_update = final_state.last_updated # Update timestamp in context
-            return final_state
-        else:
-            logger.error(f"Failed to obtain valid story state for user {context.user_id}.")
-            # Return the last known error state from the tool, or a generic error state
-            if isinstance(final_state, StoryStateUpdate): # If tool returned an error state
-                return final_state
-            else:
-                return StoryStateUpdate(
-                    key_observations=[f"Error: Failed to retrieve story state after agent run and fallback."],
-                    last_updated=datetime.now(timezone.utc)
-                )
-
+        story_state_result = await context_cache.get(
+            key=cache_key,
+            fetch_func=_fetch_and_process_story_state, # Pass the async function
+            ttl_override=cache_ttl,
+            importance=0.8 # Example importance
+        )
+        # The .get method will handle calling _fetch_and_process_story_state on miss
+        # and return either the cached value or the newly fetched value.
+        return story_state_result
 
     except Exception as e:
-        logger.error(f"Critical error in get_current_story_state for user {context.user_id}: {str(e)}", exc_info=True)
-        if context.metrics: context.metrics.last_error = str(e)
-        # Return an error state
-        return StoryStateUpdate(
-            key_observations=[f"Critical error getting state: {str(e)}"],
-            last_updated=datetime.now(timezone.utc)
-        )
-
-    finally:
-        execution_time = time.time() - start_time
-        # Ensure metrics object exists before recording
-        if context.metrics:
-             context.metrics.record_run(success, execution_time, tokens)
-        # Ensure performance monitor exists
-        if context.performance_monitor:
-             context.performance_monitor.record_token_usage(tokens.get("total", 0))
-             logger.info(f"get_current_story_state execution time: {execution_time:.4f}s, Success: {success}, Tokens: {tokens['total']}")
-
+         # Handle potential errors from the fetch_func if they weren't caught inside
+         logger.error(f"Error getting story state (cache wrapper): {str(e)}", exc_info=True)
+         # Re-raise or return an error state
+         raise # Re-raise the exception from the fetch function
 
 @track_performance("process_narrative_input")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="process_narrative_input")
