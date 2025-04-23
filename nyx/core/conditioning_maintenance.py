@@ -1067,7 +1067,7 @@ async def _get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
 
 @function_tool
 async def _record_maintenance_history(
-    ctx: RunContextWrapper[ContextType],
+    ctx: RunContextWrapper[Any],
     # 1. Change signature: maintenance_record: Optional[Dict[str, Any]] = None
     maintenance_record: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
