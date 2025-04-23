@@ -1269,46 +1269,84 @@ async def apply_activity_effects(ctx: RunContextWrapper[ContextType], activity_t
 
 @function_tool
 @track_performance("get_resource_history")
-async def get_resource_history(ctx: RunContextWrapper[ContextType], resource_type: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+async def get_resource_history(
+    ctx: RunContextWrapper[ContextType],
+    resource_type: Optional[str] = None, # This one was already correct
+    # 1. Change signature: limit: Optional[int] = None
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
     """
     Get the history of resource changes.
 
     Args:
-        resource_type: Optional filter for specific resource type (money, supplies, influence, energy, hunger)
-        limit: Maximum number of history entries to return
+        resource_type: Optional filter for specific resource type (money, supplies, influence, energy, hunger).
+        limit: Maximum number of history entries to return. Defaults to 10 if not provided. # 2. Update docstring
 
     Returns:
-        List of resource change history entries
+        List of resource change history entries.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # Ensure resource_manager is available for formatting money
+    if not hasattr(context, 'resource_manager'):
+         logger.error("Context missing resource_manager in get_resource_history")
+         # Decide if you can proceed without it or return error
+         # For now, let's proceed but log a warning later if needed for formatting
+         resource_manager = None # Set to None to check later
+    else:
+        resource_manager = context.resource_manager
+
+
+    # 3. Handle the default value inside the function
+    actual_limit = limit if limit is not None else 10
+
     async with get_db_connection_context() as conn:
         try:
             base_query = "SELECT resource_type, old_value, new_value, amount_changed, source, description, timestamp FROM ResourceHistoryLog WHERE user_id=$1 AND conversation_id=$2"
             params = [user_id, conversation_id]
+
+            # 4. Use the actual_limit in query construction
             if resource_type:
                 base_query += " AND resource_type=$3 ORDER BY timestamp DESC LIMIT $4"
-                params.extend([resource_type, limit])
+                params.extend([resource_type, actual_limit]) # Use actual_limit
             else:
                 base_query += " ORDER BY timestamp DESC LIMIT $3"
-                params.append(limit)
+                params.append(actual_limit) # Use actual_limit
 
             rows = await conn.fetch(base_query, *params)
             history = []
-            resource_manager = context.resource_manager # Get manager once
+
             for row in rows:
                 formatted_old, formatted_new, formatted_change = None, None, None
-                if row['resource_type'] == "money":
-                    formatted_old = await resource_manager.get_formatted_money(row['old_value'])
-                    formatted_new = await resource_manager.get_formatted_money(row['new_value'])
-                    formatted_change = await resource_manager.get_formatted_money(row['amount_changed'])
+                # Safely check resource_manager before using
+                if row['resource_type'] == "money" and resource_manager:
+                    try:
+                        formatted_old = await resource_manager.get_formatted_money(row['old_value'])
+                        formatted_new = await resource_manager.get_formatted_money(row['new_value'])
+                        formatted_change = await resource_manager.get_formatted_money(row['amount_changed'])
+                    except Exception as format_err:
+                         logger.warning(f"Could not format money in get_resource_history: {format_err}")
+                elif row['resource_type'] == "money" and not resource_manager:
+                     logger.warning("Cannot format money in get_resource_history: resource_manager missing from context.")
+
 
                 timestamp = row['timestamp']
                 timestamp_iso = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
 
-                history.append({"resource_type": row['resource_type'], "old_value": row['old_value'], "new_value": row['new_value'], "amount_changed": row['amount_changed'], "formatted_old_value": formatted_old, "formatted_new_value": formatted_new, "formatted_change": formatted_change, "source": row['source'], "description": row['description'], "timestamp": timestamp_iso})
+                history.append({
+                    "resource_type": row['resource_type'],
+                    "old_value": row['old_value'],
+                    "new_value": row['new_value'],
+                    "amount_changed": row['amount_changed'],
+                    "formatted_old_value": formatted_old,
+                    "formatted_new_value": formatted_new,
+                    "formatted_change": formatted_change,
+                    "source": row['source'],
+                    "description": row['description'],
+                    "timestamp": timestamp_iso
+                })
             return history
         except Exception as e:
             logger.error(f"Error getting resource history: {str(e)}", exc_info=True)
