@@ -1,0 +1,1 @@
+I’m ready to draft minimal unified‐diff patches, but I need the specific lint errors and relevant code snippets to work from. Could you please share the reported issues (error messages/locations) and the surrounding code context?
