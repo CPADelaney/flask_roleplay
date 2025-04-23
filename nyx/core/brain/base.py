@@ -285,7 +285,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.conditioning_config import ConditioningConfiguration
             from nyx.core.conditioning_system import ConditioningSystem
             from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
-            from nyx.core.input_processor import ConditionedInputProcessor  # Import input processor
+            from nyx.core.input_processor import BlendedInputProcessor  # Import input processor
             
     
             from nyx.dev_log.storage import get_dev_log_storage
@@ -347,7 +347,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Conditioning maintenance system initialized")
             
             # Initialize input processor after other conditioning systems
-            self.conditioned_input_processor = ConditionedInputProcessor(
+            self.conditioned_input_processor = BlendedInputProcessor(
                 conditioning_system=self.conditioning_system,
                 emotional_core=self.emotional_core,
                 somatosensory_system=self.digital_somatosensory_system
