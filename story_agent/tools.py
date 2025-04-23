@@ -1605,38 +1605,58 @@ async def add_moment_of_clarity(ctx: RunContextWrapper[ContextType], realization
 
 @function_tool
 @track_performance("get_player_journal_entries")
-async def get_player_journal_entries(ctx: RunContextWrapper[ContextType], entry_type: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+async def get_player_journal_entries(
+    ctx: RunContextWrapper[ContextType],
+    entry_type: Optional[str] = None, # This one was already correct
+    # 1. Change signature: limit: Optional[int] = None
+    limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
     """
     Get entries from the player's journal.
 
     Args:
-        entry_type: Optional filter for entry type (personal_revelation, dream_sequence, moment_of_clarity, etc.)
-        limit: Maximum number of entries to return
+        entry_type: Optional filter for entry type (personal_revelation, dream_sequence, moment_of_clarity, etc.).
+        limit: Maximum number of entries to return. Defaults to 10 if not provided. # 2. Update docstring
 
     Returns:
-        List of journal entries
+        List of journal entries.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_limit = limit if limit is not None else 10
+
     async with get_db_connection_context() as conn:
         try:
             base_query = "SELECT id, entry_type, entry_text, revelation_types, narrative_moment, fantasy_flag, intensity_level, timestamp FROM PlayerJournal WHERE user_id=$1 AND conversation_id=$2"
             params = [user_id, conversation_id]
+
+            # 4. Use the actual_limit in query construction
             if entry_type:
                 base_query += " AND entry_type=$3 ORDER BY timestamp DESC LIMIT $4"
-                params.extend([entry_type, limit])
+                params.extend([entry_type, actual_limit]) # Use actual_limit
             else:
                 base_query += " ORDER BY timestamp DESC LIMIT $3"
-                params.append(limit)
+                params.append(actual_limit) # Use actual_limit
 
             rows = await conn.fetch(base_query, *params)
             entries = []
             for row in rows:
                  timestamp = row['timestamp']
                  timestamp_iso = timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp)
-                 entries.append({"id": row['id'], "entry_type": row['entry_type'], "entry_text": row['entry_text'], "revelation_types": row['revelation_types'], "narrative_moment": row['narrative_moment'], "fantasy_flag": row['fantasy_flag'], "intensity_level": row['intensity_level'], "timestamp": timestamp_iso})
+                 # Ensure all keys exist or use .get() for safety
+                 entries.append({
+                     "id": row.get('id'),
+                     "entry_type": row.get('entry_type'),
+                     "entry_text": row.get('entry_text'),
+                     "revelation_types": row.get('revelation_types'),
+                     "narrative_moment": row.get('narrative_moment'),
+                     "fantasy_flag": row.get('fantasy_flag'),
+                     "intensity_level": row.get('intensity_level'),
+                     "timestamp": timestamp_iso
+                 })
             return entries
         except Exception as e:
             logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
