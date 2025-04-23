@@ -1057,10 +1057,10 @@ class ModeIntegrationManager:
         except Exception as e:
             logger.error(f"Error getting conversation style: {e}")
             return {}
-    
+
+    @staticmethod
     @function_tool
     async def _blend_guidance_elements(
-        self,
         ctx: RunContextWrapper,
         mode_distribution: Dict[str, float]
     ) -> Dict[str, Any]:
@@ -1175,10 +1175,10 @@ class ModeIntegrationManager:
             "weighted_parameters": params,
             "active_modes": {mode: weight for mode, weight in normalized_weights.items()}
         }
-    
+
+    @staticmethod
     @function_tool
     async def _blend_mode_outputs(
-        self,
         ctx: RunContextWrapper,
         context_result: Dict[str, Any],
         mode_result: Dict[str, Any],
@@ -1233,10 +1233,10 @@ class ModeIntegrationManager:
         }
         
         return blended
-    
+
+    @staticmethod
     @function_tool
     async def _check_blend_coherence(
-        self,
         ctx: RunContextWrapper,
         context_distribution: Dict[str, float],
         mode_distribution: Dict[str, float]
