@@ -503,24 +503,216 @@ async def reset_story_director(ctx: RunContextWrapper[StoryDirectorContext]) -> 
 
 
 @function_tool
-async def get_story_state(ctx: RunContextWrapper[Any]) -> str:
+@track_performance("get_story_state")
+async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> StoryStateUpdate:
     """
-    Get the current state of the story for the user in the conversation.
-
+    Get the current state of the story, including active conflicts, narrative stage, 
+    resources, and any pending narrative events.
+    
     Returns:
-        A JSON string summarizing the current narrative stage, conflicts, and other story elements.
+        A dictionary containing the current story state
     """
-    # Extract the inner context
-    context = ctx.context
+    context: StoryDirectorContext = ctx.context # Explicitly type hint context for clarity
+    user_id = context.user_id
+    conversation_id = context.conversation_id
+    conflict_manager = context.conflict_manager
+    resource_manager = context.resource_manager
+    
+    try:
+        # NEW: Get comprehensive context first
+        comprehensive_context = None
+        
+        # Try to use context service if available
+        if hasattr(context, 'get_comprehensive_context'):
+            try:
+                comprehensive_context = await context.get_comprehensive_context()
+            except Exception as context_error:
+                logger.warning(f"Error getting comprehensive context: {context_error}")
+        
+        # If we couldn't get comprehensive context, fall back to individual components
+        
+        # Get current narrative stage
+        narrative_stage = await get_current_narrative_stage(user_id, conversation_id)
+        stage_info = None
+        if narrative_stage:
+            stage_info = {
+                "name": narrative_stage.name,
+                "description": narrative_stage.description
+            }
+        
+        # Get active conflicts
+        active_conflicts = await conflict_manager.get_active_conflicts()
+        conflict_infos = []
+        for conflict in active_conflicts:
+            conflict_infos.append({
+                "conflict_id": conflict['conflict_id'],
+                "conflict_name": conflict['conflict_name'],
+                "conflict_type": conflict['conflict_type'],
+                "description": conflict['description'],
+                "phase": conflict['phase'],
+                "progress": conflict['progress'],
+                "faction_a_name": conflict['faction_a_name'],
+                "faction_b_name": conflict['faction_b_name']
+            })
+        
+        # Get key NPCs
+        key_npcs = await get_key_npcs(ctx, limit=5)
+        
+        # Get player resources and vitals
+        resources = await resource_manager.get_resources()
+        vitals = await resource_manager.get_vitals()
+        
+        # Format currency for display
+        formatted_money = await resource_manager.get_formatted_money()
+        
+        resource_status = {
+            "money": resources.get('money', 0),
+            "supplies": resources.get('supplies', 0),
+            "influence": resources.get('influence', 0),
+            "energy": vitals.get('energy', 0),
+            "hunger": vitals.get('hunger', 0),
+            "formatted_money": formatted_money
+        }
+        
+        # Check for narrative events
+        narrative_events = []
+        
+        # Personal revelations
+        personal_revelation = await check_for_personal_revelations(user_id, conversation_id)
+        if personal_revelation:
+            narrative_events.append({
+                "event_type": "personal_revelation",
+                "content": personal_revelation,
+                "should_present": True,
+                "priority": 8
+            })
+        
+        # Narrative moments
+        narrative_moment = await check_for_narrative_moments(user_id, conversation_id)
+        if narrative_moment:
+            narrative_events.append({
+                "event_type": "narrative_moment",
+                "content": narrative_moment,
+                "should_present": True,
+                "priority": 9
+            })
+        
+        # NPC revelations
+        npc_revelation = await check_for_npc_revelations(user_id, conversation_id)
+        if npc_revelation:
+            narrative_events.append({
+                "event_type": "npc_revelation",
+                "content": npc_revelation,
+                "should_present": True,
+                "priority": 7
+            })
+        
+        # Check for relationship events
+        crossroads = await check_for_crossroads_tool(user_id, conversation_id)
+        ritual = await check_for_ritual_tool(user_id, conversation_id)
+        
+        # NEW: Get relevant memories
+        relevant_memories = []
+        if hasattr(context, 'get_relevant_memories'):
+            try:
+                relevant_memories = await context.get_relevant_memories(
+                    "current story state overview recent events",
+                    limit=3
+                )
+            except Exception as mem_error:
+                logger.warning(f"Error getting relevant memories: {mem_error}")
+        
+        # Generate key observations based on current state
+        key_observations = []
+        
+        # If at a higher corruption stage, add observation
+        if narrative_stage and narrative_stage.name in ["Creeping Realization", "Veil Thinning", "Full Revelation"]:
+            key_observations.append(f"Player has progressed to {narrative_stage.name} stage, indicating significant corruption")
+        
+        # If multiple active conflicts, note this
+        if len(conflict_infos) > 2:
+            key_observations.append(f"Player is juggling {len(conflict_infos)} active conflicts, which may be overwhelming")
+        
+        # If any major or catastrophic conflicts, highlight them
+        major_conflicts = [c for c in conflict_infos if c["conflict_type"] in ["major", "catastrophic"]]
+        if major_conflicts:
+            conflict_names = ", ".join([c["conflict_name"] for c in major_conflicts])
+            key_observations.append(f"Major conflicts in progress: {conflict_names}")
+        
+        # If resources are low, note this
+        if resource_status["money"] < 30:
+            key_observations.append("Player is low on money, which may limit conflict involvement options")
+        
+        if resource_status["energy"] < 30:
+            key_observations.append("Player energy is low, which may affect capability in conflicts")
+        
+        if resource_status["hunger"] < 30:
+            key_observations.append("Player is hungry, which may distract from conflict progress")
+        
+        # Determine overall story direction
+        story_direction = ""
+        if narrative_stage:
+            if narrative_stage.name == "Innocent Beginning":
+                story_direction = "Introduce subtle hints of control dynamics while maintaining a veneer of normalcy"
+            elif narrative_stage.name == "First Doubts":
+                story_direction = "Create situations that highlight inconsistencies in NPC behavior, raising questions"
+            elif narrative_stage.name == "Creeping Realization":
+                story_direction = "NPCs should be more open about their manipulative behavior, testing boundaries"
+            elif narrative_stage.name == "Veil Thinning":
+                story_direction = "Dominant characters should drop pretense more frequently, openly directing the player"
+            elif narrative_stage.name == "Full Revelation":
+                story_direction = "The true nature of relationships should be explicit, with NPCs acknowledging their control"
+        
+        # NEW: Create a memory about this state retrieval
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Retrieved story state with {len(conflict_infos)} conflicts and narrative stage: {stage_info['name'] if stage_info else 'Unknown'}",
+                "story_state_retrieval",
+                0.4
+            )
+        
+        # NEW: Track performance if context has performance monitor
+        if hasattr(context, 'performance_monitor'):
+            context.performance_monitor.record_memory_usage()
 
-    # Create or reuse your Story Director agent
-    agent = create_story_director_agent()
+        state_data = {
+            "narrative_stage": stage_info,
+            "active_conflicts": conflict_infos,
+            "narrative_events": narrative_events,
+            "key_npcs": key_npcs,
+            "resources": resource_status,
+            "key_observations": key_observations,
+            "relationship_crossroads": crossroads,
+            "relationship_ritual": ritual,
+            "story_direction": story_direction,
+            # "memories": relevant_memories, # StoryStateUpdate doesn't have 'memories' field
+            "last_updated": datetime.now(), # Use datetime object directly
+            # "context_source": "integrated" if comprehensive_context else "direct" # Not in model
+        }
 
-    # Delegate to your existing logic
-    result = await get_current_story_state(agent, context)
+        # Validate and return the Pydantic model
+        # Filter out keys not present in the model to avoid validation errors
+        valid_keys = StoryStateUpdate.model_fields.keys()
+        filtered_state_data = {k: v for k, v in state_data.items() if k in valid_keys}
 
-    # Always return a string
-    return json.dumps(result) if not isinstance(result, str) else result
+        # Handle potential None values for optional fields if necessary
+        if filtered_state_data.get("resources"):
+             filtered_state_data["resources"] = ResourceStatus(**filtered_state_data["resources"])
+        if filtered_state_data.get("narrative_stage"):
+             filtered_state_data["narrative_stage"] = NarrativeStageInfo(**filtered_state_data["narrative_stage"])
+        # Ensure lists of complex objects are handled if needed (e.g., active_conflicts)
+        # Assuming conflict_infos already match ConflictInfo structure
+
+        return StoryStateUpdate(**filtered_state_data)
+
+    except Exception as e:
+        logger.error(f"Error getting story state: {str(e)}", exc_info=True)
+        # Return a default/error state conforming to StoryStateUpdate
+        # Or re-raise depending on desired behavior
+        # Returning a default empty state:
+        return StoryStateUpdate(
+             key_observations=[f"Error retrieving state: {str(e)}"]
+        )
 
 @track_performance("get_story_state")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state")
