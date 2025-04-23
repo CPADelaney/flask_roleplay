@@ -1817,39 +1817,62 @@ async def generate_manipulation_attempt(
             "npc_id": npc_id,
             "manipulation_type": manipulation_type
         }
+        
 @function_tool
+# @track_performance("track_conflict_story_beat") # Uncomment if track_performance is defined/imported
 async def track_conflict_story_beat(
     ctx: RunContextWrapper[ContextType],
     conflict_id: int,
     path_id: str,
     beat_description: str,
     involved_npcs: List[int],
-    progress_value: float = 5.0
+    # 1. Change signature: progress_value: Optional[float] = None
+    progress_value: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Track a story beat for a resolution path, advancing progress.
 
     Args:
-        conflict_id: ID of the conflict
-        path_id: ID of the resolution path
-        beat_description: Description of what happened
-        involved_npcs: List of NPC IDs involved
-        progress_value: Progress value (0-100)
+        conflict_id: ID of the conflict.
+        path_id: ID of the resolution path.
+        beat_description: Description of what happened.
+        involved_npcs: List of NPC IDs involved.
+        progress_value: Progress value (0-100). Defaults to 5.0 if not provided. # 2. Update docstring
 
     Returns:
-        Updated path information
+        Updated path information or error dictionary.
     """
-    context = ctx.context # Use attribute access
+    context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_progress_value = progress_value if progress_value is not None else 5.0
+
     try:
+        # Assuming ConflictSystemIntegration is imported correctly
         from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-        result = await conflict_integration.track_story_beat(conflict_id, path_id, beat_description, involved_npcs, progress_value) # Assuming this method exists
-        return {"tracked": True, "result": result}
+
+        # 4. Use the actual_progress_value in the call
+        result = await conflict_integration.track_story_beat(
+            conflict_id,
+            path_id,
+            beat_description,
+            involved_npcs,
+            actual_progress_value # Use the handled value
+        ) # Assuming this method exists
+
+        # Ensure consistent return structure
+        if isinstance(result, dict):
+            # If the underlying method returns a dict, assume it's okay
+            return {"tracked": True, "result": result}
+        else:
+            # If not a dict, wrap it
+             return {"tracked": True, "result": {"raw_output": result}} # Or adjust as needed
+
     except Exception as e:
-        logging.error(f"Error tracking story beat: {e}")
+        logger.error(f"Error tracking story beat for conflict {conflict_id}, path {path_id}: {e}", exc_info=True) # Add exc_info
         return {"tracked": False, "reason": f"Error: {str(e)}"}
 
 @function_tool
