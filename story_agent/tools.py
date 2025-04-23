@@ -245,41 +245,55 @@ async def store_narrative_memory(
     except Exception as e:
         logger.error(f"Error storing narrative memory: {str(e)}", exc_info=True)
         return {"error": str(e), "success": False}
+        
 @function_tool
+# @track_performance("search_by_vector") # Uncomment if track_performance is defined/imported
 async def search_by_vector(
     ctx: RunContextWrapper[ContextType],
     query_text: str,
-    entity_types: Optional[List[str]] = None,
-    top_k: int = 5
+    entity_types: Optional[List[str]] = None, # This one was already correct
+    # 1. Change signature: top_k: Optional[int] = None
+    top_k: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
     Search for entities by semantic similarity using vector search.
 
     Args:
-        query_text: Query text for semantic search
-        entity_types: Types of entities to search for
-        top_k: Maximum number of results to return
+        query_text: Query text for semantic search.
+        entity_types: Types of entities to search for. Defaults to ["npc", "location", "memory", "narrative"].
+        top_k: Maximum number of results to return. Defaults to 5 if not provided. # 2. Update docstring
 
     Returns:
-        List of semantically similar entities
+        List of semantically similar entities.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_top_k = top_k if top_k is not None else 5
+    # Handle default for entity_types as well (already done in original code, but good to be explicit)
+    actual_entity_types = entity_types if entity_types is not None else ["npc", "location", "memory", "narrative"]
+
+
     try:
         vector_service = await get_vector_service(user_id, conversation_id)
-        if not vector_service.enabled:
+        # Check if vector service is enabled AFTER getting it
+        if not vector_service or not vector_service.enabled:
+            logger.info("Vector service is not enabled or available. Skipping vector search.")
             return []
 
-        entity_types = entity_types or ["npc", "location", "memory", "narrative"]
+        # 4. Use the 'actual_' variables in the function call
         results = await vector_service.search_entities(
-            query_text=query_text, entity_types=entity_types, top_k=top_k, hybrid_ranking=True
+            query_text=query_text,
+            entity_types=actual_entity_types, # Use handled default
+            top_k=actual_top_k, # Use actual_top_k here
+            hybrid_ranking=True # Assuming this is always true
         )
         return results
     except Exception as e:
         logger.error(f"Error in vector search: {str(e)}", exc_info=True)
-        return []
+        return [] # Return empty list on error as per original logic
 
 @function_tool
 async def get_summarized_narrative_context(
