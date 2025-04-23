@@ -308,14 +308,11 @@ class StoryDirectorContext:
                 metadata={"source": "story_director"}
             )
             
-            # Create a RunContextWrapper with self as context
-            wrapper = RunContextWrapper(context=self)
-            
-            # Call the add_memory_tool function
-            await add_memory_tool(wrapper, self.user_id, self.conversation_id, request)
+            # Directly call the internal _add_memory method
+            await self.memory_manager._add_memory(request)
         except Exception as e:
             logger.error(f"Failed to add narrative memory: {e}", exc_info=True)
-
+        
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
         instruction = directive.get("instruction", "")
