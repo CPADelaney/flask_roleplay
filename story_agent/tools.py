@@ -1661,7 +1661,7 @@ async def get_player_journal_entries(
         except Exception as e:
             logger.error(f"Error getting player journal entries: {str(e)}", exc_info=True)
             return []
-
+            
 @function_tool
 async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrative_text: str) -> Dict[str, Any]:
     """
