@@ -529,9 +529,9 @@ class ContextAwarenessSystem:
             model="gpt-4o-mini",
             model_settings=ModelSettings(temperature=0.1)
         )
-    
-    async def _message_validation_guardrail(self, 
-                                        ctx: RunContextWrapper[CASystemContext], 
+
+    @staticmethod
+    async def _message_validation_guardrail(ctx: RunContextWrapper[CASystemContext], 
                                         agent: Agent[CASystemContext], 
                                         input_data: str | List[Any]) -> GuardrailFunctionOutput:
         """Validate user message input for context detection"""
@@ -578,10 +578,9 @@ class ContextAwarenessSystem:
             )
     
     # Helper functions for blended context
-    
+    @staticmethod
     @function_tool
-    async def _calculate_context_distribution(self, 
-                                         ctx: RunContextWrapper[CASystemContext], 
+    async def _calculate_context_distribution(ctx: RunContextWrapper[CASystemContext], 
                                          signals: List[Dict[str, Any]]) -> ContextDistribution:
         """
         Calculate context distribution based on detected signals
@@ -649,10 +648,10 @@ class ContextAwarenessSystem:
             return context_dist.normalize()
         
         return context_dist
-    
+                                             
+    @staticmethod
     @function_tool
-    async def _verify_blend_coherence(self, 
-                                 ctx: RunContextWrapper[CASystemContext], 
+    async def _verify_blend_coherence(ctx: RunContextWrapper[CASystemContext], 
                                  distribution: ContextDistribution) -> Dict[str, Any]:
         """
         Verify coherence of a context distribution blend
@@ -730,10 +729,10 @@ class ContextAwarenessSystem:
             "active_contexts": [context for context, _ in active_contexts],
             "incoherent_pairs": incoherent_pairs
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_distribution_transition(self, 
-                                          ctx: RunContextWrapper[CASystemContext], 
+    async def _analyze_distribution_transition(ctx: RunContextWrapper[CASystemContext], 
                                           from_distribution: ContextDistribution, 
                                           to_distribution: ContextDistribution) -> Dict[str, Any]:
         """
@@ -784,10 +783,10 @@ class ContextAwarenessSystem:
             "context_changes": context_changes,
             "significant_shifts": [context for context, data in context_changes.items() if data["change"] > 0.3]
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _blend_emotional_baselines(self, 
-                                    ctx: RunContextWrapper[CASystemContext], 
+    async def _blend_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
                                     distribution: ContextDistribution) -> Dict[str, float]:
         """
         Calculate blended emotional baselines based on context distribution
@@ -842,10 +841,10 @@ class ContextAwarenessSystem:
         return blended_baselines
     
     # Existing helper functions updated for blended context
-    
+
+    @staticmethod
     @function_tool
-    async def _categorize_signals(self, 
-                              ctx: RunContextWrapper[CASystemContext], 
+    async def _categorize_signals(ctx: RunContextWrapper[CASystemContext], 
                               signals: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """
         Categorize signals by type and context
@@ -881,10 +880,10 @@ class ContextAwarenessSystem:
                 categories[context.lower()].append(signal)
                 
         return categories
-    
+
+    @staticmethod
     @function_tool
-    async def _identify_implicit_signals(self, 
-                                    ctx: RunContextWrapper[CASystemContext], 
+    async def _identify_implicit_signals(ctx: RunContextWrapper[CASystemContext], 
                                     message: str) -> List[Dict[str, Any]]:
         """
         Identify implicit context signals in a message
@@ -955,10 +954,10 @@ class ContextAwarenessSystem:
             })
             
         return implicit_signals
-    
+
+    @staticmethod
     @function_tool
-    async def _get_emotional_baselines(self, 
-                                  ctx: RunContextWrapper[CASystemContext], 
+    async def _get_emotional_baselines(ctx: RunContextWrapper[CASystemContext], 
                                   context_type: str) -> Dict[str, float]:
         """
         Get emotional baselines for a specific context
@@ -990,10 +989,10 @@ class ContextAwarenessSystem:
                 "adrenyx": 0.4,
                 "seranix": 0.5
             }
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_emotional_impact(self, 
-                                     ctx: RunContextWrapper[CASystemContext], 
+    async def _calculate_emotional_impact(ctx: RunContextWrapper[CASystemContext], 
                                      old_baselines: Dict[str, float], 
                                      new_baselines: Dict[str, float]) -> float:
         """
@@ -1026,10 +1025,10 @@ class ContextAwarenessSystem:
             return impact
         else:
             return 0.0
-    
+
+    @staticmethod
     @function_tool
-    async def _check_confidence_threshold(self, 
-                                     ctx: RunContextWrapper[CASystemContext], 
+    async def _check_confidence_threshold(ctx: RunContextWrapper[CASystemContext], 
                                      distribution: ContextDistribution,
                                      confidence: float) -> Dict[str, Any]:
         """
@@ -1060,10 +1059,10 @@ class ContextAwarenessSystem:
             "significant_contexts": significant_contexts,
             "has_significant_contexts": len(significant_contexts) > 0
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _detect_context_signals(self, 
-                                 ctx: RunContextWrapper[CASystemContext], 
+    async def _detect_context_signals(ctx: RunContextWrapper[CASystemContext], 
                                  message: str) -> Dict[str, Any]:
         """
         Detect context signals and calculate initial context distribution
@@ -1160,10 +1159,10 @@ class ContextAwarenessSystem:
             "signal_based": True,
             "detection_method": "composite_analysis"
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _extract_message_features(self, 
-                                   ctx: RunContextWrapper[CASystemContext], 
+    async def _extract_message_features(ctx: RunContextWrapper[CASystemContext], 
                                    message: str) -> Dict[str, Any]:
         """
         Extract features from a message for context analysis
@@ -1235,10 +1234,10 @@ class ContextAwarenessSystem:
         features["feature_distribution"] = feature_distribution
         
         return features
-    
+
+    @staticmethod
     @function_tool
-    async def _get_context_history(self, 
-                              ctx: RunContextWrapper[CASystemContext]) -> List[Dict[str, Any]]:
+    async def _get_context_history(ctx: RunContextWrapper[CASystemContext]) -> List[Dict[str, Any]]:
         """
         Get recent context history
         
@@ -1247,10 +1246,10 @@ class ContextAwarenessSystem:
         """
         # Return last 5 context history items or fewer if not available
         return self.context_history[-5:] if self.context_history else []
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_context_confidence(self, 
-                                      ctx: RunContextWrapper[CASystemContext],
+    async def _calculate_context_confidence(ctx: RunContextWrapper[CASystemContext],
                                       distribution: ContextDistribution,
                                       signals: List[Dict[str, Any]],
                                       message_features: Dict[str, Any]) -> float:
