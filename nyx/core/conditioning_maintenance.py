@@ -251,9 +251,10 @@ class ConditioningMaintenanceSystem:
         )
     
     # Tool functions for agents
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_trait_distribution(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_trait_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Analyze the distribution of personality traits
         
@@ -335,9 +336,10 @@ class ConditioningMaintenanceSystem:
             "weak_traits": weak_traits,
             "total_traits": len(trait_counts)
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_behavior_distribution(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_behavior_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Analyze the distribution of conditioned behaviors
         
@@ -410,9 +412,10 @@ class ConditioningMaintenanceSystem:
             "underrepresented": underrepresented,
             "total_behaviors": total_behaviors
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_trait_coherence(self, ctx: RunContextWrapper, 
+    async def _calculate_trait_coherence(ctx: RunContextWrapper, 
                                  traits: Dict[str, float]) -> Dict[str, Any]:
         """
         Calculate coherence between personality traits
@@ -483,9 +486,10 @@ class ConditioningMaintenanceSystem:
             "incoherent_pairs": [p for p in complementary_coherence if p["coherence"] < 0.5] + 
                               [p for p in opposing_coherence if p["coherence"] < 0.5]
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _identify_trait_imbalances(self, ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    async def _identify_trait_imbalances(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         """
         Identify imbalances in personality traits
         
@@ -540,9 +544,10 @@ class ConditioningMaintenanceSystem:
                 })
         
         return imbalances
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_trait_adjustment(self, ctx: RunContextWrapper,
+    async def _calculate_trait_adjustment(ctx: RunContextWrapper,
                                     trait: str,
                                     current_value: float,
                                     target_value: float,
@@ -574,9 +579,10 @@ class ConditioningMaintenanceSystem:
         # Limit maximum adjustment per maintenance
         max_adjustment = 0.2
         return max(-max_adjustment, min(max_adjustment, adjustment))
-    
+
+    @staticmethod
     @function_tool
-    async def _reinforce_core_trait(self, ctx: RunContextWrapper,
+    async def _reinforce_core_trait(ctx: RunContextWrapper,
                               trait: str,
                               adjustment: float) -> Dict[str, Any]:
         """
@@ -610,9 +616,10 @@ class ConditioningMaintenanceSystem:
                 "trait": trait,
                 "error": str(e)
             }
-    
+
+    @staticmethod
     @function_tool
-    async def _get_trait_history(self, ctx: RunContextWrapper, trait: str) -> Dict[str, Any]:
+    async def _get_trait_history(ctx: RunContextWrapper, trait: str) -> Dict[str, Any]:
         """
         Get historical data for a personality trait
         
@@ -661,9 +668,10 @@ class ConditioningMaintenanceSystem:
                 history["trend"] = "stable"
         
         return history
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_reinforcement_efficacy(self, ctx: RunContextWrapper,
+    async def _analyze_reinforcement_efficacy(ctx: RunContextWrapper,
                                         trait: str) -> Dict[str, Any]:
         """
         Analyze the efficacy of trait reinforcement
@@ -730,9 +738,10 @@ class ConditioningMaintenanceSystem:
             "confidence": min(0.9, 0.3 + (adjustment_count / 10)),
             "recommendation": recommendation
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _get_association_details(self, ctx: RunContextWrapper,
+    async def _get_association_details(ctx: RunContextWrapper,
                                  association_key: str,
                                  association_type: str) -> Dict[str, Any]:
         """
@@ -779,9 +788,10 @@ class ConditioningMaintenanceSystem:
             "decay_rate": association.decay_rate,
             "context_keys": association.context_keys
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _apply_extinction_to_association(self, ctx: RunContextWrapper,
+    async def _apply_extinction_to_association(ctx: RunContextWrapper,
                                          association_key: str,
                                          association_type: str) -> Dict[str, Any]:
         """
@@ -803,9 +813,10 @@ class ConditioningMaintenanceSystem:
                 "success": False,
                 "error": str(e)
             }
-    
+
+    @staticmethod
     @function_tool
-    async def _adjust_association_decay_rate(self, ctx: RunContextWrapper,
+    async def _adjust_association_decay_rate(ctx: RunContextWrapper,
                                        association_key: str,
                                        association_type: str,
                                        new_decay_rate: float) -> Dict[str, Any]:
@@ -843,9 +854,10 @@ class ConditioningMaintenanceSystem:
             "old_decay_rate": old_decay_rate,
             "new_decay_rate": association.decay_rate
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _identify_extinction_candidates(self, ctx: RunContextWrapper) -> List[Dict[str, Any]]:
+    async def _identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
         """
         Identify associations that are candidates for extinction
         
@@ -907,9 +919,10 @@ class ConditioningMaintenanceSystem:
                 })
         
         return candidates
-    
+
+    @staticmethod
     @function_tool
-    async def _find_similar_associations(self, ctx: RunContextWrapper,
+    async def _find_similar_associations(ctx: RunContextWrapper,
                                    association_type: str) -> List[Dict[str, Any]]:
         """
         Find groups of similar associations that are candidates for consolidation
@@ -969,9 +982,10 @@ class ConditioningMaintenanceSystem:
                         })
         
         return similar_groups
-    
+
+    @staticmethod
     @function_tool
-    async def _consolidate_associations(self, ctx: RunContextWrapper,
+    async def _consolidate_associations(ctx: RunContextWrapper,
                                   group: Dict[str, Any]) -> Dict[str, Any]:
         """
         Consolidate a group of similar associations
@@ -1038,9 +1052,10 @@ class ConditioningMaintenanceSystem:
             "new_strength": strongest_association.association_strength,
             "combined_context_keys": strongest_association.context_keys
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _calculate_consolidated_strength(self, ctx: RunContextWrapper,
+    async def _calculate_consolidated_strength(ctx: RunContextWrapper,
                                          strengths: List[float]) -> float:
         """
         Calculate appropriate strength for a consolidated association
@@ -1070,9 +1085,10 @@ class ConditioningMaintenanceSystem:
         
         # Ensure strength is within bounds
         return min(1.0, consolidated_strength)
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_consolidation_impact(self, ctx: RunContextWrapper,
+    async def _analyze_consolidation_impact(ctx: RunContextWrapper,
                                       association_type: str) -> Dict[str, Any]:
         """
         Analyze the impact of consolidation on the association set
@@ -1120,9 +1136,10 @@ class ConditioningMaintenanceSystem:
             "total_associations": total_associations,
             "recommendation": recommendation
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _create_maintenance_schedule(self, ctx: RunContextWrapper) -> List[MaintenanceTask]:
+    async def _create_maintenance_schedule(ctx: RunContextWrapper) -> List[MaintenanceTask]:
         """
         Create a schedule of maintenance tasks
         
@@ -1181,9 +1198,10 @@ class ConditioningMaintenanceSystem:
         tasks.sort(key=lambda x: x.priority, reverse=True)
         
         return tasks
-    
+
+    @staticmethod
     @function_tool
-    async def _get_maintenance_status(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Get the current status of maintenance
         
@@ -1231,9 +1249,10 @@ class ConditioningMaintenanceSystem:
             "consolidation_interval_days": ctx.context.consolidation_interval_days,
             "maintenance_history_count": len(ctx.context.maintenance_history)
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _record_maintenance_history(self, ctx: RunContextWrapper,
+    async def _record_maintenance_history(ctx: RunContextWrapper,
                                     maintenance_record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Record maintenance history
@@ -1261,9 +1280,10 @@ class ConditioningMaintenanceSystem:
             "max_history_entries": ctx.context.max_history_entries,
             "latest_entry_timestamp": ctx.context.maintenance_history[-1].get("timestamp") if ctx.context.maintenance_history else None
         }
-    
+
+    @staticmethod
     @function_tool
-    async def _analyze_system_efficiency(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_system_efficiency(ctx: RunContextWrapper) -> Dict[str, Any]:
         """
         Analyze the efficiency of the conditioning system
         
