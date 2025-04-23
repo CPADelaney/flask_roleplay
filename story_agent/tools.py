@@ -1631,39 +1631,76 @@ async def analyze_conflict_potential(ctx: RunContextWrapper[ContextType], narrat
         return {"conflict_intensity": 0, "matched_keywords": [], "mentioned_npcs": [], "mentioned_factions": [], "npc_relationships": [], "recommended_conflict_type": "minor", "potential_internal_faction_conflict": None, "has_conflict_potential": False, "error": str(e)}
 
 @function_tool
-async def generate_conflict_from_analysis(ctx: RunContextWrapper[ContextType], analysis: Dict[str, Any]) -> Dict[str, Any]:
+# 1. Change signature: analysis: Optional[Dict[str, Any]] = None
+async def generate_conflict_from_analysis(
+    ctx: RunContextWrapper[ContextType],
+    analysis: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
-    Generate a conflict based on analysis.
+    Generate a conflict based on analysis provided by analyze_conflict_potential.
 
     Args:
-        analysis: Conflict potential analysis from analyze_conflict_potential
+        analysis: Conflict potential analysis dictionary (required). # 3. Update docstring
 
     Returns:
-        Generated conflict details
+        Generated conflict details or error dictionary.
     """
-    context = ctx.context # Use attribute access
+    context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 2. Add internal check for the required parameter
+    if analysis is None:
+        logger.error("generate_conflict_from_analysis called without 'analysis' parameter.")
+        return {
+            "generated": False,
+            "reason": "Missing required 'analysis' parameter.",
+            "analysis": None
+        }
+
     try:
+        # Now proceed with the original logic, using the validated 'analysis' dict
         if not analysis.get("has_conflict_potential", False):
             return {"generated": False, "reason": "Insufficient conflict potential", "analysis": analysis}
 
+        # Assuming ConflictSystemIntegration is imported correctly
         from logic.conflict_system.conflict_integration import ConflictSystemIntegration
         conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+
         conflict_type = analysis.get("recommended_conflict_type", "standard")
-        conflict = await conflict_integration.generate_new_conflict(conflict_type) # Assuming this method exists
+        # Assuming generate_new_conflict exists and works
+        conflict = await conflict_integration.generate_new_conflict(conflict_type)
 
         internal_faction_conflict = None
-        if analysis.get("potential_internal_faction_conflict") and conflict.get("conflict_id"):
-            internal_data = analysis["potential_internal_faction_conflict"]
+        potential_internal = analysis.get("potential_internal_faction_conflict")
+        # Check if conflict generation was successful before proceeding
+        if potential_internal and conflict and conflict.get("conflict_id"):
+            internal_data = potential_internal
             try:
-                internal_faction_conflict = await conflict_integration.initiate_faction_power_struggle(conflict["conflict_id"], internal_data["faction_id"], internal_data["challenger_npc_id"], internal_data["target_npc_id"], internal_data["prize"], internal_data["approach"], False) # Assuming this method exists
-            except Exception as e: logging.error(f"Error generating internal faction conflict: {e}")
+                # Assuming initiate_faction_power_struggle exists and works
+                internal_faction_conflict = await conflict_integration.initiate_faction_power_struggle(
+                    conflict["conflict_id"],
+                    internal_data["faction_id"],
+                    internal_data["challenger_npc_id"],
+                    internal_data["target_npc_id"],
+                    internal_data["prize"],
+                    internal_data["approach"],
+                    False # Not public by default
+                )
+            except Exception as e:
+                # Log the specific error for the internal conflict generation
+                logger.error(f"Error generating internal faction conflict within generate_conflict_from_analysis: {e}")
+                # Decide if this should prevent returning the main conflict or just be logged
+                # For now, just log and continue
 
-        return {"generated": True, "conflict": conflict, "internal_faction_conflict": internal_faction_conflict}
+        # Ensure conflict is included even if internal conflict fails
+        return {
+            "generated": True,
+            "conflict": conflict, # Return the main conflict info
+            "internal_faction_conflict": internal_faction_conflict # May be None if generation failed
+        }
     except Exception as e:
-        logging.error(f"Error generating conflict from analysis: {e}")
+        logger.error(f"Error generating conflict from analysis: {e}", exc_info=True) # Add exc_info
         return {"generated": False, "reason": f"Error: {str(e)}", "analysis": analysis}
 
 @function_tool
