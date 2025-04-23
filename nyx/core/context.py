@@ -14,7 +14,7 @@ class NyxBaseContext(BaseModel):
     operation_start_time: datetime.datetime = Field(default_factory=datetime.datetime.now)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-class NyxSystemContext(Generic[T], NyxBaseContext):
+class NyxSystemContext(NyxBaseContext, Generic[T]):
     """System-specific context with generic system state."""
     system_name: str
     system_state: T
