@@ -252,9 +252,8 @@ class ConditioningMaintenanceSystem:
     
     # Tool functions for agents
 
-    @staticmethod
     @function_tool
-    async def _analyze_trait_distribution(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _analyze_trait_distribution(self, ctx: RunContextWrapper[MaintenanceContext]) -> Dict[str, Any]:
         """
         Analyze the distribution of personality traits
         
