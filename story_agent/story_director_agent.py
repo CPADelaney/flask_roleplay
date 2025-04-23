@@ -714,95 +714,119 @@ async def get_story_state(ctx: RunContextWrapper[StoryDirectorContext]) -> Story
              key_observations=[f"Error retrieving state: {str(e)}"]
         )
 
-@track_performance("get_story_state")
+@track_performance("get_current_story_state")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="get_story_state")
 async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[StoryDirectorContext], StoryDirectorContext]) -> Any:
     """Get the current state of the story with caching"""
-    # Extract the actual context from the wrapper or use directly if already a StoryDirectorContext
-    if isinstance(ctx, RunContextWrapper):
-        context = ctx.context
-    else:
-        context = ctx
-        
-    # Rest of the function remains the same
+    if isinstance(ctx, RunContextWrapper): context = ctx.context
+    else: context = ctx
+
+    # Ensure dependencies are initialized
+    if not context.initialized:
+         logger.info("Context not initialized in get_current_story_state, initializing...")
+         await context.initialize_dependencies()
+         context.initialized = True # Mark as initialized
+
+
     cached_state = context.get_from_cache("current_state", max_age_seconds=60)
     if cached_state:
-        logger.info(f"Using cached story state for user {context.user_id}, conversation {context.conversation_id}")
+        logger.info(f"Using cached story state for user {context.user_id}")
+        # Make sure cached state conforms to expected return type if necessary
+        # If it's just the agent result, return it directly
         return cached_state
-    
+
     start_time = time.time()
     success = False
+    # Initialize tokens dict before the loop
     tokens = {"prompt": 0, "completion": 0, "total": 0}
-    
+    result = None # Initialize result
+
     try:
-        comprehensive_context = await context.get_comprehensive_context()
-        
+        comprehensive_context = await context.get_comprehensive_context() # Use context method
+
         prompt = """
-        Analyze the current state of the story and provide a detailed report.
-        
-        Include information about:
-        1. The narrative stage
-        2. Active conflicts
-        3. Player resources
-        4. Potential narrative events that might occur soon
-        5. Key NPCs and their relationships
-        """
-        
+        Analyze the current state of the story based on the provided context and provide a detailed report using the get_story_state tool. Focus only on using the get_story_state tool.
+        """ # Prompt asking agent to use the tool
+
         with trace(workflow_name="StoryDirector", group_id=DEFAULT_TRACING_GROUP):
-            operation = lambda: Runner.run(agent, prompt, context=context)
-            result = await retry_operation(operation)
-        
-        if hasattr(result, 'raw_responses') and result.raw_responses:
+            operation = lambda: Runner.run(agent, prompt, context=context) # Pass context object
+            result = await retry_operation(operation) # Store result
+
+        # --- TOKEN COUNTING FIX ---
+        if result and hasattr(result, 'raw_responses') and result.raw_responses:
             for response in result.raw_responses:
-                if hasattr(response, 'usage'):
-                    tokens = {
-                        "prompt": response.usage.prompt_tokens,
-                        "completion": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens
-                    }
-        
-        success = True
-        
-        context.add_to_cache("current_state", result)
-        context.last_state_update = datetime.now()
-        
-        await context.add_narrative_memory(
-            "Analyzed current story state and identified key elements",
-            "story_analysis",
-            0.5
-        )
-        
-        return result
+                 # Check if response and usage exist and have the correct attributes
+                 if response and hasattr(response, 'usage') and response.usage:
+                     # Use getattr for safety, fallback to 0
+                     current_prompt_tokens = getattr(response.usage, 'input_tokens', 0)
+                     current_completion_tokens = getattr(response.usage, 'output_tokens', 0)
+                     current_total_tokens = getattr(response.usage, 'total_tokens', 0)
+
+                     # Accumulate tokens
+                     tokens["prompt"] += current_prompt_tokens
+                     tokens["completion"] += current_completion_tokens
+                     tokens["total"] += current_total_tokens
+                     logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={current_total_tokens}")
+                 else:
+                      logger.warning("ModelResponse found without valid usage object in raw_responses.")
+        # --- END FIX ---
+
+        # Check if the agent correctly called the get_story_state tool
+        # The result.final_output *should* be the output of get_story_state if called
+        if isinstance(result.final_output, StoryStateUpdate):
+             final_state = result.final_output
+             context.add_to_cache("current_state", final_state) # Cache the actual state object
+             context.last_state_update = datetime.now(datetime.timezone.utc)
+             await context.add_narrative_memory("Analyzed current story state via tool.", "story_analysis", 0.5)
+             success = True
+             logger.info(f"Successfully retrieved story state via tool for user {context.user_id}")
+             return final_state
+        else:
+             # Agent might have returned text instead of calling the tool, or tool failed.
+             logger.warning(f"Agent did not return StoryStateUpdate. Final output type: {type(result.final_output)}. Attempting direct call.")
+             # Fallback: Call the tool directly if the agent didn't
+             # Need to wrap context for direct tool call
+             final_state = await get_story_state(RunContextWrapper(context=context))
+             context.add_to_cache("current_state", final_state)
+             context.last_state_update = datetime.now(datetime.timezone.utc)
+             success = True # Mark as success even on fallback if it works
+             return final_state
+
+
     except Exception as e:
-        logger.error(f"Error getting story state: {str(e)}", exc_info=True)
-        context.metrics.last_error = str(e)
-        raise
+        logger.error(f"Error in get_current_story_state for user {context.user_id}: {str(e)}", exc_info=True)
+        if context.metrics: context.metrics.last_error = str(e)
+        # Decide whether to raise or return an error state
+        # Returning an error state might be safer for consuming code
+        return StoryStateUpdate(key_observations=[f"Error getting state: {str(e)}"], last_updated=datetime.now(datetime.timezone.utc))
+
     finally:
         execution_time = time.time() - start_time
-        context.metrics.record_run(success, execution_time, tokens)
-        context.performance_monitor.record_token_usage(tokens.get("total", 0))
+        # Ensure metrics object exists before recording
+        if context.metrics:
+             context.metrics.record_run(success, execution_time, tokens)
+        # Ensure performance monitor exists
+        if context.performance_monitor:
+             context.performance_monitor.record_token_usage(tokens.get("total", 0))
+
 
 @track_performance("process_narrative_input")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="process_narrative_input")
 async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext], narrative_text: str) -> Any:
     context = ctx.context
-    """Process narrative input to determine if it should generate conflicts or narrative events"""
     context.invalidate_cache("current_state")
-    
+
     start_time = time.time()
     success = False
+    # Initialize tokens dict before the loop
     tokens = {"prompt": 0, "completion": 0, "total": 0}
-    
+    result = None
+
     try:
         comprehensive_context = await context.get_comprehensive_context(narrative_text)
-        
         relevant_memories = await context.get_relevant_memories(narrative_text, limit=3)
-        memory_text = ""
-        if relevant_memories:
-            memory_text = "Relevant memories:\n" + "\n".join([
-                f"- {mem.get('content', '')[:100]}..." for mem in relevant_memories
-            ])
-        
+        memory_text = "Relevant memories:\n" + "\n".join([f"- {mem.get('content', '')[:100]}..." for mem in relevant_memories]) if relevant_memories else ""
+
         prompt = f"""
         Analyze this narrative text and determine what conflicts or narrative events it might trigger:
 
@@ -811,120 +835,114 @@ async def process_narrative_input(agent: Agent, ctx: RunContextWrapper[StoryDire
 
         {memory_text}
 
-        Consider:
-        1. The current narrative stage
-        2. Existing conflicts and their status
-        3. Character relationships and dynamics
-        4. Recent events and their implications
-        5. The overall theme of subtle control and manipulation
-
-        Determine if this narrative should:
-        - Generate a new conflict
-        - Progress an existing conflict
-        - Trigger a narrative event (revelation, dream, moment of clarity)
-        - Affect relationships between characters
+        Consider the current story state (use get_story_state tool if needed), character dynamics, recent events, and the overall theme. Determine if this narrative should:
+        - Generate a new conflict (use generate_conflict tool)
+        - Progress an existing conflict (use progress_conflict tool)
+        - Trigger a narrative event (use create_narrative_event tool)
+        - Affect relationships (potentially update NPC state via tools not shown here)
+        - Or simply be noted without immediate action.
+        Provide your analysis and recommend the next step or tool call.
         """
-        
+
         with trace(workflow_name="StoryDirector", group_id=DEFAULT_TRACING_GROUP):
             operation = lambda: Runner.run(agent, prompt, context=context)
             result = await retry_operation(operation)
-        
-        if hasattr(result, 'raw_responses') and result.raw_responses:
+
+        # --- TOKEN COUNTING FIX ---
+        if result and hasattr(result, 'raw_responses') and result.raw_responses:
             for response in result.raw_responses:
-                if hasattr(response, 'usage'):
-                    tokens = {
-                        "prompt": response.usage.prompt_tokens,
-                        "completion": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens
-                    }
-        
+                 if response and hasattr(response, 'usage') and response.usage:
+                     current_prompt_tokens = getattr(response.usage, 'input_tokens', 0)
+                     current_completion_tokens = getattr(response.usage, 'output_tokens', 0)
+                     current_total_tokens = getattr(response.usage, 'total_tokens', 0)
+                     tokens["prompt"] += current_prompt_tokens
+                     tokens["completion"] += current_completion_tokens
+                     tokens["total"] += current_total_tokens
+                     logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={current_total_tokens}")
+                 else: logger.warning("ModelResponse missing valid usage object.")
+        # --- END FIX ---
+
         success = True
-        
-        await context.add_narrative_memory(
-            f"Processed narrative: {narrative_text[:100]}...",
-            "narrative_processing",
-            0.6
-        )
-        
-        return result
+        await context.add_narrative_memory(f"Processed narrative: {narrative_text[:100]}...", "narrative_processing", 0.6)
+
+        # Return the agent's final output (which might be analysis, or the result of a tool call it made)
+        return result.final_output if result else "No result from agent run."
+
     except Exception as e:
-        logger.error(f"Error processing narrative input: {str(e)}", exc_info=True)
-        context.metrics.last_error = str(e)
-        raise
+        logger.error(f"Error processing narrative input for user {context.user_id}: {str(e)}", exc_info=True)
+        if context.metrics: context.metrics.last_error = str(e)
+        raise # Re-raise for higher level handling
     finally:
         execution_time = time.time() - start_time
-        context.metrics.record_run(success, execution_time, tokens)
-        context.performance_monitor.record_token_usage(tokens.get("total", 0))
+        if context.metrics: context.metrics.record_run(success, execution_time, tokens)
+        if context.performance_monitor: context.performance_monitor.record_token_usage(tokens.get("total", 0))
+
 
 @track_performance("advance_story")
 @with_action_reporting(agent_type=AgentType.STORY_DIRECTOR, action_type="advance_story")
 async def advance_story(agent: Agent, ctx: RunContextWrapper[StoryDirectorContext], player_actions: str) -> Any:
     context = ctx.context
-    """Advance the story based on player actions"""
     context.invalidate_cache("current_state")
-    
+
     start_time = time.time()
     success = False
+    # Initialize tokens dict before the loop
     tokens = {"prompt": 0, "completion": 0, "total": 0}
-    
+    result = None
+
     try:
         comprehensive_context = await context.get_comprehensive_context(player_actions)
-        
         relevant_memories = await context.get_relevant_memories(player_actions, limit=3)
-        memory_text = ""
-        if relevant_memories:
-            memory_text = "Relevant memories:\n" + "\n".join([
-                f"- {mem.get('content', '')[:100]}..." for mem in relevant_memories
-            ])
-        
+        memory_text = "Relevant memories:\n" + "\n".join([f"- {mem.get('content', '')[:100]}..." for mem in relevant_memories]) if relevant_memories else ""
+
         prompt = f"""
         The player has taken the following actions:
-
         {player_actions}
 
         {memory_text}
 
-        How should the story advance? Consider:
-        1. What conflicts should progress or resolve?
-        2. What narrative events should occur?
-        3. How should character relationships evolve?
-        4. What are the resource implications?
-        5. How does this affect the overall narrative progression?
-
-        Your response should include concrete recommendations for
-        advancing the story based on these player actions.
+        Based on the current story state (use get_story_state tool if needed) and these actions, how should the story advance?
+        Recommend specific actions using available tools:
+        - Progress or resolve conflicts (use progress_conflict tool).
+        - Generate new conflicts if appropriate (use generate_conflict tool).
+        - Trigger narrative events (use create_narrative_event tool).
+        - Update resources based on actions (use update_resource tool).
+        - Adjust relationships or NPC states (future tools).
+        Provide your reasoning and the specific tool calls needed.
         """
-        
+
         with trace(workflow_name="StoryDirector", group_id=DEFAULT_TRACING_GROUP):
             operation = lambda: Runner.run(agent, prompt, context=context)
             result = await retry_operation(operation)
-        
-        if hasattr(result, 'raw_responses') and result.raw_responses:
+
+        # --- TOKEN COUNTING FIX ---
+        if result and hasattr(result, 'raw_responses') and result.raw_responses:
             for response in result.raw_responses:
-                if hasattr(response, 'usage'):
-                    tokens = {
-                        "prompt": response.usage.prompt_tokens,
-                        "completion": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens
-                    }
-        
+                 if response and hasattr(response, 'usage') and response.usage:
+                     current_prompt_tokens = getattr(response.usage, 'input_tokens', 0)
+                     current_completion_tokens = getattr(response.usage, 'output_tokens', 0)
+                     current_total_tokens = getattr(response.usage, 'total_tokens', 0)
+                     tokens["prompt"] += current_prompt_tokens
+                     tokens["completion"] += current_completion_tokens
+                     tokens["total"] += current_total_tokens
+                     logger.debug(f"Accumulated tokens: Prompt={current_prompt_tokens}, Completion={current_completion_tokens}, Total={current_total_tokens}")
+                 else: logger.warning("ModelResponse missing valid usage object.")
+        # --- END FIX ---
+
         success = True
-        
-        await context.add_narrative_memory(
-            f"Advanced story based on player actions: {player_actions[:100]}...",
-            "story_advancement",
-            0.7
-        )
-        
-        return result
+        await context.add_narrative_memory(f"Advanced story based on actions: {player_actions[:100]}...", "story_advancement", 0.7)
+
+        # Return the agent's final output (analysis or tool call result)
+        return result.final_output if result else "No result from agent run."
+
     except Exception as e:
-        logger.error(f"Error advancing story: {str(e)}", exc_info=True)
-        context.metrics.last_error = str(e)
-        raise
+        logger.error(f"Error advancing story for user {context.user_id}: {str(e)}", exc_info=True)
+        if context.metrics: context.metrics.last_error = str(e)
+        raise # Re-raise
     finally:
         execution_time = time.time() - start_time
-        context.metrics.record_run(success, execution_time, tokens)
-        context.performance_monitor.record_token_usage(tokens.get("total", 0))
+        if context.metrics: context.metrics.record_run(success, execution_time, tokens)
+        if context.performance_monitor: context.performance_monitor.record_token_usage(tokens.get("total", 0))
 
 def get_story_director_metrics(context: StoryDirectorContext) -> Dict[str, Any]:
     """Get metrics for the Story Director agent"""
