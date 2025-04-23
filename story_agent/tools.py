@@ -500,12 +500,13 @@ async def generate_activity_suggestion(
 
 @function_tool
 @track_performance("get_key_npcs")
-async def get_key_npcs(ctx: RunContextWrapper[ContextType], limit: int = 5) -> List[Dict[str, Any]]:
+# 1. Change signature: limit: Optional[int] = None
+async def get_key_npcs(ctx: RunContextWrapper[ContextType], limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Get the key NPCs in the current game state, ordered by importance.
 
     Args:
-        limit: Maximum number of NPCs to return
+        limit: Maximum number of NPCs to return. Defaults to 5 if not provided. # 2. Update docstring
 
     Returns:
         List of NPC information dictionaries
@@ -514,14 +515,49 @@ async def get_key_npcs(ctx: RunContextWrapper[ContextType], limit: int = 5) -> L
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_limit = limit if limit is not None else 5
+
     async with get_db_connection_context() as conn:
         try:
-            rows = await conn.fetch("SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE ORDER BY dominance DESC LIMIT $3", user_id, conversation_id, limit)
+            # 4. Use the actual_limit in the query
+            rows = await conn.fetch(
+                """
+                SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+                ORDER BY dominance DESC
+                LIMIT $3
+                """,
+                user_id, conversation_id, actual_limit # Use actual_limit here
+            )
+
             npcs = []
             for row in rows:
-                relationship = await get_relationship_summary_tool(user_id, conversation_id, "player", user_id, "npc", row['npc_id'])
-                dynamics = relationship.get('dynamics', {}) if relationship else {}
-                npcs.append({"npc_id": row['npc_id'], "npc_name": row['npc_name'], "dominance": row['dominance'], "cruelty": row['cruelty'], "closeness": row['closeness'], "trust": row['trust'], "respect": row['respect'], "relationship_dynamics": dynamics})
+                dynamics = {}
+                # Check if the relationship tool is available before calling
+                if HAS_REL_TOOL:
+                    try:
+                        relationship = await get_relationship_summary_tool(
+                            user_id, conversation_id, "player", user_id, "npc", row['npc_id']
+                        )
+                        dynamics = relationship.get('dynamics', {}) if relationship else {}
+                    except Exception as rel_err:
+                         logger.warning(f"Error getting relationship summary for NPC {row['npc_id']} in get_key_npcs: {rel_err}")
+                else:
+                    logger.debug("Skipping relationship summary in get_key_npcs as tool is not available.")
+
+
+                npcs.append({
+                    "npc_id": row['npc_id'],
+                    "npc_name": row['npc_name'],
+                    "dominance": row['dominance'],
+                    "cruelty": row['cruelty'],
+                    "closeness": row['closeness'],
+                    "trust": row['trust'],
+                    "respect": row['respect'],
+                    "relationship_dynamics": dynamics
+                })
             return npcs
         except Exception as e:
             logger.error(f"Error fetching key NPCs: {str(e)}", exc_info=True)
