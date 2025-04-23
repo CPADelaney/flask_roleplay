@@ -855,10 +855,10 @@ class GoalSelector:
         except Exception as e:
             logger.error(f"Error getting goals for mode {mode}: {e}")
             return []
-    
+
+    @staticmethod
     @function_tool
     async def _analyze_goal_compatibility(
-        self, 
         ctx: RunContextWrapper[GoalSelectorContext],
         goal1: Dict[str, Any],
         goal2: Dict[str, Any]
@@ -944,10 +944,10 @@ class GoalSelector:
             "mode1": mode1,
             "mode2": mode2
         }
-    
+
+    @staticmethod
     @function_tool
     async def _blend_goal_steps(
-        self, 
         ctx: RunContextWrapper[GoalSelectorContext],
         goals: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -1040,10 +1040,10 @@ class GoalSelector:
             "original_descriptions": descriptions,
             "plan": blended_plan
         }
-    
+
+    @staticmethod
     @function_tool
     async def _evaluate_goal_mode_alignment(
-        self, 
         ctx: RunContextWrapper[GoalSelectorContext],
         goal: Dict[str, Any],
         mode_distribution: Dict[str, float]
@@ -1098,10 +1098,10 @@ class GoalSelector:
             "total_alignment": total_alignment,
             "alignments_by_mode": alignments
         }
-    
+
+    @staticmethod
     @function_tool
     async def _calculate_goal_priority(
-        self, 
         ctx: RunContextWrapper[GoalSelectorContext],
         goal: Dict[str, Any],
         mode_distribution: Dict[str, float],
