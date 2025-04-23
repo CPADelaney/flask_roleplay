@@ -7,7 +7,7 @@ from typing import Dict, List, Any, Optional, Union
 from agents import Agent, Runner, trace, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, RunConfig, RunContextWrapper
 from pydantic import BaseModel, Field
 
-from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences, update_memory, delete_memory, apply_memory_decay, retrieve_memories, create_reflection_from_memories, create_abstraction_from_memories, retrieve_relevant_experiences, generate_conversational_recall,construct_narrative_from_memories, consolidate_memory_clusters
+from nyx.core.memory_core import MemoryCoreAgents, MemoryCoreContext, add_memory, get_memory, retrieve_memories_with_formatting, retrieve_relevant_experiences, update_memory, delete_memory, apply_memory_decay, retrieve_memories, create_reflection_from_memories, create_abstraction_from_memories, retrieve_relevant_experiences, generate_conversational_recall,construct_narrative_from_memories, consolidate_memory_clusters
 
 logger = logging.getLogger(__name__)
 
