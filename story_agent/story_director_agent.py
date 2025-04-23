@@ -522,14 +522,16 @@ get_story_state_tool = FunctionTool(
     ),
     params_json_schema={
         "type": "object",
-        "additionalProperties": False,    # <— this line
+        "additionalProperties": False,       # ⬅️ no extra top-level keys
         "properties": {
             "ctx": {
                 "type": "object",
                 "description": (
                     "The context wrapper object containing user and "
                     "conversation information"
-                )
+                ),
+                "properties": {},               # ⬅️ ctx has no sub-fields
+                "additionalProperties": False   # ⬅️ no extra keys inside ctx
             }
         },
         "required": ["ctx"],
