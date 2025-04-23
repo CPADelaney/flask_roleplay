@@ -126,35 +126,42 @@ async def get_optimized_context(
         }
 
 @function_tool
+# @track_performance("retrieve_relevant_memories") # Uncomment if track_performance is defined/imported
 async def retrieve_relevant_memories(
     ctx: RunContextWrapper[ContextType],
     query_text: str,
-    memory_type: Optional[str] = None,
-    limit: int = 5
+    memory_type: Optional[str] = None, # This one was already correct
+    # 1. Change signature: limit: Optional[int] = None
+    limit: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant memories using vector search.
 
     Args:
-        query_text: Query text for relevance matching
-        memory_type: Optional type filter (observation, event, etc.)
-        limit: Maximum number of memories to return
+        query_text: Query text for relevance matching.
+        memory_type: Optional type filter (observation, event, etc.).
+        limit: Maximum number of memories to return. Defaults to 5 if not provided. # 2. Update docstring
 
     Returns:
-        List of relevant memories
+        List of relevant memories.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_limit = limit if limit is not None else 5
+
     try:
         memory_manager = await get_memory_manager(user_id, conversation_id)
-        memory_types = [memory_type] if memory_type else None
+        memory_types = [memory_type] if memory_type else None # Keep existing logic
+
+        # 4. Use the 'actual_' variable in the function call
         memories = await memory_manager.search_memories(
             query_text=query_text,
             memory_types=memory_types,
-            limit=limit,
-            use_vector=True
+            limit=actual_limit, # Use actual_limit here
+            use_vector=True # Assuming this is always true for this tool
         )
 
         memory_dicts = []
@@ -170,8 +177,7 @@ async def retrieve_relevant_memories(
         return memory_dicts
     except Exception as e:
         logger.error(f"Error retrieving relevant memories: {str(e)}", exc_info=True)
-        return []
-
+        return [] # Return empty list on error as per original logic
 @function_tool
 async def store_narrative_memory(
     ctx: RunContextWrapper[ContextType],
