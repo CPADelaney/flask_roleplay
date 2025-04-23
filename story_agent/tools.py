@@ -1026,31 +1026,64 @@ async def get_conflict_details(ctx: RunContextWrapper[ContextType], conflict_id:
 
 @function_tool
 @track_performance("check_resources")
-async def check_resources(ctx: RunContextWrapper[ContextType], money: int = 0, supplies: int = 0, influence: int = 0) -> Dict[str, Any]:
+async def check_resources(
+    ctx: RunContextWrapper[ContextType],
+    # 1. Change parameters with defaults to Optional[Type] = None
+    money: Optional[int] = None,
+    supplies: Optional[int] = None,
+    influence: Optional[int] = None
+) -> Dict[str, Any]:
     """
     Check if player has sufficient resources.
 
     Args:
-        money: Required amount of money
-        supplies: Required amount of supplies
-        influence: Required amount of influence
+        money: Required amount of money. Defaults to 0 if not provided. # 2. Update docstrings
+        supplies: Required amount of supplies. Defaults to 0 if not provided.
+        influence: Required amount of influence. Defaults to 0 if not provided.
 
     Returns:
-        Dictionary with resource check results
+        Dictionary with resource check results.
     """
     context = ctx.context
+    # Ensure resource_manager is available on the context
+    if not hasattr(context, 'resource_manager'):
+         logger.error("Context missing resource_manager in check_resources")
+         return {"has_resources": False, "error": "Internal context setup error", "current": {}}
     resource_manager = context.resource_manager
 
+    # 3. Handle default values inside the function
+    actual_money = money if money is not None else 0
+    actual_supplies = supplies if supplies is not None else 0
+    actual_influence = influence if influence is not None else 0
+
     try:
-        result = await resource_manager.check_resources(money, supplies, influence)
-        if result.get('current', {}).get('money') is not None:
-            formatted_money = await resource_manager.get_formatted_money(result['current']['money'])
-            result['current']['formatted_money'] = formatted_money
+        # 4. Use the 'actual_' variables in the function call
+        result = await resource_manager.check_resources(
+            actual_money, actual_supplies, actual_influence
+        )
+
+        # Format money if present in the result
+        current_res = result.get('current', {})
+        if current_res.get('money') is not None:
+            try:
+                # Ensure get_formatted_money exists and handles potential errors
+                formatted_money = await resource_manager.get_formatted_money(current_res['money'])
+                current_res['formatted_money'] = formatted_money
+                result['current'] = current_res # Update the dict in result
+            except Exception as format_err:
+                logger.warning(f"Could not format money in check_resources: {format_err}")
+                # Optionally add formatted_money: None or keep it absent
+
+        # Ensure consistent return structure
+        if 'has_resources' not in result:
+            result['has_resources'] = False # Assume false if not explicitly set
+        if 'current' not in result:
+            result['current'] = {}
+
         return result
     except Exception as e:
         logger.error(f"Error checking resources: {str(e)}", exc_info=True)
         return {"has_resources": False, "error": str(e), "current": {}}
-
 @function_tool
 @track_performance("commit_resources_to_conflict")
 async def commit_resources_to_conflict(
