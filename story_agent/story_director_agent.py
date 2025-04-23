@@ -1145,9 +1145,12 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         )
 
         # Example directive issuance
+        # --- FIX: Revert parameter names ---
         await governance.issue_directive(
-            target_agent_type=AgentType.STORY_DIRECTOR, # Correct parameter name
-            target_agent_id="director",
+            # target_agent_type=AgentType.STORY_DIRECTOR, # Incorrect parameter name
+            # target_agent_id="director",                 # Incorrect parameter name
+            agent_type=AgentType.STORY_DIRECTOR,  # Corrected: Use 'agent_type'
+            agent_id="director",                # Corrected: Use 'agent_id'
             directive_type=DirectiveType.ACTION,
             directive_data={
                 "instruction": "Periodically check for narrative opportunities and report findings.",
@@ -1157,6 +1160,7 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
             priority=DirectivePriority.MEDIUM,
             duration_minutes=24*60 # Example: 1 day
         )
+        # --- END FIX ---
 
         logging.info(
             f"StoryDirector registered with Nyx governance system "
@@ -1164,6 +1168,9 @@ async def register_with_governance(user_id: int, conversation_id: int) -> None:
         )
     except ImportError as e:
          logger.error(f"Failed to import Nyx components for registration: {e}", exc_info=True)
+    except TypeError as te: # Catch the specific error for better logging
+         logger.error(f"TypeError during governance interaction (likely incorrect parameter names): {te}", exc_info=True)
+         # Potentially log the expected signature if possible or suggest checking NyxUnifiedGovernor definition
     except Exception as e:
         # Catch specific exceptions if possible (e.g., governance connection error)
         logger.error(f"Error registering StoryDirector with governance for user {user_id}: {e}", exc_info=True)
