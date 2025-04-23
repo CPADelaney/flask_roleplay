@@ -355,11 +355,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Conditioned input processor initialized")
             
             # 3. Initialize foundational systems without dependencies
+            # Initialize hormone state
             self.hormone_system = HormoneSystem()
             logger.debug("Hormone system initialized")
             
-            self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
+            # Initialize emotional core without passing hormone_system
+            self.emotional_core = EmotionalCore()
             logger.debug("Emotional core initialized")
+            
+            # Connect them after initialization
+            self.emotional_core.set_hormone_system(self.hormone_system)
+            logger.debug("Emotional core and hormone system connected")
 
             self.checkpoint_planner = CheckpointingPlannerAgent()           
             
