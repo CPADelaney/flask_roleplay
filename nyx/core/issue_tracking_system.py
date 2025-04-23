@@ -453,6 +453,11 @@ class IssueTrackingSystem:
         """
         with trace(workflow_name="process_issue_observation"):
             # Prepare the prompt for the analyzer
+            # Avoid using backslash in f-string by constructing context part separately
+            context_part = ""
+            if context:
+                context_part = f"CONTEXT:\n{context}"
+            
             prompt = f"""
             Analyze this observation from the AI bot to identify potential issues, efficiency improvements, 
             or enhancement requests:
@@ -460,7 +465,7 @@ class IssueTrackingSystem:
             OBSERVATION:
             {observation}
             
-            {f"CONTEXT:\\n{context}" if context else ""}
+            {context_part}
             
             Determine if this contains an actionable issue, efficiency idea, or feature request.
             If yes, extract the relevant details and categorize appropriately.
