@@ -350,9 +350,13 @@ async def get_summarized_narrative_context(
 
                 # Try storing on context if it's mutable and designed for it
                 try:
-                    context.narrative_manager = narrative_manager
-                except AttributeError:
-                     logger.warning("Could not store narrative_manager on context (context might be immutable).")
+                    # Check if context is suitable for attribute assignment
+                    if hasattr(context, '__dict__') or isinstance(context, object): # Basic check
+                         context.narrative_manager = narrative_manager
+                    else:
+                         logger.warning("Context object does not support attribute assignment for narrative_manager.")
+                except Exception as assign_err: # Catch potential errors during assignment
+                     logger.warning(f"Could not store narrative_manager on context: {assign_err}")
 
             except ImportError:
                  logger.error("Module 'story_agent.progressive_summarization' not found.")
@@ -376,6 +380,7 @@ async def get_summarized_narrative_context(
         logger.error(f"Error getting summarized narrative context: {str(e)}", exc_info=True)
         # Ensure consistent error structure
         return {"error": str(e), "memories": [], "arcs": []}
+        
 @function_tool
 @track_performance("analyze_activity")
 async def analyze_activity(
