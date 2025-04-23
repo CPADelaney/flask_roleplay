@@ -1066,35 +1066,76 @@ async def _get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
     }
 
 @function_tool
-async def _record_maintenance_history(ctx: RunContextWrapper,
-                                maintenance_record: Dict[str, Any]) -> Dict[str, Any]:
+async def _record_maintenance_history(
+    ctx: RunContextWrapper[ContextType],
+    # 1. Change signature: maintenance_record: Optional[Dict[str, Any]] = None
+    maintenance_record: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
-    Record maintenance history
-    
-    Args:
-        maintenance_record: Maintenance record to add
-        
-    Returns:
-        Updated history info
-    """
-    # Add timestamp if not present
-    if "timestamp" not in maintenance_record:
-        maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
-    
-    # Add to history
-    ctx.context.maintenance_history.append(maintenance_record)
-    
-    # Trim history if needed
-    if len(ctx.context.maintenance_history) > ctx.context.max_history_entries:
-        ctx.context.maintenance_history = ctx.context.maintenance_history[-ctx.context.max_history_entries:]
-    
-    return {
-        "success": True,
-        "history_count": len(ctx.context.maintenance_history),
-        "max_history_entries": ctx.context.max_history_entries,
-        "latest_entry_timestamp": ctx.context.maintenance_history[-1].get("timestamp") if ctx.context.maintenance_history else None
-    }
+    Record maintenance history.
 
+    Args:
+        maintenance_record: Maintenance record dictionary to add (required). # 3. Update docstring
+
+    Returns:
+        Updated history info or error dictionary.
+    """
+    # 2. Add internal check for the required parameter
+    if maintenance_record is None:
+        logger.error("_record_maintenance_history called without 'maintenance_record' parameter.")
+        return {
+            "success": False,
+            "error": "Missing required 'maintenance_record' parameter."
+            # Avoid accessing ctx.context here if the parameter is missing
+        }
+
+    context = ctx.context # Access context only after validation
+
+    # Ensure context has the expected attributes
+    if not hasattr(context, 'maintenance_history') or not hasattr(context, 'max_history_entries'):
+         logger.error("Context missing maintenance_history or max_history_entries in _record_maintenance_history")
+         return {"success": False, "error": "Internal context setup error"}
+
+
+    try:
+        # Now proceed with the original logic, using the validated 'maintenance_record' dict
+        # Add timestamp if not present
+        if "timestamp" not in maintenance_record:
+            maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
+
+        # Add to history (assuming it's a list)
+        if isinstance(context.maintenance_history, list):
+            context.maintenance_history.append(maintenance_record)
+        else:
+             logger.error("maintenance_history in context is not a list.")
+             return {"success": False, "error": "Internal context error: history is not a list"}
+
+
+        # Trim history if needed (ensure max_history_entries is an int)
+        max_entries = getattr(context, 'max_history_entries', 100) # Default if missing
+        if not isinstance(max_entries, int):
+            logger.warning(f"max_history_entries is not an integer ({type(max_entries)}), using default 100.")
+            max_entries = 100
+
+        if len(context.maintenance_history) > max_entries:
+            context.maintenance_history = context.maintenance_history[-max_entries:]
+
+        # Safely get latest timestamp
+        latest_timestamp = None
+        if context.maintenance_history:
+             latest_timestamp = context.maintenance_history[-1].get("timestamp")
+
+
+        return {
+            "success": True,
+            "history_count": len(context.maintenance_history),
+            "max_history_entries": max_entries,
+            "latest_entry_timestamp": latest_timestamp
+        }
+    except Exception as e:
+        logger.error(f"Error recording maintenance history: {e}", exc_info=True)
+        return {"success": False, "error": f"Error processing record: {str(e)}"}
+        
 @function_tool
 async def _analyze_system_efficiency(ctx: RunContextWrapper) -> Dict[str, Any]:
     """
