@@ -31,20 +31,22 @@ class MaintenanceRecommendation(BaseModel):
 
 class BalanceAnalysisOutput(BaseModel):
     """Output schema for personality balance analysis"""
-    is_balanced: bool = Field(..., description="Whether personality is balanced")
-    imbalances: List[Dict[str, Any]] = Field(..., description="Detected imbalances")
-    trait_recommendations: List[Dict[str, Any]] = Field(..., description="Trait recommendations")
-    behavior_recommendations: List[Dict[str, Any]] = Field(..., description="Behavior recommendations")
-    balance_score: float = Field(..., description="Overall balance score (0.0-1.0)")
-    analysis: str = Field(..., description="Analysis of personality balance")
+    # CHANGE: Make all fields Optional and provide default=None
+    is_balanced: Optional[bool] = Field(default=None, description="Whether personality is balanced")
+    imbalances: Optional[List[Dict[str, Any]]] = Field(default=None, description="Detected imbalances")
+    trait_recommendations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Trait recommendations")
+    behavior_recommendations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Behavior recommendations")
+    balance_score: Optional[float] = Field(default=None, description="Overall balance score (0.0-1.0)")
+    analysis: Optional[str] = Field(default=None, description="Analysis of personality balance")
 
 class AssociationConsolidationOutput(BaseModel):
     """Output schema for association consolidation"""
-    consolidations: List[Dict[str, Any]] = Field(..., description="Consolidations performed")
-    removed_keys: List[str] = Field(..., description="Association keys removed")
-    strengthened_keys: List[str] = Field(..., description="Association keys strengthened")
-    efficiency_gain: float = Field(..., description="Efficiency gain from consolidation (0.0-1.0)")
-    reasoning: str = Field(..., description="Reasoning for consolidations")
+    # CHANGE: Make all fields Optional and provide default=None
+    consolidations: Optional[List[Dict[str, Any]]] = Field(default=None, description="Consolidations performed")
+    removed_keys: Optional[List[str]] = Field(default=None, description="Association keys removed")
+    strengthened_keys: Optional[List[str]] = Field(default=None, description="Association keys strengthened")
+    efficiency_gain: Optional[float] = Field(default=None, description="Efficiency gain from consolidation (0.0-1.0)")
+    reasoning: Optional[str] = Field(default=None, description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
     """
