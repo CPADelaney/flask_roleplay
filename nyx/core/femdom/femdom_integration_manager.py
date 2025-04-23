@@ -8,7 +8,9 @@ from agents import Agent, Runner, function_tool, trace, handoff, RunContextWrapp
 from agents.run import RunConfig
 
 from nyx.core.integration.event_bus import Event, get_event_bus, DominanceEvent
-from nyx.core.integration.integrated_tracer import trace_method 
+from nyx.core.integration.integrated_tracer import trace_method, TraceLevel
+
+
 logger = logging.getLogger(__name__)
 
 class IntegrationContext:
