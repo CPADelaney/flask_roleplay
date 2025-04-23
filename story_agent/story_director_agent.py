@@ -522,6 +522,7 @@ get_story_state_tool = FunctionTool(
     ),
     params_json_schema={
         "type": "object",
+        "additionalProperties": False,    # <— this line
         "properties": {
             "ctx": {
                 "type": "object",
