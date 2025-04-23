@@ -412,6 +412,7 @@ async def retry_operation(operation, max_retries=3):
 # ----- Main Agent Creation Function -----
 
 def create_story_director_agent():
+    
     """Create the Story Director Agent with all required tools"""
     
     agent_instructions = """
@@ -445,6 +446,8 @@ def create_story_director_agent():
     from story_agent.tools import context_tools
     
     from story_agent.story_director_agent import get_story_state_tool
+
+    specialized_agents = initialize_specialized_agents()
 
     all_tools = [
         get_story_state_tool,
