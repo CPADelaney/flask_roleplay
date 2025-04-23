@@ -348,7 +348,7 @@ class AgenticCreativitySystemV2:
                 
             logger.info(f"Creative system integrated with NyxBrain instance")
                 
-    return system
+        return system
 
 # ---------------------------------------------------------------------------
 # 7. Compatibility shims
