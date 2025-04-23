@@ -47,35 +47,40 @@ class AssociationConsolidationOutput(BaseModel):
     reasoning: str = Field(..., description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
-    """Output schema for maintenance run summary. Fields have defaults to avoid schema validation issues."""
-    tasks_performed: List[Dict[str, Any]] = Field(
-        default_factory=list, # Use default_factory for mutable types like list/dict
+    """
+    Output schema for maintenance run summary.
+    All fields are optional in the schema to satisfy API validation,
+    but the agent should be instructed to populate all fields.
+    """
+    tasks_performed: Optional[List[Dict[str, Any]]] = Field(
+        default=None, # Default to None
         description="Tasks performed during the maintenance run."
     )
-    time_taken_seconds: float = Field(
-        default=0.0,
+    time_taken_seconds: Optional[float] = Field(
+        default=None, # Default to None
         description="Total time taken for the maintenance run in seconds."
     )
-    associations_modified: int = Field(
-        default=0,
+    associations_modified: Optional[int] = Field(
+        default=None, # Default to None
         description="Number of conditioning associations modified (created, deleted, updated)."
     )
-    traits_adjusted: int = Field(
-        default=0,
+    traits_adjusted: Optional[int] = Field(
+        default=None, # Default to None
         description="Number of personality traits adjusted."
     )
-    extinction_count: int = Field(
-        default=0,
+    extinction_count: Optional[int] = Field(
+        default=None, # Default to None
         description="Number of associations removed due to extinction."
     )
-    improvements: List[str] = Field(
-        default_factory=list,
+    improvements: Optional[List[str]] = Field(
+        default=None, # Default to None
         description="List of key improvements or changes made to the system during the run."
     )
-    next_maintenance_recommendation: str = Field(
-        default="Perform standard maintenance checks.",
+    next_maintenance_recommendation: Optional[str] = Field(
+        default=None, # Default to None
         description="Recommendation for the focus of the next maintenance run."
     )
+
 
 class MaintenanceContext:
     """Context object for conditioning maintenance operations"""
