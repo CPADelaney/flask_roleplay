@@ -271,8 +271,10 @@ async def _analyze_behavior_distribution(ctx: RunContextWrapper) -> Dict[str, An
     }
 
 @function_tool
-async def _calculate_trait_coherence(ctx: RunContextWrapper, 
-                              traits: Dict[str, float]) -> Dict[str, Any]:
+async def _calculate_trait_coherence(
+    ctx: RunContextWrapper[MaintenanceContext],
+    traits: Optional[Dict[str, float]] = None # Make 'traits' Optional, default to None
+) -> Dict[str, Any]:
     """
     Calculate coherence between personality traits
     
@@ -282,6 +284,18 @@ async def _calculate_trait_coherence(ctx: RunContextWrapper,
     Returns:
         Trait coherence analysis
     """
+    # Add a check at the beginning to handle the case where the caller forgets to provide it
+    if traits is None:
+        logger.error("Tool _calculate_trait_coherence called without providing the required 'traits' argument.")
+        # Return an error structure or raise an exception, depending on desired handling
+        return {
+            "error": "Missing required 'traits' argument.",
+            "overall_coherence": 0.0,
+            "incoherent_pairs": [],
+            "complementary_coherence": [],
+            "opposing_coherence": []
+        }
+    
     # Define trait relationships (which traits complement or oppose each other)
     complementary_pairs = [
         ("dominance", "strictness"),
@@ -401,11 +415,13 @@ async def _identify_trait_imbalances(ctx: RunContextWrapper) -> List[Dict[str, A
     return imbalances
 
 @function_tool
-async def _calculate_trait_adjustment(ctx: RunContextWrapper,
-                                trait: str,
-                                current_value: float,
-                                target_value: float,
-                                importance: float = 0.5) -> float:
+async def _calculate_trait_adjustment(
+    ctx: RunContextWrapper[MaintenanceContext],
+    trait: Optional[str] = None, # Make Optional
+    current_value: Optional[float] = None, # Make Optional
+    target_value: Optional[float] = None, # Make Optional
+    importance: float = 0.5 # Keep default for truly optional args
+) -> float:
     """
     Calculate appropriate adjustment for a personality trait
     
@@ -418,6 +434,10 @@ async def _calculate_trait_adjustment(ctx: RunContextWrapper,
     Returns:
         Calculated adjustment value
     """
+    if trait is None or current_value is None or target_value is None:
+        logger.error("Tool _calculate_trait_adjustment missing required arguments.")
+        return 0.0 # Return neutral adjustment on error
+        
     # Calculate difference
     difference = target_value - current_value
     
@@ -435,9 +455,11 @@ async def _calculate_trait_adjustment(ctx: RunContextWrapper,
     return max(-max_adjustment, min(max_adjustment, adjustment))
 
 @function_tool
-async def _reinforce_core_trait(ctx: RunContextWrapper,
-                          trait: str,
-                          adjustment: float) -> Dict[str, Any]:
+async def _reinforce_core_trait(
+    ctx: RunContextWrapper[MaintenanceContext],
+    trait: Optional[str] = None, # Make Optional
+    adjustment: Optional[float] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Reinforce a core personality trait
     
@@ -448,6 +470,10 @@ async def _reinforce_core_trait(ctx: RunContextWrapper,
     Returns:
         Result of reinforcement
     """
+    if trait is None or adjustment is None:
+        logger.error("Tool _reinforce_core_trait missing required arguments.")
+        return {"success": False, "error": "Missing required arguments."}
+        
     # Apply reinforcement via conditioning system
     try:
         result = await ctx.context.conditioning_system.condition_personality_trait(
@@ -471,7 +497,10 @@ async def _reinforce_core_trait(ctx: RunContextWrapper,
         }
 
 @function_tool
-async def _get_trait_history(ctx: RunContextWrapper, trait: str) -> Dict[str, Any]:
+async def _get_trait_history(
+    ctx: RunContextWrapper[MaintenanceContext],
+    trait: Optional[str] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Get historical data for a personality trait
     
@@ -481,6 +510,9 @@ async def _get_trait_history(ctx: RunContextWrapper, trait: str) -> Dict[str, An
     Returns:
         Historical data for the trait
     """
+     if trait is None:
+          logger.error("Tool _get_trait_history missing required 'trait' argument.")
+          return {"error": "Missing required 'trait' argument."}
     # This is a placeholder - in a real implementation, you would retrieve
     # historical data from a database or other storage
     history = {
@@ -522,8 +554,10 @@ async def _get_trait_history(ctx: RunContextWrapper, trait: str) -> Dict[str, An
     return history
 
 @function_tool
-async def _analyze_reinforcement_efficacy(ctx: RunContextWrapper,
-                                    trait: str) -> Dict[str, Any]:
+async def _analyze_reinforcement_efficacy(
+    ctx: RunContextWrapper[MaintenanceContext],
+    trait: Optional[str] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Analyze the efficacy of trait reinforcement
     
@@ -533,6 +567,10 @@ async def _analyze_reinforcement_efficacy(ctx: RunContextWrapper,
     Returns:
         Analysis of reinforcement efficacy
     """
+    if trait is None:
+        logger.error("Tool _analyze_reinforcement_efficacy missing required 'trait' argument.")
+        return {"error": "Missing required 'trait' argument."}
+        
     # Get trait history
     history = await _get_trait_history(ctx, trait)
     
@@ -591,9 +629,11 @@ async def _analyze_reinforcement_efficacy(ctx: RunContextWrapper,
     }
 
 @function_tool
-async def _get_association_details(ctx: RunContextWrapper,
-                             association_key: str,
-                             association_type: str) -> Dict[str, Any]:
+async def _get_association_details(
+    ctx: RunContextWrapper[MaintenanceContext],
+    association_key: Optional[str] = None, # Make Optional
+    association_type: Optional[str] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Get details about a conditioning association
     
@@ -604,6 +644,10 @@ async def _get_association_details(ctx: RunContextWrapper,
     Returns:
         Association details
     """
+    if association_key is None or association_type is None:
+        logger.error("Tool _get_association_details missing required arguments.")
+        return {"success": False, "error": "Missing required arguments."}
+        
     # Get the appropriate association dictionary
     associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
     
@@ -640,9 +684,11 @@ async def _get_association_details(ctx: RunContextWrapper,
     }
 
 @function_tool
-async def _apply_extinction_to_association(ctx: RunContextWrapper,
-                                     association_key: str,
-                                     association_type: str) -> Dict[str, Any]:
+async def _apply_extinction_to_association(
+    ctx: RunContextWrapper[MaintenanceContext],
+    association_key: Optional[str] = None, # Make Optional
+    association_type: Optional[str] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Apply extinction to a specific association
     
@@ -653,6 +699,10 @@ async def _apply_extinction_to_association(ctx: RunContextWrapper,
     Returns:
         Result of extinction
     """
+    if association_key is None or association_type is None:
+        logger.error("Tool _apply_extinction_to_association missing required arguments.")
+        return {"success": False, "error": "Missing required arguments."}
+        
     try:
         result = await ctx.context.conditioning_system.apply_extinction(association_key, association_type)
         return result
@@ -664,10 +714,12 @@ async def _apply_extinction_to_association(ctx: RunContextWrapper,
         }
 
 @function_tool
-async def _adjust_association_decay_rate(ctx: RunContextWrapper,
-                                   association_key: str,
-                                   association_type: str,
-                                   new_decay_rate: float) -> Dict[str, Any]:
+async def _adjust_association_decay_rate(
+    ctx: RunContextWrapper[MaintenanceContext],
+    association_key: Optional[str] = None, # Make Optional
+    association_type: Optional[str] = None, # Make Optional
+    new_decay_rate: Optional[float] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Adjust the decay rate of an association
     
@@ -679,6 +731,10 @@ async def _adjust_association_decay_rate(ctx: RunContextWrapper,
     Returns:
         Result of adjustment
     """
+    if association_key is None or association_type is None or new_decay_rate is None:
+         logger.error("Tool _adjust_association_decay_rate missing required arguments.")
+         return {"success": False, "error": "Missing required arguments."}
+        
     # Get the appropriate association dictionary
     associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
     
@@ -768,8 +824,10 @@ async def _identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[s
     return candidates
 
 @function_tool
-async def _find_similar_associations(ctx: RunContextWrapper,
-                               association_type: str) -> List[Dict[str, Any]]:
+async def _find_similar_associations(
+    ctx: RunContextWrapper[MaintenanceContext],
+    association_type: Optional[str] = None # Make Optional
+) -> List[Dict[str, Any]]:
     """
     Find groups of similar associations that are candidates for consolidation
     
@@ -779,6 +837,10 @@ async def _find_similar_associations(ctx: RunContextWrapper,
     Returns:
         Groups of similar associations
     """
+    if association_type is None:
+        logger.error("Tool _find_similar_associations missing required 'association_type' argument.")
+        return []
+        
     associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
     
     # Group associations by stimulus
@@ -830,8 +892,10 @@ async def _find_similar_associations(ctx: RunContextWrapper,
     return similar_groups
 
 @function_tool
-async def _consolidate_associations(ctx: RunContextWrapper,
-                              group: Dict[str, Any]) -> Dict[str, Any]:
+async def _consolidate_associations(
+    ctx: RunContextWrapper[MaintenanceContext],
+    group: Optional[Dict[str, Any]] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Consolidate a group of similar associations
     
@@ -841,6 +905,10 @@ async def _consolidate_associations(ctx: RunContextWrapper,
     Returns:
         Result of consolidation
     """
+    if group is None:
+        logger.error("Tool _consolidate_associations missing required 'group' argument.")
+        return {"success": False, "error": "Missing required 'group' argument."}
+        
     association_type = group.get("association_type", "classical")
     associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
     
@@ -899,8 +967,10 @@ async def _consolidate_associations(ctx: RunContextWrapper,
     }
 
 @function_tool
-async def _calculate_consolidated_strength(ctx: RunContextWrapper,
-                                     strengths: List[float]) -> float:
+async def _calculate_consolidated_strength(
+    ctx: RunContextWrapper[MaintenanceContext],
+    strengths: Optional[List[float]] = None # Make Optional
+) -> float:
     """
     Calculate appropriate strength for a consolidated association
     
@@ -910,6 +980,10 @@ async def _calculate_consolidated_strength(ctx: RunContextWrapper,
     Returns:
         Calculated consolidated strength
     """
+    if strengths is None:
+        logger.error("Tool _calculate_consolidated_strength missing required 'strengths' argument.")
+        return 0.0
+    
     if not strengths:
         return 0.0
     
@@ -931,8 +1005,10 @@ async def _calculate_consolidated_strength(ctx: RunContextWrapper,
     return min(1.0, consolidated_strength)
 
 @function_tool
-async def _analyze_consolidation_impact(ctx: RunContextWrapper,
-                                  association_type: str) -> Dict[str, Any]:
+async def _analyze_consolidation_impact(
+    ctx: RunContextWrapper[MaintenanceContext],
+    association_type: Optional[str] = None # Make Optional
+) -> Dict[str, Any]:
     """
     Analyze the impact of consolidation on the association set
     
@@ -942,6 +1018,10 @@ async def _analyze_consolidation_impact(ctx: RunContextWrapper,
     Returns:
         Analysis of consolidation impact
     """
+    if association_type is None:
+        logger.error("Tool _analyze_consolidation_impact missing required 'association_type' argument.")
+        return {"error": "Missing required 'association_type' argument."}
+        
     # Find similar associations
     similar_groups = await _find_similar_associations(ctx, association_type)
     
@@ -1093,9 +1173,8 @@ async def _get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
 
 @function_tool
 async def _record_maintenance_history(
-    ctx: RunContextWrapper[Any],
-    # 1. Change signature: maintenance_record: Optional[Dict[str, Any]] = None
-    maintenance_record: Optional[Dict[str, Any]] = None
+    ctx: RunContextWrapper[MaintenanceContext],
+    maintenance_record: Optional[Dict[str, Any]] = None # Make Optional
 ) -> Dict[str, Any]:
     """
     Record maintenance history.
