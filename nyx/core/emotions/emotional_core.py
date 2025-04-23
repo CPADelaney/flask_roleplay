@@ -10,7 +10,7 @@ from typing import Dict, List, Any, Optional, Union, AsyncIterator, TypeVar
 from agents import (
     Agent, Runner, RunContextWrapper, function_tool, ItemHelpers,
     ModelSettings, RunConfig, trace, handoff, 
-    AgentHooks, GuardrailFunctionOutput
+    AgentHooks, GuardrailFunctionOutput, HandoffInputData
 )
 from agents.exceptions import AgentsException, UserError, MaxTurnsExceeded
 from agents.extensions import handoff_filters
@@ -496,7 +496,7 @@ class EmotionalCore:
                 tool_name_override="record_and_learn",
                 tool_description_override="Record interaction patterns and apply learning adaptations.",
                 input_type=LearningRequest,
-                input_filter=handoff_filters.keep_relevant_history,
+                input_filter=self.keep_relevant_history,
                 on_handoff=self._on_learning_handoff
             )
         ]
@@ -561,7 +561,7 @@ class EmotionalCore:
             Filtered handoff data
         """
         # Start with the base filter from SDK
-        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        filtered_data = self.keep_relevant_history(handoff_data)
         
         # Extract the last user message for deeper analysis
         last_user_message = None
@@ -605,7 +605,7 @@ class EmotionalCore:
             Filtered handoff data
         """
         # Start with basic relevant history
-        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        filtered_data = self.keep_relevant_history(handoff_data)
         
         # Add rich emotional context
         # Extract recent emotional state history
@@ -659,7 +659,7 @@ class EmotionalCore:
             Filtered handoff data
         """
         # Start with relevant history
-        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        filtered_data = self.keep_relevant_history(handoff_data)
         
         # Add pattern history and learning context
         pattern_history = self.context.get_value("pattern_history", [])
@@ -720,7 +720,7 @@ class EmotionalCore:
             Filtered handoff data
         """
         # Use the SDK's default filter first with improved chaining
-        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        filtered_data = self.keep_relevant_history(handoff_data)
         
         # Extract the last user message for analysis using more efficient iteration
         last_user_message = None
@@ -758,7 +758,7 @@ class EmotionalCore:
             Filtered handoff data
         """
         # Use the base keep_relevant_history filter first
-        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        filtered_data = self.keep_relevant_history(handoff_data)
         
         # Add emotional state history for context
         emotion_history = []
@@ -780,6 +780,42 @@ class EmotionalCore:
         
         return filtered_data
     
+    def keep_relevant_history(self, handoff_data):
+        """
+        Filters the handoff input data to keep only the most relevant conversation history.
+        - Keeps the most recent messages (up to 10)
+        - Preserves user messages and important context
+        
+        Args:
+            handoff_data: The original handoff input data
+            
+        Returns:
+            Filtered handoff data with only relevant history
+        """
+        # Get the input history
+        history = handoff_data.input_history
+        
+        # If history is not a tuple or is empty, return as is
+        if not isinstance(history, tuple) or not history:
+            return handoff_data
+        
+        # Keep only the most recent messages (maximum 10)
+        MAX_HISTORY_ITEMS = 10
+        filtered_history = history[-MAX_HISTORY_ITEMS:] if len(history) > MAX_HISTORY_ITEMS else history
+        
+        # Get the pre-handoff items (keep as is for now)
+        filtered_pre_handoff_items = handoff_data.pre_handoff_items
+        
+        # Keep the new items as is
+        filtered_new_items = handoff_data.new_items
+        
+        # Create and return the filtered handoff data
+        return HandoffInputData(
+            input_history=filtered_history,
+            pre_handoff_items=filtered_pre_handoff_items,
+            new_items=filtered_new_items,
+        )
+        
     def _quick_pattern_analysis(self, text: str) -> str:
         """
         Simple pattern analysis without using LLM
