@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper
+from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings, RunContextWrapper, FunctionTool
 
 # Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
