@@ -348,10 +348,10 @@ class BlendedInputProcessor:
                     break  # Only detect each pattern once
         
         return detected
-    
+
+    @staticmethod
     @function_tool
     async def _evaluate_behavior(
-        self, 
         ctx: RunContextWrapper[ProcessingContext], 
         behavior: str,
         detected_patterns: List[Dict[str, Any]],
@@ -430,10 +430,10 @@ class BlendedInputProcessor:
             "confidence": 0.5,
             "reasoning": "No clear indicator for this behavior"
         }
-    
+
+    @staticmethod
     @function_tool
     async def _process_operant_conditioning(
-        self,
         ctx: RunContextWrapper[ProcessingContext],
         behavior: str,
         consequence_type: str,
@@ -473,10 +473,10 @@ class BlendedInputProcessor:
             "effect": f"Will {effect} of {behavior} in the future",
             "success": True
         }
-    
+
+    @staticmethod
     @function_tool
     async def _get_mode_preferences(
-        self,
         ctx: RunContextWrapper[ProcessingContext],
         mode: str
     ) -> Dict[str, Any]:
@@ -529,10 +529,10 @@ class BlendedInputProcessor:
                 logger.warning(f"Error getting mode preferences from mode manager: {e}")
         
         return preferences
-    
+
+    @staticmethod
     @function_tool
     async def _calculate_style_elements(
-        self,
         ctx: RunContextWrapper[ProcessingContext],
         mode_distribution: Dict[str, float]
     ) -> Dict[str, Any]:
@@ -635,10 +635,10 @@ class BlendedInputProcessor:
             "influences": influences,
             "element_sources": element_sources
         }
-    
+
+    @staticmethod
     @function_tool
     async def _analyze_response_coherence(
-        self,
         ctx: RunContextWrapper[ProcessingContext],
         original_response: str,
         modified_response: str
