@@ -296,48 +296,86 @@ async def search_by_vector(
         return [] # Return empty list on error as per original logic
 
 @function_tool
+# @track_performance("get_summarized_narrative_context") # Uncomment if track_performance is defined/imported
 async def get_summarized_narrative_context(
     ctx: RunContextWrapper[ContextType],
     query: str,
-    max_tokens: int = 1000
+    # 1. Change signature: max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Get automatically summarized narrative context using progressive summarization.
 
     Args:
-        query: Query for relevance matching
-        max_tokens: Maximum tokens for context
+        query: Query for relevance matching.
+        max_tokens: Maximum tokens for context. Defaults to 1000 if not provided. # 2. Update docstring
 
     Returns:
-        Summarized narrative context
+        Summarized narrative context or error dictionary.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle the default value inside the function
+    actual_max_tokens = max_tokens if max_tokens is not None else 1000
+
     try:
         narrative_manager = None
+        # Safely check for and access narrative_manager
         if hasattr(context, 'narrative_manager') and context.narrative_manager:
             narrative_manager = context.narrative_manager
         else:
             try:
+                # Ensure progressive_summarization is importable
                 from story_agent.progressive_summarization import RPGNarrativeManager
-                async with get_db_connection_context() as conn:
-                    dsn = getattr(conn, '_pool', {})._connect_kwargs.get('dsn', 'DATABASE_URL_NOT_FOUND') # Attempt to get DSN
+                dsn = 'DATABASE_URL_NOT_FOUND' # Default DSN
+                try:
+                    # Attempt to get DSN safely
+                    async with get_db_connection_context() as conn:
+                         # Check if conn and _pool exist and have the attribute
+                         pool = getattr(conn, '_pool', None)
+                         connect_kwargs = getattr(pool, '_connect_kwargs', {}) if pool else {}
+                         dsn = connect_kwargs.get('dsn', dsn)
+                except Exception as db_conn_err:
+                     logger.warning(f"Could not get DSN from DB connection: {db_conn_err}")
 
-                narrative_manager = RPGNarrativeManager(user_id=user_id, conversation_id=conversation_id, db_connection_string=dsn)
+
+                narrative_manager = RPGNarrativeManager(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    db_connection_string=dsn
+                )
                 await narrative_manager.initialize()
-                context.narrative_manager = narrative_manager # Store for future use if context is mutable
-            except Exception as import_error:
-                logger.error(f"Error initializing narrative manager: {import_error}")
-                return {"error": "Narrative manager not available", "memories": [], "arcs": []}
 
-        context_data = await narrative_manager.get_optimal_narrative_context(query=query, max_tokens=max_tokens)
+                # Try storing on context if it's mutable and designed for it
+                try:
+                    context.narrative_manager = narrative_manager
+                except AttributeError:
+                     logger.warning("Could not store narrative_manager on context (context might be immutable).")
+
+            except ImportError:
+                 logger.error("Module 'story_agent.progressive_summarization' not found.")
+                 return {"error": "Narrative manager component not available.", "memories": [], "arcs": []}
+            except Exception as init_error:
+                logger.error(f"Error initializing narrative manager: {init_error}", exc_info=True)
+                return {"error": "Narrative manager initialization failed.", "memories": [], "arcs": []}
+
+        # Ensure narrative_manager was successfully initialized before using
+        if not narrative_manager:
+             return {"error": "Narrative manager could not be initialized.", "memories": [], "arcs": []}
+
+
+        # 4. Use the 'actual_' variable in the function call
+        context_data = await narrative_manager.get_optimal_narrative_context(
+            query=query,
+            max_tokens=actual_max_tokens # Use actual_max_tokens here
+        )
         return context_data
     except Exception as e:
         logger.error(f"Error getting summarized narrative context: {str(e)}", exc_info=True)
+        # Ensure consistent error structure
         return {"error": str(e), "memories": [], "arcs": []}
-
 @function_tool
 @track_performance("analyze_activity")
 async def analyze_activity(
