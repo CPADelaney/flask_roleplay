@@ -20,7 +20,7 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 # NEW: Context system integration
 from context.context_service import get_context_service, get_comprehensive_context
 from context.context_config import get_config
-from context.memory_manager import get_memory_manager, Memory
+from context.memory_manager import get_memory_manager, Memory, add_memory_tool, MemoryAddRequest
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 MAX_RETRY_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 1
 DEFAULT_TRACING_GROUP = "story-director"
+
+
 
 # ----- Pydantic Models for Tool Outputs -----
 
@@ -236,6 +238,7 @@ class StoryDirectorContext:
                 DirectiveType.OVERRIDE,
                 self.handle_override_directive
             )
+            
             # Start background processing
             await self.directive_handler.start_background_processing()
             logger.info("Directive handler initialized and started.")
@@ -294,15 +297,22 @@ class StoryDirectorContext:
         if not self.memory_manager:
              logger.error("Failed to initialize memory manager, cannot add memory.")
              return
-
+    
         try:
-            await self.memory_manager.add_memory(
+            # Create a MemoryAddRequest from the parameters
+            request = MemoryAddRequest(
                 content=content,
                 memory_type=memory_type,
                 importance=importance,
                 tags=["story_director", memory_type],
                 metadata={"source": "story_director"}
             )
+            
+            # Create a RunContextWrapper with self as context
+            wrapper = RunContextWrapper(context=self)
+            
+            # Call the add_memory_tool function
+            await add_memory_tool(wrapper, self.user_id, self.conversation_id, request)
         except Exception as e:
             logger.error(f"Failed to add narrative memory: {e}", exc_info=True)
 
