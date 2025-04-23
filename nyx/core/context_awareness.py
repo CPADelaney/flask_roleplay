@@ -431,7 +431,7 @@ class ContextAwarenessSystem:
                       tool_description_override="Validate context detection results")
             ],
             input_guardrails=[
-                InputGuardrail(guardrail_function=self.message_validation_guardrail)
+                InputGuardrail(guardrail_function=self._message_validation_guardrail)
             ],
             output_type=BlendedContextDetectionOutput,
             model="gpt-4o",
