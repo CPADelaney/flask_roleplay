@@ -510,9 +510,9 @@ async def _get_trait_history(
     Returns:
         Historical data for the trait
     """
-     if trait is None:
-          logger.error("Tool _get_trait_history missing required 'trait' argument.")
-          return {"error": "Missing required 'trait' argument."}
+    if trait is None:
+        logger.error("Tool _get_trait_history missing required 'trait' argument.")
+        return {"error": "Missing required 'trait' argument."}
     # This is a placeholder - in a real implementation, you would retrieve
     # historical data from a database or other storage
     history = {
