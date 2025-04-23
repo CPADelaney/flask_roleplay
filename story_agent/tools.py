@@ -52,46 +52,78 @@ ContextType = Any # Or StoryDirectorContext
 # ----- NEW: Context Tools -----
 
 @function_tool
-async def get_optimized_context(ctx: RunContextWrapper[ContextType], query_text: str = "", use_vector: bool = True) -> Dict[str, Any]:
+# @track_performance("get_optimized_context") # Uncomment if track_performance is defined/imported
+async def get_optimized_context(
+    ctx: RunContextWrapper[ContextType],
+    # 1. Change parameters with defaults to Optional[Type] = None
+    query_text: Optional[str] = None,
+    use_vector: Optional[bool] = None
+) -> Dict[str, Any]:
     """
     Get optimized context using the comprehensive context system.
 
     Args:
-        query_text: Optional query text for relevance scoring
-        use_vector: Whether to use vector search for relevance
+        query_text: Optional query text for relevance scoring. Defaults to "" if not provided. # 2. Update docstrings
+        use_vector: Whether to use vector search for relevance. Defaults to True if not provided.
 
     Returns:
-        Dictionary with comprehensive context information
+        Dictionary with comprehensive context information.
     """
-    context = ctx.context # Access context object
+    context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
 
+    # 3. Handle default values inside the function
+    actual_query_text = query_text if query_text is not None else ""
+    actual_use_vector = use_vector if use_vector is not None else True
+
     try:
         context_service = await get_context_service(user_id, conversation_id)
-        from context.context_config import get_config # Local import if needed
+        # from context.context_config import get_config # Already imported above
         config = get_config()
         token_budget = config.get_token_budget("default")
 
+        # 4. Use the 'actual_' variables in the function call
         context_data = await context_service.get_context(
-            input_text=query_text,
+            input_text=actual_query_text,
             context_budget=token_budget,
-            use_vector_search=use_vector
+            use_vector_search=actual_use_vector
         )
 
+        # Safely access performance monitor
+        perf_monitor = None
         if hasattr(context, 'performance_monitor'):
             perf_monitor = context.performance_monitor
         else:
-            perf_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
+            try:
+                # Attempt to get instance if not present on context
+                perf_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
+            except Exception as pm_err:
+                 logger.warning(f"Could not get performance monitor instance: {pm_err}")
 
-        if "token_usage" in context_data:
-            total_tokens = sum(context_data["token_usage"].values())
-            perf_monitor.record_token_usage(total_tokens)
+        if perf_monitor and "token_usage" in context_data:
+            try:
+                # Ensure token_usage is a dict before summing
+                usage = context_data["token_usage"]
+                if isinstance(usage, dict):
+                    total_tokens = sum(usage.values())
+                    perf_monitor.record_token_usage(total_tokens)
+                else:
+                    logger.warning(f"Unexpected format for token_usage: {type(usage)}")
+            except Exception as token_err:
+                 logger.warning(f"Error recording token usage: {token_err}")
+
 
         return context_data
     except Exception as e:
         logger.error(f"Error getting optimized context: {str(e)}", exc_info=True)
-        return {"error": str(e), "user_id": user_id, "conversation_id": conversation_id}
+        # Return consistent error structure
+        return {
+            "error": str(e),
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "context_data": None # Indicate data retrieval failed
+        }
 
 @function_tool
 async def retrieve_relevant_memories(
