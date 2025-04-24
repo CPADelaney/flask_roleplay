@@ -51,8 +51,9 @@ class AssociationConsolidationOutput(BaseModel):
 
 class MaintenanceSummaryOutput(BaseModel):
     """Output schema for maintenance run summary."""
-    tasks_performed: List[Dict[str, Any]] = Field(
-        default_factory=list,
+    # CHANGE: Make tasks_performed Optional as well
+    tasks_performed: Optional[List[Dict[str, Any]]] = Field(
+        default_factory=list, # Keep default_factory for initialization convenience
         description="Tasks performed during the maintenance run."
     )
     time_taken_seconds: Optional[float] = Field(
@@ -60,23 +61,23 @@ class MaintenanceSummaryOutput(BaseModel):
         description="Total time taken for the maintenance run in seconds."
     )
     associations_modified: Optional[int] = Field(
-        default=None, # Default to None
+        default=None,
         description="Number of conditioning associations modified (created, deleted, updated)."
     )
     traits_adjusted: Optional[int] = Field(
-        default=None, # Default to None
+        default=None,
         description="Number of personality traits adjusted."
     )
     extinction_count: Optional[int] = Field(
-        default=None, # Default to None
+        default=None,
         description="Number of associations removed due to extinction."
     )
     improvements: Optional[List[str]] = Field(
-        default=None, # Default to None
+        default=None,
         description="List of key improvements or changes made to the system during the run."
     )
     next_maintenance_recommendation: Optional[str] = Field(
-        default=None, # Default to None
+        default=None,
         description="Recommendation for the focus of the next maintenance run."
     )
 
