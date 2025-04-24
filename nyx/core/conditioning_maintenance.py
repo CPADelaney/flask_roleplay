@@ -835,21 +835,18 @@ async def _identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[s
 @function_tool
 async def _find_similar_associations(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_type: Optional[str] = None # Make Optional
+    # CHANGE: Make association_type required
+    association_type: str
 ) -> List[Dict[str, Any]]:
     """
     Find groups of similar associations that are candidates for consolidation
-    
+
     Args:
-        association_type: Type of association (classical or operant)
-        
+        association_type: Type of association (classical or operant) - REQUIRED.
+
     Returns:
         Groups of similar associations
     """
-    if association_type is None:
-        logger.error("Tool _find_similar_associations missing required 'association_type' argument.")
-        return []
-        
     associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
     
     # Group associations by stimulus
@@ -1016,23 +1013,19 @@ async def _calculate_consolidated_strength(
 @function_tool
 async def _analyze_consolidation_impact(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_type: Optional[str] = None # Make Optional
+    # CHANGE: Make association_type required
+    association_type: str
 ) -> Dict[str, Any]:
     """
     Analyze the impact of consolidation on the association set
-    
+
     Args:
-        association_type: Type of association (classical or operant)
-        
+        association_type: Type of association (classical or operant) - REQUIRED.
+
     Returns:
         Analysis of consolidation impact
     """
-    if association_type is None:
-        logger.error("Tool _analyze_consolidation_impact missing required 'association_type' argument.")
-        return {"error": "Missing required 'association_type' argument."}
-        
-    # Find similar associations
-    similar_groups = await _find_similar_associations(ctx, association_type)
+    similar_groups = await _find_similar_associations(ctx, association_type=association_type) # Pass it along
     
     if not similar_groups:
         return {
@@ -1462,6 +1455,8 @@ class ConditioningMaintenanceSystem:
             2. Merge redundant associations efficiently
             3. Determine appropriate strength for consolidated associations
             4. Preserve context keys and transfer relevant properties
+
+            To find candidates for consolidation, call the `find_similar_associations` tool. You MUST provide the `association_type` ('classical' or 'operant') you want to search within. To analyze the overall impact, use `analyze_consolidation_impact`, again specifying the `association_type`.
             
             Focus on improving efficiency without losing learned information.
             Use similarity measures to determine which associations to consolidate.
@@ -1488,6 +1483,8 @@ class ConditioningMaintenanceSystem:
             2. Coordinate between specialized maintenance agents
             3. Determine which aspects of the system need attention
             4. Summarize maintenance results and improvements
+
+            When checking for association consolidation using `find_similar_associations` or `analyze_consolidation_impact`, you MUST specify the `association_type` parameter as either 'classical' or 'operant'. You should typically perform the analysis for both types by calling the relevant tool twice, once for each type, if a full analysis is needed.
             
             IMPORTANT: You MUST produce a MaintenanceSummaryOutput with all fields populated
             at the end of your execution.
