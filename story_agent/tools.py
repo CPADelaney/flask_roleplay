@@ -38,7 +38,7 @@ from logic.social_links import (
 
 # Context system imports
 from context.context_service import get_context_service, get_comprehensive_context
-from context.memory_manager import get_memory_manager
+from context.memory_manager import get_memory_manager, search_memories_tool
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
@@ -158,7 +158,7 @@ async def retrieve_relevant_memories(
         memory_types = [memory_type] if memory_type else None # Keep existing logic
 
         # 4. Use the 'actual_' variable in the function call
-        memories = await memory_manager.search_memories(
+        memories = await memory_manager.search_memories_tool(
             query_text=query_text,
             memory_types=memory_types,
             limit=actual_limit, # Use actual_limit here
