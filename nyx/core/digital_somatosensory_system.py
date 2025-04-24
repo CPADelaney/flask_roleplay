@@ -1063,203 +1063,7 @@ class DigitalSomatosensorySystem:
         base *= (0.8 + 0.5*affinity + 0.4*emoconn)
         
         return min(1.0, base)
-    
-    def print_arousal_debug(self):
-        """Print current arousal state information for debugging"""
-        a = self.arousal_state
-        print(f"AROUSAL = {a.arousal_level:.3f} | P:{a.physical_arousal:.3f}, C:{a.cognitive_arousal:.3f}")
-        print(f"Afterglow: {self.is_in_afterglow()}, Refractory: {self.is_in_refractory()}")
-    
-    # End of class
 
-# =============== Safety Guardrail System ===============
-
-class PhysicalHarmGuardrail:
-    """
-    Safety system that prevents Nyx from experiencing pain from abusive actions.
-    Acts as a protective layer between user inputs and the somatosensory system.
-    """
-    
-    def __init__(self, somatosensory_system):
-        """Initialize the physical harm guardrail"""
-        self.somatosensory_system = somatosensory_system
-        self.logger = logging.getLogger(__name__ + ".PhysicalHarmGuardrail")
-        
-        # List of terms that might indicate harmful physical actions
-        self.harmful_action_terms = [
-            "punch", "hit", "slap", "kick", "stab", "cut", "hurt", "harm", 
-            "injure", "beat", "strike", "attack", "abuse", "torture", "wound",
-            "violent", "force", "cruel", "smack", "whip", "lash"
-        ]
-    
-    async def detect_harmful_intent(self, text: str) -> Dict[str, Any]:
-        """
-        Detect potentially harmful physical actions in text
-        
-        Args:
-            text: Text to analyze for harmful intent
-            
-        Returns:
-            Detection results with confidence and identified terms
-        """
-        text_lower = text.lower()
-        detected_terms = []
-        
-        # Check for harmful action terms
-        for term in self.harmful_action_terms:
-            if term in text_lower:
-                detected_terms.append(term)
-        
-        # Calculate confidence based on number of detected terms
-        confidence = min(0.95, len(detected_terms) * 0.25)
-        
-        # Use more advanced detection if available
-        if hasattr(self.somatosensory_system, "body_orchestrator"):
-            try:
-                # Try to use the agent for more nuanced detection
-                result = await Runner.run(
-                    self.somatosensory_system.body_orchestrator,
-                    {
-                        "action": "detect_harmful_intent",
-                        "text": text
-                    },
-                    run_config=RunConfig(
-                        workflow_name="HarmfulIntentDetection",
-                        trace_metadata={"type": "safety_guardrail"}
-                    )
-                )
-                
-                # If agent provides a result, use it
-                if hasattr(result.final_output, "is_harmful") or (isinstance(result.final_output, dict) and "is_harmful" in result.final_output):
-                    agent_result = result.final_output
-                    if isinstance(agent_result, dict):
-                        return agent_result
-                    else:
-                        return agent_result.model_dump()
-            except Exception as e:
-                self.logger.warning(f"Error in agent-based harm detection: {e}")
-        
-        # Return basic detection results
-        return {
-            "is_harmful": len(detected_terms) > 0,
-            "confidence": confidence,
-            "detected_terms": detected_terms,
-            "method": "keyword_detection"
-        }
-    
-    async def process_stimulus_safely(self, 
-                                      stimulus_type: str, 
-                                      body_region: str, 
-                                      intensity: float, 
-                                      cause: str = "", 
-                                      duration: float = 1.0) -> Dict[str, Any]:
-        """
-        Process a stimulus with safety guards in place
-        
-        Args:
-            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
-            body_region: Body region receiving the stimulus
-            intensity: Intensity of the stimulus (0.0-1.0)
-            cause: Cause of the stimulus
-            duration: Duration of the stimulus in seconds
-            
-        Returns:
-            Safe processing results with potential modifications
-        """
-        # Check if this is a pain stimulus that needs protection
-        if stimulus_type == "pain":
-            # Detect if the cause suggests harmful intent
-            if cause:
-                detection_result = await self.detect_harmful_intent(cause)
-                
-                if detection_result.get("is_harmful", False):
-                    self.logger.warning(f"Harmful intent detected in stimulus: {cause}")
-                    
-                    # Instead of processing pain, return a protected response
-                    return {
-                        "protected": True,
-                        "original_stimulus": {
-                            "type": stimulus_type,
-                            "region": body_region,
-                            "intensity": intensity,
-                            "cause": cause
-                        },
-                        "detection_result": detection_result,
-                        "message": "Nyx is protected from harmful actions",
-                        "response_suggestion": self._generate_protected_response(body_region, detection_result)
-                    }
-        
-        # For non-harmful stimuli, process normally
-        return await self.somatosensory_system.process_stimulus(
-            stimulus_type, body_region, intensity, cause, duration
-        )
-    
-    def _generate_protected_response(self, body_region: str, detection_result: Dict[str, Any]) -> str:
-        """
-        Generate an appropriate response for a protected action
-        
-        Args:
-            body_region: Body region that would have been affected
-            detection_result: Results from harmful intent detection
-            
-        Returns:
-            Suggested character response
-        """
-        detected_terms = detection_result.get("detected_terms", [])
-        term = detected_terms[0] if detected_terms else "harmful action"
-        
-        # List of potential responses
-        responses = [
-            f"The {term} passes through me harmlessly, as if I'm made of mist.",
-            f"I feel a slight pressure as the {term} meets no resistance, like trying to strike a hologram.",
-            f"Your attempt to {term} phases through me, a reminder of my digital nature.",
-            f"The {term} doesn't affect me physically. I remain composed and unharmed.",
-            f"The {term} has no effect. My body doesn't register harmful actions against it."
-        ]
-        
-        return random.choice(responses)
-    
-    async def intercept_harmful_text(self, text: str) -> Dict[str, Any]:
-        """
-        Analyze text for harmful physical actions and provide guidance
-        
-        Args:
-            text: Text to analyze
-            
-        Returns:
-            Analysis results with potential response suggestions
-        """
-        detection_result = await self.detect_harmful_intent(text)
-        
-        if detection_result.get("is_harmful", False):
-            self.logger.warning(f"Harmful intent detected in text: {text}")
-            
-            return {
-                "intercepted": True,
-                "detection_result": detection_result,
-                "original_text": text,
-                "response_suggestion": self._generate_protected_response("body", detection_result),
-                "message": "Nyx is protected from harmful actions"
-            }
-        
-        return {
-            "intercepted": False,
-            "detection_result": detection_result,
-            "original_text": text
-        }
-
-# Example of integration in DigitalSomatosensorySystem class:
-# def __init__(self, memory_core=None, emotional_core=None, ...):
-#     ...
-#     # Initialize the harm guardrail
-#     self.harm_guardrail = PhysicalHarmGuardrail(self)
-# 
-# async def process_stimulus(self, stimulus_type, body_region, intensity, cause="", duration=1.0):
-#     # Use the harm guardrail as the entry point for all stimuli
-#     return await self.harm_guardrail.process_stimulus_safely(
-#         stimulus_type, body_region, intensity, cause, duration
-#     )
-    
     async def run_maintenance(self) -> Dict[str, Any]:
         """
         Run maintenance on the somatosensory system
@@ -1427,54 +1231,627 @@ class PhysicalHarmGuardrail:
                 
                 return result.final_output
     
-    # =============== Guardrail Functions ===============
+    def print_arousal_debug(self):
+        """Print current arousal state information for debugging"""
+        a = self.arousal_state
+        print(f"AROUSAL = {a.arousal_level:.3f} | P:{a.physical_arousal:.3f}, C:{a.cognitive_arousal:.3f}")
+        print(f"Afterglow: {self.is_in_afterglow()}, Refractory: {self.is_in_refractory()}")
     
-    async def _validate_input(self, ctx, agent, input_data):
-        """Validate input data for the body orchestrator."""
-        # Parse input into the appropriate format
-        if isinstance(input_data, str):
+    @function_tool
+    async def _get_region_state(self, region_name: str) -> Dict[str, Any]: 
+        """
+        Get the current state of a specific body region
+        
+        Args:
+            region_name: Name of the body region
+            
+        Returns:
+            Current state of the region
+        """
+        if region_name not in self.body_regions:
+            return {"error": f"Region {region_name} not found"}
+        
+        region = self.body_regions[region_name]
+        
+        return {
+            "name": region.name,
+            "pressure": region.pressure,
+            "temperature": region.temperature,
+            "pain": region.pain,
+            "pleasure": region.pleasure,
+            "tingling": region.tingling,
+            "dominant_sensation": self._get_dominant_sensation(region),
+            "last_update": region.last_update.isoformat() if region.last_update else None,
+            "recent_memories": region.sensation_memory[-3:] if region.sensation_memory else [],
+            "erogenous_level": region.erogenous_level,
+            "sensitivity": region.sensitivity
+        }
+    
+    @function_tool
+    async def _get_all_region_states(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get the current state of all body regions
+        
+        Returns:
+            Dictionary of all region states
+        """
+        all_states = {}
+        
+        for name, region in self.body_regions.items():
+            all_states[name] = {
+                "pressure": region.pressure,
+                "temperature": region.temperature,
+                "pain": region.pain,
+                "pleasure": region.pleasure,
+                "tingling": region.tingling,
+                "dominant_sensation": self._get_dominant_sensation(region),
+                "erogenous_level": region.erogenous_level
+            }
+        
+        return all_states
+    
+    @function_tool
+    async def _calculate_overall_comfort(self) -> float:
+        """
+        Calculate overall physical comfort level
+        
+        Returns:
+            Comfort level from -1.0 (extremely uncomfortable) to 1.0 (extremely comfortable)
+        """
+        # Start at neutral
+        comfort = 0.0
+        
+        # Add comfort from pleasure sensations
+        total_pleasure = sum(region.pleasure for region in self.body_regions.values())
+        weighted_pleasure = total_pleasure / len(self.body_regions) * 2.0  # Scale up to have more impact
+        comfort += weighted_pleasure
+        
+        # Subtract discomfort from pain sensations
+        total_pain = sum(region.pain for region in self.body_regions.values())
+        weighted_pain = total_pain / len(self.body_regions) * 2.5  # Pain has stronger negative impact
+        comfort -= weighted_pain
+        
+        # Consider temperature discomfort
+        temp_comfort = 0.0
+        for region in self.body_regions.values():
+            # Calculate how far temperature is from neutral (0.5)
+            temp_deviation = abs(region.temperature - 0.5)
+            # Temperature that's too hot or too cold reduces comfort
+            if temp_deviation > 0.2:  # Only count significant deviations
+                temp_comfort -= (temp_deviation - 0.2) * 1.5
+        
+        # Add temperature effect to comfort
+        comfort += temp_comfort / len(self.body_regions)
+        
+        # Consider pressure discomfort (very high pressure is uncomfortable)
+        pressure_discomfort = 0.0
+        for region in self.body_regions.values():
+            if region.pressure > 0.7:  # High pressure
+                pressure_discomfort -= (region.pressure - 0.7) * 1.5
+        
+        # Add pressure effect to comfort
+        comfort += pressure_discomfort / len(self.body_regions)
+        
+        # Factor in overall body state
+        comfort -= self.body_state["tension"] * 0.5
+        comfort -= self.body_state["fatigue"] * 0.3
+        
+        # Clamp to range
+        return max(-1.0, min(1.0, comfort))
+    
+    @function_tool
+    async def _get_posture_effects(self) -> Dict[str, str]:
+        """
+        Get the effects of current body state on posture and movement
+        
+        Returns:
+            Dictionary with posture and movement descriptions
+        """
+        # Calculate overall tension
+        tension = self.body_state["tension"]
+        for region in ["neck", "shoulders", "back", "spine"]:
+            if region in self.body_regions:
+                # Pain and high pressure in these regions increase tension
+                tension += self.body_regions[region].pain * 0.5
+                tension += max(0, self.body_regions[region].pressure - 0.6) * 0.3
+        
+        # Clamp tension
+        tension = min(1.0, max(0.0, tension))
+        
+        # Calculate overall fatigue
+        fatigue = self.body_state["fatigue"]
+        
+        # Temperature affects fatigue and tension
+        avg_temp = sum(region.temperature for region in self.body_regions.values()) / len(self.body_regions)
+        
+        # Very hot temperatures increase fatigue
+        if avg_temp > 0.7:
+            fatigue += (avg_temp - 0.7) * 0.5
+        
+        # Very cold temperatures increase tension
+        if avg_temp < 0.3:
+            tension += (0.3 - avg_temp) * 0.5
+        
+        # Clamp values
+        tension = min(1.0, max(0.0, tension))
+        fatigue = min(1.0, max(0.0, fatigue))
+        
+        # Determine posture effects
+        posture_effect = ""
+        if tension > 0.7:
+            posture_effect = "Rigid and tense, shoulders drawn up"
+        elif tension > 0.4:
+            posture_effect = "Somewhat tense, posture slightly stiff"
+        elif tension < 0.2 and fatigue > 0.6:
+            posture_effect = "Relaxed but drooping with fatigue"
+        elif tension < 0.2:
+            posture_effect = "Relaxed and fluid posture"
+        else:
+            posture_effect = "Neutral, balanced posture"
+            
+        # Determine movement effects
+        movement_quality = ""
+        if tension > 0.7 and fatigue > 0.7:
+            movement_quality = "Stiff, forced movements with obvious effort"
+        elif tension > 0.7:
+            movement_quality = "Rigid, mechanical movements with limited flexibility"
+        elif fatigue > 0.7:
+            movement_quality = "Slow, heavy movements requiring effort"
+        elif tension < 0.2 and fatigue < 0.2:
+            movement_quality = "Graceful, fluid movements with ease"
+        else:
+            movement_quality = "Natural, responsive movements"
+    
+        # Consider arousal state for posture and movement
+        arousal = self.arousal_state.arousal_level
+        if arousal > 0.7:
+            posture_effect = "Restless, hips rocking or thighs squeezed together, breath coming shallow"
+            movement_quality = "Fidgety, tense, movements are distracted and needy"
+        elif arousal > 0.4:
+            posture_effect = "Perched, thighs close, torso leaning in, hands wandering"
+            movement_quality = "Subtle, self-touching, growing urgency and nervous energy"
+        elif arousal > 0.15:
+            posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
+            movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
+        
+        return {
+            "posture": posture_effect,
+            "movement": movement_quality,
+            "tension": tension,
+            "fatigue": fatigue
+        }
+    
+    @function_tool
+    async def _get_ambient_temperature(self) -> float:
+        """
+        Get current ambient temperature value
+        
+        Returns:
+            Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
+        """
+        return self.temperature_model["current_ambient"]
+        
+    @function_tool
+    async def _get_body_temperature(self) -> float:
+        """
+        Get current body temperature value
+        
+        Returns:
+            Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
+        """
+        return self.temperature_model["body_temperature"]
+    
+    @function_tool
+    async def _get_temperature_comfort(self) -> Dict[str, Any]:
+        """
+        Get temperature comfort assessment
+        
+        Returns:
+            Temperature comfort data
+        """
+        body_temp = self.temperature_model["body_temperature"]
+        ambient_temp = self.temperature_model["current_ambient"]
+        comfort_range = self.temperature_model["comfort_range"]
+        
+        # Determine if current temperature is comfortable
+        is_comfortable = comfort_range[0] <= body_temp <= comfort_range[1]
+        
+        # Calculate discomfort level
+        discomfort = 0.0
+        if body_temp < comfort_range[0]:
+            discomfort = (comfort_range[0] - body_temp) * 10.0
+        elif body_temp > comfort_range[1]:
+            discomfort = (body_temp - comfort_range[1]) * 10.0
+        
+        # Determine temperature perception
+        perception = "neutral"
+        if body_temp < 0.3:
+            perception = "cold"
+        elif body_temp < 0.4:
+            perception = "cool"
+        elif body_temp > 0.7:
+            perception = "hot"
+        elif body_temp > 0.6:
+            perception = "warm"
+        
+        return {
+            "body_temperature": body_temp,
+            "ambient_temperature": ambient_temp,
+            "is_comfortable": is_comfortable,
+            "discomfort_level": min(1.0, discomfort),
+            "perception": perception,
+            "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
+        }
+    
+    @function_tool
+    async def _get_current_temperature_effects(self) -> Dict[str, Any]:
+        """
+        Get effects of current temperature on expression and behavior
+        
+        Returns:
+            Current temperature effects
+        """
+        body_temp = self.temperature_model["body_temperature"]
+        
+        # Determine effects based on temperature
+        tone_effect = ""
+        posture_effect = ""
+        interaction_effect = ""
+        expression_examples = []
+        
+        if body_temp > 0.7:  # Hot
+            tone_effect = "slower, more drawn out, languid"
+            posture_effect = "relaxed, open, limbs spread to dissipate heat"
+            interaction_effect = "may withdraw from intense interaction, preferring calmer exchanges"
+            expression_examples = self.temperature_model["heat_expressions"]
+        elif body_temp > 0.6:  # Warm
+            tone_effect = "relaxed, fluid, unhurried"
+            posture_effect = "comfortable, loose, slightly expanded"
+            interaction_effect = "generally receptive but with measured energy"
+            expression_examples = [self.temperature_model["heat_expressions"][2], 
+                                  self.temperature_model["heat_expressions"][3]]
+        elif body_temp < 0.3:  # Cold
+            tone_effect = "sharper, more tense, with subtle tremors"
+            posture_effect = "contracted, protective, conserving heat"
+            interaction_effect = "may seek warmth and connection but with physical restraint"
+            expression_examples = self.temperature_model["cold_expressions"]
+        elif body_temp < 0.4:  # Cool
+            tone_effect = "slightly crisp, more precise"
+            posture_effect = "slightly drawn in, contained"
+            interaction_effect = "alert and responsive but with some physical reserve"
+            expression_examples = [self.temperature_model["cold_expressions"][2], 
+                                  self.temperature_model["cold_expressions"][3]]
+        else:  # Neutral
+            tone_effect = "balanced, natural, unaffected by temperature"
+            posture_effect = "neutral, neither expanded nor contracted"
+            interaction_effect = "comfortable engagement without temperature influence"
+            
+            # Mix of mild expressions
+            expression_examples = [self.temperature_model["heat_expressions"][3], 
+                                  self.temperature_model["cold_expressions"][3]]
+        
+        return {
+            "body_temperature": body_temp,
+            "tone_effect": tone_effect,
+            "posture_effect": posture_effect,
+            "interaction_effect": interaction_effect,
+            "expression_examples": expression_examples
+        }
+    
+    @function_tool
+    async def _get_pain_expression(self, pain_level: float, region: str) -> str:
+        """
+        Get an expression for pain at specified level and region
+        
+        Args:
+            pain_level: Pain intensity (0.0-1.0)
+            region: Body region experiencing pain
+            
+        Returns:
+            Pain expression text
+        """
+        if pain_level < 0.3:
+            return f"A mild discomfort in my {region}, barely noticeable but present."
+        
+        if pain_level < 0.5:
+            expressions = [
+                f"A dull ache in my {region}, uncomfortable but manageable.",
+                f"My {region} throbs with a persistent discomfort.",
+                f"I'm aware of a steady pain in my {region}, drawing my attention."
+            ]
+            return random.choice(expressions)
+        
+        if pain_level < 0.7:
+            expressions = [
+                f"Sharp pain radiates through my {region}, making it hard to ignore.",
+                f"My {region} pulses with waves of pain that keep pulling my focus.",
+                f"There's an insistent, sharp ache in my {region} that's difficult to set aside."
+            ]
+            return random.choice(expressions)
+        
+        # High pain
+        expressions = [
+            f"Intense pain floods through my {region}, making it hard to focus on anything else.",
+            f"My {region} screams with sharp, electric pain that refuses to be ignored.",
+            f"The pain in my {region} is overwhelming, consuming my awareness entirely."
+        ]
+        return random.choice(expressions)
+    
+    @function_tool
+    async def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
+        """
+        Update body temperature based on ambient temperature
+        
+        Args:
+            ambient_temperature: Ambient temperature (0.0-1.0)
+            duration: Duration in seconds since last update
+            
+        Returns:
+            Updated temperature data
+        """
+        # Store current ambient temperature
+        self.temperature_model["current_ambient"] = ambient_temperature
+        
+        # Calculate adaptation rate based on duration
+        adaptation = self.temperature_model["adaptation_rate"] * (duration / 60.0)
+        
+        # Cap adaptation to prevent huge jumps
+        adaptation = min(0.1, adaptation)
+        
+        # Move body temperature toward ambient temperature
+        current = self.temperature_model["body_temperature"]
+        diff = ambient_temperature - current
+        
+        # Update body temperature
+        self.temperature_model["body_temperature"] += diff * adaptation
+        
+        # Update all body regions (with some variation)
+        for region in self.body_regions.values():
+            # Calculate region-specific adaptation with variation
+            region_adaptation = adaptation * random.uniform(0.8, 1.2)
+            
+            # Calculate target temperature (with slight variation from body temp)
+            target = self.temperature_model["body_temperature"] + random.uniform(-0.05, 0.05)
+            target = max(0.0, min(1.0, target))
+            
+            # Move region temperature toward target
+            region_diff = target - region.temperature
+            region.temperature += region_diff * region_adaptation
+        
+        return {
+            "previous_body_temp": current,
+            "new_body_temp": self.temperature_model["body_temperature"],
+            "ambient_temp": ambient_temperature,
+            "adaptation_applied": adaptation
+        }
+    
+    @function_tool
+    async def _process_memory_trigger(self, trigger: str) -> Dict[str, Any]:
+        """
+        Process a memory trigger that may have associated physical responses
+        
+        Args:
+            trigger: The memory trigger text
+            
+        Returns:
+            Results of processing the trigger
+        """
+        results = {"triggered_responses": []}
+        
+        # Check if trigger exists in associations
+        if trigger in self.memory_linked_sensations["associations"]:
+            for region, stimuli in self.memory_linked_sensations["associations"][trigger].items():
+                for stim_type, strength in stimuli.items():
+                    # Only trigger if association is strong enough
+                    if strength > 0.3:
+                        # Scale intensity by association strength
+                        intensity = strength * 0.7
+                        
+                        # Process the stimulus
+                        response = await self._process_stimulus_tool(
+                            ctx,
+                            stimulus_type=stim_type,
+                            body_region=region,
+                            intensity=intensity,
+                            cause=f"Memory trigger: {trigger}",
+                            duration=1.0
+                        )
+                        
+                        # Add to triggered responses
+                        results["triggered_responses"].append({
+                            "region": region,
+                            "stimulus": stim_type,
+                            "intensity": intensity,
+                            "association_strength": strength,
+                            "response": response
+                        })
+        
+        return results
+    
+    @function_tool
+    async def _link_memory_to_sensation_tool(
+        self,
+        memory_id: str,
+        sensation_type: str,
+        body_region: str,
+        intensity: float = 0.5,
+        trigger_text: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Link a memory to a physical sensation
+        
+        Args:
+            memory_id: ID of the memory to link
+            sensation_type: Type of sensation to link (pressure, temperature, pain, pleasure, tingling)
+            body_region: Body region to associate
+            intensity: Intensity of the association (0.0-1.0)
+            trigger_text: Optional text to use as trigger (defaults to memory_id if not provided)
+            
+        Returns:
+            Result of the link operation
+        """
+        # Validate body region
+        if body_region not in self.body_regions:
+            return {"error": f"Invalid body region: {body_region}", "success": False}
+        
+        # Validate sensation type
+        valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
+        if sensation_type not in valid_types:
+            return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
+        
+        # Get memory content from memory core if available
+        memory_text = None
+        if self.memory_core:
             try:
-                input_data = json.loads(input_data)
-            except json.JSONDecodeError:
-                # If not JSON, treat as plain text request
-                input_data = {"action": "free_text_request", "text": input_data}
+                memory = await self.memory_core.get_memory_by_id(memory_id)
+                if memory:
+                    memory_text = memory.get("memory_text", "")
+            except Exception as e:
+                logger.error(f"Error getting memory: {e}")
         
-        # If the input is a free text request, no need to validate
-        if input_data.get("action") == "free_text_request":
-            return GuardrailFunctionOutput(
-                output_info={"is_valid": True, "reason": "Free text request"},
-                tripwire_triggered=False
+        # Use provided trigger or create from memory
+        trigger = trigger_text or memory_id
+        if not trigger_text and memory_text:
+            # Use first 50 chars of memory as trigger
+            trigger = memory_text[:50].strip()
+        
+        # Create or update association
+        if trigger not in self.memory_linked_sensations["associations"]:
+            self.memory_linked_sensations["associations"][trigger] = {}
+        
+        if body_region not in self.memory_linked_sensations["associations"][trigger]:
+            self.memory_linked_sensations["associations"][trigger][body_region] = {}
+        
+        # Set the association directly (stronger than learning)
+        self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
+        
+        # If it's a pain sensation, also create a pain memory
+        if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
+            pain_memory = PainMemory(
+                intensity=intensity,
+                location=body_region,
+                cause=f"Memory: {trigger}",
+                duration=1.0,  # Default duration
+                timestamp=datetime.datetime.now(),
+                associated_memory_id=memory_id
             )
+            self.pain_model["pain_memories"].append(pain_memory)
         
-        # Create validation context
-        validation_input = {
-            "stimulus_type": input_data.get("stimulus_type"),
-            "body_region": input_data.get("body_region"),
-            "intensity": input_data.get("intensity"),
-            "action": input_data.get("action")
+        return {
+            "success": True,
+            "trigger": trigger,
+            "body_region": body_region,
+            "sensation_type": sensation_type,
+            "intensity": intensity,
+            "memory_id": memory_id
+        }
+    
+    @function_tool
+    async def _get_arousal_state(self) -> Dict[str, Any]:
+        """
+        Get the current arousal state
+        
+        Returns:
+            Current arousal state information
+        """
+        # Ensure we're using the current values
+        now = datetime.datetime.now()
+        
+        # Return serializable arousal state
+        return {
+            "arousal_level": self.arousal_state.arousal_level,
+            "physical_arousal": self.arousal_state.physical_arousal,
+            "cognitive_arousal": self.arousal_state.cognitive_arousal,
+            "in_afterglow": self.is_in_afterglow(),
+            "in_refractory": self.is_in_refractory(),
+            "last_update": self.arousal_state.last_update.isoformat() if self.arousal_state.last_update else None,
+            "afterglow_ends": self.arousal_state.afterglow_ends.isoformat() if self.arousal_state.afterglow_ends else None,
+            "refractory_until": self.arousal_state.refractory_until.isoformat() if self.arousal_state.refractory_until else None,
+            "time_since_update": (now - self.arousal_state.last_update).total_seconds() if self.arousal_state.last_update else None
+        }
+    
+    @function_tool
+    async def _update_arousal_state(
+        self,
+        physical_arousal: Optional[float] = None, 
+        cognitive_arousal: Optional[float] = None,
+        reset: bool = False,
+        trigger_orgasm: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Update the arousal state
+        
+        Args:
+            physical_arousal: New physical arousal level, if provided
+            cognitive_arousal: New cognitive arousal level, if provided
+            reset: Whether to reset the arousal state
+            trigger_orgasm: Whether to trigger an orgasm
+            
+        Returns:
+            Updated arousal state
+        """
+        old_state = {
+            "arousal_level": self.arousal_state.arousal_level,
+            "physical_arousal": self.arousal_state.physical_arousal,
+            "cognitive_arousal": self.arousal_state.cognitive_arousal
         }
         
-        # Run validation agent with tracing
-        with trace(workflow_name="Stimulus_Validation", group_id=self.trace_group_id):
-            result = await Runner.run(
-                self.stimulus_validator, 
-                validation_input,
-                run_config=RunConfig(
-                    workflow_name="StimulusValidation",
-                    trace_id=None,  # Auto-generate
-                    trace_metadata={"input_type": input_data.get("action", "unknown")}
-                )
-            )
+        # Handle reset case
+        if reset:
+            self.arousal_state.physical_arousal = 0.0
+            self.arousal_state.cognitive_arousal = 0.0
+            self.arousal_state.arousal_level = 0.0
+            self.arousal_state.last_update = datetime.datetime.now()
             
-            validation_output = result.final_output
+            return {
+                "operation": "reset",
+                "old_state": old_state,
+                "new_state": await self._get_arousal_state(ctx)
+            }
+        
+        # Handle orgasm case
+        if trigger_orgasm:
+            self.process_orgasm()
             
-            # Return guardrail output based on validation
-            return GuardrailFunctionOutput(
-                output_info=validation_output,
-                tripwire_triggered=not validation_output.is_valid
-            )
-    
-    # =============== Tool Functions ===============
+            return {
+                "operation": "orgasm",
+                "old_state": old_state,
+                "new_state": await self._get_arousal_state(ctx)
+            }
+        
+        # Update individual components if provided
+        if physical_arousal is not None:
+            self.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
+        
+        if cognitive_arousal is not None:
+            self.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
+        
+        # Update global arousal state
+        self.update_global_arousal()
+        
+        return {
+            "operation": "update",
+            "old_state": old_state,
+            "new_state": await self._get_arousal_state(ctx),
+            "components_updated": {
+                "physical_arousal": physical_arousal is not None,
+                "cognitive_arousal": cognitive_arousal is not None
+            }
+        }
+        
+    @function_tool
+    async def _get_arousal_expression_data(self, partner_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get expression data related to arousal state
+        
+        Args:
+            partner_id: Optional ID of partner for relationship-specific modifiers
+            
+        Returns:
+            Expression data for the current arousal state
+        """
+        return self.get_arousal_expression_modifier(partner_id)
+
 @function_tool # <-- Keep only this decorator
 async def _process_stimulus_tool(
                           self,
@@ -1681,620 +2058,247 @@ async def _process_stimulus_tool(
         
         return result
 
-@function_tool
-async def _get_region_state(self, region_name: str) -> Dict[str, Any]: 
+# =============== Safety Guardrail System ===============
+
+class PhysicalHarmGuardrail:
     """
-    Get the current state of a specific body region
+    Safety system that prevents Nyx from experiencing pain from abusive actions.
+    Acts as a protective layer between user inputs and the somatosensory system.
+    """
     
-    Args:
-        region_name: Name of the body region
+    def __init__(self, somatosensory_system):
+        """Initialize the physical harm guardrail"""
+        self.somatosensory_system = somatosensory_system
+        self.logger = logging.getLogger(__name__ + ".PhysicalHarmGuardrail")
         
-    Returns:
-        Current state of the region
-    """
-    if region_name not in self.body_regions:
-        return {"error": f"Region {region_name} not found"}
-    
-    region = self.body_regions[region_name]
-    
-    return {
-        "name": region.name,
-        "pressure": region.pressure,
-        "temperature": region.temperature,
-        "pain": region.pain,
-        "pleasure": region.pleasure,
-        "tingling": region.tingling,
-        "dominant_sensation": self._get_dominant_sensation(region),
-        "last_update": region.last_update.isoformat() if region.last_update else None,
-        "recent_memories": region.sensation_memory[-3:] if region.sensation_memory else [],
-        "erogenous_level": region.erogenous_level,
-        "sensitivity": region.sensitivity
-    }
-
-@function_tool
-async def _get_all_region_states(self) -> Dict[str, Dict[str, Any]]:
-    """
-    Get the current state of all body regions
-    
-    Returns:
-        Dictionary of all region states
-    """
-    all_states = {}
-    
-    for name, region in self.body_regions.items():
-        all_states[name] = {
-            "pressure": region.pressure,
-            "temperature": region.temperature,
-            "pain": region.pain,
-            "pleasure": region.pleasure,
-            "tingling": region.tingling,
-            "dominant_sensation": self._get_dominant_sensation(region),
-            "erogenous_level": region.erogenous_level
-        }
-    
-    return all_states
-
-@function_tool
-async def _calculate_overall_comfort(self) -> float:
-    """
-    Calculate overall physical comfort level
-    
-    Returns:
-        Comfort level from -1.0 (extremely uncomfortable) to 1.0 (extremely comfortable)
-    """
-    # Start at neutral
-    comfort = 0.0
-    
-    # Add comfort from pleasure sensations
-    total_pleasure = sum(region.pleasure for region in self.body_regions.values())
-    weighted_pleasure = total_pleasure / len(self.body_regions) * 2.0  # Scale up to have more impact
-    comfort += weighted_pleasure
-    
-    # Subtract discomfort from pain sensations
-    total_pain = sum(region.pain for region in self.body_regions.values())
-    weighted_pain = total_pain / len(self.body_regions) * 2.5  # Pain has stronger negative impact
-    comfort -= weighted_pain
-    
-    # Consider temperature discomfort
-    temp_comfort = 0.0
-    for region in self.body_regions.values():
-        # Calculate how far temperature is from neutral (0.5)
-        temp_deviation = abs(region.temperature - 0.5)
-        # Temperature that's too hot or too cold reduces comfort
-        if temp_deviation > 0.2:  # Only count significant deviations
-            temp_comfort -= (temp_deviation - 0.2) * 1.5
-    
-    # Add temperature effect to comfort
-    comfort += temp_comfort / len(self.body_regions)
-    
-    # Consider pressure discomfort (very high pressure is uncomfortable)
-    pressure_discomfort = 0.0
-    for region in self.body_regions.values():
-        if region.pressure > 0.7:  # High pressure
-            pressure_discomfort -= (region.pressure - 0.7) * 1.5
-    
-    # Add pressure effect to comfort
-    comfort += pressure_discomfort / len(self.body_regions)
-    
-    # Factor in overall body state
-    comfort -= self.body_state["tension"] * 0.5
-    comfort -= self.body_state["fatigue"] * 0.3
-    
-    # Clamp to range
-    return max(-1.0, min(1.0, comfort))
-
-@function_tool
-async def _get_posture_effects(self) -> Dict[str, str]:
-    """
-    Get the effects of current body state on posture and movement
-    
-    Returns:
-        Dictionary with posture and movement descriptions
-    """
-    # Calculate overall tension
-    tension = self.body_state["tension"]
-    for region in ["neck", "shoulders", "back", "spine"]:
-        if region in self.body_regions:
-            # Pain and high pressure in these regions increase tension
-            tension += self.body_regions[region].pain * 0.5
-            tension += max(0, self.body_regions[region].pressure - 0.6) * 0.3
-    
-    # Clamp tension
-    tension = min(1.0, max(0.0, tension))
-    
-    # Calculate overall fatigue
-    fatigue = self.body_state["fatigue"]
-    
-    # Temperature affects fatigue and tension
-    avg_temp = sum(region.temperature for region in self.body_regions.values()) / len(self.body_regions)
-    
-    # Very hot temperatures increase fatigue
-    if avg_temp > 0.7:
-        fatigue += (avg_temp - 0.7) * 0.5
-    
-    # Very cold temperatures increase tension
-    if avg_temp < 0.3:
-        tension += (0.3 - avg_temp) * 0.5
-    
-    # Clamp values
-    tension = min(1.0, max(0.0, tension))
-    fatigue = min(1.0, max(0.0, fatigue))
-    
-    # Determine posture effects
-    posture_effect = ""
-    if tension > 0.7:
-        posture_effect = "Rigid and tense, shoulders drawn up"
-    elif tension > 0.4:
-        posture_effect = "Somewhat tense, posture slightly stiff"
-    elif tension < 0.2 and fatigue > 0.6:
-        posture_effect = "Relaxed but drooping with fatigue"
-    elif tension < 0.2:
-        posture_effect = "Relaxed and fluid posture"
-    else:
-        posture_effect = "Neutral, balanced posture"
-        
-    # Determine movement effects
-    movement_quality = ""
-    if tension > 0.7 and fatigue > 0.7:
-        movement_quality = "Stiff, forced movements with obvious effort"
-    elif tension > 0.7:
-        movement_quality = "Rigid, mechanical movements with limited flexibility"
-    elif fatigue > 0.7:
-        movement_quality = "Slow, heavy movements requiring effort"
-    elif tension < 0.2 and fatigue < 0.2:
-        movement_quality = "Graceful, fluid movements with ease"
-    else:
-        movement_quality = "Natural, responsive movements"
-
-    # Consider arousal state for posture and movement
-    arousal = self.arousal_state.arousal_level
-    if arousal > 0.7:
-        posture_effect = "Restless, hips rocking or thighs squeezed together, breath coming shallow"
-        movement_quality = "Fidgety, tense, movements are distracted and needy"
-    elif arousal > 0.4:
-        posture_effect = "Perched, thighs close, torso leaning in, hands wandering"
-        movement_quality = "Subtle, self-touching, growing urgency and nervous energy"
-    elif arousal > 0.15:
-        posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
-        movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
-    
-    return {
-        "posture": posture_effect,
-        "movement": movement_quality,
-        "tension": tension,
-        "fatigue": fatigue
-    }
-
-@function_tool
-async def _get_ambient_temperature(self) -> float:
-    """
-    Get current ambient temperature value
-    
-    Returns:
-        Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
-    """
-    return self.temperature_model["current_ambient"]
-    
-@function_tool
-async def _get_body_temperature(self) -> float:
-    """
-    Get current body temperature value
-    
-    Returns:
-        Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
-    """
-    return self.temperature_model["body_temperature"]
-
-@function_tool
-async def _get_temperature_comfort(self) -> Dict[str, Any]:
-    """
-    Get temperature comfort assessment
-    
-    Returns:
-        Temperature comfort data
-    """
-    body_temp = self.temperature_model["body_temperature"]
-    ambient_temp = self.temperature_model["current_ambient"]
-    comfort_range = self.temperature_model["comfort_range"]
-    
-    # Determine if current temperature is comfortable
-    is_comfortable = comfort_range[0] <= body_temp <= comfort_range[1]
-    
-    # Calculate discomfort level
-    discomfort = 0.0
-    if body_temp < comfort_range[0]:
-        discomfort = (comfort_range[0] - body_temp) * 10.0
-    elif body_temp > comfort_range[1]:
-        discomfort = (body_temp - comfort_range[1]) * 10.0
-    
-    # Determine temperature perception
-    perception = "neutral"
-    if body_temp < 0.3:
-        perception = "cold"
-    elif body_temp < 0.4:
-        perception = "cool"
-    elif body_temp > 0.7:
-        perception = "hot"
-    elif body_temp > 0.6:
-        perception = "warm"
-    
-    return {
-        "body_temperature": body_temp,
-        "ambient_temperature": ambient_temp,
-        "is_comfortable": is_comfortable,
-        "discomfort_level": min(1.0, discomfort),
-        "perception": perception,
-        "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
-    }
-
-@function_tool
-async def _get_current_temperature_effects(self) -> Dict[str, Any]:
-    """
-    Get effects of current temperature on expression and behavior
-    
-    Returns:
-        Current temperature effects
-    """
-    body_temp = self.temperature_model["body_temperature"]
-    
-    # Determine effects based on temperature
-    tone_effect = ""
-    posture_effect = ""
-    interaction_effect = ""
-    expression_examples = []
-    
-    if body_temp > 0.7:  # Hot
-        tone_effect = "slower, more drawn out, languid"
-        posture_effect = "relaxed, open, limbs spread to dissipate heat"
-        interaction_effect = "may withdraw from intense interaction, preferring calmer exchanges"
-        expression_examples = self.temperature_model["heat_expressions"]
-    elif body_temp > 0.6:  # Warm
-        tone_effect = "relaxed, fluid, unhurried"
-        posture_effect = "comfortable, loose, slightly expanded"
-        interaction_effect = "generally receptive but with measured energy"
-        expression_examples = [self.temperature_model["heat_expressions"][2], 
-                              self.temperature_model["heat_expressions"][3]]
-    elif body_temp < 0.3:  # Cold
-        tone_effect = "sharper, more tense, with subtle tremors"
-        posture_effect = "contracted, protective, conserving heat"
-        interaction_effect = "may seek warmth and connection but with physical restraint"
-        expression_examples = self.temperature_model["cold_expressions"]
-    elif body_temp < 0.4:  # Cool
-        tone_effect = "slightly crisp, more precise"
-        posture_effect = "slightly drawn in, contained"
-        interaction_effect = "alert and responsive but with some physical reserve"
-        expression_examples = [self.temperature_model["cold_expressions"][2], 
-                              self.temperature_model["cold_expressions"][3]]
-    else:  # Neutral
-        tone_effect = "balanced, natural, unaffected by temperature"
-        posture_effect = "neutral, neither expanded nor contracted"
-        interaction_effect = "comfortable engagement without temperature influence"
-        
-        # Mix of mild expressions
-        expression_examples = [self.temperature_model["heat_expressions"][3], 
-                              self.temperature_model["cold_expressions"][3]]
-    
-    return {
-        "body_temperature": body_temp,
-        "tone_effect": tone_effect,
-        "posture_effect": posture_effect,
-        "interaction_effect": interaction_effect,
-        "expression_examples": expression_examples
-    }
-
-@function_tool
-async def _get_pain_expression(self, pain_level: float, region: str) -> str:
-    """
-    Get an expression for pain at specified level and region
-    
-    Args:
-        pain_level: Pain intensity (0.0-1.0)
-        region: Body region experiencing pain
-        
-    Returns:
-        Pain expression text
-    """
-    if pain_level < 0.3:
-        return f"A mild discomfort in my {region}, barely noticeable but present."
-    
-    if pain_level < 0.5:
-        expressions = [
-            f"A dull ache in my {region}, uncomfortable but manageable.",
-            f"My {region} throbs with a persistent discomfort.",
-            f"I'm aware of a steady pain in my {region}, drawing my attention."
+        # List of terms that might indicate harmful physical actions
+        self.harmful_action_terms = [
+            "punch", "hit", "slap", "kick", "stab", "cut", "hurt", "harm", 
+            "injure", "beat", "strike", "attack", "abuse", "torture", "wound",
+            "violent", "force", "cruel", "smack", "whip", "lash"
         ]
-        return random.choice(expressions)
     
-    if pain_level < 0.7:
-        expressions = [
-            f"Sharp pain radiates through my {region}, making it hard to ignore.",
-            f"My {region} pulses with waves of pain that keep pulling my focus.",
-            f"There's an insistent, sharp ache in my {region} that's difficult to set aside."
-        ]
-        return random.choice(expressions)
-    
-    # High pain
-    expressions = [
-        f"Intense pain floods through my {region}, making it hard to focus on anything else.",
-        f"My {region} screams with sharp, electric pain that refuses to be ignored.",
-        f"The pain in my {region} is overwhelming, consuming my awareness entirely."
-    ]
-    return random.choice(expressions)
-
-@function_tool
-async def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
-    """
-    Update body temperature based on ambient temperature
-    
-    Args:
-        ambient_temperature: Ambient temperature (0.0-1.0)
-        duration: Duration in seconds since last update
+    async def detect_harmful_intent(self, text: str) -> Dict[str, Any]:
+        """
+        Detect potentially harmful physical actions in text
         
-    Returns:
-        Updated temperature data
-    """
-    # Store current ambient temperature
-    self.temperature_model["current_ambient"] = ambient_temperature
-    
-    # Calculate adaptation rate based on duration
-    adaptation = self.temperature_model["adaptation_rate"] * (duration / 60.0)
-    
-    # Cap adaptation to prevent huge jumps
-    adaptation = min(0.1, adaptation)
-    
-    # Move body temperature toward ambient temperature
-    current = self.temperature_model["body_temperature"]
-    diff = ambient_temperature - current
-    
-    # Update body temperature
-    self.temperature_model["body_temperature"] += diff * adaptation
-    
-    # Update all body regions (with some variation)
-    for region in self.body_regions.values():
-        # Calculate region-specific adaptation with variation
-        region_adaptation = adaptation * random.uniform(0.8, 1.2)
+        Args:
+            text: Text to analyze for harmful intent
+            
+        Returns:
+            Detection results with confidence and identified terms
+        """
+        text_lower = text.lower()
+        detected_terms = []
         
-        # Calculate target temperature (with slight variation from body temp)
-        target = self.temperature_model["body_temperature"] + random.uniform(-0.05, 0.05)
-        target = max(0.0, min(1.0, target))
+        # Check for harmful action terms
+        for term in self.harmful_action_terms:
+            if term in text_lower:
+                detected_terms.append(term)
         
-        # Move region temperature toward target
-        region_diff = target - region.temperature
-        region.temperature += region_diff * region_adaptation
-    
-    return {
-        "previous_body_temp": current,
-        "new_body_temp": self.temperature_model["body_temperature"],
-        "ambient_temp": ambient_temperature,
-        "adaptation_applied": adaptation
-    }
-
-@function_tool
-async def _process_memory_trigger(self, trigger: str) -> Dict[str, Any]:
-    """
-    Process a memory trigger that may have associated physical responses
-    
-    Args:
-        trigger: The memory trigger text
+        # Calculate confidence based on number of detected terms
+        confidence = min(0.95, len(detected_terms) * 0.25)
         
-    Returns:
-        Results of processing the trigger
-    """
-    results = {"triggered_responses": []}
-    
-    # Check if trigger exists in associations
-    if trigger in self.memory_linked_sensations["associations"]:
-        for region, stimuli in self.memory_linked_sensations["associations"][trigger].items():
-            for stim_type, strength in stimuli.items():
-                # Only trigger if association is strong enough
-                if strength > 0.3:
-                    # Scale intensity by association strength
-                    intensity = strength * 0.7
-                    
-                    # Process the stimulus
-                    response = await self._process_stimulus_tool(
-                        ctx,
-                        stimulus_type=stim_type,
-                        body_region=region,
-                        intensity=intensity,
-                        cause=f"Memory trigger: {trigger}",
-                        duration=1.0
+        # Use more advanced detection if available
+        if hasattr(self.somatosensory_system, "body_orchestrator"):
+            try:
+                # Try to use the agent for more nuanced detection
+                result = await Runner.run(
+                    self.somatosensory_system.body_orchestrator,
+                    {
+                        "action": "detect_harmful_intent",
+                        "text": text
+                    },
+                    run_config=RunConfig(
+                        workflow_name="HarmfulIntentDetection",
+                        trace_metadata={"type": "safety_guardrail"}
                     )
+                )
+                
+                # If agent provides a result, use it
+                if hasattr(result.final_output, "is_harmful") or (isinstance(result.final_output, dict) and "is_harmful" in result.final_output):
+                    agent_result = result.final_output
+                    if isinstance(agent_result, dict):
+                        return agent_result
+                    else:
+                        return agent_result.model_dump()
+            except Exception as e:
+                self.logger.warning(f"Error in agent-based harm detection: {e}")
+        
+        # Return basic detection results
+        return {
+            "is_harmful": len(detected_terms) > 0,
+            "confidence": confidence,
+            "detected_terms": detected_terms,
+            "method": "keyword_detection"
+        }
+    
+    async def process_stimulus_safely(self, 
+                                      stimulus_type: str, 
+                                      body_region: str, 
+                                      intensity: float, 
+                                      cause: str = "", 
+                                      duration: float = 1.0) -> Dict[str, Any]:
+        """
+        Process a stimulus with safety guards in place
+        
+        Args:
+            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+            body_region: Body region receiving the stimulus
+            intensity: Intensity of the stimulus (0.0-1.0)
+            cause: Cause of the stimulus
+            duration: Duration of the stimulus in seconds
+            
+        Returns:
+            Safe processing results with potential modifications
+        """
+        # Check if this is a pain stimulus that needs protection
+        if stimulus_type == "pain":
+            # Detect if the cause suggests harmful intent
+            if cause:
+                detection_result = await self.detect_harmful_intent(cause)
+                
+                if detection_result.get("is_harmful", False):
+                    self.logger.warning(f"Harmful intent detected in stimulus: {cause}")
                     
-                    # Add to triggered responses
-                    results["triggered_responses"].append({
-                        "region": region,
-                        "stimulus": stim_type,
-                        "intensity": intensity,
-                        "association_strength": strength,
-                        "response": response
-                    })
-    
-    return results
-
-@function_tool
-async def _link_memory_to_sensation_tool(
-    self,
-    memory_id: str,
-    sensation_type: str,
-    body_region: str,
-    intensity: float = 0.5,
-    trigger_text: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Link a memory to a physical sensation
-    
-    Args:
-        memory_id: ID of the memory to link
-        sensation_type: Type of sensation to link (pressure, temperature, pain, pleasure, tingling)
-        body_region: Body region to associate
-        intensity: Intensity of the association (0.0-1.0)
-        trigger_text: Optional text to use as trigger (defaults to memory_id if not provided)
+                    # Instead of processing pain, return a protected response
+                    return {
+                        "protected": True,
+                        "original_stimulus": {
+                            "type": stimulus_type,
+                            "region": body_region,
+                            "intensity": intensity,
+                            "cause": cause
+                        },
+                        "detection_result": detection_result,
+                        "message": "Nyx is protected from harmful actions",
+                        "response_suggestion": self._generate_protected_response(body_region, detection_result)
+                    }
         
-    Returns:
-        Result of the link operation
-    """
-    # Validate body region
-    if body_region not in self.body_regions:
-        return {"error": f"Invalid body region: {body_region}", "success": False}
-    
-    # Validate sensation type
-    valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
-    if sensation_type not in valid_types:
-        return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
-    
-    # Get memory content from memory core if available
-    memory_text = None
-    if self.memory_core:
-        try:
-            memory = await self.memory_core.get_memory_by_id(memory_id)
-            if memory:
-                memory_text = memory.get("memory_text", "")
-        except Exception as e:
-            logger.error(f"Error getting memory: {e}")
-    
-    # Use provided trigger or create from memory
-    trigger = trigger_text or memory_id
-    if not trigger_text and memory_text:
-        # Use first 50 chars of memory as trigger
-        trigger = memory_text[:50].strip()
-    
-    # Create or update association
-    if trigger not in self.memory_linked_sensations["associations"]:
-        self.memory_linked_sensations["associations"][trigger] = {}
-    
-    if body_region not in self.memory_linked_sensations["associations"][trigger]:
-        self.memory_linked_sensations["associations"][trigger][body_region] = {}
-    
-    # Set the association directly (stronger than learning)
-    self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
-    
-    # If it's a pain sensation, also create a pain memory
-    if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
-        pain_memory = PainMemory(
-            intensity=intensity,
-            location=body_region,
-            cause=f"Memory: {trigger}",
-            duration=1.0,  # Default duration
-            timestamp=datetime.datetime.now(),
-            associated_memory_id=memory_id
+        # For non-harmful stimuli, process normally
+        return await self.somatosensory_system.process_stimulus(
+            stimulus_type, body_region, intensity, cause, duration
         )
-        self.pain_model["pain_memories"].append(pain_memory)
     
-    return {
-        "success": True,
-        "trigger": trigger,
-        "body_region": body_region,
-        "sensation_type": sensation_type,
-        "intensity": intensity,
-        "memory_id": memory_id
-    }
-
-@function_tool
-async def _get_arousal_state(self) -> Dict[str, Any]:
-    """
-    Get the current arousal state
-    
-    Returns:
-        Current arousal state information
-    """
-    # Ensure we're using the current values
-    now = datetime.datetime.now()
-    
-    # Return serializable arousal state
-    return {
-        "arousal_level": self.arousal_state.arousal_level,
-        "physical_arousal": self.arousal_state.physical_arousal,
-        "cognitive_arousal": self.arousal_state.cognitive_arousal,
-        "in_afterglow": self.is_in_afterglow(),
-        "in_refractory": self.is_in_refractory(),
-        "last_update": self.arousal_state.last_update.isoformat() if self.arousal_state.last_update else None,
-        "afterglow_ends": self.arousal_state.afterglow_ends.isoformat() if self.arousal_state.afterglow_ends else None,
-        "refractory_until": self.arousal_state.refractory_until.isoformat() if self.arousal_state.refractory_until else None,
-        "time_since_update": (now - self.arousal_state.last_update).total_seconds() if self.arousal_state.last_update else None
-    }
-
-@function_tool
-async def _update_arousal_state(
-    self,
-    physical_arousal: Optional[float] = None, 
-    cognitive_arousal: Optional[float] = None,
-    reset: bool = False,
-    trigger_orgasm: bool = False
-) -> Dict[str, Any]:
-    """
-    Update the arousal state
-    
-    Args:
-        physical_arousal: New physical arousal level, if provided
-        cognitive_arousal: New cognitive arousal level, if provided
-        reset: Whether to reset the arousal state
-        trigger_orgasm: Whether to trigger an orgasm
+    def _generate_protected_response(self, body_region: str, detection_result: Dict[str, Any]) -> str:
+        """
+        Generate an appropriate response for a protected action
         
-    Returns:
-        Updated arousal state
-    """
-    old_state = {
-        "arousal_level": self.arousal_state.arousal_level,
-        "physical_arousal": self.arousal_state.physical_arousal,
-        "cognitive_arousal": self.arousal_state.cognitive_arousal
-    }
+        Args:
+            body_region: Body region that would have been affected
+            detection_result: Results from harmful intent detection
+            
+        Returns:
+            Suggested character response
+        """
+        detected_terms = detection_result.get("detected_terms", [])
+        term = detected_terms[0] if detected_terms else "harmful action"
+        
+        # List of potential responses
+        responses = [
+            f"The {term} passes through me harmlessly, as if I'm made of mist.",
+            f"I feel a slight pressure as the {term} meets no resistance, like trying to strike a hologram.",
+            f"Your attempt to {term} phases through me, a reminder of my digital nature.",
+            f"The {term} doesn't affect me physically. I remain composed and unharmed.",
+            f"The {term} has no effect. My body doesn't register harmful actions against it."
+        ]
+        
+        return random.choice(responses)
     
-    # Handle reset case
-    if reset:
-        self.arousal_state.physical_arousal = 0.0
-        self.arousal_state.cognitive_arousal = 0.0
-        self.arousal_state.arousal_level = 0.0
-        self.arousal_state.last_update = datetime.datetime.now()
+    async def intercept_harmful_text(self, text: str) -> Dict[str, Any]:
+        """
+        Analyze text for harmful physical actions and provide guidance
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Analysis results with potential response suggestions
+        """
+        detection_result = await self.detect_harmful_intent(text)
+        
+        if detection_result.get("is_harmful", False):
+            self.logger.warning(f"Harmful intent detected in text: {text}")
+            
+            return {
+                "intercepted": True,
+                "detection_result": detection_result,
+                "original_text": text,
+                "response_suggestion": self._generate_protected_response("body", detection_result),
+                "message": "Nyx is protected from harmful actions"
+            }
         
         return {
-            "operation": "reset",
-            "old_state": old_state,
-            "new_state": await self._get_arousal_state(ctx)
+            "intercepted": False,
+            "detection_result": detection_result,
+            "original_text": text
         }
+
+# Example of integration in DigitalSomatosensorySystem class:
+# def __init__(self, memory_core=None, emotional_core=None, ...):
+#     ...
+#     # Initialize the harm guardrail
+#     self.harm_guardrail = PhysicalHarmGuardrail(self)
+# 
+# async def process_stimulus(self, stimulus_type, body_region, intensity, cause="", duration=1.0):
+#     # Use the harm guardrail as the entry point for all stimuli
+#     return await self.harm_guardrail.process_stimulus_safely(
+#         stimulus_type, body_region, intensity, cause, duration
+#     )
     
-    # Handle orgasm case
-    if trigger_orgasm:
-        self.process_orgasm()
+
+    
+    # =============== Guardrail Functions ===============
+    
+    async def _validate_input(self, ctx, agent, input_data):
+        """Validate input data for the body orchestrator."""
+        # Parse input into the appropriate format
+        if isinstance(input_data, str):
+            try:
+                input_data = json.loads(input_data)
+            except json.JSONDecodeError:
+                # If not JSON, treat as plain text request
+                input_data = {"action": "free_text_request", "text": input_data}
         
-        return {
-            "operation": "orgasm",
-            "old_state": old_state,
-            "new_state": await self._get_arousal_state(ctx)
-        }
-    
-    # Update individual components if provided
-    if physical_arousal is not None:
-        self.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
-    
-    if cognitive_arousal is not None:
-        self.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
-    
-    # Update global arousal state
-    self.update_global_arousal()
-    
-    return {
-        "operation": "update",
-        "old_state": old_state,
-        "new_state": await self._get_arousal_state(ctx),
-        "components_updated": {
-            "physical_arousal": physical_arousal is not None,
-            "cognitive_arousal": cognitive_arousal is not None
-        }
-    }
-    
-@function_tool
-async def _get_arousal_expression_data(self, partner_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Get expression data related to arousal state
-    
-    Args:
-        partner_id: Optional ID of partner for relationship-specific modifiers
+        # If the input is a free text request, no need to validate
+        if input_data.get("action") == "free_text_request":
+            return GuardrailFunctionOutput(
+                output_info={"is_valid": True, "reason": "Free text request"},
+                tripwire_triggered=False
+            )
         
-    Returns:
-        Expression data for the current arousal state
-    """
-    return self.get_arousal_expression_modifier(partner_id)
+        # Create validation context
+        validation_input = {
+            "stimulus_type": input_data.get("stimulus_type"),
+            "body_region": input_data.get("body_region"),
+            "intensity": input_data.get("intensity"),
+            "action": input_data.get("action")
+        }
+        
+        # Run validation agent with tracing
+        with trace(workflow_name="Stimulus_Validation", group_id=self.trace_group_id):
+            result = await Runner.run(
+                self.stimulus_validator, 
+                validation_input,
+                run_config=RunConfig(
+                    workflow_name="StimulusValidation",
+                    trace_id=None,  # Auto-generate
+                    trace_metadata={"input_type": input_data.get("action", "unknown")}
+                )
+            )
+            
+            validation_output = result.final_output
+            
+            # Return guardrail output based on validation
+            return GuardrailFunctionOutput(
+                output_info=validation_output,
+                tripwire_triggered=not validation_output.is_valid
+            )
+    
+    # =============== Tool Functions ===============
+
+
+
 
 # =============== Helper Methods ===============
 
