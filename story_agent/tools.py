@@ -371,9 +371,9 @@ async def get_summarized_narrative_context(
 
 
         # 4. Use the 'actual_' variable in the function call
-        context_data = await narrative_manager.get_optimal_narrative_context(
-            query=query,
-            max_tokens=actual_max_tokens # Use actual_max_tokens here
+        context_data = await narrative_manager.get_current_narrative_context(
+            query,  # or input_text parameter as expected by the method
+            actual_max_tokens
         )
         return context_data
     except Exception as e:
