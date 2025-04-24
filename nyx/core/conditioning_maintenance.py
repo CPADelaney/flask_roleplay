@@ -1120,89 +1120,119 @@ async def _create_maintenance_schedule(ctx: RunContextWrapper) -> List[Maintenan
     
     return tasks
 
-@function_tool
-async def _get_maintenance_status(ctx: RunContextWrapper) -> Dict[str, Any]:
-    """
-    Get the current status of maintenance
-    
-    Returns:
-        Maintenance status
-    """
+async def _get_maintenance_status_logic(ctx: RunContextWrapper[MaintenanceContext]) -> Dict[str, Any]:
+    """Internal logic to get the current status of maintenance."""
+    # Check if context is valid and has necessary attributes
+    if not hasattr(ctx, 'context') or ctx.context is None:
+        logger.error("Context missing in _get_maintenance_status_logic")
+        # Return a default error state or raise an appropriate exception
+        return {"error": "Invalid context"}
+    if not hasattr(ctx.context, 'last_maintenance_time') or \
+       not hasattr(ctx.context, 'maintenance_interval_hours') or \
+       not hasattr(ctx.context, 'consolidation_interval_days') or \
+       not hasattr(ctx.context, 'maintenance_history'):
+         logger.error("Context missing required attributes in _get_maintenance_status_logic")
+         return {"error": "Context attributes missing"}
+
+
     now = datetime.datetime.now()
-    
+    context = ctx.context # Now safe to access
+
     # Calculate time since last maintenance
-    if ctx.context.last_maintenance_time:
-        seconds_since_last = (now - ctx.context.last_maintenance_time).total_seconds()
-        hours_since_last = seconds_since_last / 3600
-        days_since_last = hours_since_last / 24
-    else:
-        seconds_since_last = None
-        hours_since_last = None
-        days_since_last = None
-    
+    seconds_since_last = None
+    hours_since_last = None
+    days_since_last = None
+    if context.last_maintenance_time:
+        try:
+            # Ensure last_maintenance_time is a datetime object
+            last_maint_dt = context.last_maintenance_time
+            if isinstance(last_maint_dt, str):
+                 last_maint_dt = datetime.datetime.fromisoformat(last_maint_dt.replace("Z", "+00:00"))
+
+            if isinstance(last_maint_dt, datetime.datetime):
+                 seconds_since_last = (now - last_maint_dt).total_seconds()
+                 hours_since_last = seconds_since_last / 3600
+                 days_since_last = hours_since_last / 24
+            else:
+                 logger.warning(f"last_maintenance_time is not a datetime object: {type(last_maint_dt)}")
+        except Exception as e:
+            logger.error(f"Error processing last_maintenance_time: {e}")
+
+
     # Calculate next scheduled maintenance
-    if ctx.context.last_maintenance_time:
-        next_maintenance = ctx.context.last_maintenance_time + datetime.timedelta(hours=ctx.context.maintenance_interval_hours)
-        hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
-    else:
-        next_maintenance = None
-        hours_until_next = 0
-    
+    next_maintenance = None
+    hours_until_next = 0
+    if context.last_maintenance_time and isinstance(context.last_maintenance_time, datetime.datetime):
+        try:
+             next_maintenance = context.last_maintenance_time + datetime.timedelta(hours=context.maintenance_interval_hours)
+             hours_until_next = max(0, (next_maintenance - now).total_seconds() / 3600)
+        except Exception as e:
+             logger.error(f"Error calculating next maintenance time: {e}")
+    elif not context.last_maintenance_time:
+         hours_until_next = 0 # Due immediately if never run
+
     # Check if maintenance is due
     maintenance_due = hours_until_next <= 0
-    
+
     # Check if consolidation is due
     consolidation_due = False
-    if ctx.context.last_maintenance_time:
-        consolidation_due = days_since_last is not None and days_since_last >= ctx.context.consolidation_interval_days
-    else:
-        consolidation_due = True
-    
+    if context.last_maintenance_time and days_since_last is not None:
+        consolidation_due = days_since_last >= context.consolidation_interval_days
+    elif not context.last_maintenance_time:
+        consolidation_due = True # Due if never run
+
     return {
-        "last_maintenance_time": ctx.context.last_maintenance_time.isoformat() if ctx.context.last_maintenance_time else None,
+        "last_maintenance_time": context.last_maintenance_time.isoformat() if isinstance(context.last_maintenance_time, datetime.datetime) else None,
         "hours_since_last_maintenance": hours_since_last,
         "next_scheduled_maintenance": next_maintenance.isoformat() if next_maintenance else None,
         "hours_until_next_maintenance": hours_until_next,
         "maintenance_due": maintenance_due,
         "consolidation_due": consolidation_due,
-        "maintenance_interval_hours": ctx.context.maintenance_interval_hours,
-        "consolidation_interval_days": ctx.context.consolidation_interval_days,
-        "maintenance_history_count": len(ctx.context.maintenance_history)
+        "maintenance_interval_hours": context.maintenance_interval_hours,
+        "consolidation_interval_days": context.consolidation_interval_days,
+        "maintenance_history_count": len(context.maintenance_history) if isinstance(context.maintenance_history, list) else 0
     }
 
-@function_tool
-async def _record_maintenance_history(
+# 2. Create the FunctionTool object *from* the logic function
+#    Use the original desired name for the tool the LLM sees.
+_get_maintenance_status_tool = function_tool(
+    _get_maintenance_status_logic,
+    name_override="_get_maintenance_status",
+    description_override="Get the current status of maintenance" # Add description
+)
+
+
+async def _record_maintenance_history_logic(
     ctx: RunContextWrapper[MaintenanceContext],
     maintenance_record: Optional[Dict[str, Any]] = None # Make Optional
 ) -> Dict[str, Any]:
-    """
-    Record maintenance history.
-
-    Args:
-        maintenance_record: Maintenance record dictionary to add (required). # 3. Update docstring
-
-    Returns:
-        Updated history info or error dictionary.
-    """
-    # 2. Add internal check for the required parameter
+    """Internal logic to record maintenance history."""
+    # Parameter check moved inside as per previous refinement
     if maintenance_record is None:
-        logger.error("_record_maintenance_history called without 'maintenance_record' parameter.")
+        logger.error("_record_maintenance_history_logic called without 'maintenance_record' parameter.")
         return {
             "success": False,
             "error": "Missing required 'maintenance_record' parameter."
-            # Avoid accessing ctx.context here if the parameter is missing
         }
+
+    # Context check
+    if not hasattr(ctx, 'context') or ctx.context is None:
+        logger.error("Context missing in _record_maintenance_history_logic")
+        return {"success": False, "error": "Invalid context"}
 
     context = ctx.context # Access context only after validation
 
     # Ensure context has the expected attributes
     if not hasattr(context, 'maintenance_history') or not hasattr(context, 'max_history_entries'):
-         logger.error("Context missing maintenance_history or max_history_entries in _record_maintenance_history")
+         logger.error("Context missing maintenance_history or max_history_entries in _record_maintenance_history_logic")
          return {"success": False, "error": "Internal context setup error"}
 
-
     try:
-        # Now proceed with the original logic, using the validated 'maintenance_record' dict
+        # Ensure maintenance_record is a dict if not None
+        if not isinstance(maintenance_record, dict):
+            logger.error(f"_record_maintenance_history_logic received non-dict record: {type(maintenance_record)}")
+            return {"success": False, "error": "Invalid maintenance_record format"}
+
         # Add timestamp if not present
         if "timestamp" not in maintenance_record:
             maintenance_record["timestamp"] = datetime.datetime.now().isoformat()
@@ -1213,7 +1243,6 @@ async def _record_maintenance_history(
         else:
              logger.error("maintenance_history in context is not a list.")
              return {"success": False, "error": "Internal context error: history is not a list"}
-
 
         # Trim history if needed (ensure max_history_entries is an int)
         max_entries = getattr(context, 'max_history_entries', 100) # Default if missing
@@ -1229,7 +1258,6 @@ async def _record_maintenance_history(
         if context.maintenance_history:
              latest_timestamp = context.maintenance_history[-1].get("timestamp")
 
-
         return {
             "success": True,
             "history_count": len(context.maintenance_history),
@@ -1239,6 +1267,14 @@ async def _record_maintenance_history(
     except Exception as e:
         logger.error(f"Error recording maintenance history: {e}", exc_info=True)
         return {"success": False, "error": f"Error processing record: {str(e)}"}
+
+# 2. Create the FunctionTool object *from* the logic function
+_record_maintenance_history_tool = function_tool(
+    _record_maintenance_history_logic,
+    name_override="_record_maintenance_history",
+    description_override="Record maintenance history." # Add description
+)
+
         
 @function_tool
 async def _analyze_system_efficiency(ctx: RunContextWrapper) -> Dict[str, Any]:
@@ -1451,10 +1487,10 @@ class ConditioningMaintenanceSystem:
             while optimizing for efficiency and effectiveness.
             """,
             tools=[
-                _create_maintenance_schedule,
-                _get_maintenance_status,
-                _record_maintenance_history,
-                _analyze_system_efficiency,
+                _get_maintenance_status_tool,         # USE THE TOOL OBJECT
+                _record_maintenance_history_tool,     # USE THE TOOL OBJECT
+                _analyze_system_efficiency, # Assuming this one IS correctly just a tool
+                _create_maintenance_schedule, # Assuming this one IS correctly just a tool
                 # Convert handoffs to tools
                 self.balance_analysis_agent.as_tool(
                     tool_name="analyze_personality_balance",
@@ -1543,7 +1579,7 @@ class ConditioningMaintenanceSystem:
                 # Prepare input for the orchestrator (more explicit)
                 wrapper = RunContextWrapper(context=self.context)
                 # Assume _get_maintenance_status returns a dict/object convertible to dict
-                status_info = await _get_maintenance_status(wrapper, "{}")
+                status_info = await _get_maintenance_status_logic(wrapper) # <--- FIX: Call logic function
 
                 orchestrator_input = json.dumps({
                     "action_request": "perform_full_maintenance_run",
@@ -1641,9 +1677,9 @@ class ConditioningMaintenanceSystem:
                 if maintenance_record: # If a record (success or failure) was created
                     try:
                         # Attempt to record the result (success or failure)
-                        await _record_maintenance_history(
-                            RunContextWrapper(context=self.context),
-                            json.dumps({"maintenance_record": maintenance_record})
+                        await _record_maintenance_history_logic(
+                            RunContextWrapper(context=self.context), # Pass the wrapper
+                            maintenance_record=maintenance_record     # <--- FIX: Pass the dictionary directly
                         )
                         logger.info(f"Maintenance record (Status: {maintenance_record.get('status', 'unknown')}) recorded for Trace Group: {group_id}.")
                     except Exception as hist_e:
