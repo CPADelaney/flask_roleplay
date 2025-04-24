@@ -1494,7 +1494,6 @@ class ConditioningMaintenanceSystem:
             """,
             tools=[
                 _get_maintenance_status_tool,         # USE THE TOOL OBJECT
-                _record_maintenance_history_tool,     # USE THE TOOL OBJECT
                 _analyze_system_efficiency, # Assuming this one IS correctly just a tool
                 _create_maintenance_schedule, # Assuming this one IS correctly just a tool
                 # Convert handoffs to tools
