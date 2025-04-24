@@ -50,19 +50,33 @@ class ReflectionTools:
         Args:
             emotion_system: The emotion system to interact with
         """
+        # Direct attribute assignments (similar pattern)
         self.neurochemicals = emotion_system.neurochemicals
         self.reflection_patterns = emotion_system.reflection_patterns
         self.emotional_state_history = emotion_system.emotional_state_history
         self.reward_learning = emotion_system.reward_learning
-        
-        # Store reference to get_emotional_state_matrix function
+
+        # CHANGE: More robust function reference handling for get_emotional_state_matrix
         if hasattr(emotion_system, "get_emotional_state_matrix"):
             self.get_emotional_state_matrix = emotion_system.get_emotional_state_matrix
         elif hasattr(emotion_system, "_get_emotional_state_matrix"):
             self.get_emotional_state_matrix = emotion_system._get_emotional_state_matrix
+            # Example if wrapper was needed (e.g., if _get required no args):
+            # self.get_emotional_state_matrix = lambda *args, **kwargs: emotion_system._get_emotional_state_matrix()
         else:
             self.get_emotional_state_matrix = None
-            logger.warning("No get_emotional_state_matrix function found")
+            logger.warning("No get_emotional_state_matrix or _get_emotional_state_matrix function found in emotion_system")
+
+        # Add last_update attribute, mirroring the target style
+        # This assumes 'emotion_system' is expected to have a 'last_update' attribute.
+        # If it might not, add a check like hasattr(emotion_system, 'last_update').
+        try:
+            self.last_update = emotion_system.last_update
+        except AttributeError:
+            self.last_update = None # Or set a sensible default
+            logger.warning("emotion_system does not have a 'last_update' attribute.")
+
+    
     
     # -------------------------------------------------------------------------
     # 1) generate_internal_thought
