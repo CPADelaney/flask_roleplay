@@ -1435,7 +1435,6 @@ class ConditioningMaintenanceSystem:
             of reinforcement when determining extinction.
             """,
             tools=[
-                _get_association_details,
                 _apply_extinction_to_association,
                 _adjust_association_decay_rate,
                 _identify_extinction_candidates
