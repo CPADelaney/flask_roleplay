@@ -73,17 +73,16 @@ class NeurochemicalTools:
     """
 
     def __init__(self, neurochemical_system):
-        """
-        Initialize with reference to the neurochemical system.
-        """
+        """Initialize with reference to the neurochemical system"""
         self.neurochemicals = neurochemical_system.neurochemicals
         self.chemical_interactions = neurochemical_system.chemical_interactions
         
-        # Store reference to the emotional_state derivation function
+        # CHANGE: More robust function reference handling
         if hasattr(neurochemical_system, "derive_emotional_state"):
             self.derive_emotional_state = neurochemical_system.derive_emotional_state
-        elif hasattr(neurochemical_system, "_derive_emotional_state"):
-            self.derive_emotional_state = neurochemical_system._derive_emotional_state
+        elif hasattr(neurochemical_system, "_derive_emotional_state_sync"):
+            # Create wrapper for sync version
+            self.derive_emotional_state = lambda ctx: neurochemical_system._derive_emotional_state_sync()
         else:
             self.derive_emotional_state = None
             logger.warning("No derive_emotional_state function found")
