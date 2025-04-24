@@ -239,7 +239,7 @@ class ConditioningSystem:
             """,
             tools=[
                 function_tool(self._identify_trait_behaviors),
-                function_tool(self._calculate_trait_adjustment),
+                function_tool(self._calculate_conditioning_trait_adjustment),
                 function_tool(self._update_identity_trait),
                 function_tool(self._check_trait_balance)
             ],
@@ -862,36 +862,37 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    async def _calculate_trait_adjustment(ctx: RunContextWrapper,
+    # RENAME this function
+    async def _calculate_conditioning_trait_adjustment(ctx: RunContextWrapper,
                                     current_value: float,
                                     target_value: float,
                                     reinforcement_count: int) -> float:
         """
-        Calculate appropriate trait adjustment
-        
+        Calculate appropriate trait adjustment during conditioning.
+
         Args:
             current_value: Current trait value
             target_value: Target trait value
             reinforcement_count: Number of reinforcements so far
-            
+
         Returns:
             Calculated adjustment value
         """
         # Calculate difference
         difference = target_value - current_value
-        
+
         # Scale adjustment based on difference (larger difference = larger adjustment)
         base_adjustment = difference * 0.3
-        
+
         # Apply diminishing returns based on reinforcement count
         diminishing_factor = 1.0 / (1.0 + 0.1 * reinforcement_count)
-        
+
         adjustment = base_adjustment * diminishing_factor
-        
+
         # Limit maximum adjustment per reinforcement
         max_adjustment = 0.2
         return max(-max_adjustment, min(max_adjustment, adjustment))
-
+                                        
     @staticmethod
     @function_tool
     async def _update_identity_trait(ctx: RunContextWrapper,
@@ -1425,7 +1426,7 @@ class ConditioningSystem:
             try:
                 # Run the personality development agent
                 result = await Runner.run(
-                    self.personality_development_agent,
+                    self.personality_development_agent, # This agent now uses the correctly named tool
                     json.dumps(data),
                     context=self.context
                 )
