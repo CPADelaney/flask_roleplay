@@ -158,7 +158,6 @@ class AttentionalController:
             model="gpt-4o",
             model_settings=ModelSettings(
                 temperature=0.3,
-                response_format={"type": "json_object"}
             )
         )
     
