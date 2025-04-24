@@ -1852,211 +1852,211 @@ class DigitalSomatosensorySystem:
         """
         return self.get_arousal_expression_modifier(partner_id)
 
-@function_tool # <-- Keep only this decorator
-async def _process_stimulus_tool(
-                          self,
-                          stimulus_type: str, 
-                          body_region: str, 
-                          intensity: float,
-                          cause: str = "",
-                          duration: float = 1.0,
-                          # Optional: ctx: RunContextWrapper = None # Add if context is actually needed
-                          ) -> Dict[str, Any]:
-    """
-    Process a sensory stimulus on a body region (internal tool function)
-    
-    Args:
-        stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
-        body_region: Body region receiving the stimulus
-        intensity: Intensity of the stimulus (0.0-1.0)
-        cause: Cause of the stimulus
-        duration: Duration of the stimulus in seconds
+    @function_tool # <-- Keep only this decorator
+    async def _process_stimulus_tool(
+                              self,
+                              stimulus_type: str, 
+                              body_region: str, 
+                              intensity: float,
+                              cause: str = "",
+                              duration: float = 1.0,
+                              # Optional: ctx: RunContextWrapper = None # Add if context is actually needed
+                              ) -> Dict[str, Any]:
+        """
+        Process a sensory stimulus on a body region (internal tool function)
         
-    Returns:
-        Result of stimulus application
-    """
-    # Create a custom span for tracing this operation
-    with custom_span(
-        name="process_stimulus", 
-        data={
-            "stimulus_type": stimulus_type,
-            "body_region": body_region,
-            "intensity": intensity,
-            "cause": cause,
-            "duration": duration
-        }
-    ):
-        # Get the region
-        if body_region not in self.body_regions:
-            return {"error": f"Invalid body region: {body_region}"}
+        Args:
+            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+            body_region: Body region receiving the stimulus
+            intensity: Intensity of the stimulus (0.0-1.0)
+            cause: Cause of the stimulus
+            duration: Duration of the stimulus in seconds
             
-        region = self.body_regions[body_region]
-        
-        # Record time of update
-        region.last_update = datetime.datetime.now()
-        
-        # Apply stimulus based on type
-        result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
-        
-        if stimulus_type == "pressure":
-            region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
-            result["new_value"] = region.pressure
-            
-            # High pressure can cause pain if intense and sustained
-            if intensity > 0.7 and duration > 5.0:
-                pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
-                region.pain = min(1.0, region.pain + pain_from_pressure)
-                result["pain_caused"] = pain_from_pressure
-        
-        elif stimulus_type == "temperature":
-            # Scale to temperature range (0.0-1.0)
-            target_temp = intensity  # Direct mapping for simplicity
-            
-            # Apply temperature change with duration factor
-            temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
-            region.temperature += temp_change
-            region.temperature = max(0.0, min(1.0, region.temperature))
-            result["new_value"] = region.temperature
-            
-            # Extreme temperatures can cause pain
-            if region.temperature < 0.2 or region.temperature > 0.8:
-                temp_deviation = 0.0
-                if region.temperature < 0.2:
-                    temp_deviation = 0.2 - region.temperature
-                else:
-                    temp_deviation = region.temperature - 0.8
+        Returns:
+            Result of stimulus application
+        """
+        # Create a custom span for tracing this operation
+        with custom_span(
+            name="process_stimulus", 
+            data={
+                "stimulus_type": stimulus_type,
+                "body_region": body_region,
+                "intensity": intensity,
+                "cause": cause,
+                "duration": duration
+            }
+        ):
+            # Get the region
+            if body_region not in self.body_regions:
+                return {"error": f"Invalid body region: {body_region}"}
                 
-                pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
-                region.pain = min(1.0, region.pain + pain_from_temp)
-                result["pain_caused"] = pain_from_temp
+            region = self.body_regions[body_region]
             
-        elif stimulus_type == "pain":
-            region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
-            result["new_value"] = region.pain
+            # Record time of update
+            region.last_update = datetime.datetime.now()
             
-            # Store pain memory if significant
-            if intensity > self.pain_model["threshold"]:
-                pain_memory = PainMemory(
-                    intensity=intensity,
-                    location=body_region,
-                    cause=cause or "unknown stimulus",
-                    duration=duration,
-                    timestamp=datetime.datetime.now(),
-                    associated_memory_id=None
-                )
-                self.pain_model["pain_memories"].append(pain_memory)
-                result["memory_created"] = True
+            # Apply stimulus based on type
+            result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
             
-        elif stimulus_type == "pleasure":
-            region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
-            result["new_value"] = region.pleasure
-            
-            # Pleasure can reduce pain
-            if intensity > 0.5 and region.pain > 0.0:
-                pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
-                region.pain = max(0.0, region.pain - pain_reduction)
-                result["pain_reduced"] = pain_reduction
-            
-            # Update arousal state when pleasure is applied to erogenous regions
-            if region.erogenous_level > 0.3:
-                self._update_physical_arousal()
-                result["arousal_updated"] = True
-            
-        elif stimulus_type == "tingling":
-            region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
-            result["new_value"] = region.tingling
-            
-            # Update arousal state when tingling is applied to erogenous regions
-            if region.erogenous_level > 0.3:
-                self._update_physical_arousal()
-                result["arousal_updated"] = True
-        
-        # Add to sensation memory
-        memory_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "type": stimulus_type,
-            "intensity": intensity,
-            "cause": cause,
-            "duration": duration
-        }
-        region.sensation_memory.append(memory_entry)
-        
-        # Keep memory size manageable
-        if len(region.sensation_memory) > 20:
-            region.sensation_memory = region.sensation_memory[-20:]
-        
-        # Check for learned associations
-        if cause and len(cause.strip()) > 0:
-            # Store or update association
-            if cause not in self.memory_linked_sensations["associations"]:
-                self.memory_linked_sensations["associations"][cause] = {}
-            
-            # Update region-specific association
-            if body_region not in self.memory_linked_sensations["associations"][cause]:
-                self.memory_linked_sensations["associations"][cause][body_region] = {}
-            
-            # Update stimulus-specific association
-            if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
-                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
-            
-            # Strengthen association based on learning rate and intensity
-            current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-            learned = self.memory_linked_sensations["learning_rate"] * intensity
-            self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
-            
-            result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-        
-        # Update body state if needed
-        if stimulus_type == "pain" and intensity > 0.5:
-            # Pain increases tension
-            self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
-        elif stimulus_type == "pleasure" and intensity > 0.5:
-            # Pleasure reduces tension
-            self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
-        
-        # Update reward system if available
-        if self.reward_system:
-            reward_value = 0.0
-            if stimulus_type == "pleasure" and intensity >= 0.5:
-                reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
-            elif stimulus_type == "pain" and intensity >= self.pain_model["threshold"]:
-                reward_value = -min(1.0, (intensity / max(0.1, self.pain_model["tolerance"])) * 0.6)
-            
-            if abs(reward_value) > 0.1:
-                reward_signal = RewardSignal(
-                    value=reward_value,
-                    source=f"somatic_{body_region}",
-                    context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
-                    timestamp=datetime.datetime.now().isoformat()
-                )
+            if stimulus_type == "pressure":
+                region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
+                result["new_value"] = region.pressure
                 
-                # Add reward signal to result for tracking
-                result["reward_value"] = reward_value
-                
-                # Process reward signal asynchronously
-                asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
-        
-        # Update emotional core if available
-        if self.emotional_core:
-            emotional_impact = {}
+                # High pressure can cause pain if intense and sustained
+                if intensity > 0.7 and duration > 5.0:
+                    pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
+                    region.pain = min(1.0, region.pain + pain_from_pressure)
+                    result["pain_caused"] = pain_from_pressure
             
-            if stimulus_type == "pleasure" and region.pleasure > 0.5:
-                scaled_intensity = (region.pleasure - 0.4) * 1.5
-                self.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
-                self.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
-                emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
+            elif stimulus_type == "temperature":
+                # Scale to temperature range (0.0-1.0)
+                target_temp = intensity  # Direct mapping for simplicity
                 
-            elif stimulus_type == "pain" and region.pain > self.pain_model["threshold"]:
-                effective_pain = region.pain / max(0.1, self.pain_model["tolerance"])
-                self.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
-                self.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
-                self.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
-                emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
+                # Apply temperature change with duration factor
+                temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
+                region.temperature += temp_change
+                region.temperature = max(0.0, min(1.0, region.temperature))
+                result["new_value"] = region.temperature
+                
+                # Extreme temperatures can cause pain
+                if region.temperature < 0.2 or region.temperature > 0.8:
+                    temp_deviation = 0.0
+                    if region.temperature < 0.2:
+                        temp_deviation = 0.2 - region.temperature
+                    else:
+                        temp_deviation = region.temperature - 0.8
+                    
+                    pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
+                    region.pain = min(1.0, region.pain + pain_from_temp)
+                    result["pain_caused"] = pain_from_temp
+                
+            elif stimulus_type == "pain":
+                region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
+                result["new_value"] = region.pain
+                
+                # Store pain memory if significant
+                if intensity > self.pain_model["threshold"]:
+                    pain_memory = PainMemory(
+                        intensity=intensity,
+                        location=body_region,
+                        cause=cause or "unknown stimulus",
+                        duration=duration,
+                        timestamp=datetime.datetime.now(),
+                        associated_memory_id=None
+                    )
+                    self.pain_model["pain_memories"].append(pain_memory)
+                    result["memory_created"] = True
+                
+            elif stimulus_type == "pleasure":
+                region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
+                result["new_value"] = region.pleasure
+                
+                # Pleasure can reduce pain
+                if intensity > 0.5 and region.pain > 0.0:
+                    pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
+                    region.pain = max(0.0, region.pain - pain_reduction)
+                    result["pain_reduced"] = pain_reduction
+                
+                # Update arousal state when pleasure is applied to erogenous regions
+                if region.erogenous_level > 0.3:
+                    self._update_physical_arousal()
+                    result["arousal_updated"] = True
+                
+            elif stimulus_type == "tingling":
+                region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
+                result["new_value"] = region.tingling
+                
+                # Update arousal state when tingling is applied to erogenous regions
+                if region.erogenous_level > 0.3:
+                    self._update_physical_arousal()
+                    result["arousal_updated"] = True
             
-            if emotional_impact:
-                result["emotional_impact"] = emotional_impact
-        
-        return result
+            # Add to sensation memory
+            memory_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "type": stimulus_type,
+                "intensity": intensity,
+                "cause": cause,
+                "duration": duration
+            }
+            region.sensation_memory.append(memory_entry)
+            
+            # Keep memory size manageable
+            if len(region.sensation_memory) > 20:
+                region.sensation_memory = region.sensation_memory[-20:]
+            
+            # Check for learned associations
+            if cause and len(cause.strip()) > 0:
+                # Store or update association
+                if cause not in self.memory_linked_sensations["associations"]:
+                    self.memory_linked_sensations["associations"][cause] = {}
+                
+                # Update region-specific association
+                if body_region not in self.memory_linked_sensations["associations"][cause]:
+                    self.memory_linked_sensations["associations"][cause][body_region] = {}
+                
+                # Update stimulus-specific association
+                if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
+                    self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
+                
+                # Strengthen association based on learning rate and intensity
+                current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+                learned = self.memory_linked_sensations["learning_rate"] * intensity
+                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
+                
+                result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+            
+            # Update body state if needed
+            if stimulus_type == "pain" and intensity > 0.5:
+                # Pain increases tension
+                self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
+            elif stimulus_type == "pleasure" and intensity > 0.5:
+                # Pleasure reduces tension
+                self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
+            
+            # Update reward system if available
+            if self.reward_system:
+                reward_value = 0.0
+                if stimulus_type == "pleasure" and intensity >= 0.5:
+                    reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
+                elif stimulus_type == "pain" and intensity >= self.pain_model["threshold"]:
+                    reward_value = -min(1.0, (intensity / max(0.1, self.pain_model["tolerance"])) * 0.6)
+                
+                if abs(reward_value) > 0.1:
+                    reward_signal = RewardSignal(
+                        value=reward_value,
+                        source=f"somatic_{body_region}",
+                        context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
+                        timestamp=datetime.datetime.now().isoformat()
+                    )
+                    
+                    # Add reward signal to result for tracking
+                    result["reward_value"] = reward_value
+                    
+                    # Process reward signal asynchronously
+                    asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+            
+            # Update emotional core if available
+            if self.emotional_core:
+                emotional_impact = {}
+                
+                if stimulus_type == "pleasure" and region.pleasure > 0.5:
+                    scaled_intensity = (region.pleasure - 0.4) * 1.5
+                    self.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
+                    self.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
+                    emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
+                    
+                elif stimulus_type == "pain" and region.pain > self.pain_model["threshold"]:
+                    effective_pain = region.pain / max(0.1, self.pain_model["tolerance"])
+                    self.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
+                    self.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
+                    self.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
+                    emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
+                
+                if emotional_impact:
+                    result["emotional_impact"] = emotional_impact
+            
+            return result
 
 # =============== Safety Guardrail System ===============
 
