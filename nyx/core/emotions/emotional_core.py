@@ -399,6 +399,19 @@ class EmotionalCore:
         """Initialize all agents using the OpenAI Agents SDK patterns"""
         # Create base agent for cloning
         base_agent = self._initialize_base_agent()
+
+        # CHANGE: Initialize tools in the correct order
+        # Initialize EmotionTools first since others depend on it
+        self.emotion_tools = EmotionTools(self)
+        
+        # CHANGE: Set function references that other tools need
+        self.derive_emotional_state = self.emotion_tools.derive_emotional_state
+        self.get_emotional_state_matrix = self.emotion_tools.get_emotional_state_matrix
+        
+        # Now initialize other tools with proper references
+        self.neurochemical_tools = NeurochemicalTools(self)
+        self.reflection_tools = ReflectionTools(self)
+        self.learning_tools = LearningTools(self)
         
         # Create neurochemical agent - streamlined configuration
         self.agents["neurochemical"] = base_agent.clone(
@@ -845,17 +858,16 @@ class EmotionalCore:
             return "negative"
         else:
             return "neutral"
-    
-    async def _on_neurochemical_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: NeurochemicalRequest):
-        """
-        Enhanced callback when handing off to neurochemical agent with structured input
         
-        Args:
-            ctx: Run context wrapper
-            input_data: Structured neurochemical request data
-        """
+    async def _on_neurochemical_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: NeurochemicalRequest):
+        """Enhanced callback when handing off to neurochemical agent"""
         logger.debug("Handoff to neurochemical agent triggered")
         ctx.context.record_time_marker("neurochemical_handoff_start")
+        
+        # CHANGE: Set tool instances in context for the handoff
+        ctx.context.set_value("neurochemical_tools_instance", self.neurochemical_tools)
+        ctx.context.set_value("emotion_tools_instance", self.emotion_tools)
+        ctx.context.set_value("reflection_tools_instance", self.reflection_tools)
         
         # Create a custom span for the handoff with rich data
         with custom_span(
@@ -898,15 +910,14 @@ class EmotionalCore:
     
         
     async def _on_reflection_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: ReflectionRequest):
-        """
-        Enhanced callback when handing off to reflection agent with structured input
-        
-        Args:
-            ctx: Run context wrapper
-            input_data: Structured reflection request data
-        """
+        """Enhanced callback when handing off to neurochemical agent"""
         logger.debug("Handoff to reflection agent triggered")
         ctx.context.record_time_marker("reflection_handoff_start")
+        
+        # CHANGE: Set tool instances in context for the handoff
+        ctx.context.set_value("neurochemical_tools_instance", self.neurochemical_tools)
+        ctx.context.set_value("emotion_tools_instance", self.emotion_tools)
+        ctx.context.set_value("reflection_tools_instance", self.reflection_tools)
         
         # Create a custom span for the handoff with rich data
         with custom_span(
@@ -963,15 +974,14 @@ class EmotionalCore:
             })
     
     async def _on_learning_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: LearningRequest):
-        """
-        Enhanced callback when handing off to learning agent with structured input
-        
-        Args:
-            ctx: Run context wrapper
-            input_data: Structured learning request data
-        """
+        """Enhanced callback when handing off to neurochemical agent"""
         logger.debug("Handoff to learning agent triggered")
         ctx.context.record_time_marker("learning_handoff_start")
+        
+        # CHANGE: Set tool instances in context for the handoff
+        ctx.context.set_value("neurochemical_tools_instance", self.neurochemical_tools)
+        ctx.context.set_value("emotion_tools_instance", self.emotion_tools)
+        ctx.context.set_value("reflection_tools_instance", self.reflection_tools)
         
         # Create a custom span for the handoff with rich data
         with custom_span(
@@ -1040,17 +1050,15 @@ class EmotionalCore:
     
 
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
-        """
-        Process input text through the emotional system with enhanced SDK integration
-        
-        Args:
-            text: Input text to process
-            
-        Returns:
-            Processing results with updated emotional state
-        """
+        """Process input text through the emotional system"""
         # Increment context cycle count
         self.context.cycle_count += 1
+        
+        # CHANGE: Store tool instances in context
+        self.context.set_value("neurochemical_tools_instance", self.neurochemical_tools)
+        self.context.set_value("emotion_tools_instance", self.emotion_tools)
+        self.context.set_value("reflection_tools_instance", self.reflection_tools)
+        self.context.set_value("learning_tools_instance", self.learning_tools)
         
         # Get the orchestrator agent
         orchestrator = self._get_agent("orchestrator")
@@ -1146,18 +1154,33 @@ class EmotionalCore:
                     self.active_runs[run_id]["status"] = "error"
                     self.active_runs[run_id]["error"] = str(e)
                     return {"error": f"Processing failed: {str(e)}"}
+
+    async def derive_emotional_state(self, ctx):
+        """Wrapper for emotion_tools.derive_emotional_state"""
+        # Call method on emotion_tools if available, otherwise call the sync version
+        if hasattr(self, "emotion_tools") and hasattr(self.emotion_tools, "_derive_emotional_state_impl"):
+            return await self.emotion_tools._derive_emotional_state_impl(ctx)
+        return self._derive_emotional_state_sync()
+    
+    async def get_emotional_state_matrix(self, ctx):
+        """Wrapper for emotion_tools.get_emotional_state_matrix"""
+        # Call method on emotion_tools if available, otherwise call the sync version
+        if hasattr(self, "emotion_tools") and hasattr(self.emotion_tools, "_get_emotional_state_matrix_impl"):
+            return await self.emotion_tools._get_emotional_state_matrix_impl(ctx)
+        return self._get_emotional_state_matrix_sync()
     
     async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[StreamEvent]:
-        """
-        Enhanced version that processes input with streaming responses
-        
-        Args:
-            text: Input text to process
-            
-        Returns:
-            Stream of structured emotional response updates
-        """
+        """Process input text through the emotional system"""
+        # Increment context cycle count
         self.context.cycle_count += 1
+        
+        # CHANGE: Store tool instances in context
+        self.context.set_value("neurochemical_tools_instance", self.neurochemical_tools)
+        self.context.set_value("emotion_tools_instance", self.emotion_tools)
+        self.context.set_value("reflection_tools_instance", self.reflection_tools)
+        self.context.set_value("learning_tools_instance", self.learning_tools)
+        
+        # Get the orchestrator agent
         orchestrator = self._get_agent("orchestrator")
         
         # Generate a conversation ID for grouping traces if not present
