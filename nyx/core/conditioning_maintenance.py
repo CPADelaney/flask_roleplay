@@ -1571,61 +1571,56 @@ class ConditioningMaintenanceSystem:
             Maintenance results (dictionary)
         """
         workflow_name = "conditioning_maintenance"
-        # Generate unique group ID using timestamp including microseconds
         group_id = f"maintenance_{datetime.datetime.now().strftime('%Y%m%d%H%M%S_%f')}"
-        self.context.trace_group_id = group_id # Update context's group_id for potential internal traces
+        self.context.trace_group_id = group_id
+        start_time = datetime.datetime.now()
+        # Initialize maintenance_record to a default failure state immediately
+        maintenance_record = {
+            "timestamp": start_time.isoformat(),
+            "status": "failed",
+            "error": "Initialization or early failure",
+            "trace_group_id": group_id
+        }
 
-        # Use the updated group_id for the main trace
-        with trace(workflow_name=workflow_name, group_id=group_id):
+        with trace(workflow_name=workflow_name, group_id=group_id) as maintenance_trace: # Add context manager variable
             logger.info(f"Starting conditioning system maintenance (Trace Group: {group_id})")
-            start_time = datetime.datetime.now()
-            maintenance_record = None # Initialize record variable
 
-            # ***** CORRECTED INDENTATION FOR TRY *****
             try:
-                # Prepare input for the orchestrator (more explicit)
+                # --- Prepare input ---
                 wrapper = RunContextWrapper(context=self.context)
-                # Assume _get_maintenance_status returns a dict/object convertible to dict
-                status_info = await _get_maintenance_status_logic(wrapper) # <--- FIX: Call logic function
+                status_info = await _get_maintenance_status_logic(wrapper)
 
                 orchestrator_input = json.dumps({
                     "action_request": "perform_full_maintenance_run",
-                    "current_status": status_info, # Pass the actual status info
+                    "current_status": status_info,
                     "config": {
                         "extinction_threshold": self.context.extinction_threshold,
                         "reinforcement_threshold": self.context.reinforcement_threshold,
                         "consolidation_interval_days": self.context.consolidation_interval_days
                     }
                 })
-
                 logger.debug(f"Running Maintenance Orchestrator with input: {orchestrator_input}")
 
-                # Run the maintenance orchestrator
+                # --- Run the agent ---
                 result = await Runner.run(
                     starting_agent=self.maintenance_orchestrator,
                     input=orchestrator_input,
                     context=self.context
-                    # Consider adding run_config if needed, e.g., run_config=RunConfig(workflow_name=workflow_name, group_id=group_id)
                 )
 
-                # --- Check the type of the final output ---
+                # --- Process Successful Result ---
                 final_output_obj = result.final_output
                 output_type_name = type(final_output_obj).__name__
                 duration = (datetime.datetime.now() - start_time).total_seconds()
                 last_agent_name = result.last_agent.name if result.last_agent else 'Unknown'
-
                 logger.info(f"Maintenance Runner completed. Last agent: {last_agent_name}. Final output type: {output_type_name}. Duration: {duration:.2f}s")
 
                 # Initialize variables for the record
-                tasks_performed = []
-                associations_modified = 0
-                traits_adjusted = 0
-                extinction_count = 0
-                improvements = []
+                tasks_performed, associations_modified, traits_adjusted, extinction_count = [], 0, 0, 0
+                improvements = ["Review run details and logs."]
                 next_recommendation = "Review run details and logs."
 
                 if isinstance(final_output_obj, MaintenanceSummaryOutput):
-                    # Expected output type - extract data directly
                     logger.info("Orchestrator produced expected MaintenanceSummaryOutput.")
                     summary = final_output_obj
                     tasks_performed = summary.tasks_performed or []
@@ -1634,71 +1629,70 @@ class ConditioningMaintenanceSystem:
                     extinction_count = summary.extinction_count or 0
                     improvements = summary.improvements or ["Maintenance completed successfully."]
                     next_recommendation = summary.next_maintenance_recommendation or "Focus on identified areas or standard checks."
-
                 else:
-                    # Unexpected output type - log warning and use defaults
                     logger.warning(f"Maintenance run finished, but the final output was of unexpected type '{output_type_name}', not 'MaintenanceSummaryOutput'. Using default summary values.")
                     improvements = [f"Maintenance run completed in {duration:.2f}s, but final output type was '{output_type_name}'. Check trace {group_id} for details."]
-                    # Optionally, log the actual output if simple and not too large
                     if isinstance(final_output_obj, (str, dict, list, int, float, bool, type(None))):
                         logger.warning(f"Actual final output content (truncated): {str(final_output_obj)[:500]}")
 
-                # Create maintenance record using the extracted or default values
+                # Overwrite initial failure record with success details
                 maintenance_record = {
-                    "timestamp": datetime.datetime.now().isoformat(), # Use current time for record timestamp
+                    "timestamp": datetime.datetime.now().isoformat(),
                     "duration_seconds": duration,
-                    "final_output_type": output_type_name, # Add type info to record
-                    "status": "completed", # Indicate success
+                    "final_output_type": output_type_name,
+                    "status": "completed",
                     "tasks_performed": tasks_performed,
                     "associations_modified": associations_modified,
                     "traits_adjusted": traits_adjusted,
                     "extinction_count": extinction_count,
                     "improvements": improvements,
                     "next_maintenance_recommendation": next_recommendation,
-                    "trace_group_id": group_id # Include trace group ID for easy lookup
-                }
-
-                logger.info(f"Conditioning system maintenance completed successfully in {duration:.2f} seconds.")
-
-            except Exception as e:
-                # This catches errors during the main maintenance logic execution
-                duration = (datetime.datetime.now() - start_time).total_seconds()
-                logger.error(f"Error in maintenance run after {duration:.2f} seconds: {e}", exc_info=True) # Log full traceback
-
-                # Create failure record
-                maintenance_record = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "duration_seconds": duration,
-                    "error": str(e),
-                    "traceback": traceback.format_exc(), # Include traceback in record
-                    "status": "failed",
                     "trace_group_id": group_id
                 }
-                # Note: We will attempt to record this failure in the finally block
+                logger.info(f"Conditioning system maintenance completed successfully in {duration:.2f} seconds.")
+                maintenance_trace.set_status("ok") # Explicitly set trace status
+
+            except Exception as e:
+                # --- Process Failure ---
+                duration = (datetime.datetime.now() - start_time).total_seconds()
+                logger.error(f"Error in maintenance run after {duration:.2f} seconds: {e}", exc_info=True)
+                # Update the pre-initialized failure record with more details
+                maintenance_record["duration_seconds"] = duration
+                maintenance_record["error"] = str(e)
+                maintenance_record["traceback"] = traceback.format_exc()
+                maintenance_trace.set_status("error", description=str(e)) # Set trace status to error
 
             finally:
-                # This block executes whether the try block succeeded or failed
+                # This block now *always* has a dictionary in maintenance_record
                 current_time = datetime.datetime.now()
-                self.context.last_maintenance_time = current_time # Update last maintenance time regardless of success/failure
+                # Update duration if not set during success/failure processing
+                if "duration_seconds" not in maintenance_record:
+                     maintenance_record["duration_seconds"] = (current_time - start_time).total_seconds()
 
-                if maintenance_record: # If a record (success or failure) was created
-                    try:
-                        # Attempt to record the result (success or failure)
-                        await _record_maintenance_history_logic(
-                            RunContextWrapper(context=self.context), # Pass the wrapper
-                            maintenance_record=maintenance_record     # <--- FIX: Pass the dictionary directly
-                        )
-                        logger.info(f"Maintenance record (Status: {maintenance_record.get('status', 'unknown')}) recorded for Trace Group: {group_id}.")
-                    except Exception as hist_e:
-                         # Log error if recording the history itself fails
-                         logger.error(f"CRITICAL: Failed to record maintenance history (Status: {maintenance_record.get('status', 'unknown')}) for Trace Group {group_id}: {hist_e}", exc_info=True)
-                else:
-                    # This case should ideally not happen if try/except is structured correctly,
-                    # but log a warning if it does.
-                    logger.warning(f"No maintenance record was generated for Trace Group: {group_id}. Last maintenance time updated.")
+                # Update last maintenance time only if status is completed
+                # Decide if failed runs should also update the time (maybe not?)
+                if maintenance_record.get("status") == "completed":
+                     self.context.last_maintenance_time = current_time
 
-                # Return the generated record (or None if something went very wrong before record creation)
+                try:
+                    # Record the result (which is guaranteed to be a dict now)
+                    record_result = await _record_maintenance_history_logic(
+                        RunContextWrapper(context=self.context),
+                        maintenance_record=maintenance_record.copy() # Pass a copy
+                    )
+                    if record_result.get("success"):
+                         logger.info(f"Maintenance record (Status: {maintenance_record.get('status', 'unknown')}) recorded for Trace Group: {group_id}.")
+                    else:
+                         # Log the failure to record history, but don't overwrite the original run status
+                         logger.error(f"CRITICAL: Failed to record maintenance history (Run Status: {maintenance_record.get('status', 'unknown')}, Trace Group: {group_id}): {record_result.get('error')}")
+
+                except Exception as hist_e:
+                    # Log error if recording the history itself fails catastrophically
+                    logger.error(f"CRITICAL: Exception while recording final maintenance history (Run Status: {maintenance_record.get('status', 'unknown')}, Trace Group: {group_id}): {hist_e}", exc_info=True)
+
+                # Return the final record (success or failure details)
                 return maintenance_record
+
                     
     async def _check_personality_balance(self) -> Dict[str, Any]:
         """Check if personality traits are balanced"""
