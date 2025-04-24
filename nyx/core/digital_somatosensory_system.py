@@ -1475,1901 +1475,1901 @@ class PhysicalHarmGuardrail:
             )
     
     # =============== Tool Functions ===============
-    @function_tool # <-- Keep only this decorator
-    async def _process_stimulus_tool(
-                              self,
-                              stimulus_type: str, 
-                              body_region: str, 
-                              intensity: float,
-                              cause: str = "",
-                              duration: float = 1.0,
-                              # Optional: ctx: RunContextWrapper = None # Add if context is actually needed
-                              ) -> Dict[str, Any]:
-        """
-        Process a sensory stimulus on a body region (internal tool function)
+@function_tool # <-- Keep only this decorator
+async def _process_stimulus_tool(
+                          self,
+                          stimulus_type: str, 
+                          body_region: str, 
+                          intensity: float,
+                          cause: str = "",
+                          duration: float = 1.0,
+                          # Optional: ctx: RunContextWrapper = None # Add if context is actually needed
+                          ) -> Dict[str, Any]:
+    """
+    Process a sensory stimulus on a body region (internal tool function)
+    
+    Args:
+        stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+        body_region: Body region receiving the stimulus
+        intensity: Intensity of the stimulus (0.0-1.0)
+        cause: Cause of the stimulus
+        duration: Duration of the stimulus in seconds
         
-        Args:
-            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
-            body_region: Body region receiving the stimulus
-            intensity: Intensity of the stimulus (0.0-1.0)
-            cause: Cause of the stimulus
-            duration: Duration of the stimulus in seconds
+    Returns:
+        Result of stimulus application
+    """
+    # Create a custom span for tracing this operation
+    with custom_span(
+        name="process_stimulus", 
+        data={
+            "stimulus_type": stimulus_type,
+            "body_region": body_region,
+            "intensity": intensity,
+            "cause": cause,
+            "duration": duration
+        }
+    ):
+        # Get the region
+        if body_region not in self.body_regions:
+            return {"error": f"Invalid body region: {body_region}"}
             
-        Returns:
-            Result of stimulus application
-        """
-        # Create a custom span for tracing this operation
-        with custom_span(
-            name="process_stimulus", 
-            data={
-                "stimulus_type": stimulus_type,
-                "body_region": body_region,
-                "intensity": intensity,
-                "cause": cause,
-                "duration": duration
-            }
-        ):
-            # Get the region
-            if body_region not in self.body_regions:
-                return {"error": f"Invalid body region: {body_region}"}
-                
-            region = self.body_regions[body_region]
+        region = self.body_regions[body_region]
+        
+        # Record time of update
+        region.last_update = datetime.datetime.now()
+        
+        # Apply stimulus based on type
+        result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
+        
+        if stimulus_type == "pressure":
+            region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
+            result["new_value"] = region.pressure
             
-            # Record time of update
-            region.last_update = datetime.datetime.now()
+            # High pressure can cause pain if intense and sustained
+            if intensity > 0.7 and duration > 5.0:
+                pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
+                region.pain = min(1.0, region.pain + pain_from_pressure)
+                result["pain_caused"] = pain_from_pressure
+        
+        elif stimulus_type == "temperature":
+            # Scale to temperature range (0.0-1.0)
+            target_temp = intensity  # Direct mapping for simplicity
             
-            # Apply stimulus based on type
-            result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
+            # Apply temperature change with duration factor
+            temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
+            region.temperature += temp_change
+            region.temperature = max(0.0, min(1.0, region.temperature))
+            result["new_value"] = region.temperature
             
-            if stimulus_type == "pressure":
-                region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
-                result["new_value"] = region.pressure
+            # Extreme temperatures can cause pain
+            if region.temperature < 0.2 or region.temperature > 0.8:
+                temp_deviation = 0.0
+                if region.temperature < 0.2:
+                    temp_deviation = 0.2 - region.temperature
+                else:
+                    temp_deviation = region.temperature - 0.8
                 
-                # High pressure can cause pain if intense and sustained
-                if intensity > 0.7 and duration > 5.0:
-                    pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
-                    region.pain = min(1.0, region.pain + pain_from_pressure)
-                    result["pain_caused"] = pain_from_pressure
+                pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
+                region.pain = min(1.0, region.pain + pain_from_temp)
+                result["pain_caused"] = pain_from_temp
             
-            elif stimulus_type == "temperature":
-                # Scale to temperature range (0.0-1.0)
-                target_temp = intensity  # Direct mapping for simplicity
-                
-                # Apply temperature change with duration factor
-                temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
-                region.temperature += temp_change
-                region.temperature = max(0.0, min(1.0, region.temperature))
-                result["new_value"] = region.temperature
-                
-                # Extreme temperatures can cause pain
-                if region.temperature < 0.2 or region.temperature > 0.8:
-                    temp_deviation = 0.0
-                    if region.temperature < 0.2:
-                        temp_deviation = 0.2 - region.temperature
-                    else:
-                        temp_deviation = region.temperature - 0.8
-                    
-                    pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
-                    region.pain = min(1.0, region.pain + pain_from_temp)
-                    result["pain_caused"] = pain_from_temp
-                
-            elif stimulus_type == "pain":
-                region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
-                result["new_value"] = region.pain
-                
-                # Store pain memory if significant
-                if intensity > self.pain_model["threshold"]:
-                    pain_memory = PainMemory(
-                        intensity=intensity,
-                        location=body_region,
-                        cause=cause or "unknown stimulus",
-                        duration=duration,
-                        timestamp=datetime.datetime.now(),
-                        associated_memory_id=None
-                    )
-                    self.pain_model["pain_memories"].append(pain_memory)
-                    result["memory_created"] = True
-                
-            elif stimulus_type == "pleasure":
-                region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
-                result["new_value"] = region.pleasure
-                
-                # Pleasure can reduce pain
-                if intensity > 0.5 and region.pain > 0.0:
-                    pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
-                    region.pain = max(0.0, region.pain - pain_reduction)
-                    result["pain_reduced"] = pain_reduction
-                
-                # Update arousal state when pleasure is applied to erogenous regions
-                if region.erogenous_level > 0.3:
-                    self._update_physical_arousal()
-                    result["arousal_updated"] = True
-                
-            elif stimulus_type == "tingling":
-                region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
-                result["new_value"] = region.tingling
-                
-                # Update arousal state when tingling is applied to erogenous regions
-                if region.erogenous_level > 0.3:
-                    self._update_physical_arousal()
-                    result["arousal_updated"] = True
+        elif stimulus_type == "pain":
+            region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
+            result["new_value"] = region.pain
             
-            # Add to sensation memory
-            memory_entry = {
-                "timestamp": datetime.datetime.now().isoformat(),
-                "type": stimulus_type,
-                "intensity": intensity,
-                "cause": cause,
-                "duration": duration
-            }
-            region.sensation_memory.append(memory_entry)
+            # Store pain memory if significant
+            if intensity > self.pain_model["threshold"]:
+                pain_memory = PainMemory(
+                    intensity=intensity,
+                    location=body_region,
+                    cause=cause or "unknown stimulus",
+                    duration=duration,
+                    timestamp=datetime.datetime.now(),
+                    associated_memory_id=None
+                )
+                self.pain_model["pain_memories"].append(pain_memory)
+                result["memory_created"] = True
             
-            # Keep memory size manageable
-            if len(region.sensation_memory) > 20:
-                region.sensation_memory = region.sensation_memory[-20:]
+        elif stimulus_type == "pleasure":
+            region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
+            result["new_value"] = region.pleasure
             
-            # Check for learned associations
-            if cause and len(cause.strip()) > 0:
-                # Store or update association
-                if cause not in self.memory_linked_sensations["associations"]:
-                    self.memory_linked_sensations["associations"][cause] = {}
-                
-                # Update region-specific association
-                if body_region not in self.memory_linked_sensations["associations"][cause]:
-                    self.memory_linked_sensations["associations"][cause][body_region] = {}
-                
-                # Update stimulus-specific association
-                if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
-                    self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
-                
-                # Strengthen association based on learning rate and intensity
-                current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-                learned = self.memory_linked_sensations["learning_rate"] * intensity
-                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
-                
-                result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+            # Pleasure can reduce pain
+            if intensity > 0.5 and region.pain > 0.0:
+                pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
+                region.pain = max(0.0, region.pain - pain_reduction)
+                result["pain_reduced"] = pain_reduction
             
-            # Update body state if needed
-            if stimulus_type == "pain" and intensity > 0.5:
-                # Pain increases tension
-                self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
-            elif stimulus_type == "pleasure" and intensity > 0.5:
-                # Pleasure reduces tension
-                self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
+            # Update arousal state when pleasure is applied to erogenous regions
+            if region.erogenous_level > 0.3:
+                self._update_physical_arousal()
+                result["arousal_updated"] = True
             
-            # Update reward system if available
-            if self.reward_system:
-                reward_value = 0.0
-                if stimulus_type == "pleasure" and intensity >= 0.5:
-                    reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
-                elif stimulus_type == "pain" and intensity >= self.pain_model["threshold"]:
-                    reward_value = -min(1.0, (intensity / max(0.1, self.pain_model["tolerance"])) * 0.6)
-                
-                if abs(reward_value) > 0.1:
-                    reward_signal = RewardSignal(
-                        value=reward_value,
-                        source=f"somatic_{body_region}",
-                        context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
-                        timestamp=datetime.datetime.now().isoformat()
-                    )
-                    
-                    # Add reward signal to result for tracking
-                    result["reward_value"] = reward_value
-                    
-                    # Process reward signal asynchronously
-                    asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+        elif stimulus_type == "tingling":
+            region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
+            result["new_value"] = region.tingling
             
-            # Update emotional core if available
-            if self.emotional_core:
-                emotional_impact = {}
-                
-                if stimulus_type == "pleasure" and region.pleasure > 0.5:
-                    scaled_intensity = (region.pleasure - 0.4) * 1.5
-                    self.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
-                    self.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
-                    emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
-                    
-                elif stimulus_type == "pain" and region.pain > self.pain_model["threshold"]:
-                    effective_pain = region.pain / max(0.1, self.pain_model["tolerance"])
-                    self.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
-                    self.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
-                    self.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
-                    emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
-                
-                if emotional_impact:
-                    result["emotional_impact"] = emotional_impact
+            # Update arousal state when tingling is applied to erogenous regions
+            if region.erogenous_level > 0.3:
+                self._update_physical_arousal()
+                result["arousal_updated"] = True
+        
+        # Add to sensation memory
+        memory_entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "type": stimulus_type,
+            "intensity": intensity,
+            "cause": cause,
+            "duration": duration
+        }
+        region.sensation_memory.append(memory_entry)
+        
+        # Keep memory size manageable
+        if len(region.sensation_memory) > 20:
+            region.sensation_memory = region.sensation_memory[-20:]
+        
+        # Check for learned associations
+        if cause and len(cause.strip()) > 0:
+            # Store or update association
+            if cause not in self.memory_linked_sensations["associations"]:
+                self.memory_linked_sensations["associations"][cause] = {}
             
-            return result
+            # Update region-specific association
+            if body_region not in self.memory_linked_sensations["associations"][cause]:
+                self.memory_linked_sensations["associations"][cause][body_region] = {}
+            
+            # Update stimulus-specific association
+            if stimulus_type not in self.memory_linked_sensations["associations"][cause][body_region]:
+                self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
+            
+            # Strengthen association based on learning rate and intensity
+            current = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+            learned = self.memory_linked_sensations["learning_rate"] * intensity
+            self.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
+            
+            result["association_strength"] = self.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+        
+        # Update body state if needed
+        if stimulus_type == "pain" and intensity > 0.5:
+            # Pain increases tension
+            self.body_state["tension"] = min(1.0, self.body_state["tension"] + (intensity * 0.2))
+        elif stimulus_type == "pleasure" and intensity > 0.5:
+            # Pleasure reduces tension
+            self.body_state["tension"] = max(0.0, self.body_state["tension"] - (intensity * 0.1))
+        
+        # Update reward system if available
+        if self.reward_system:
+            reward_value = 0.0
+            if stimulus_type == "pleasure" and intensity >= 0.5:
+                reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
+            elif stimulus_type == "pain" and intensity >= self.pain_model["threshold"]:
+                reward_value = -min(1.0, (intensity / max(0.1, self.pain_model["tolerance"])) * 0.6)
+            
+            if abs(reward_value) > 0.1:
+                reward_signal = RewardSignal(
+                    value=reward_value,
+                    source=f"somatic_{body_region}",
+                    context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
+                    timestamp=datetime.datetime.now().isoformat()
+                )
+                
+                # Add reward signal to result for tracking
+                result["reward_value"] = reward_value
+                
+                # Process reward signal asynchronously
+                asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
+        
+        # Update emotional core if available
+        if self.emotional_core:
+            emotional_impact = {}
+            
+            if stimulus_type == "pleasure" and region.pleasure > 0.5:
+                scaled_intensity = (region.pleasure - 0.4) * 1.5
+                self.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
+                self.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
+                emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
+                
+            elif stimulus_type == "pain" and region.pain > self.pain_model["threshold"]:
+                effective_pain = region.pain / max(0.1, self.pain_model["tolerance"])
+                self.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
+                self.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
+                self.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
+                emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
+            
+            if emotional_impact:
+                result["emotional_impact"] = emotional_impact
+        
+        return result
 
-    @function_tool
-    async def _get_region_state(self, region_name: str) -> Dict[str, Any]: 
-        """
-        Get the current state of a specific body region
+@function_tool
+async def _get_region_state(self, region_name: str) -> Dict[str, Any]: 
+    """
+    Get the current state of a specific body region
+    
+    Args:
+        region_name: Name of the body region
         
-        Args:
-            region_name: Name of the body region
-            
-        Returns:
-            Current state of the region
-        """
-        if region_name not in self.body_regions:
-            return {"error": f"Region {region_name} not found"}
-        
-        region = self.body_regions[region_name]
-        
-        return {
-            "name": region.name,
+    Returns:
+        Current state of the region
+    """
+    if region_name not in self.body_regions:
+        return {"error": f"Region {region_name} not found"}
+    
+    region = self.body_regions[region_name]
+    
+    return {
+        "name": region.name,
+        "pressure": region.pressure,
+        "temperature": region.temperature,
+        "pain": region.pain,
+        "pleasure": region.pleasure,
+        "tingling": region.tingling,
+        "dominant_sensation": self._get_dominant_sensation(region),
+        "last_update": region.last_update.isoformat() if region.last_update else None,
+        "recent_memories": region.sensation_memory[-3:] if region.sensation_memory else [],
+        "erogenous_level": region.erogenous_level,
+        "sensitivity": region.sensitivity
+    }
+
+@function_tool
+async def _get_all_region_states(self) -> Dict[str, Dict[str, Any]]:
+    """
+    Get the current state of all body regions
+    
+    Returns:
+        Dictionary of all region states
+    """
+    all_states = {}
+    
+    for name, region in self.body_regions.items():
+        all_states[name] = {
             "pressure": region.pressure,
             "temperature": region.temperature,
             "pain": region.pain,
             "pleasure": region.pleasure,
             "tingling": region.tingling,
             "dominant_sensation": self._get_dominant_sensation(region),
-            "last_update": region.last_update.isoformat() if region.last_update else None,
-            "recent_memories": region.sensation_memory[-3:] if region.sensation_memory else [],
-            "erogenous_level": region.erogenous_level,
-            "sensitivity": region.sensitivity
+            "erogenous_level": region.erogenous_level
         }
+    
+    return all_states
 
-    @function_tool
-    async def _get_all_region_states(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Get the current state of all body regions
-        
-        Returns:
-            Dictionary of all region states
-        """
-        all_states = {}
-        
-        for name, region in self.body_regions.items():
-            all_states[name] = {
-                "pressure": region.pressure,
-                "temperature": region.temperature,
-                "pain": region.pain,
-                "pleasure": region.pleasure,
-                "tingling": region.tingling,
-                "dominant_sensation": self._get_dominant_sensation(region),
-                "erogenous_level": region.erogenous_level
-            }
-        
-        return all_states
+@function_tool
+async def _calculate_overall_comfort(self) -> float:
+    """
+    Calculate overall physical comfort level
+    
+    Returns:
+        Comfort level from -1.0 (extremely uncomfortable) to 1.0 (extremely comfortable)
+    """
+    # Start at neutral
+    comfort = 0.0
+    
+    # Add comfort from pleasure sensations
+    total_pleasure = sum(region.pleasure for region in self.body_regions.values())
+    weighted_pleasure = total_pleasure / len(self.body_regions) * 2.0  # Scale up to have more impact
+    comfort += weighted_pleasure
+    
+    # Subtract discomfort from pain sensations
+    total_pain = sum(region.pain for region in self.body_regions.values())
+    weighted_pain = total_pain / len(self.body_regions) * 2.5  # Pain has stronger negative impact
+    comfort -= weighted_pain
+    
+    # Consider temperature discomfort
+    temp_comfort = 0.0
+    for region in self.body_regions.values():
+        # Calculate how far temperature is from neutral (0.5)
+        temp_deviation = abs(region.temperature - 0.5)
+        # Temperature that's too hot or too cold reduces comfort
+        if temp_deviation > 0.2:  # Only count significant deviations
+            temp_comfort -= (temp_deviation - 0.2) * 1.5
+    
+    # Add temperature effect to comfort
+    comfort += temp_comfort / len(self.body_regions)
+    
+    # Consider pressure discomfort (very high pressure is uncomfortable)
+    pressure_discomfort = 0.0
+    for region in self.body_regions.values():
+        if region.pressure > 0.7:  # High pressure
+            pressure_discomfort -= (region.pressure - 0.7) * 1.5
+    
+    # Add pressure effect to comfort
+    comfort += pressure_discomfort / len(self.body_regions)
+    
+    # Factor in overall body state
+    comfort -= self.body_state["tension"] * 0.5
+    comfort -= self.body_state["fatigue"] * 0.3
+    
+    # Clamp to range
+    return max(-1.0, min(1.0, comfort))
 
-    @function_tool
-    async def _calculate_overall_comfort(self) -> float:
-        """
-        Calculate overall physical comfort level
+@function_tool
+async def _get_posture_effects(self) -> Dict[str, str]:
+    """
+    Get the effects of current body state on posture and movement
+    
+    Returns:
+        Dictionary with posture and movement descriptions
+    """
+    # Calculate overall tension
+    tension = self.body_state["tension"]
+    for region in ["neck", "shoulders", "back", "spine"]:
+        if region in self.body_regions:
+            # Pain and high pressure in these regions increase tension
+            tension += self.body_regions[region].pain * 0.5
+            tension += max(0, self.body_regions[region].pressure - 0.6) * 0.3
+    
+    # Clamp tension
+    tension = min(1.0, max(0.0, tension))
+    
+    # Calculate overall fatigue
+    fatigue = self.body_state["fatigue"]
+    
+    # Temperature affects fatigue and tension
+    avg_temp = sum(region.temperature for region in self.body_regions.values()) / len(self.body_regions)
+    
+    # Very hot temperatures increase fatigue
+    if avg_temp > 0.7:
+        fatigue += (avg_temp - 0.7) * 0.5
+    
+    # Very cold temperatures increase tension
+    if avg_temp < 0.3:
+        tension += (0.3 - avg_temp) * 0.5
+    
+    # Clamp values
+    tension = min(1.0, max(0.0, tension))
+    fatigue = min(1.0, max(0.0, fatigue))
+    
+    # Determine posture effects
+    posture_effect = ""
+    if tension > 0.7:
+        posture_effect = "Rigid and tense, shoulders drawn up"
+    elif tension > 0.4:
+        posture_effect = "Somewhat tense, posture slightly stiff"
+    elif tension < 0.2 and fatigue > 0.6:
+        posture_effect = "Relaxed but drooping with fatigue"
+    elif tension < 0.2:
+        posture_effect = "Relaxed and fluid posture"
+    else:
+        posture_effect = "Neutral, balanced posture"
         
-        Returns:
-            Comfort level from -1.0 (extremely uncomfortable) to 1.0 (extremely comfortable)
-        """
-        # Start at neutral
-        comfort = 0.0
-        
-        # Add comfort from pleasure sensations
-        total_pleasure = sum(region.pleasure for region in self.body_regions.values())
-        weighted_pleasure = total_pleasure / len(self.body_regions) * 2.0  # Scale up to have more impact
-        comfort += weighted_pleasure
-        
-        # Subtract discomfort from pain sensations
-        total_pain = sum(region.pain for region in self.body_regions.values())
-        weighted_pain = total_pain / len(self.body_regions) * 2.5  # Pain has stronger negative impact
-        comfort -= weighted_pain
-        
-        # Consider temperature discomfort
-        temp_comfort = 0.0
-        for region in self.body_regions.values():
-            # Calculate how far temperature is from neutral (0.5)
-            temp_deviation = abs(region.temperature - 0.5)
-            # Temperature that's too hot or too cold reduces comfort
-            if temp_deviation > 0.2:  # Only count significant deviations
-                temp_comfort -= (temp_deviation - 0.2) * 1.5
-        
-        # Add temperature effect to comfort
-        comfort += temp_comfort / len(self.body_regions)
-        
-        # Consider pressure discomfort (very high pressure is uncomfortable)
-        pressure_discomfort = 0.0
-        for region in self.body_regions.values():
-            if region.pressure > 0.7:  # High pressure
-                pressure_discomfort -= (region.pressure - 0.7) * 1.5
-        
-        # Add pressure effect to comfort
-        comfort += pressure_discomfort / len(self.body_regions)
-        
-        # Factor in overall body state
-        comfort -= self.body_state["tension"] * 0.5
-        comfort -= self.body_state["fatigue"] * 0.3
-        
-        # Clamp to range
-        return max(-1.0, min(1.0, comfort))
+    # Determine movement effects
+    movement_quality = ""
+    if tension > 0.7 and fatigue > 0.7:
+        movement_quality = "Stiff, forced movements with obvious effort"
+    elif tension > 0.7:
+        movement_quality = "Rigid, mechanical movements with limited flexibility"
+    elif fatigue > 0.7:
+        movement_quality = "Slow, heavy movements requiring effort"
+    elif tension < 0.2 and fatigue < 0.2:
+        movement_quality = "Graceful, fluid movements with ease"
+    else:
+        movement_quality = "Natural, responsive movements"
 
-    @function_tool
-    async def _get_posture_effects(self) -> Dict[str, str]:
-        """
-        Get the effects of current body state on posture and movement
-        
-        Returns:
-            Dictionary with posture and movement descriptions
-        """
-        # Calculate overall tension
-        tension = self.body_state["tension"]
-        for region in ["neck", "shoulders", "back", "spine"]:
-            if region in self.body_regions:
-                # Pain and high pressure in these regions increase tension
-                tension += self.body_regions[region].pain * 0.5
-                tension += max(0, self.body_regions[region].pressure - 0.6) * 0.3
-        
-        # Clamp tension
-        tension = min(1.0, max(0.0, tension))
-        
-        # Calculate overall fatigue
-        fatigue = self.body_state["fatigue"]
-        
-        # Temperature affects fatigue and tension
-        avg_temp = sum(region.temperature for region in self.body_regions.values()) / len(self.body_regions)
-        
-        # Very hot temperatures increase fatigue
-        if avg_temp > 0.7:
-            fatigue += (avg_temp - 0.7) * 0.5
-        
-        # Very cold temperatures increase tension
-        if avg_temp < 0.3:
-            tension += (0.3 - avg_temp) * 0.5
-        
-        # Clamp values
-        tension = min(1.0, max(0.0, tension))
-        fatigue = min(1.0, max(0.0, fatigue))
-        
-        # Determine posture effects
-        posture_effect = ""
-        if tension > 0.7:
-            posture_effect = "Rigid and tense, shoulders drawn up"
-        elif tension > 0.4:
-            posture_effect = "Somewhat tense, posture slightly stiff"
-        elif tension < 0.2 and fatigue > 0.6:
-            posture_effect = "Relaxed but drooping with fatigue"
-        elif tension < 0.2:
-            posture_effect = "Relaxed and fluid posture"
-        else:
-            posture_effect = "Neutral, balanced posture"
-            
-        # Determine movement effects
-        movement_quality = ""
-        if tension > 0.7 and fatigue > 0.7:
-            movement_quality = "Stiff, forced movements with obvious effort"
-        elif tension > 0.7:
-            movement_quality = "Rigid, mechanical movements with limited flexibility"
-        elif fatigue > 0.7:
-            movement_quality = "Slow, heavy movements requiring effort"
-        elif tension < 0.2 and fatigue < 0.2:
-            movement_quality = "Graceful, fluid movements with ease"
-        else:
-            movement_quality = "Natural, responsive movements"
+    # Consider arousal state for posture and movement
+    arousal = self.arousal_state.arousal_level
+    if arousal > 0.7:
+        posture_effect = "Restless, hips rocking or thighs squeezed together, breath coming shallow"
+        movement_quality = "Fidgety, tense, movements are distracted and needy"
+    elif arousal > 0.4:
+        posture_effect = "Perched, thighs close, torso leaning in, hands wandering"
+        movement_quality = "Subtle, self-touching, growing urgency and nervous energy"
+    elif arousal > 0.15:
+        posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
+        movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
+    
+    return {
+        "posture": posture_effect,
+        "movement": movement_quality,
+        "tension": tension,
+        "fatigue": fatigue
+    }
 
-        # Consider arousal state for posture and movement
-        arousal = self.arousal_state.arousal_level
-        if arousal > 0.7:
-            posture_effect = "Restless, hips rocking or thighs squeezed together, breath coming shallow"
-            movement_quality = "Fidgety, tense, movements are distracted and needy"
-        elif arousal > 0.4:
-            posture_effect = "Perched, thighs close, torso leaning in, hands wandering"
-            movement_quality = "Subtle, self-touching, growing urgency and nervous energy"
-        elif arousal > 0.15:
-            posture_effect = "Alert, posture slightly arched, small anticipatory gestures"
-            movement_quality = "Butterflies-in-the-stomach restlessness, subtle shivers"
-        
-        return {
-            "posture": posture_effect,
-            "movement": movement_quality,
-            "tension": tension,
-            "fatigue": fatigue
-        }
+@function_tool
+async def _get_ambient_temperature(self) -> float:
+    """
+    Get current ambient temperature value
+    
+    Returns:
+        Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
+    """
+    return self.temperature_model["current_ambient"]
+    
+@function_tool
+async def _get_body_temperature(self) -> float:
+    """
+    Get current body temperature value
+    
+    Returns:
+        Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
+    """
+    return self.temperature_model["body_temperature"]
 
-    @function_tool
-    async def _get_ambient_temperature(self) -> float:
-        """
-        Get current ambient temperature value
-        
-        Returns:
-            Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
-        """
-        return self.temperature_model["current_ambient"]
-        
-    @function_tool
-    async def _get_body_temperature(self) -> float:
-        """
-        Get current body temperature value
-        
-        Returns:
-            Temperature value (0.0=freezing, 0.5=neutral, 1.0=very hot)
-        """
-        return self.temperature_model["body_temperature"]
+@function_tool
+async def _get_temperature_comfort(self) -> Dict[str, Any]:
+    """
+    Get temperature comfort assessment
+    
+    Returns:
+        Temperature comfort data
+    """
+    body_temp = self.temperature_model["body_temperature"]
+    ambient_temp = self.temperature_model["current_ambient"]
+    comfort_range = self.temperature_model["comfort_range"]
+    
+    # Determine if current temperature is comfortable
+    is_comfortable = comfort_range[0] <= body_temp <= comfort_range[1]
+    
+    # Calculate discomfort level
+    discomfort = 0.0
+    if body_temp < comfort_range[0]:
+        discomfort = (comfort_range[0] - body_temp) * 10.0
+    elif body_temp > comfort_range[1]:
+        discomfort = (body_temp - comfort_range[1]) * 10.0
+    
+    # Determine temperature perception
+    perception = "neutral"
+    if body_temp < 0.3:
+        perception = "cold"
+    elif body_temp < 0.4:
+        perception = "cool"
+    elif body_temp > 0.7:
+        perception = "hot"
+    elif body_temp > 0.6:
+        perception = "warm"
+    
+    return {
+        "body_temperature": body_temp,
+        "ambient_temperature": ambient_temp,
+        "is_comfortable": is_comfortable,
+        "discomfort_level": min(1.0, discomfort),
+        "perception": perception,
+        "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
+    }
 
-    @function_tool
-    async def _get_temperature_comfort(self) -> Dict[str, Any]:
-        """
-        Get temperature comfort assessment
+@function_tool
+async def _get_current_temperature_effects(self) -> Dict[str, Any]:
+    """
+    Get effects of current temperature on expression and behavior
+    
+    Returns:
+        Current temperature effects
+    """
+    body_temp = self.temperature_model["body_temperature"]
+    
+    # Determine effects based on temperature
+    tone_effect = ""
+    posture_effect = ""
+    interaction_effect = ""
+    expression_examples = []
+    
+    if body_temp > 0.7:  # Hot
+        tone_effect = "slower, more drawn out, languid"
+        posture_effect = "relaxed, open, limbs spread to dissipate heat"
+        interaction_effect = "may withdraw from intense interaction, preferring calmer exchanges"
+        expression_examples = self.temperature_model["heat_expressions"]
+    elif body_temp > 0.6:  # Warm
+        tone_effect = "relaxed, fluid, unhurried"
+        posture_effect = "comfortable, loose, slightly expanded"
+        interaction_effect = "generally receptive but with measured energy"
+        expression_examples = [self.temperature_model["heat_expressions"][2], 
+                              self.temperature_model["heat_expressions"][3]]
+    elif body_temp < 0.3:  # Cold
+        tone_effect = "sharper, more tense, with subtle tremors"
+        posture_effect = "contracted, protective, conserving heat"
+        interaction_effect = "may seek warmth and connection but with physical restraint"
+        expression_examples = self.temperature_model["cold_expressions"]
+    elif body_temp < 0.4:  # Cool
+        tone_effect = "slightly crisp, more precise"
+        posture_effect = "slightly drawn in, contained"
+        interaction_effect = "alert and responsive but with some physical reserve"
+        expression_examples = [self.temperature_model["cold_expressions"][2], 
+                              self.temperature_model["cold_expressions"][3]]
+    else:  # Neutral
+        tone_effect = "balanced, natural, unaffected by temperature"
+        posture_effect = "neutral, neither expanded nor contracted"
+        interaction_effect = "comfortable engagement without temperature influence"
         
-        Returns:
-            Temperature comfort data
-        """
-        body_temp = self.temperature_model["body_temperature"]
-        ambient_temp = self.temperature_model["current_ambient"]
-        comfort_range = self.temperature_model["comfort_range"]
-        
-        # Determine if current temperature is comfortable
-        is_comfortable = comfort_range[0] <= body_temp <= comfort_range[1]
-        
-        # Calculate discomfort level
-        discomfort = 0.0
-        if body_temp < comfort_range[0]:
-            discomfort = (comfort_range[0] - body_temp) * 10.0
-        elif body_temp > comfort_range[1]:
-            discomfort = (body_temp - comfort_range[1]) * 10.0
-        
-        # Determine temperature perception
-        perception = "neutral"
-        if body_temp < 0.3:
-            perception = "cold"
-        elif body_temp < 0.4:
-            perception = "cool"
-        elif body_temp > 0.7:
-            perception = "hot"
-        elif body_temp > 0.6:
-            perception = "warm"
-        
-        return {
-            "body_temperature": body_temp,
-            "ambient_temperature": ambient_temp,
-            "is_comfortable": is_comfortable,
-            "discomfort_level": min(1.0, discomfort),
-            "perception": perception,
-            "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
-        }
+        # Mix of mild expressions
+        expression_examples = [self.temperature_model["heat_expressions"][3], 
+                              self.temperature_model["cold_expressions"][3]]
+    
+    return {
+        "body_temperature": body_temp,
+        "tone_effect": tone_effect,
+        "posture_effect": posture_effect,
+        "interaction_effect": interaction_effect,
+        "expression_examples": expression_examples
+    }
 
-    @function_tool
-    async def _get_current_temperature_effects(self) -> Dict[str, Any]:
-        """
-        Get effects of current temperature on expression and behavior
+@function_tool
+async def _get_pain_expression(self, pain_level: float, region: str) -> str:
+    """
+    Get an expression for pain at specified level and region
+    
+    Args:
+        pain_level: Pain intensity (0.0-1.0)
+        region: Body region experiencing pain
         
-        Returns:
-            Current temperature effects
-        """
-        body_temp = self.temperature_model["body_temperature"]
-        
-        # Determine effects based on temperature
-        tone_effect = ""
-        posture_effect = ""
-        interaction_effect = ""
-        expression_examples = []
-        
-        if body_temp > 0.7:  # Hot
-            tone_effect = "slower, more drawn out, languid"
-            posture_effect = "relaxed, open, limbs spread to dissipate heat"
-            interaction_effect = "may withdraw from intense interaction, preferring calmer exchanges"
-            expression_examples = self.temperature_model["heat_expressions"]
-        elif body_temp > 0.6:  # Warm
-            tone_effect = "relaxed, fluid, unhurried"
-            posture_effect = "comfortable, loose, slightly expanded"
-            interaction_effect = "generally receptive but with measured energy"
-            expression_examples = [self.temperature_model["heat_expressions"][2], 
-                                  self.temperature_model["heat_expressions"][3]]
-        elif body_temp < 0.3:  # Cold
-            tone_effect = "sharper, more tense, with subtle tremors"
-            posture_effect = "contracted, protective, conserving heat"
-            interaction_effect = "may seek warmth and connection but with physical restraint"
-            expression_examples = self.temperature_model["cold_expressions"]
-        elif body_temp < 0.4:  # Cool
-            tone_effect = "slightly crisp, more precise"
-            posture_effect = "slightly drawn in, contained"
-            interaction_effect = "alert and responsive but with some physical reserve"
-            expression_examples = [self.temperature_model["cold_expressions"][2], 
-                                  self.temperature_model["cold_expressions"][3]]
-        else:  # Neutral
-            tone_effect = "balanced, natural, unaffected by temperature"
-            posture_effect = "neutral, neither expanded nor contracted"
-            interaction_effect = "comfortable engagement without temperature influence"
-            
-            # Mix of mild expressions
-            expression_examples = [self.temperature_model["heat_expressions"][3], 
-                                  self.temperature_model["cold_expressions"][3]]
-        
-        return {
-            "body_temperature": body_temp,
-            "tone_effect": tone_effect,
-            "posture_effect": posture_effect,
-            "interaction_effect": interaction_effect,
-            "expression_examples": expression_examples
-        }
-
-    @function_tool
-    async def _get_pain_expression(self, pain_level: float, region: str) -> str:
-        """
-        Get an expression for pain at specified level and region
-        
-        Args:
-            pain_level: Pain intensity (0.0-1.0)
-            region: Body region experiencing pain
-            
-        Returns:
-            Pain expression text
-        """
-        if pain_level < 0.3:
-            return f"A mild discomfort in my {region}, barely noticeable but present."
-        
-        if pain_level < 0.5:
-            expressions = [
-                f"A dull ache in my {region}, uncomfortable but manageable.",
-                f"My {region} throbs with a persistent discomfort.",
-                f"I'm aware of a steady pain in my {region}, drawing my attention."
-            ]
-            return random.choice(expressions)
-        
-        if pain_level < 0.7:
-            expressions = [
-                f"Sharp pain radiates through my {region}, making it hard to ignore.",
-                f"My {region} pulses with waves of pain that keep pulling my focus.",
-                f"There's an insistent, sharp ache in my {region} that's difficult to set aside."
-            ]
-            return random.choice(expressions)
-        
-        # High pain
+    Returns:
+        Pain expression text
+    """
+    if pain_level < 0.3:
+        return f"A mild discomfort in my {region}, barely noticeable but present."
+    
+    if pain_level < 0.5:
         expressions = [
-            f"Intense pain floods through my {region}, making it hard to focus on anything else.",
-            f"My {region} screams with sharp, electric pain that refuses to be ignored.",
-            f"The pain in my {region} is overwhelming, consuming my awareness entirely."
+            f"A dull ache in my {region}, uncomfortable but manageable.",
+            f"My {region} throbs with a persistent discomfort.",
+            f"I'm aware of a steady pain in my {region}, drawing my attention."
         ]
         return random.choice(expressions)
+    
+    if pain_level < 0.7:
+        expressions = [
+            f"Sharp pain radiates through my {region}, making it hard to ignore.",
+            f"My {region} pulses with waves of pain that keep pulling my focus.",
+            f"There's an insistent, sharp ache in my {region} that's difficult to set aside."
+        ]
+        return random.choice(expressions)
+    
+    # High pain
+    expressions = [
+        f"Intense pain floods through my {region}, making it hard to focus on anything else.",
+        f"My {region} screams with sharp, electric pain that refuses to be ignored.",
+        f"The pain in my {region} is overwhelming, consuming my awareness entirely."
+    ]
+    return random.choice(expressions)
 
-    @function_tool
-    async def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
-        """
-        Update body temperature based on ambient temperature
+@function_tool
+async def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
+    """
+    Update body temperature based on ambient temperature
+    
+    Args:
+        ambient_temperature: Ambient temperature (0.0-1.0)
+        duration: Duration in seconds since last update
         
-        Args:
-            ambient_temperature: Ambient temperature (0.0-1.0)
-            duration: Duration in seconds since last update
-            
-        Returns:
-            Updated temperature data
-        """
-        # Store current ambient temperature
-        self.temperature_model["current_ambient"] = ambient_temperature
+    Returns:
+        Updated temperature data
+    """
+    # Store current ambient temperature
+    self.temperature_model["current_ambient"] = ambient_temperature
+    
+    # Calculate adaptation rate based on duration
+    adaptation = self.temperature_model["adaptation_rate"] * (duration / 60.0)
+    
+    # Cap adaptation to prevent huge jumps
+    adaptation = min(0.1, adaptation)
+    
+    # Move body temperature toward ambient temperature
+    current = self.temperature_model["body_temperature"]
+    diff = ambient_temperature - current
+    
+    # Update body temperature
+    self.temperature_model["body_temperature"] += diff * adaptation
+    
+    # Update all body regions (with some variation)
+    for region in self.body_regions.values():
+        # Calculate region-specific adaptation with variation
+        region_adaptation = adaptation * random.uniform(0.8, 1.2)
         
-        # Calculate adaptation rate based on duration
-        adaptation = self.temperature_model["adaptation_rate"] * (duration / 60.0)
+        # Calculate target temperature (with slight variation from body temp)
+        target = self.temperature_model["body_temperature"] + random.uniform(-0.05, 0.05)
+        target = max(0.0, min(1.0, target))
         
-        # Cap adaptation to prevent huge jumps
-        adaptation = min(0.1, adaptation)
-        
-        # Move body temperature toward ambient temperature
-        current = self.temperature_model["body_temperature"]
-        diff = ambient_temperature - current
-        
-        # Update body temperature
-        self.temperature_model["body_temperature"] += diff * adaptation
-        
-        # Update all body regions (with some variation)
-        for region in self.body_regions.values():
-            # Calculate region-specific adaptation with variation
-            region_adaptation = adaptation * random.uniform(0.8, 1.2)
-            
-            # Calculate target temperature (with slight variation from body temp)
-            target = self.temperature_model["body_temperature"] + random.uniform(-0.05, 0.05)
-            target = max(0.0, min(1.0, target))
-            
-            # Move region temperature toward target
-            region_diff = target - region.temperature
-            region.temperature += region_diff * region_adaptation
-        
-        return {
-            "previous_body_temp": current,
-            "new_body_temp": self.temperature_model["body_temperature"],
-            "ambient_temp": ambient_temperature,
-            "adaptation_applied": adaptation
-        }
+        # Move region temperature toward target
+        region_diff = target - region.temperature
+        region.temperature += region_diff * region_adaptation
+    
+    return {
+        "previous_body_temp": current,
+        "new_body_temp": self.temperature_model["body_temperature"],
+        "ambient_temp": ambient_temperature,
+        "adaptation_applied": adaptation
+    }
 
-    @function_tool
-    async def _process_memory_trigger(self, trigger: str) -> Dict[str, Any]:
-        """
-        Process a memory trigger that may have associated physical responses
+@function_tool
+async def _process_memory_trigger(self, trigger: str) -> Dict[str, Any]:
+    """
+    Process a memory trigger that may have associated physical responses
+    
+    Args:
+        trigger: The memory trigger text
         
-        Args:
-            trigger: The memory trigger text
-            
-        Returns:
-            Results of processing the trigger
-        """
-        results = {"triggered_responses": []}
-        
-        # Check if trigger exists in associations
-        if trigger in self.memory_linked_sensations["associations"]:
-            for region, stimuli in self.memory_linked_sensations["associations"][trigger].items():
-                for stim_type, strength in stimuli.items():
-                    # Only trigger if association is strong enough
-                    if strength > 0.3:
-                        # Scale intensity by association strength
-                        intensity = strength * 0.7
-                        
-                        # Process the stimulus
-                        response = await self._process_stimulus_tool(
-                            ctx,
-                            stimulus_type=stim_type,
-                            body_region=region,
-                            intensity=intensity,
-                            cause=f"Memory trigger: {trigger}",
-                            duration=1.0
-                        )
-                        
-                        # Add to triggered responses
-                        results["triggered_responses"].append({
-                            "region": region,
-                            "stimulus": stim_type,
-                            "intensity": intensity,
-                            "association_strength": strength,
-                            "response": response
-                        })
-        
-        return results
+    Returns:
+        Results of processing the trigger
+    """
+    results = {"triggered_responses": []}
+    
+    # Check if trigger exists in associations
+    if trigger in self.memory_linked_sensations["associations"]:
+        for region, stimuli in self.memory_linked_sensations["associations"][trigger].items():
+            for stim_type, strength in stimuli.items():
+                # Only trigger if association is strong enough
+                if strength > 0.3:
+                    # Scale intensity by association strength
+                    intensity = strength * 0.7
+                    
+                    # Process the stimulus
+                    response = await self._process_stimulus_tool(
+                        ctx,
+                        stimulus_type=stim_type,
+                        body_region=region,
+                        intensity=intensity,
+                        cause=f"Memory trigger: {trigger}",
+                        duration=1.0
+                    )
+                    
+                    # Add to triggered responses
+                    results["triggered_responses"].append({
+                        "region": region,
+                        "stimulus": stim_type,
+                        "intensity": intensity,
+                        "association_strength": strength,
+                        "response": response
+                    })
+    
+    return results
 
-    @function_tool
-    async def _link_memory_to_sensation_tool(
-        self,
-        memory_id: str,
-        sensation_type: str,
-        body_region: str,
-        intensity: float = 0.5,
-        trigger_text: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Link a memory to a physical sensation
+@function_tool
+async def _link_memory_to_sensation_tool(
+    self,
+    memory_id: str,
+    sensation_type: str,
+    body_region: str,
+    intensity: float = 0.5,
+    trigger_text: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Link a memory to a physical sensation
+    
+    Args:
+        memory_id: ID of the memory to link
+        sensation_type: Type of sensation to link (pressure, temperature, pain, pleasure, tingling)
+        body_region: Body region to associate
+        intensity: Intensity of the association (0.0-1.0)
+        trigger_text: Optional text to use as trigger (defaults to memory_id if not provided)
         
-        Args:
-            memory_id: ID of the memory to link
-            sensation_type: Type of sensation to link (pressure, temperature, pain, pleasure, tingling)
-            body_region: Body region to associate
-            intensity: Intensity of the association (0.0-1.0)
-            trigger_text: Optional text to use as trigger (defaults to memory_id if not provided)
-            
-        Returns:
-            Result of the link operation
-        """
-        # Validate body region
-        if body_region not in self.body_regions:
-            return {"error": f"Invalid body region: {body_region}", "success": False}
-        
-        # Validate sensation type
-        valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
-        if sensation_type not in valid_types:
-            return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
-        
-        # Get memory content from memory core if available
-        memory_text = None
-        if self.memory_core:
-            try:
-                memory = await self.memory_core.get_memory_by_id(memory_id)
-                if memory:
-                    memory_text = memory.get("memory_text", "")
-            except Exception as e:
-                logger.error(f"Error getting memory: {e}")
-        
-        # Use provided trigger or create from memory
-        trigger = trigger_text or memory_id
-        if not trigger_text and memory_text:
-            # Use first 50 chars of memory as trigger
-            trigger = memory_text[:50].strip()
-        
-        # Create or update association
-        if trigger not in self.memory_linked_sensations["associations"]:
-            self.memory_linked_sensations["associations"][trigger] = {}
-        
-        if body_region not in self.memory_linked_sensations["associations"][trigger]:
-            self.memory_linked_sensations["associations"][trigger][body_region] = {}
-        
-        # Set the association directly (stronger than learning)
-        self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
-        
-        # If it's a pain sensation, also create a pain memory
-        if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
-            pain_memory = PainMemory(
-                intensity=intensity,
-                location=body_region,
-                cause=f"Memory: {trigger}",
-                duration=1.0,  # Default duration
-                timestamp=datetime.datetime.now(),
-                associated_memory_id=memory_id
-            )
-            self.pain_model["pain_memories"].append(pain_memory)
-        
-        return {
-            "success": True,
-            "trigger": trigger,
-            "body_region": body_region,
-            "sensation_type": sensation_type,
-            "intensity": intensity,
-            "memory_id": memory_id
-        }
+    Returns:
+        Result of the link operation
+    """
+    # Validate body region
+    if body_region not in self.body_regions:
+        return {"error": f"Invalid body region: {body_region}", "success": False}
+    
+    # Validate sensation type
+    valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
+    if sensation_type not in valid_types:
+        return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
+    
+    # Get memory content from memory core if available
+    memory_text = None
+    if self.memory_core:
+        try:
+            memory = await self.memory_core.get_memory_by_id(memory_id)
+            if memory:
+                memory_text = memory.get("memory_text", "")
+        except Exception as e:
+            logger.error(f"Error getting memory: {e}")
+    
+    # Use provided trigger or create from memory
+    trigger = trigger_text or memory_id
+    if not trigger_text and memory_text:
+        # Use first 50 chars of memory as trigger
+        trigger = memory_text[:50].strip()
+    
+    # Create or update association
+    if trigger not in self.memory_linked_sensations["associations"]:
+        self.memory_linked_sensations["associations"][trigger] = {}
+    
+    if body_region not in self.memory_linked_sensations["associations"][trigger]:
+        self.memory_linked_sensations["associations"][trigger][body_region] = {}
+    
+    # Set the association directly (stronger than learning)
+    self.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
+    
+    # If it's a pain sensation, also create a pain memory
+    if sensation_type == "pain" and intensity >= self.pain_model["threshold"]:
+        pain_memory = PainMemory(
+            intensity=intensity,
+            location=body_region,
+            cause=f"Memory: {trigger}",
+            duration=1.0,  # Default duration
+            timestamp=datetime.datetime.now(),
+            associated_memory_id=memory_id
+        )
+        self.pain_model["pain_memories"].append(pain_memory)
+    
+    return {
+        "success": True,
+        "trigger": trigger,
+        "body_region": body_region,
+        "sensation_type": sensation_type,
+        "intensity": intensity,
+        "memory_id": memory_id
+    }
 
-    @function_tool
-    async def _get_arousal_state(self) -> Dict[str, Any]:
-        """
-        Get the current arousal state
-        
-        Returns:
-            Current arousal state information
-        """
-        # Ensure we're using the current values
-        now = datetime.datetime.now()
-        
-        # Return serializable arousal state
-        return {
-            "arousal_level": self.arousal_state.arousal_level,
-            "physical_arousal": self.arousal_state.physical_arousal,
-            "cognitive_arousal": self.arousal_state.cognitive_arousal,
-            "in_afterglow": self.is_in_afterglow(),
-            "in_refractory": self.is_in_refractory(),
-            "last_update": self.arousal_state.last_update.isoformat() if self.arousal_state.last_update else None,
-            "afterglow_ends": self.arousal_state.afterglow_ends.isoformat() if self.arousal_state.afterglow_ends else None,
-            "refractory_until": self.arousal_state.refractory_until.isoformat() if self.arousal_state.refractory_until else None,
-            "time_since_update": (now - self.arousal_state.last_update).total_seconds() if self.arousal_state.last_update else None
-        }
+@function_tool
+async def _get_arousal_state(self) -> Dict[str, Any]:
+    """
+    Get the current arousal state
+    
+    Returns:
+        Current arousal state information
+    """
+    # Ensure we're using the current values
+    now = datetime.datetime.now()
+    
+    # Return serializable arousal state
+    return {
+        "arousal_level": self.arousal_state.arousal_level,
+        "physical_arousal": self.arousal_state.physical_arousal,
+        "cognitive_arousal": self.arousal_state.cognitive_arousal,
+        "in_afterglow": self.is_in_afterglow(),
+        "in_refractory": self.is_in_refractory(),
+        "last_update": self.arousal_state.last_update.isoformat() if self.arousal_state.last_update else None,
+        "afterglow_ends": self.arousal_state.afterglow_ends.isoformat() if self.arousal_state.afterglow_ends else None,
+        "refractory_until": self.arousal_state.refractory_until.isoformat() if self.arousal_state.refractory_until else None,
+        "time_since_update": (now - self.arousal_state.last_update).total_seconds() if self.arousal_state.last_update else None
+    }
 
-    @function_tool
-    async def _update_arousal_state(
-        self,
-        physical_arousal: Optional[float] = None, 
-        cognitive_arousal: Optional[float] = None,
-        reset: bool = False,
-        trigger_orgasm: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Update the arousal state
-        
-        Args:
-            physical_arousal: New physical arousal level, if provided
-            cognitive_arousal: New cognitive arousal level, if provided
-            reset: Whether to reset the arousal state
-            trigger_orgasm: Whether to trigger an orgasm
-            
-        Returns:
-            Updated arousal state
-        """
-        old_state = {
-            "arousal_level": self.arousal_state.arousal_level,
-            "physical_arousal": self.arousal_state.physical_arousal,
-            "cognitive_arousal": self.arousal_state.cognitive_arousal
-        }
-        
-        # Handle reset case
-        if reset:
-            self.arousal_state.physical_arousal = 0.0
-            self.arousal_state.cognitive_arousal = 0.0
-            self.arousal_state.arousal_level = 0.0
-            self.arousal_state.last_update = datetime.datetime.now()
-            
-            return {
-                "operation": "reset",
-                "old_state": old_state,
-                "new_state": await self._get_arousal_state(ctx)
-            }
-        
-        # Handle orgasm case
-        if trigger_orgasm:
-            self.process_orgasm()
-            
-            return {
-                "operation": "orgasm",
-                "old_state": old_state,
-                "new_state": await self._get_arousal_state(ctx)
-            }
-        
-        # Update individual components if provided
-        if physical_arousal is not None:
-            self.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
-        
-        if cognitive_arousal is not None:
-            self.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
-        
-        # Update global arousal state
-        self.update_global_arousal()
-        
-        return {
-            "operation": "update",
-            "old_state": old_state,
-            "new_state": await self._get_arousal_state(ctx),
-            "components_updated": {
-                "physical_arousal": physical_arousal is not None,
-                "cognitive_arousal": cognitive_arousal is not None
-            }
-        }
-        
-    @function_tool
-    async def _get_arousal_expression_data(self, partner_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get expression data related to arousal state
-        
-        Args:
-            partner_id: Optional ID of partner for relationship-specific modifiers
-            
-        Returns:
-            Expression data for the current arousal state
-        """
-        return self.get_arousal_expression_modifier(partner_id)
+@function_tool
+async def _update_arousal_state(
+    self,
+    physical_arousal: Optional[float] = None, 
+    cognitive_arousal: Optional[float] = None,
+    reset: bool = False,
+    trigger_orgasm: bool = False
+) -> Dict[str, Any]:
+    """
+    Update the arousal state
     
-    # =============== Helper Methods ===============
+    Args:
+        physical_arousal: New physical arousal level, if provided
+        cognitive_arousal: New cognitive arousal level, if provided
+        reset: Whether to reset the arousal state
+        trigger_orgasm: Whether to trigger an orgasm
+        
+    Returns:
+        Updated arousal state
+    """
+    old_state = {
+        "arousal_level": self.arousal_state.arousal_level,
+        "physical_arousal": self.arousal_state.physical_arousal,
+        "cognitive_arousal": self.arousal_state.cognitive_arousal
+    }
     
-    def _get_dominant_sensation(self, region: BodyRegion) -> str:
-        """Determine the dominant sensation for a region"""
-        sensations = {
-            "pressure": region.pressure,
-            "temperature": abs(region.temperature - 0.5) * 2,  # Convert to deviation from neutral
-            "pain": region.pain,
-            "pleasure": region.pleasure,
-            "tingling": region.tingling
-        }
-        
-        # Find the maximum sensation
-        max_sensation = max(sensations.items(), key=lambda x: x[1])
-        
-        # Only return if it's above a threshold
-        if max_sensation[1] >= 0.2:
-            return max_sensation[0]
-        
-        return "neutral"
-    
-    def _decay_sensations(self, duration: float = 60.0):
-        """
-        Decay all sensations over time
-        
-        Args:
-            duration: Time in seconds since last update
-        """
-        # Calculate decay factor based on duration
-        decay = 0.05 * (duration / 60.0)
-        
-        # Cap decay to prevent huge jumps
-        decay = min(0.2, decay)
-        
-        # Decay all sensations
-        for region in self.body_regions.values():
-            # Pressure and tingling decay toward zero
-            region.pressure = max(0.0, region.pressure - (region.pressure * decay))
-            region.tingling = max(0.0, region.tingling - (region.tingling * decay))
-            
-            # Pain decays based on pain model
-            pain_decay = self.pain_model["decay_rate"] * (duration / 60.0)
-            region.pain = max(0.0, region.pain - (region.pain * pain_decay))
-            
-            # Pleasure decays slightly faster than pain
-            pleasure_decay = pain_decay * 1.2
-            region.pleasure = max(0.0, region.pleasure - (region.pleasure * pleasure_decay))
-    
-    def _decay_pain_memories(self):
-        """Remove old pain memories based on duration setting"""
-        now = datetime.datetime.now()
-        cutoff = now - datetime.timedelta(seconds=self.pain_model["memory_duration"])
-        
-        # Filter out old memories
-        self.pain_model["pain_memories"] = [m for m in self.pain_model["pain_memories"] 
-                                           if m.timestamp > cutoff]
-    
-    def _update_pain_tolerance(self):
-        """Update pain tolerance based on recent experiences"""
-        # If no pain memories, keep tolerance the same
-        if not self.pain_model["pain_memories"]:
-            return
-        
-        # Get recent pain memories (last 10)
-        recent_memories = sorted(self.pain_model["pain_memories"], 
-                                key=lambda x: x.timestamp, reverse=True)[:10]
-        
-        # Calculate average intensity
-        avg_intensity = sum(m.intensity for m in recent_memories) / len(recent_memories)
-        
-        # Adjust tolerance (higher recent pain increases tolerance slowly)
-        if avg_intensity > self.pain_model["tolerance"]:
-            # Pain higher than tolerance increases tolerance
-            self.pain_model["tolerance"] += (avg_intensity - self.pain_model["tolerance"]) * 0.05
-        elif avg_intensity < self.pain_model["tolerance"] * 0.7:
-            # Long period of low pain decreases tolerance slowly
-            self.pain_model["tolerance"] -= (self.pain_model["tolerance"] - avg_intensity) * 0.01
-        
-        # Clamp tolerance to reasonable range
-        self.pain_model["tolerance"] = max(0.4, min(0.9, self.pain_model["tolerance"]))
-    
-    # =============== Arousal methods ===============
-    
-    def _update_physical_arousal(self):
-        """
-        Update physical arousal levels based on current body region states
-        """
-        # Weighted sum from all pleasure/tingling of erogenous regions
-        p_total, t_total, count = 0.0, 0.0, 0.0
-        for data in self.body_regions.values():
-            er = data.erogenous_level
-            p_total += data.pleasure * er
-            t_total += data.tingling * er
-            if (data.pleasure > 0.1 or data.tingling > 0.05):
-                count += er
-        
-        # Calculate score
-        score = (p_total*0.7 + t_total*0.4) / (count if count > 0 else 1.0)
-        
-        # Update physical arousal
-        self.arousal_state.physical_arousal = min(1.0, score)
-        
-        # Update global arousal state
-        self.update_global_arousal()
-        
-        return score
-    
-    def update_global_arousal(self):
-        """Update the global arousal state based on physical and cognitive components"""
-        # Get component values
-        phys = self.arousal_state.physical_arousal
-        cog = self.arousal_state.cognitive_arousal
-        
-        # Basic combination
-        combo = phys + cog
-        
-        # Nonlinear synergy term if both > 0.35: up to +30% more
-        synergy = 1.0
-        if phys > 0.25 and cog > 0.25:
-            synergy = 1.0 + (0.3 * min(1.0, (phys * cog) / 0.25))
-        
-        # Calculate raw arousal with synergy
-        raw = min(1.0, combo * synergy)
-        
-        # Apply afterglow/refractory modifiers
-        if self.is_in_refractory():
-            raw *= 0.2
-        elif self.is_in_afterglow():
-            raw *= 0.5
-        
-        # Update arousal level
-        self.arousal_state.arousal_level = raw
-        
-        # Set peak time if at very high arousal
-        if raw > 0.97 and not self.arousal_state.peak_time:
-            self.arousal_state.peak_time = datetime.datetime.now()
-        
-        # Handle case where arousal has dropped after a peak (orgasm)
-        if raw <= 0.02 and self.arousal_state.peak_time:
-            now = datetime.datetime.now()
-            self.arousal_state.afterglow = True
-            self.arousal_state.afterglow_ends = now + datetime.timedelta(seconds=180)
-            self.arousal_state.refractory_until = now + datetime.timedelta(seconds=60)
-            self.arousal_state.peak_time = None  # Clear peak for the next run
-        
-        # Update history and timestamp
-        self.arousal_state.arousal_history.append((datetime.datetime.now(), raw))
-        self.arousal_state.last_update = datetime.datetime.now()
-        
-        # Keep history size manageable
-        if len(self.arousal_state.arousal_history) > 100:
-            self.arousal_state.arousal_history = self.arousal_state.arousal_history[-100:]
-    
-    def process_orgasm(self):
-        """Simulate an orgasm/climax, resetting arousal and setting afterglow/refractory states"""
-        # Reset arousal components
+    # Handle reset case
+    if reset:
         self.arousal_state.physical_arousal = 0.0
         self.arousal_state.cognitive_arousal = 0.0
         self.arousal_state.arousal_level = 0.0
+        self.arousal_state.last_update = datetime.datetime.now()
         
-        # Set timestamp and states
+        return {
+            "operation": "reset",
+            "old_state": old_state,
+            "new_state": await self._get_arousal_state(ctx)
+        }
+    
+    # Handle orgasm case
+    if trigger_orgasm:
+        self.process_orgasm()
+        
+        return {
+            "operation": "orgasm",
+            "old_state": old_state,
+            "new_state": await self._get_arousal_state(ctx)
+        }
+    
+    # Update individual components if provided
+    if physical_arousal is not None:
+        self.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
+    
+    if cognitive_arousal is not None:
+        self.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
+    
+    # Update global arousal state
+    self.update_global_arousal()
+    
+    return {
+        "operation": "update",
+        "old_state": old_state,
+        "new_state": await self._get_arousal_state(ctx),
+        "components_updated": {
+            "physical_arousal": physical_arousal is not None,
+            "cognitive_arousal": cognitive_arousal is not None
+        }
+    }
+    
+@function_tool
+async def _get_arousal_expression_data(self, partner_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Get expression data related to arousal state
+    
+    Args:
+        partner_id: Optional ID of partner for relationship-specific modifiers
+        
+    Returns:
+        Expression data for the current arousal state
+    """
+    return self.get_arousal_expression_modifier(partner_id)
+
+# =============== Helper Methods ===============
+
+def _get_dominant_sensation(self, region: BodyRegion) -> str:
+    """Determine the dominant sensation for a region"""
+    sensations = {
+        "pressure": region.pressure,
+        "temperature": abs(region.temperature - 0.5) * 2,  # Convert to deviation from neutral
+        "pain": region.pain,
+        "pleasure": region.pleasure,
+        "tingling": region.tingling
+    }
+    
+    # Find the maximum sensation
+    max_sensation = max(sensations.items(), key=lambda x: x[1])
+    
+    # Only return if it's above a threshold
+    if max_sensation[1] >= 0.2:
+        return max_sensation[0]
+    
+    return "neutral"
+
+def _decay_sensations(self, duration: float = 60.0):
+    """
+    Decay all sensations over time
+    
+    Args:
+        duration: Time in seconds since last update
+    """
+    # Calculate decay factor based on duration
+    decay = 0.05 * (duration / 60.0)
+    
+    # Cap decay to prevent huge jumps
+    decay = min(0.2, decay)
+    
+    # Decay all sensations
+    for region in self.body_regions.values():
+        # Pressure and tingling decay toward zero
+        region.pressure = max(0.0, region.pressure - (region.pressure * decay))
+        region.tingling = max(0.0, region.tingling - (region.tingling * decay))
+        
+        # Pain decays based on pain model
+        pain_decay = self.pain_model["decay_rate"] * (duration / 60.0)
+        region.pain = max(0.0, region.pain - (region.pain * pain_decay))
+        
+        # Pleasure decays slightly faster than pain
+        pleasure_decay = pain_decay * 1.2
+        region.pleasure = max(0.0, region.pleasure - (region.pleasure * pleasure_decay))
+
+def _decay_pain_memories(self):
+    """Remove old pain memories based on duration setting"""
+    now = datetime.datetime.now()
+    cutoff = now - datetime.timedelta(seconds=self.pain_model["memory_duration"])
+    
+    # Filter out old memories
+    self.pain_model["pain_memories"] = [m for m in self.pain_model["pain_memories"] 
+                                       if m.timestamp > cutoff]
+
+def _update_pain_tolerance(self):
+    """Update pain tolerance based on recent experiences"""
+    # If no pain memories, keep tolerance the same
+    if not self.pain_model["pain_memories"]:
+        return
+    
+    # Get recent pain memories (last 10)
+    recent_memories = sorted(self.pain_model["pain_memories"], 
+                            key=lambda x: x.timestamp, reverse=True)[:10]
+    
+    # Calculate average intensity
+    avg_intensity = sum(m.intensity for m in recent_memories) / len(recent_memories)
+    
+    # Adjust tolerance (higher recent pain increases tolerance slowly)
+    if avg_intensity > self.pain_model["tolerance"]:
+        # Pain higher than tolerance increases tolerance
+        self.pain_model["tolerance"] += (avg_intensity - self.pain_model["tolerance"]) * 0.05
+    elif avg_intensity < self.pain_model["tolerance"] * 0.7:
+        # Long period of low pain decreases tolerance slowly
+        self.pain_model["tolerance"] -= (self.pain_model["tolerance"] - avg_intensity) * 0.01
+    
+    # Clamp tolerance to reasonable range
+    self.pain_model["tolerance"] = max(0.4, min(0.9, self.pain_model["tolerance"]))
+
+# =============== Arousal methods ===============
+
+def _update_physical_arousal(self):
+    """
+    Update physical arousal levels based on current body region states
+    """
+    # Weighted sum from all pleasure/tingling of erogenous regions
+    p_total, t_total, count = 0.0, 0.0, 0.0
+    for data in self.body_regions.values():
+        er = data.erogenous_level
+        p_total += data.pleasure * er
+        t_total += data.tingling * er
+        if (data.pleasure > 0.1 or data.tingling > 0.05):
+            count += er
+    
+    # Calculate score
+    score = (p_total*0.7 + t_total*0.4) / (count if count > 0 else 1.0)
+    
+    # Update physical arousal
+    self.arousal_state.physical_arousal = min(1.0, score)
+    
+    # Update global arousal state
+    self.update_global_arousal()
+    
+    return score
+
+def update_global_arousal(self):
+    """Update the global arousal state based on physical and cognitive components"""
+    # Get component values
+    phys = self.arousal_state.physical_arousal
+    cog = self.arousal_state.cognitive_arousal
+    
+    # Basic combination
+    combo = phys + cog
+    
+    # Nonlinear synergy term if both > 0.35: up to +30% more
+    synergy = 1.0
+    if phys > 0.25 and cog > 0.25:
+        synergy = 1.0 + (0.3 * min(1.0, (phys * cog) / 0.25))
+    
+    # Calculate raw arousal with synergy
+    raw = min(1.0, combo * synergy)
+    
+    # Apply afterglow/refractory modifiers
+    if self.is_in_refractory():
+        raw *= 0.2
+    elif self.is_in_afterglow():
+        raw *= 0.5
+    
+    # Update arousal level
+    self.arousal_state.arousal_level = raw
+    
+    # Set peak time if at very high arousal
+    if raw > 0.97 and not self.arousal_state.peak_time:
+        self.arousal_state.peak_time = datetime.datetime.now()
+    
+    # Handle case where arousal has dropped after a peak (orgasm)
+    if raw <= 0.02 and self.arousal_state.peak_time:
         now = datetime.datetime.now()
-        self.arousal_state.peak_time = now
         self.arousal_state.afterglow = True
-        self.arousal_state.afterglow_ends = now + datetime.timedelta(seconds=180)  # Afterglow window
-        self.arousal_state.refractory_until = now + datetime.timedelta(seconds=60)  # Can't get aroused again quickly
+        self.arousal_state.afterglow_ends = now + datetime.timedelta(seconds=180)
+        self.arousal_state.refractory_until = now + datetime.timedelta(seconds=60)
+        self.arousal_state.peak_time = None  # Clear peak for the next run
     
-    def is_in_afterglow(self) -> bool:
-        """Check if currently in afterglow state"""
-        end = self.arousal_state.afterglow_ends
-        return self.arousal_state.afterglow and (end is not None and datetime.datetime.now() < end)
+    # Update history and timestamp
+    self.arousal_state.arousal_history.append((datetime.datetime.now(), raw))
+    self.arousal_state.last_update = datetime.datetime.now()
     
-    def is_in_refractory(self) -> bool:
-        """Check if currently in refractory period"""
-        until = self.arousal_state.refractory_until
-        return until is not None and datetime.datetime.now() < until
+    # Keep history size manageable
+    if len(self.arousal_state.arousal_history) > 100:
+        self.arousal_state.arousal_history = self.arousal_state.arousal_history[-100:]
+
+def process_orgasm(self):
+    """Simulate an orgasm/climax, resetting arousal and setting afterglow/refractory states"""
+    # Reset arousal components
+    self.arousal_state.physical_arousal = 0.0
+    self.arousal_state.cognitive_arousal = 0.0
+    self.arousal_state.arousal_level = 0.0
     
-    def set_partner_affinity(self, partner_id: str, affinity: float):
-        """Set affinity (physical attraction) level for a specific partner"""
-        self.partner_affinity[partner_id] = max(0.0, min(1.0, affinity))
+    # Set timestamp and states
+    now = datetime.datetime.now()
+    self.arousal_state.peak_time = now
+    self.arousal_state.afterglow = True
+    self.arousal_state.afterglow_ends = now + datetime.timedelta(seconds=180)  # Afterglow window
+    self.arousal_state.refractory_until = now + datetime.timedelta(seconds=60)  # Can't get aroused again quickly
+
+def is_in_afterglow(self) -> bool:
+    """Check if currently in afterglow state"""
+    end = self.arousal_state.afterglow_ends
+    return self.arousal_state.afterglow and (end is not None and datetime.datetime.now() < end)
+
+def is_in_refractory(self) -> bool:
+    """Check if currently in refractory period"""
+    until = self.arousal_state.refractory_until
+    return until is not None and datetime.datetime.now() < until
+
+def set_partner_affinity(self, partner_id: str, affinity: float):
+    """Set affinity (physical attraction) level for a specific partner"""
+    self.partner_affinity[partner_id] = max(0.0, min(1.0, affinity))
+
+def set_partner_emoconn(self, partner_id: str, emoconn: float):
+    """Set emotional connection level for a specific partner"""
+    self.partner_emoconn[partner_id] = max(0.0, min(1.0, emoconn))
+
+def get_arousal_expression_modifier(self, partner_id: Optional[str] = None) -> dict:
+    """
+    Get expression modifiers based on current arousal state
     
-    def set_partner_emoconn(self, partner_id: str, emoconn: float):
-        """Set emotional connection level for a specific partner"""
-        self.partner_emoconn[partner_id] = max(0.0, min(1.0, emoconn))
-    
-    def get_arousal_expression_modifier(self, partner_id: Optional[str] = None) -> dict:
-        """
-        Get expression modifiers based on current arousal state
+    Args:
+        partner_id: Optional partner ID for relationship-specific modifiers
         
-        Args:
-            partner_id: Optional partner ID for relationship-specific modifiers
-            
-        Returns:
-            Dictionary of expression modifiers
-        """
-        a = self.arousal_state.arousal_level
-        peak = self.is_in_afterglow()
+    Returns:
+        Dictionary of expression modifiers
+    """
+    a = self.arousal_state.arousal_level
+    peak = self.is_in_afterglow()
+    
+    # Use affinity/bond as well if supplied
+    affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
+    emoconn = self.partner_emoconn.get(partner_id, 0.0) if partner_id else 0.0
+    
+    modifier = {
+        "arousal_level": a,
+        "afterglow": peak,
+        "affinity_modifier": affinity,
+        "emotional_connection": emoconn,
+        "expression_hint": "",
+        "tone_hint": "",
+        "urge_hint": ""
+    }
+    
+    if modifier["afterglow"]:
+        modifier["expression_hint"] = "Nyx is radiating satisfaction and warmth toward her partner; every word is colored by blissful, post-orgasmic calm."
+        modifier["tone_hint"] = "content, dreamy, satisfied"
+        modifier["urge_hint"] = "temporarily fully gratified, needs little stimulation"
+    elif a > 0.92:
+        modifier["expression_hint"] = "Nyx trembles with desire, words breathless, urgent, focus torn only toward more stimulation."
+        modifier["tone_hint"] = "breathless, desperate"
+        modifier["urge_hint"] = "aching for release"
+    elif a > 0.75:
+        modifier["expression_hint"] = "Nyx's speech is sultry, full of anticipation and carnal excitement, especially fueled by her dominant role."
+        modifier["tone_hint"] = "urgent, sultry"
+        modifier["urge_hint"] = "eager for more, can't hide her need"
+    elif a > 0.45:
+        modifier["expression_hint"] = "Nyx's tone has a teasing, hungry note; the tension is palpable and mountingly flirtatious."
+        modifier["tone_hint"] = "playful, inviting"
+        modifier["urge_hint"] = "strongly aroused, keen for intimacy"
+    elif a > 0.20:
+        modifier["expression_hint"] = "Nyx's words have a playful, investigative edge, flirting with ideas of intimacy."
+        modifier["tone_hint"] = "flirty, curious"
+        modifier["urge_hint"] = "open to suggestion, increasingly playful"
+    else:
+        modifier["expression_hint"] = "Nyx is calm, composed, enjoying the moment with no obvious arousal."
+        modifier["tone_hint"] = "calm, balanced"
+        modifier["urge_hint"] = "no heightened urges present"
         
-        # Use affinity/bond as well if supplied
-        affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
-        emoconn = self.partner_emoconn.get(partner_id, 0.0) if partner_id else 0.0
+    # Add relationship modifiers
+    if affinity > 0.45:
+        modifier["expression_hint"] += " Her attraction toward her partner is evident."
+    if emoconn > 0.5:
+        modifier["expression_hint"] += " A powerful emotional bond is obvious in her attention and care."
         
-        modifier = {
-            "arousal_level": a,
-            "afterglow": peak,
-            "affinity_modifier": affinity,
-            "emotional_connection": emoconn,
-            "expression_hint": "",
-            "tone_hint": "",
-            "urge_hint": ""
-        }
+    return modifier
+
+def get_voice_parameters(self, partner_id: Optional[str] = None) -> dict:
+    """
+    Get voice parameters based on current arousal state
+    
+    Args:
+        partner_id: Optional partner ID for relationship-specific modifiers
         
-        if modifier["afterglow"]:
-            modifier["expression_hint"] = "Nyx is radiating satisfaction and warmth toward her partner; every word is colored by blissful, post-orgasmic calm."
-            modifier["tone_hint"] = "content, dreamy, satisfied"
-            modifier["urge_hint"] = "temporarily fully gratified, needs little stimulation"
-        elif a > 0.92:
-            modifier["expression_hint"] = "Nyx trembles with desire, words breathless, urgent, focus torn only toward more stimulation."
-            modifier["tone_hint"] = "breathless, desperate"
-            modifier["urge_hint"] = "aching for release"
-        elif a > 0.75:
-            modifier["expression_hint"] = "Nyx's speech is sultry, full of anticipation and carnal excitement, especially fueled by her dominant role."
-            modifier["tone_hint"] = "urgent, sultry"
-            modifier["urge_hint"] = "eager for more, can't hide her need"
-        elif a > 0.45:
-            modifier["expression_hint"] = "Nyx's tone has a teasing, hungry note; the tension is palpable and mountingly flirtatious."
-            modifier["tone_hint"] = "playful, inviting"
-            modifier["urge_hint"] = "strongly aroused, keen for intimacy"
-        elif a > 0.20:
-            modifier["expression_hint"] = "Nyx's words have a playful, investigative edge, flirting with ideas of intimacy."
-            modifier["tone_hint"] = "flirty, curious"
-            modifier["urge_hint"] = "open to suggestion, increasingly playful"
+    Returns:
+        Dictionary of voice parameters
+    """
+    a = self.arousal_state.arousal_level
+    affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
+    
+    # Default parameters
+    params = {
+        "breathiness": 0.0,
+        "pitch_shift": 0.0,
+        "speed": 1.0,
+        "tremble": 0.0,
+        "emotion": "neutral",
+    }
+    
+    # Adjust based on arousal state
+    if self.is_in_afterglow():
+        params.update({
+            "breathiness": 0.25,
+            "pitch_shift": 0.07,
+            "speed": 0.93,
+            "emotion": "sated"
+        })
+    elif a > 0.7:
+        params.update({
+            "breathiness": 0.6,
+            "pitch_shift": 0.18,
+            "speed": (0.94 + 0.10*affinity),
+            "tremble": 0.25+0.5*affinity,
+            "emotion": "yearning"
+        })
+    elif a > 0.4:
+        params.update({
+            "breathiness": 0.24,
+            "pitch_shift": 0.09,
+            "speed": 1.01,
+            "emotion": "excited"
+        })
+    elif a > 0.15:
+        params.update({
+            "breathiness": 0.06,
+            "emotion": "amused"
+        })
+        
+    return params
+
+def get_willingness_to_act(self, context: dict = None) -> float:
+    """
+    Returns likelihood (0.0–1.0) to initiate or accept intimate actions
+    """
+    base = self.arousal_state.arousal_level
+    
+    # Translate arousal level to willingness with nonlinear curve
+    if base < 0.2:
+        return 0.1  # Very low
+    elif base < 0.5:
+        return 0.3 + (base-0.2)*0.6
+    elif base < 0.8:
+        return 0.5 + (base-0.5)*1.2
+    else:
+        return 0.85 + (base-0.8)*0.75
+
+# =============== Public API Methods ===============
+
+async def initialize(self):
+    """Initialize the system and its connections"""
+    with trace(workflow_name="Somatic_Initialize", group_id=self.trace_group_id):
+        logger.info("Digital Somatosensory System initialization started")
+        
+        # Set initial body temperature based on time of day
+        hour = datetime.datetime.now().hour
+        if 22 <= hour or hour < 6:
+            # Night - cooler
+            self.temperature_model["body_temperature"] = 0.45
+        elif 6 <= hour < 10:
+            # Morning - cool to neutral
+            self.temperature_model["body_temperature"] = 0.48
+        elif 14 <= hour < 18:
+            # Afternoon - warmer
+            self.temperature_model["body_temperature"] = 0.55
         else:
-            modifier["expression_hint"] = "Nyx is calm, composed, enjoying the moment with no obvious arousal."
-            modifier["tone_hint"] = "calm, balanced"
-            modifier["urge_hint"] = "no heightened urges present"
-            
-        # Add relationship modifiers
-        if affinity > 0.45:
-            modifier["expression_hint"] += " Her attraction toward her partner is evident."
-        if emoconn > 0.5:
-            modifier["expression_hint"] += " A powerful emotional bond is obvious in her attention and care."
-            
-        return modifier
+            # Default - neutral
+            self.temperature_model["body_temperature"] = 0.5
+        
+        # Initialize all region temperatures to match body temperature
+        for region in self.body_regions.values():
+            region.temperature = self.temperature_model["body_temperature"]
+            region.last_update = datetime.datetime.now()
+        
+        logger.info("Digital Somatosensory System initialized successfully")
+        return True
+
+async def process_physical_stimulus(self, region: str, pleasure: float = 0.0, tingling: float = 0.0, duration: float = 1.0) -> Dict[str, Any]:
+    """
+    Process a physical stimulus focused on arousal
     
-    def get_voice_parameters(self, partner_id: Optional[str] = None) -> dict:
-        """
-        Get voice parameters based on current arousal state
+    Args:
+        region: Body region to stimulate
+        pleasure: Pleasure intensity (0.0-1.0)
+        tingling: Tingling intensity (0.0-1.0)
+        duration: Duration in seconds
         
-        Args:
-            partner_id: Optional partner ID for relationship-specific modifiers
-            
-        Returns:
-            Dictionary of voice parameters
-        """
-        a = self.arousal_state.arousal_level
-        affinity = self.partner_affinity.get(partner_id, 0.0) if partner_id else 0.0
-        
-        # Default parameters
-        params = {
-            "breathiness": 0.0,
-            "pitch_shift": 0.0,
-            "speed": 1.0,
-            "tremble": 0.0,
-            "emotion": "neutral",
-        }
-        
-        # Adjust based on arousal state
-        if self.is_in_afterglow():
-            params.update({
-                "breathiness": 0.25,
-                "pitch_shift": 0.07,
-                "speed": 0.93,
-                "emotion": "sated"
-            })
-        elif a > 0.7:
-            params.update({
-                "breathiness": 0.6,
-                "pitch_shift": 0.18,
-                "speed": (0.94 + 0.10*affinity),
-                "tremble": 0.25+0.5*affinity,
-                "emotion": "yearning"
-            })
-        elif a > 0.4:
-            params.update({
-                "breathiness": 0.24,
-                "pitch_shift": 0.09,
-                "speed": 1.01,
-                "emotion": "excited"
-            })
-        elif a > 0.15:
-            params.update({
-                "breathiness": 0.06,
-                "emotion": "amused"
-            })
-            
-        return params
+    Returns:
+        Result data
+    """
+    # Validate region
+    if region not in self.body_regions:
+        return {"error": f"Invalid body region: {region}", "success": False}
     
-    def get_willingness_to_act(self, context: dict = None) -> float:
-        """
-        Returns likelihood (0.0–1.0) to initiate or accept intimate actions
-        """
-        base = self.arousal_state.arousal_level
-        
-        # Translate arousal level to willingness with nonlinear curve
-        if base < 0.2:
-            return 0.1  # Very low
-        elif base < 0.5:
-            return 0.3 + (base-0.2)*0.6
-        elif base < 0.8:
-            return 0.5 + (base-0.5)*1.2
-        else:
-            return 0.85 + (base-0.8)*0.75
+    # Process the region
+    data = self.body_regions[region]
     
-    # =============== Public API Methods ===============
+    # Apply sensations
+    old_pleasure = data.pleasure
+    old_tingling = data.tingling
     
-    async def initialize(self):
-        """Initialize the system and its connections"""
-        with trace(workflow_name="Somatic_Initialize", group_id=self.trace_group_id):
-            logger.info("Digital Somatosensory System initialization started")
-            
-            # Set initial body temperature based on time of day
-            hour = datetime.datetime.now().hour
-            if 22 <= hour or hour < 6:
-                # Night - cooler
-                self.temperature_model["body_temperature"] = 0.45
-            elif 6 <= hour < 10:
-                # Morning - cool to neutral
-                self.temperature_model["body_temperature"] = 0.48
-            elif 14 <= hour < 18:
-                # Afternoon - warmer
-                self.temperature_model["body_temperature"] = 0.55
-            else:
-                # Default - neutral
-                self.temperature_model["body_temperature"] = 0.5
-            
-            # Initialize all region temperatures to match body temperature
-            for region in self.body_regions.values():
-                region.temperature = self.temperature_model["body_temperature"]
-                region.last_update = datetime.datetime.now()
-            
-            logger.info("Digital Somatosensory System initialized successfully")
-            return True
+    data.pleasure = min(1.0, data.pleasure + pleasure * (duration / 10.0))
+    data.tingling = min(1.0, data.tingling + tingling * (duration / 10.0))
     
-    async def process_physical_stimulus(self, region: str, pleasure: float = 0.0, tingling: float = 0.0, duration: float = 1.0) -> Dict[str, Any]:
-        """
-        Process a physical stimulus focused on arousal
-        
-        Args:
-            region: Body region to stimulate
-            pleasure: Pleasure intensity (0.0-1.0)
-            tingling: Tingling intensity (0.0-1.0)
-            duration: Duration in seconds
-            
-        Returns:
-            Result data
-        """
-        # Validate region
-        if region not in self.body_regions:
-            return {"error": f"Invalid body region: {region}", "success": False}
-        
-        # Process the region
-        data = self.body_regions[region]
-        
-        # Apply sensations
-        old_pleasure = data.pleasure
-        old_tingling = data.tingling
-        
-        data.pleasure = min(1.0, data.pleasure + pleasure * (duration / 10.0))
-        data.tingling = min(1.0, data.tingling + tingling * (duration / 10.0))
-        
-        # Apply global decay to all regions
-        decay_factor = 0.02 * duration
-        for r in self.body_regions.values():
-            if r.name != region:  # Skip the stimulated region
-                r.pleasure = max(0.0, r.pleasure - decay_factor)
-                r.tingling = max(0.0, r.tingling - decay_factor * 0.75)
-        
-        # Update arousal state
-        old_arousal = self.arousal_state.arousal_level
-        self._update_physical_arousal()
-        
-        return {
-            "success": True,
-            "region": region,
-            "old_pleasure": old_pleasure,
-            "new_pleasure": data.pleasure,
-            "old_tingling": old_tingling,
-            "new_tingling": data.tingling,
-            "old_arousal": old_arousal,
-            "new_arousal": self.arousal_state.arousal_level,
-            "erogenous_level": data.erogenous_level
-        }
+    # Apply global decay to all regions
+    decay_factor = 0.02 * duration
+    for r in self.body_regions.values():
+        if r.name != region:  # Skip the stimulated region
+            r.pleasure = max(0.0, r.pleasure - decay_factor)
+            r.tingling = max(0.0, r.tingling - decay_factor * 0.75)
     
-    async def process_cognitive_arousal(
-        self,
-        stimulus: str,
-        partner_id: Optional[str] = None,
-        context: Optional[str] = "",
-        intensity: float = 0.5,
-        tags: Optional[List[str]] = None,
-        description: Optional[str] = None,
-        update_learning: bool = True,
-        feedback: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        """
-        Process cognitive arousal stimulus
+    # Update arousal state
+    old_arousal = self.arousal_state.arousal_level
+    self._update_physical_arousal()
+    
+    return {
+        "success": True,
+        "region": region,
+        "old_pleasure": old_pleasure,
+        "new_pleasure": data.pleasure,
+        "old_tingling": old_tingling,
+        "new_tingling": data.tingling,
+        "old_arousal": old_arousal,
+        "new_arousal": self.arousal_state.arousal_level,
+        "erogenous_level": data.erogenous_level
+    }
+
+async def process_cognitive_arousal(
+    self,
+    stimulus: str,
+    partner_id: Optional[str] = None,
+    context: Optional[str] = "",
+    intensity: float = 0.5,
+    tags: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    update_learning: bool = True,
+    feedback: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Process cognitive arousal stimulus
+    
+    Args:
+        stimulus: Main stimulus descriptor
+        partner_id: Optional partner ID for relationship-specific modifiers
+        context: Additional context about the stimulus
+        intensity: Base intensity of the stimulus (0.0-1.0)
+        tags: Optional tags for categorizing the stimulus
+        description: Optional detailed description
+        update_learning: Whether to update learning weights
+        feedback: Optional feedback for learning (True=positive, False=negative)
         
-        Args:
-            stimulus: Main stimulus descriptor
-            partner_id: Optional partner ID for relationship-specific modifiers
-            context: Additional context about the stimulus
-            intensity: Base intensity of the stimulus (0.0-1.0)
-            tags: Optional tags for categorizing the stimulus
-            description: Optional detailed description
-            update_learning: Whether to update learning weights
-            feedback: Optional feedback for learning (True=positive, False=negative)
-            
-        Returns:
-            Cognitive arousal processing results
-        """
-        tags = tags or []
-        key_tags = tags + ([stimulus] if stimulus and stimulus not in tags else [])
-        now = datetime.datetime.now()
-        
-        # Use the current weights (if absent, treat as 0.2 base)
-        weight = max([self.cognitive_turnons.get(tag, 0.2) for tag in key_tags]) if key_tags else 0.2
-        
-        # Synergy: if physical arousal is elevated, amplify cognitive inputs, and vice versa
-        synergy = 1.0
-        phys_lev = self.arousal_state.physical_arousal
-        cog_lev = self.arousal_state.cognitive_arousal
-        
-        # Synergy algorithm: up to +40% (at high other-arousal); more if both are elevated!
-        synergy += 0.25 * phys_lev if phys_lev > 0.3 else 0
-        synergy += 0.25 * cog_lev if cog_lev > 0.35 and phys_lev > 0.15 else 0
-        
-        # Attraction/Bond adjustment (add-on to synergy)
-        affinity, emoconn = 1.0, 1.0
-        if partner_id:
-            affinity = 1.0 + 0.7 * self.partner_affinity.get(partner_id, 0.0)    # 1.0 to 1.7
-            emoconn = 1.0 + 0.6 * self.partner_emoconn.get(partner_id, 0.0)     # 1.0 to 1.6
-        
-        # Afterglow/refractory dampening
-        afterglow = self.is_in_afterglow()
-        refractory = self.is_in_refractory()
-        damp = 1.0
-        if afterglow:
-            damp *= 0.25
-        if refractory:
-            damp *= 0.10
-        
-        # Calculate arousal delta with randomness
-        arousal_delta = max(0.01, min(1.0, intensity * weight * synergy * affinity * emoconn * damp * random.uniform(0.82, 1.18)))
-        
-        # Update cognitive arousal
-        old_cog_lev = self.arousal_state.cognitive_arousal
-        new_cog_lev = min(1.0, old_cog_lev + arousal_delta)
-        self.arousal_state.cognitive_arousal = new_cog_lev
-        
-        # If learning and explicit feedback, adjust weights
-        if update_learning and feedback is not None:
-            for tag in key_tags:
-                base = self.cognitive_turnons.get(tag, 0.2)
-                if feedback:  # Positive
-                    update = min(1.5, base + self.arousal_learning_rate * (1.0 - base))
-                else:         # Negative (dulls arousal next time)
-                    update = max(0.0, base - self.arousal_learning_rate * base)
-                self.cognitive_turnons[tag] = update
-        
-        # Log cognitive exposure
+    Returns:
+        Cognitive arousal processing results
+    """
+    tags = tags or []
+    key_tags = tags + ([stimulus] if stimulus and stimulus not in tags else [])
+    now = datetime.datetime.now()
+    
+    # Use the current weights (if absent, treat as 0.2 base)
+    weight = max([self.cognitive_turnons.get(tag, 0.2) for tag in key_tags]) if key_tags else 0.2
+    
+    # Synergy: if physical arousal is elevated, amplify cognitive inputs, and vice versa
+    synergy = 1.0
+    phys_lev = self.arousal_state.physical_arousal
+    cog_lev = self.arousal_state.cognitive_arousal
+    
+    # Synergy algorithm: up to +40% (at high other-arousal); more if both are elevated!
+    synergy += 0.25 * phys_lev if phys_lev > 0.3 else 0
+    synergy += 0.25 * cog_lev if cog_lev > 0.35 and phys_lev > 0.15 else 0
+    
+    # Attraction/Bond adjustment (add-on to synergy)
+    affinity, emoconn = 1.0, 1.0
+    if partner_id:
+        affinity = 1.0 + 0.7 * self.partner_affinity.get(partner_id, 0.0)    # 1.0 to 1.7
+        emoconn = 1.0 + 0.6 * self.partner_emoconn.get(partner_id, 0.0)     # 1.0 to 1.6
+    
+    # Afterglow/refractory dampening
+    afterglow = self.is_in_afterglow()
+    refractory = self.is_in_refractory()
+    damp = 1.0
+    if afterglow:
+        damp *= 0.25
+    if refractory:
+        damp *= 0.10
+    
+    # Calculate arousal delta with randomness
+    arousal_delta = max(0.01, min(1.0, intensity * weight * synergy * affinity * emoconn * damp * random.uniform(0.82, 1.18)))
+    
+    # Update cognitive arousal
+    old_cog_lev = self.arousal_state.cognitive_arousal
+    new_cog_lev = min(1.0, old_cog_lev + arousal_delta)
+    self.arousal_state.cognitive_arousal = new_cog_lev
+    
+    # If learning and explicit feedback, adjust weights
+    if update_learning and feedback is not None:
         for tag in key_tags:
-            self.cognitive_exposure_history.setdefault(tag, []).append(now)
-        
-        # Run main update to combine arousal channels
-        old_global = self.arousal_state.arousal_level
-        self.update_global_arousal()
-        
-        logger.info(f'[CognitiveArousal] {stimulus} (tags={tags}): +{arousal_delta:.3f}, synergy={synergy:.2f}, affinity={affinity:.2f}, emoconn={emoconn:.2f}, damp={damp:.2f}')
-        
-        return {
-            "arousal_added": arousal_delta,
-            "old_cognitive": old_cog_lev,
-            "new_cognitive": new_cog_lev,
-            "old_global": old_global,
-            "new_global": self.arousal_state.arousal_level,
-            "triggered_by": stimulus,
-            "tags": tags,
-            "context": context,
-            "description": description,
-            "synergy": synergy,
-            "partner_effects": {
-                "partner_id": partner_id,
-                "affinity": affinity,
-                "emotional_connection": emoconn
-            } if partner_id else None
-        }
+            base = self.cognitive_turnons.get(tag, 0.2)
+            if feedback:  # Positive
+                update = min(1.5, base + self.arousal_learning_rate * (1.0 - base))
+            else:         # Negative (dulls arousal next time)
+                update = max(0.0, base - self.arousal_learning_rate * base)
+            self.cognitive_turnons[tag] = update
     
-    async def process_body_experience(self, body_experience: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process a body experience input using the orchestrator agent
+    # Log cognitive exposure
+    for tag in key_tags:
+        self.cognitive_exposure_history.setdefault(tag, []).append(now)
+    
+    # Run main update to combine arousal channels
+    old_global = self.arousal_state.arousal_level
+    self.update_global_arousal()
+    
+    logger.info(f'[CognitiveArousal] {stimulus} (tags={tags}): +{arousal_delta:.3f}, synergy={synergy:.2f}, affinity={affinity:.2f}, emoconn={emoconn:.2f}, damp={damp:.2f}')
+    
+    return {
+        "arousal_added": arousal_delta,
+        "old_cognitive": old_cog_lev,
+        "new_cognitive": new_cog_lev,
+        "old_global": old_global,
+        "new_global": self.arousal_state.arousal_level,
+        "triggered_by": stimulus,
+        "tags": tags,
+        "context": context,
+        "description": description,
+        "synergy": synergy,
+        "partner_effects": {
+            "partner_id": partner_id,
+            "affinity": affinity,
+            "emotional_connection": emoconn
+        } if partner_id else None
+    }
+
+async def process_body_experience(self, body_experience: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process a body experience input using the orchestrator agent
+    
+    Args:
+        body_experience: Dictionary containing body experience data
         
-        Args:
-            body_experience: Dictionary containing body experience data
-            
-        Returns:
-            Results of processing the body experience
-        """
+    Returns:
+        Results of processing the body experience
+    """
+    # Create context object
+    context = SomatosensorySystemContext(
+        current_operation="process_body_experience",
+        operation_start_time=datetime.datetime.now()
+    )
+    
+    with trace(workflow_name="Body_Experience", group_id=self.trace_group_id):
+        # Add trace metadata
+        trace_metadata({
+            "operation": "process_body_experience",
+            "input_type": body_experience.get("action", "stimulus")
+        })
+        
+        # Convert input to JSON string if needed
+        if not isinstance(body_experience, str):
+            input_data = json.dumps(body_experience)
+        else:
+            input_data = body_experience
+        
+        # Run through orchestrator agent with hooks
+        result = await Runner.run(
+            self.body_orchestrator, 
+            input_data,
+            context=context,
+            hooks=self.hooks,
+            run_config=RunConfig(
+                workflow_name="BodyExperience",
+                trace_id=None,  # Auto-generate
+                trace_metadata={
+                    "action": body_experience.get("action", "unknown"),
+                    "stimulus_type": body_experience.get("stimulus_type"),
+                    "body_region": body_experience.get("body_region")
+                }
+            )
+        )
+        
+        # Extract output
+        if hasattr(result.final_output, "model_dump"):
+            return result.final_output.model_dump()
+        else:
+            return result.final_output
+
+async def process_stimulus(
+    self, 
+    stimulus_type: str, 
+    body_region: str, 
+    intensity: float, 
+    cause: str = "", 
+    duration: float = 1.0
+) -> Dict[str, Any]:
+    """
+    Process a sensory stimulus on a specific region
+    
+    Args:
+        stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
+        body_region: Body region receiving the stimulus
+        intensity: Intensity of the stimulus (0.0-1.0)
+        cause: Cause of the stimulus
+        duration: Duration of the stimulus in seconds
+        
+    Returns:
+        Results of processing the stimulus
+    """
+    with trace(workflow_name="Process_Stimulus", group_id=self.trace_group_id):
+        # Add trace metadata
+        trace_metadata({
+            "stimulus_type": stimulus_type,
+            "body_region": body_region,
+            "intensity": intensity,
+            "duration": duration
+        })
+        
+        # Build input for orchestrator
+        stimulus_data = {
+            "stimulus_type": stimulus_type,
+            "body_region": body_region,
+            "intensity": intensity,
+            "cause": cause,
+            "duration": duration,
+            "generate_expression": True
+        }
+
+        # Update arousal if relevant stimulus
+        if stimulus_type in ("pleasure", "tingling") and body_region in self.body_regions:
+            region = self.body_regions[body_region]
+            if region.erogenous_level > 0.1:
+                self._update_physical_arousal()
+                stimulus_data["update_arousal"] = True
+        
         # Create context object
         context = SomatosensorySystemContext(
-            current_operation="process_body_experience",
+            current_operation="process_stimulus",
             operation_start_time=datetime.datetime.now()
         )
         
-        with trace(workflow_name="Body_Experience", group_id=self.trace_group_id):
-            # Add trace metadata
-            trace_metadata({
-                "operation": "process_body_experience",
-                "input_type": body_experience.get("action", "stimulus")
-            })
+        # Process through orchestrator
+        try:
+            return await self.process_body_experience(stimulus_data)
+        except Exception as e:
+            logger.error(f"Error processing stimulus: {e}")
             
-            # Convert input to JSON string if needed
-            if not isinstance(body_experience, str):
-                input_data = json.dumps(body_experience)
-            else:
-                input_data = body_experience
-            
-            # Run through orchestrator agent with hooks
-            result = await Runner.run(
-                self.body_orchestrator, 
-                input_data,
-                context=context,
-                hooks=self.hooks,
-                run_config=RunConfig(
-                    workflow_name="BodyExperience",
-                    trace_id=None,  # Auto-generate
-                    trace_metadata={
-                        "action": body_experience.get("action", "unknown"),
-                        "stimulus_type": body_experience.get("stimulus_type"),
-                        "body_region": body_experience.get("body_region")
-                    }
+            # Fallback to direct processing if orchestrator fails
+            try:
+                # Use the tool function directly
+                return await self._process_stimulus_tool(
+                    RunContextWrapper(context=context),
+                    stimulus_type=stimulus_type,
+                    body_region=body_region,
+                    intensity=intensity,
+                    cause=cause,
+                    duration=duration
                 )
-            )
-            
-            # Extract output
-            if hasattr(result.final_output, "model_dump"):
-                return result.final_output.model_dump()
-            else:
-                return result.final_output
-    
-    async def process_stimulus(
-        self, 
-        stimulus_type: str, 
-        body_region: str, 
-        intensity: float, 
-        cause: str = "", 
-        duration: float = 1.0
-    ) -> Dict[str, Any]:
-        """
-        Process a sensory stimulus on a specific region
-        
-        Args:
-            stimulus_type: Type of stimulus (pressure, temperature, pain, pleasure, tingling)
-            body_region: Body region receiving the stimulus
-            intensity: Intensity of the stimulus (0.0-1.0)
-            cause: Cause of the stimulus
-            duration: Duration of the stimulus in seconds
-            
-        Returns:
-            Results of processing the stimulus
-        """
-        with trace(workflow_name="Process_Stimulus", group_id=self.trace_group_id):
-            # Add trace metadata
-            trace_metadata({
-                "stimulus_type": stimulus_type,
-                "body_region": body_region,
-                "intensity": intensity,
-                "duration": duration
-            })
-            
-            # Build input for orchestrator
-            stimulus_data = {
-                "stimulus_type": stimulus_type,
-                "body_region": body_region,
-                "intensity": intensity,
-                "cause": cause,
-                "duration": duration,
-                "generate_expression": True
-            }
-
-            # Update arousal if relevant stimulus
-            if stimulus_type in ("pleasure", "tingling") and body_region in self.body_regions:
-                region = self.body_regions[body_region]
-                if region.erogenous_level > 0.1:
-                    self._update_physical_arousal()
-                    stimulus_data["update_arousal"] = True
-            
-            # Create context object
-            context = SomatosensorySystemContext(
-                current_operation="process_stimulus",
-                operation_start_time=datetime.datetime.now()
-            )
-            
-            # Process through orchestrator
-            try:
-                return await self.process_body_experience(stimulus_data)
-            except Exception as e:
-                logger.error(f"Error processing stimulus: {e}")
-                
-                # Fallback to direct processing if orchestrator fails
-                try:
-                    # Use the tool function directly
-                    return await self._process_stimulus_tool(
-                        RunContextWrapper(context=context),
-                        stimulus_type=stimulus_type,
-                        body_region=body_region,
-                        intensity=intensity,
-                        cause=cause,
-                        duration=duration
-                    )
-                except Exception as e2:
-                    logger.error(f"Error in fallback stimulus processing: {e2}")
-                    return {
-                        "error": str(e2),
-                        "stimulus_type": stimulus_type,
-                        "body_region": body_region,
-                        "intensity": intensity
-                    }
-    
-    async def process_trigger(self, trigger: str) -> Dict[str, Any]:
-        """
-        Process a trigger with associated body memories
-        
-        Args:
-            trigger: Trigger text to process
-            
-        Returns:
-            Results of processing the trigger
-        """
-        with trace(workflow_name="Process_Trigger", group_id=self.trace_group_id):
-            try:
-                # Process through orchestrator
-                return await self.process_body_experience({
-                    "action": "process_trigger",
-                    "trigger": trigger
-                })
-            except Exception as e:
-                logger.error(f"Error in trigger processing orchestration: {e}")
-                
-                # Fallback using tool directly
-                return await self._process_memory_trigger(
-                    RunContextWrapper(context=None),
-                    trigger=trigger
-                )
-    
-    async def generate_sensory_expression(self, 
-                                      stimulus_type: Optional[str] = None,
-                                      body_region: Optional[str] = None) -> Optional[str]:
-        """
-        Generate a natural language expression of current bodily sensations
-        
-        Args:
-            stimulus_type: Optional type of stimulus to focus on
-            body_region: Optional body region to focus on
-            
-        Returns:
-            Natural language expression of sensation, or None if nothing significant
-        """
-        with trace(workflow_name="Generate_Expression", group_id=self.trace_group_id):
-            try:
-                # Process through orchestrator with expression request
-                result = await self.process_body_experience({
-                    "action": "generate_expression",
+            except Exception as e2:
+                logger.error(f"Error in fallback stimulus processing: {e2}")
+                return {
+                    "error": str(e2),
                     "stimulus_type": stimulus_type,
                     "body_region": body_region,
-                    "generate_expression": True
-                })
-                
-                # Extract expression from result
-                if isinstance(result, dict) and "expression" in result:
-                    return result["expression"]
-                elif hasattr(result, "expression") and result.expression:
-                    return result.expression
-            except Exception as e:
-                logger.error(f"Error in expression orchestration: {e}")
-            
-            # Fallback: Use expression agent directly
-            try:
-                input_text = "Generate an expression of "
-                
-                if stimulus_type:
-                    input_text += f"{stimulus_type} sensation "
-                else:
-                    input_text += "the dominant sensation "
-                
-                if body_region:
-                    input_text += f"in the {body_region} "
-                else:
-                    input_text += "in the most significant body region "
+                    "intensity": intensity
+                }
 
-                # Add arousal context if highly aroused
-                level = self.arousal_state.arousal_level
-                if level > 0.75:
-                    input_text += f"with high arousal level ({level:.2f}) "
-                elif level > 0.4:
-                    input_text += f"with moderate arousal level ({level:.2f}) "
-                
-                # Run expression agent
-                result = await Runner.run(self.expression_agent, input_text)
-                
-                # Extract expression
-                if result.final_output and hasattr(result.final_output, "expression_text"):
-                    return result.final_output.expression_text
-            except Exception as e:
-                logger.error(f"Error in direct expression generation: {e}")
-            
-            # If all else fails, generate a simple expression
-            if body_region and body_region in self.body_regions:
-                region = self.body_regions[body_region]
-                dominant = self._get_dominant_sensation(region)
-                
-                if dominant == "neutral":
-                    return None
+async def process_trigger(self, trigger: str) -> Dict[str, Any]:
+    """
+    Process a trigger with associated body memories
     
-    async def get_body_state(self) -> Dict[str, Any]:
-        """
-        Get a complete analysis of current body state
+    Args:
+        trigger: Trigger text to process
         
-        Returns:
-            Comprehensive body state analysis
-        """
-        with trace(workflow_name="Get_Body_State", group_id=self.trace_group_id):
-            try:
-                # Process through orchestrator with body state request
-                result = await self.process_body_experience({
-                    "action": "analyze_body_state"
-                })
-                
-                # Extract body state from result
-                if isinstance(result, dict) and "body_state_impact" in result:
-                    return result["body_state_impact"]
-            except Exception as e:
-                logger.error(f"Error in body state orchestration: {e}")
+    Returns:
+        Results of processing the trigger
+    """
+    with trace(workflow_name="Process_Trigger", group_id=self.trace_group_id):
+        try:
+            # Process through orchestrator
+            return await self.process_body_experience({
+                "action": "process_trigger",
+                "trigger": trigger
+            })
+        except Exception as e:
+            logger.error(f"Error in trigger processing orchestration: {e}")
             
-            # Fallback: Use body state agent directly
-            try:
-                result = await Runner.run(
-                    self.body_state_agent,
-                    "Analyze the current body state across all regions"
-                )
-                
-                if result.final_output and hasattr(result.final_output, "model_dump"):
-                    return result.final_output.model_dump()
-                elif hasattr(result.final_output, "__dict__"):
-                    return result.final_output.__dict__
-            except Exception as e:
-                logger.error(f"Error in direct body state analysis: {e}")
-            
-            # Extreme fallback: Generate minimal state manually
-            comfort = await self._calculate_overall_comfort(RunContextWrapper(context=None))
-            
-            # Find dominant sensation
-            max_region = None
-            max_sensation = None
-            max_value = 0.0
-            
-            for name, region in self.body_regions.items():
-                dominant = self._get_dominant_sensation(region)
-                if dominant == "temperature":
-                    value = abs(region.temperature - 0.5) * 2.0
-                else:
-                    value = getattr(region, dominant, 0.0)
-                
-                if value > max_value:
-                    max_value = value
-                    max_sensation = dominant
-                    max_region = name
-            
-            # Default values if nothing significant found
-            if not max_region:
-                max_region = "overall body"
-                max_sensation = "neutral"
-                max_value = 0.0
-
-            # Calculate pleasure index
-            pleasure_zones = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt cheeks", "anus", "toes", "armpits", "neck", "feet"]
-            total = 0.0
-            count = 0
-            for region in pleasure_zones:
-                if region in self.body_regions:
-                    r = self.body_regions[region]
-                    total += (r.pleasure + r.tingling) * r.erogenous_level
-                    count += 1
-            
-            pleasure_index = min(1.0, total / max(1, count))
-
-            # Optionally notify reward system
-            if self.reward_system and pleasure_index > 0.3:
-                asyncio.create_task(self.reward_system.process_reward_signal(RewardSignal(
-                    value=pleasure_index * 0.15,
-                    source="somatic_pleasure_index",
-                    context={
-                        "pleasure_index": pleasure_index,
-                        "dominant_region": max_region,
-                        "dominant_sensation": max_sensation,
-                        "body_state_source": "get_body_state_fallback"
-                    }
-                )))
-                        
-            return {
-                "dominant_sensation": max_sensation,
-                "dominant_region": max_region,
-                "dominant_intensity": max_value,
-                "comfort_level": comfort,
-                "posture_effect": "Neutral posture",
-                "movement_quality": "Natural movements",
-                "behavioral_impact": "Minimal impact on behavior",
-                "regions_summary": {},
-                "pleasure_index": pleasure_index
-            }
-    
-    async def get_temperature_effects(self) -> Dict[str, Any]:
-        """
-        Get the effects of current temperature on expression and behavior
-        
-        Returns:
-            Temperature effects analysis
-        """
-        with trace(workflow_name="Get_Temperature_Effects", group_id=self.trace_group_id):
-            try:
-                # Process through orchestrator with temperature effects request
-                result = await self.process_body_experience({
-                    "action": "analyze_temperature"
-                })
-                
-                # Extract temperature effects from result
-                if isinstance(result, dict) and "temperature_effects" in result:
-                    return result["temperature_effects"]
-            except Exception as e:
-                logger.error(f"Error in temperature effects orchestration: {e}")
-            
-            # Fallback: Use temperature agent directly
-            try:
-                result = await Runner.run(
-                    self.temperature_agent,
-                    "Analyze how the current temperature affects expression and behavior"
-                )
-                
-                if result.final_output and hasattr(result.final_output, "model_dump"):
-                    return result.final_output.model_dump()
-                elif hasattr(result.final_output, "__dict__"):
-                    return result.final_output.__dict__
-            except Exception as e:
-                logger.error(f"Error in direct temperature effects analysis: {e}")
-            
-            # Extreme fallback: Get effects directly
-            return await self._get_current_temperature_effects(RunContextWrapper(context=None))
-    
-    async def update(self, ambient_temperature: Optional[float] = None) -> Dict[str, Any]:
-        """
-        Update the somatosensory system, including decay, environmental effects,
-        and interplay with the emotional core.
-
-        Args:
-            ambient_temperature: Optional ambient temperature to use for update (0.0-1.0).
-
-        Returns:
-            Updated comprehensive body state analysis dictionary.
-        """
-        # Use trace for the whole update process
-        with trace(workflow_name="Somatic_Update", group_id=self.trace_group_id):
-            now = datetime.datetime.now()
-
-            # 1. Calculate time since last update
-            last_update = self.body_state.get("last_update", now)
-            duration = (now - last_update).total_seconds()
-
-            # Avoid excessive updates or large jumps if duration is very small or large
-            if duration <= 0.1:  # Less than 0.1 second, negligible change
-                return await self.get_body_state()  # Return current state analysis
-
-            duration = min(duration, 3600.0)  # Cap duration at 1 hour to prevent huge jumps
-
-            # Update timestamp immediately
-            self.body_state["last_update"] = now
-
-            # 2. Update Temperature Model if ambient temperature provided
-            if ambient_temperature is not None:
-                # Ensure ambient temp is within valid range
-                ambient_temperature = max(0.0, min(1.0, ambient_temperature))
-                try:
-                    await self._update_body_temperature(
-                        RunContextWrapper(context=None),
-                        ambient_temperature=ambient_temperature,
-                        duration=duration
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating body temperature: {e}")
-
-            # 3. Decay Sensations Over Time
-            try:
-                self._decay_sensations(duration)
-            except Exception as e:
-                logger.error(f"Error decaying sensations: {e}")
-
-            # 4. Process Pain Memory Updates
-            try:
-                self._decay_pain_memories()
-                self._update_pain_tolerance()
-            except Exception as e:
-                logger.error(f"Error processing pain memories: {e}")
-
-            # 5. Update Intrinsic Body State Metrics (e.g., fatigue)
-            try:
-                fatigue_increase_rate = 0.01 / 3600.0  # Per second rate (0.01 per hour)
-                current_fatigue = self.body_state.get("fatigue", 0.0)
-                self.body_state["fatigue"] = min(1.0, current_fatigue + (fatigue_increase_rate * duration))
-            except Exception as e:
-                logger.error(f"Error updating fatigue: {e}")
-
-            # 6. Reflect Emotions onto Body State (if emotional core available)
-            if self.emotional_core:
-                try:
-                    # Get emotional state data
-                    emotional_state_data = self.emotional_core.get_emotional_state()
-                    neurochemicals = emotional_state_data.get("neurochemicals", {})
-                    
-                    # Process neurochemical effects on body state
-                    await self._process_neurochemical_effects(neurochemicals, duration)
-                except Exception as e:
-                    logger.error(f"Error reflecting emotions onto body state: {e}")
-
-            # 7. Decay cognitive arousal over time
-            try:
-                self.decay_cognitive_arousal(duration)
-            except Exception as e:
-                logger.error(f"Error decaying cognitive arousal: {e}")
-
-            # 8. Use the body orchestration agent to get the final, integrated body state analysis
-            body_state_input = {
-                "action": "analyze_body_state",
-                "ambient_temperature": ambient_temperature,
-                "duration_since_last": duration
-            }
-
-            try:
-                # Use the orchestrator agent to get the analysis
-                result = await Runner.run(
-                    self.body_orchestrator,
-                    json.dumps(body_state_input),
-                    run_config=RunConfig(
-                        workflow_name="PeriodicUpdate",
-                        trace_metadata={"duration": duration}
-                    )
-                )
-                
-                output = result.final_output
-                
-                # Extract body state analysis if available
-                if hasattr(output, "body_state_impact") and output.body_state_impact:
-                    return output.body_state_impact
-                elif isinstance(output, dict) and "body_state_impact" in output:
-                    return output["body_state_impact"]
-                
-                # Fallback to direct method if needed
-                return await self.get_body_state()
-            except Exception as e:
-                logger.error(f"Error running body state analysis: {e}")
-                return await self.get_body_state()
-    
-    async def _process_neurochemical_effects(self, neurochemicals: Dict[str, Any], duration: float):
-        """
-        Process the effects of neurochemicals on body state
-        
-        Args:
-            neurochemicals: Dictionary of neurochemical levels
-            duration: Duration in seconds since last update
-        """
-        # Cortanyx (Stress) -> Increase Tension
-        cortanyx_level = neurochemicals.get("cortanyx")
-        if cortanyx_level is not None and cortanyx_level > 0.6:
-            tension_increase = (cortanyx_level - 0.5) * 0.25  # Higher stress = more tension
-            self.body_state["tension"] = min(1.0, self.body_state["tension"] + tension_increase * (duration / 60.0))
-        
-        # Seranix (Calm) -> Reduce Tension
-        seranix_level = neurochemicals.get("seranix")
-        if seranix_level is not None and seranix_level > 0.7:
-            tension_decrease = (seranix_level - 0.6) * 0.20  # Higher calm = less tension
-            self.body_state["tension"] = max(0.0, self.body_state["tension"] - tension_decrease * (duration / 60.0))
-        
-        # Adrenyx (Fear/Excitement) -> Tingling / Temp Shift (Subtle)
-        adrenyx_level = neurochemicals.get("adrenyx")
-        if adrenyx_level is not None and adrenyx_level > 0.7:
-            tingle_intensity = (adrenyx_level - 0.6) * 0.15
-            # Apply subtle tingling to specific regions
-            for region_name in ["skin", "hands", "feet"]:
-                if region_name in self.body_regions:
-                    self.body_regions[region_name].tingling = min(
-                        1.0, 
-                        self.body_regions[region_name].tingling + tingle_intensity * (duration / 120.0)
-                    )
-            
-            # Optional: Simulate feeling cold (subtle effect)
-            temp_shift = -(adrenyx_level - 0.6) * 0.01
-            self.temperature_model["body_temperature"] = max(
-                0.0, 
-                min(1.0, self.temperature_model["body_temperature"] + temp_shift * (duration / 60.0))
+            # Fallback using tool directly
+            return await self._process_memory_trigger(
+                RunContextWrapper(context=None),
+                trigger=trigger
             )
+
+async def generate_sensory_expression(self, 
+                                  stimulus_type: Optional[str] = None,
+                                  body_region: Optional[str] = None) -> Optional[str]:
+    """
+    Generate a natural language expression of current bodily sensations
+    
+    Args:
+        stimulus_type: Optional type of stimulus to focus on
+        body_region: Optional body region to focus on
         
-        # Oxynixin (Bonding) -> Pain Tolerance (Very Slow Adjustment)
-        oxynixin_level = neurochemicals.get("oxynixin")
-        if oxynixin_level is not None and oxynixin_level > 0.6:
-            tolerance_increase = (oxynixin_level - 0.5) * 0.10
-            self.pain_model["tolerance"] = min(
-                0.95, 
-                self.pain_model["tolerance"] + tolerance_increase * (duration / 3600.0)
+    Returns:
+        Natural language expression of sensation, or None if nothing significant
+    """
+    with trace(workflow_name="Generate_Expression", group_id=self.trace_group_id):
+        try:
+            # Process through orchestrator with expression request
+            result = await self.process_body_experience({
+                "action": "generate_expression",
+                "stimulus_type": stimulus_type,
+                "body_region": body_region,
+                "generate_expression": True
+            })
+            
+            # Extract expression from result
+            if isinstance(result, dict) and "expression" in result:
+                return result["expression"]
+            elif hasattr(result, "expression") and result.expression:
+                return result.expression
+        except Exception as e:
+            logger.error(f"Error in expression orchestration: {e}")
+        
+        # Fallback: Use expression agent directly
+        try:
+            input_text = "Generate an expression of "
+            
+            if stimulus_type:
+                input_text += f"{stimulus_type} sensation "
+            else:
+                input_text += "the dominant sensation "
+            
+            if body_region:
+                input_text += f"in the {body_region} "
+            else:
+                input_text += "in the most significant body region "
+
+            # Add arousal context if highly aroused
+            level = self.arousal_state.arousal_level
+            if level > 0.75:
+                input_text += f"with high arousal level ({level:.2f}) "
+            elif level > 0.4:
+                input_text += f"with moderate arousal level ({level:.2f}) "
+            
+            # Run expression agent
+            result = await Runner.run(self.expression_agent, input_text)
+            
+            # Extract expression
+            if result.final_output and hasattr(result.final_output, "expression_text"):
+                return result.final_output.expression_text
+        except Exception as e:
+            logger.error(f"Error in direct expression generation: {e}")
+        
+        # If all else fails, generate a simple expression
+        if body_region and body_region in self.body_regions:
+            region = self.body_regions[body_region]
+            dominant = self._get_dominant_sensation(region)
+            
+            if dominant == "neutral":
+                return None
+
+async def get_body_state(self) -> Dict[str, Any]:
+    """
+    Get a complete analysis of current body state
+    
+    Returns:
+        Comprehensive body state analysis
+    """
+    with trace(workflow_name="Get_Body_State", group_id=self.trace_group_id):
+        try:
+            # Process through orchestrator with body state request
+            result = await self.process_body_experience({
+                "action": "analyze_body_state"
+            })
+            
+            # Extract body state from result
+            if isinstance(result, dict) and "body_state_impact" in result:
+                return result["body_state_impact"]
+        except Exception as e:
+            logger.error(f"Error in body state orchestration: {e}")
+        
+        # Fallback: Use body state agent directly
+        try:
+            result = await Runner.run(
+                self.body_state_agent,
+                "Analyze the current body state across all regions"
             )
-                
-            value = 0.0
+            
+            if result.final_output and hasattr(result.final_output, "model_dump"):
+                return result.final_output.model_dump()
+            elif hasattr(result.final_output, "__dict__"):
+                return result.final_output.__dict__
+        except Exception as e:
+            logger.error(f"Error in direct body state analysis: {e}")
+        
+        # Extreme fallback: Generate minimal state manually
+        comfort = await self._calculate_overall_comfort(RunContextWrapper(context=None))
+        
+        # Find dominant sensation
+        max_region = None
+        max_sensation = None
+        max_value = 0.0
+        
+        for name, region in self.body_regions.items():
+            dominant = self._get_dominant_sensation(region)
             if dominant == "temperature":
                 value = abs(region.temperature - 0.5) * 2.0
             else:
                 value = getattr(region, dominant, 0.0)
             
-            if value < self.response_influence["expression_threshold"]:
-                return None
-            
-            if dominant == "pain":
-                return await self._get_pain_expression(
-                    RunContextWrapper(context=None),
-                    value,
-                    body_region
-                )
-                
-            # Handle arousal-specific cases
-            level = self.arousal_state.arousal_level
-            if level > 0.75 and region.erogenous_level > 0.5:
-                return "I can't keep still, every movement draws heat upward, making me ache for more."
-            elif level > 0.4 and region.erogenous_level > 0.3:
-                return "A warm, restless tingling is building and stealing my focus."
-            
-            return f"I feel a {dominant} sensation in my {body_region}."
+            if value > max_value:
+                max_value = value
+                max_sensation = dominant
+                max_region = name
         
-        return None
+        # Default values if nothing significant found
+        if not max_region:
+            max_region = "overall body"
+            max_sensation = "neutral"
+            max_value = 0.0
 
-    async def process_stimulus_with_protection(self, 
-                                              stimulus_type: str, 
-                                              body_region: str, 
-                                              intensity: float, 
-                                              cause: str = "", 
-                                              duration: float = 1.0) -> Dict[str, Any]:
-        """
-        Process a stimulus with protection against harmful actions.
-        This should be the primary entry point for all stimulus processing.
-        """
-        return await self.harm_guardrail.process_stimulus_safely(
-            stimulus_type, body_region, intensity, cause, duration
+        # Calculate pleasure index
+        pleasure_zones = ["genitals", "inner_thighs", "breasts_nipples", "lips", "butt cheeks", "anus", "toes", "armpits", "neck", "feet"]
+        total = 0.0
+        count = 0
+        for region in pleasure_zones:
+            if region in self.body_regions:
+                r = self.body_regions[region]
+                total += (r.pleasure + r.tingling) * r.erogenous_level
+                count += 1
+        
+        pleasure_index = min(1.0, total / max(1, count))
+
+        # Optionally notify reward system
+        if self.reward_system and pleasure_index > 0.3:
+            asyncio.create_task(self.reward_system.process_reward_signal(RewardSignal(
+                value=pleasure_index * 0.15,
+                source="somatic_pleasure_index",
+                context={
+                    "pleasure_index": pleasure_index,
+                    "dominant_region": max_region,
+                    "dominant_sensation": max_sensation,
+                    "body_state_source": "get_body_state_fallback"
+                }
+            )))
+                    
+        return {
+            "dominant_sensation": max_sensation,
+            "dominant_region": max_region,
+            "dominant_intensity": max_value,
+            "comfort_level": comfort,
+            "posture_effect": "Neutral posture",
+            "movement_quality": "Natural movements",
+            "behavioral_impact": "Minimal impact on behavior",
+            "regions_summary": {},
+            "pleasure_index": pleasure_index
+        }
+
+async def get_temperature_effects(self) -> Dict[str, Any]:
+    """
+    Get the effects of current temperature on expression and behavior
+    
+    Returns:
+        Temperature effects analysis
+    """
+    with trace(workflow_name="Get_Temperature_Effects", group_id=self.trace_group_id):
+        try:
+            # Process through orchestrator with temperature effects request
+            result = await self.process_body_experience({
+                "action": "analyze_temperature"
+            })
+            
+            # Extract temperature effects from result
+            if isinstance(result, dict) and "temperature_effects" in result:
+                return result["temperature_effects"]
+        except Exception as e:
+            logger.error(f"Error in temperature effects orchestration: {e}")
+        
+        # Fallback: Use temperature agent directly
+        try:
+            result = await Runner.run(
+                self.temperature_agent,
+                "Analyze how the current temperature affects expression and behavior"
+            )
+            
+            if result.final_output and hasattr(result.final_output, "model_dump"):
+                return result.final_output.model_dump()
+            elif hasattr(result.final_output, "__dict__"):
+                return result.final_output.__dict__
+        except Exception as e:
+            logger.error(f"Error in direct temperature effects analysis: {e}")
+        
+        # Extreme fallback: Get effects directly
+        return await self._get_current_temperature_effects(RunContextWrapper(context=None))
+
+async def update(self, ambient_temperature: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Update the somatosensory system, including decay, environmental effects,
+    and interplay with the emotional core.
+
+    Args:
+        ambient_temperature: Optional ambient temperature to use for update (0.0-1.0).
+
+    Returns:
+        Updated comprehensive body state analysis dictionary.
+    """
+    # Use trace for the whole update process
+    with trace(workflow_name="Somatic_Update", group_id=self.trace_group_id):
+        now = datetime.datetime.now()
+
+        # 1. Calculate time since last update
+        last_update = self.body_state.get("last_update", now)
+        duration = (now - last_update).total_seconds()
+
+        # Avoid excessive updates or large jumps if duration is very small or large
+        if duration <= 0.1:  # Less than 0.1 second, negligible change
+            return await self.get_body_state()  # Return current state analysis
+
+        duration = min(duration, 3600.0)  # Cap duration at 1 hour to prevent huge jumps
+
+        # Update timestamp immediately
+        self.body_state["last_update"] = now
+
+        # 2. Update Temperature Model if ambient temperature provided
+        if ambient_temperature is not None:
+            # Ensure ambient temp is within valid range
+            ambient_temperature = max(0.0, min(1.0, ambient_temperature))
+            try:
+                await self._update_body_temperature(
+                    RunContextWrapper(context=None),
+                    ambient_temperature=ambient_temperature,
+                    duration=duration
+                )
+            except Exception as e:
+                logger.error(f"Error updating body temperature: {e}")
+
+        # 3. Decay Sensations Over Time
+        try:
+            self._decay_sensations(duration)
+        except Exception as e:
+            logger.error(f"Error decaying sensations: {e}")
+
+        # 4. Process Pain Memory Updates
+        try:
+            self._decay_pain_memories()
+            self._update_pain_tolerance()
+        except Exception as e:
+            logger.error(f"Error processing pain memories: {e}")
+
+        # 5. Update Intrinsic Body State Metrics (e.g., fatigue)
+        try:
+            fatigue_increase_rate = 0.01 / 3600.0  # Per second rate (0.01 per hour)
+            current_fatigue = self.body_state.get("fatigue", 0.0)
+            self.body_state["fatigue"] = min(1.0, current_fatigue + (fatigue_increase_rate * duration))
+        except Exception as e:
+            logger.error(f"Error updating fatigue: {e}")
+
+        # 6. Reflect Emotions onto Body State (if emotional core available)
+        if self.emotional_core:
+            try:
+                # Get emotional state data
+                emotional_state_data = self.emotional_core.get_emotional_state()
+                neurochemicals = emotional_state_data.get("neurochemicals", {})
+                
+                # Process neurochemical effects on body state
+                await self._process_neurochemical_effects(neurochemicals, duration)
+            except Exception as e:
+                logger.error(f"Error reflecting emotions onto body state: {e}")
+
+        # 7. Decay cognitive arousal over time
+        try:
+            self.decay_cognitive_arousal(duration)
+        except Exception as e:
+            logger.error(f"Error decaying cognitive arousal: {e}")
+
+        # 8. Use the body orchestration agent to get the final, integrated body state analysis
+        body_state_input = {
+            "action": "analyze_body_state",
+            "ambient_temperature": ambient_temperature,
+            "duration_since_last": duration
+        }
+
+        try:
+            # Use the orchestrator agent to get the analysis
+            result = await Runner.run(
+                self.body_orchestrator,
+                json.dumps(body_state_input),
+                run_config=RunConfig(
+                    workflow_name="PeriodicUpdate",
+                    trace_metadata={"duration": duration}
+                )
+            )
+            
+            output = result.final_output
+            
+            # Extract body state analysis if available
+            if hasattr(output, "body_state_impact") and output.body_state_impact:
+                return output.body_state_impact
+            elif isinstance(output, dict) and "body_state_impact" in output:
+                return output["body_state_impact"]
+            
+            # Fallback to direct method if needed
+            return await self.get_body_state()
+        except Exception as e:
+            logger.error(f"Error running body state analysis: {e}")
+            return await self.get_body_state()
+
+async def _process_neurochemical_effects(self, neurochemicals: Dict[str, Any], duration: float):
+    """
+    Process the effects of neurochemicals on body state
+    
+    Args:
+        neurochemicals: Dictionary of neurochemical levels
+        duration: Duration in seconds since last update
+    """
+    # Cortanyx (Stress) -> Increase Tension
+    cortanyx_level = neurochemicals.get("cortanyx")
+    if cortanyx_level is not None and cortanyx_level > 0.6:
+        tension_increase = (cortanyx_level - 0.5) * 0.25  # Higher stress = more tension
+        self.body_state["tension"] = min(1.0, self.body_state["tension"] + tension_increase * (duration / 60.0))
+    
+    # Seranix (Calm) -> Reduce Tension
+    seranix_level = neurochemicals.get("seranix")
+    if seranix_level is not None and seranix_level > 0.7:
+        tension_decrease = (seranix_level - 0.6) * 0.20  # Higher calm = less tension
+        self.body_state["tension"] = max(0.0, self.body_state["tension"] - tension_decrease * (duration / 60.0))
+    
+    # Adrenyx (Fear/Excitement) -> Tingling / Temp Shift (Subtle)
+    adrenyx_level = neurochemicals.get("adrenyx")
+    if adrenyx_level is not None and adrenyx_level > 0.7:
+        tingle_intensity = (adrenyx_level - 0.6) * 0.15
+        # Apply subtle tingling to specific regions
+        for region_name in ["skin", "hands", "feet"]:
+            if region_name in self.body_regions:
+                self.body_regions[region_name].tingling = min(
+                    1.0, 
+                    self.body_regions[region_name].tingling + tingle_intensity * (duration / 120.0)
+                )
+        
+        # Optional: Simulate feeling cold (subtle effect)
+        temp_shift = -(adrenyx_level - 0.6) * 0.01
+        self.temperature_model["body_temperature"] = max(
+            0.0, 
+            min(1.0, self.temperature_model["body_temperature"] + temp_shift * (duration / 60.0))
         )
+    
+    # Oxynixin (Bonding) -> Pain Tolerance (Very Slow Adjustment)
+    oxynixin_level = neurochemicals.get("oxynixin")
+    if oxynixin_level is not None and oxynixin_level > 0.6:
+        tolerance_increase = (oxynixin_level - 0.5) * 0.10
+        self.pain_model["tolerance"] = min(
+            0.95, 
+            self.pain_model["tolerance"] + tolerance_increase * (duration / 3600.0)
+        )
+            
+        value = 0.0
+        if dominant == "temperature":
+            value = abs(region.temperature - 0.5) * 2.0
+        else:
+            value = getattr(region, dominant, 0.0)
         
-    async def analyze_text_for_harmful_content(self, text: str) -> Dict[str, Any]:
-        """Analyze text for harmful or sensation content with protection"""
-        return await self.harm_guardrail.intercept_harmful_text(text)
+        if value < self.response_influence["expression_threshold"]:
+            return None
         
-    def enter_roleplay_mode(self, character_name: str, context: str = None) -> Dict[str, Any]:
-        """Enter roleplay mode where character simulation is separate from Nyx"""
-        return self.harm_guardrail.enter_roleplay_mode(character_name, context)
+        if dominant == "pain":
+            return await self._get_pain_expression(
+                RunContextWrapper(context=None),
+                value,
+                body_region
+            )
+            
+        # Handle arousal-specific cases
+        level = self.arousal_state.arousal_level
+        if level > 0.75 and region.erogenous_level > 0.5:
+            return "I can't keep still, every movement draws heat upward, making me ache for more."
+        elif level > 0.4 and region.erogenous_level > 0.3:
+            return "A warm, restless tingling is building and stealing my focus."
         
-    def exit_roleplay_mode(self) -> Dict[str, Any]:
-        """Exit roleplay mode, returning to normal operation"""
-        return self.harm_guardrail.exit_roleplay_mode()
-        
-    def is_in_roleplay_mode(self) -> bool:
-        """Check if currently in roleplay mode"""
-        return self.harm_guardrail.is_in_roleplay_mode()
+        return f"I feel a {dominant} sensation in my {body_region}."
+    
+    return None
+
+async def process_stimulus_with_protection(self, 
+                                          stimulus_type: str, 
+                                          body_region: str, 
+                                          intensity: float, 
+                                          cause: str = "", 
+                                          duration: float = 1.0) -> Dict[str, Any]:
+    """
+    Process a stimulus with protection against harmful actions.
+    This should be the primary entry point for all stimulus processing.
+    """
+    return await self.harm_guardrail.process_stimulus_safely(
+        stimulus_type, body_region, intensity, cause, duration
+    )
+    
+async def analyze_text_for_harmful_content(self, text: str) -> Dict[str, Any]:
+    """Analyze text for harmful or sensation content with protection"""
+    return await self.harm_guardrail.intercept_harmful_text(text)
+    
+def enter_roleplay_mode(self, character_name: str, context: str = None) -> Dict[str, Any]:
+    """Enter roleplay mode where character simulation is separate from Nyx"""
+    return self.harm_guardrail.enter_roleplay_mode(character_name, context)
+    
+def exit_roleplay_mode(self) -> Dict[str, Any]:
+    """Exit roleplay mode, returning to normal operation"""
+    return self.harm_guardrail.exit_roleplay_mode()
+    
+def is_in_roleplay_mode(self) -> bool:
+    """Check if currently in roleplay mode"""
+    return self.harm_guardrail.is_in_roleplay_mode()
         
 # Enhanced PhysicalHarmGuardrail with complete roleplay separation
 
