@@ -101,16 +101,16 @@ class AttentionalController:
     
     def _initialize_agents(self):
         """Initialize all agents needed for the attention system"""
-        # Create main attention allocation agent
-        self.attention_agent = self._create_attention_agent()
-        
-        # Create specialized agents for different attention functions
+        # First create specialized agents
         self.saliency_agent = self._create_saliency_agent()
         self.focus_agent = self._create_focus_agent()
         self.inhibition_agent = self._create_inhibition_agent()
         
         # Create input validation guardrail
         self.input_validation = self._create_input_validation()
+        
+        # Now create the main agent that depends on the specialized agents
+        self.attention_agent = self._create_attention_agent()
     
     def _create_attention_agent(self) -> Agent[AttentionContext]:
         """Create agent for attention allocation decisions"""
