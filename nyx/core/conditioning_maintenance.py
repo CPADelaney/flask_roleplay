@@ -417,42 +417,51 @@ async def _identify_trait_imbalances(ctx: RunContextWrapper) -> List[Dict[str, A
 @function_tool
 async def _calculate_trait_adjustment(
     ctx: RunContextWrapper[MaintenanceContext],
-    trait: Optional[str] = None, # Make Optional
-    current_value: Optional[float] = None, # Make Optional
-    target_value: Optional[float] = None, # Make Optional
-    importance: float = 0.5 # Keep default for truly optional args
+    trait: Optional[str] = None,
+    current_value: Optional[float] = None,
+    target_value: Optional[float] = None,
+    # CHANGE 1: Make importance Optional in the signature
+    importance: Optional[float] = None
 ) -> float:
     """
     Calculate appropriate adjustment for a personality trait
-    
+
     Args:
         trait: The trait to adjust
         current_value: Current trait value
         target_value: Target trait value
-        importance: Importance of the trait (0.0-1.0)
-        
+        importance: Importance of the trait (0.0-1.0). Defaults to 0.5 if not provided. # Updated docstring
+
     Returns:
         Calculated adjustment value
     """
+    # Parameter validation (already present)
     if trait is None or current_value is None or target_value is None:
-        logger.error("Tool _calculate_trait_adjustment missing required arguments.")
+        logger.error("Tool _calculate_trait_adjustment missing required arguments (trait, current_value, or target_value).")
         return 0.0 # Return neutral adjustment on error
-        
+
+    # CHANGE 2: Handle the default value inside the function logic
+    actual_importance = importance if importance is not None else 0.5
+    # Ensure the effective importance is within the valid range
+    actual_importance = max(0.0, min(1.0, actual_importance))
+
     # Calculate difference
     difference = target_value - current_value
-    
+
     # Basic adjustment is a fraction of the difference
     basic_adjustment = difference * 0.3
-    
+
     # Scale based on importance
-    importance_factor = 0.5 + (importance / 2)  # Range: 0.5 to 1.0
-    
+    # Use the actual_importance which includes the default handling
+    importance_factor = 0.5 + (actual_importance / 2)  # Range: 0.5 to 1.0
+
     # Calculate final adjustment
     adjustment = basic_adjustment * importance_factor
-    
+
     # Limit maximum adjustment per maintenance
     max_adjustment = 0.2
     return max(-max_adjustment, min(max_adjustment, adjustment))
+
 
 @function_tool
 async def _reinforce_core_trait(
