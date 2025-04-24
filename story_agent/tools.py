@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from agents import function_tool, RunContextWrapper
 # ****** OPTIONAL: Import specific context if no circular dependency ******
 # from story_agent.story_director_agent import StoryDirectorContext # Use this if possible
+from logic.conflict_system.conflict_tools import add_conflict_to_narrative
 
 from db.connection import get_db_connection_context
 from logic.narrative_progression import (
