@@ -322,7 +322,8 @@ class ContextAwarenessSystem:
         self.context_detection_agent = self._create_context_detection_agent()
         
         # Create input validation guardrail
-        self.message_validation_guardrail = self._create_message_validation_guardrail()
+        self.message_validation_guardrail = InputGuardrail(guardrail_function=self._message_validation_guardrail)
+
     
     def _initialize_context_signals(self) -> List[ContextSignal]:
         """Initialize the database of context signals"""
