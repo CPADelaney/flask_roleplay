@@ -1457,7 +1457,6 @@ class PhysicalHarmGuardrail:
             )
     
     # =============== Tool Functions ===============
-    @staticmethod
     @function_tool
     async def _get_valid_body_regions(ctx: RunContextWrapper) -> List[str]:
         """Get a list of valid body regions."""
