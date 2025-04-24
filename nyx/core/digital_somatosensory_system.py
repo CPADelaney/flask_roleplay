@@ -1461,7 +1461,7 @@ class PhysicalHarmGuardrail:
     @function_tool
     async def _get_valid_body_regions(ctx: RunContextWrapper) -> List[str]:
         """Get a list of valid body regions."""
-        return list(self.body_regions.keys())
+        return list(ctx.context.body_regions.keys())
 
     @staticmethod
     @function_tool
