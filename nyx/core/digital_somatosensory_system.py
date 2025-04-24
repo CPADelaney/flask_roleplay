@@ -374,27 +374,36 @@ class DigitalSomatosensorySystem:
         self.body_orchestrator = self._create_orchestrator_agent()
         
     def _create_stimulus_validator(self):
-        """Create the stimulus validation agent.""" # Updated docstring slightly
-        validation_agent = Agent(
-            name="Stimulus Validator",
-            instructions="""
-            You validate inputs for the Digital Somatosensory System.
+            """Create the stimulus validation agent."""
+            # --- DEBUGGING ---
+            logger.info(">>> Entering _create_stimulus_validator")
+            logger.info(f">>> Type of self: {type(self)}")
+            logger.info(f">>> Does self have _get_valid_body_regions? {hasattr(self, '_get_valid_body_regions')}")
+            if hasattr(self, '_get_valid_body_regions'):
+                logger.info(f">>> Is it callable? {callable(getattr(self, '_get_valid_body_regions'))}")
+            logger.info(f">>> Attributes available on self: {dir(self)}")
+            # --- END DEBUGGING ---
     
-            Check that:
-            1. Stimulus types are valid (pressure, temperature, pain, pleasure, tingling)
-            2. Body regions are valid based on the provided list using the tool.
-            3. Intensity values are within range 0.0-1.0
-            4. Duration values are positive
+            validation_agent = Agent(
+                name="Stimulus Validator",
+                instructions="""
+                You validate inputs for the Digital Somatosensory System.
     
-            Return validation results and reasoning. Use the available tool to get valid regions.
-            """,
-            # Pass the decorated method object DIRECTLY to the list
-            tools=[self._get_valid_body_regions],
-            output_type=StimulusValidationOutput,
-            model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.1) # Low temperature for consistency
-        )
-        return validation_agent
+                Check that:
+                1. Stimulus types are valid (pressure, temperature, pain, pleasure, tingling)
+                2. Body regions are valid based on the provided list using the tool.
+                3. Intensity values are within range 0.0-1.0
+                4. Duration values are positive
+    
+                Return validation results and reasoning. Use the available tool to get valid regions.
+                """,
+                tools=[self._get_valid_body_regions], # This is the line causing the error (approx line 392/416)
+                output_type=StimulusValidationOutput,
+                model="gpt-4o",
+                model_settings=ModelSettings(temperature=0.1)
+            )
+            logger.info(">>> Successfully created validation_agent (or crashed before this)") # Add this too
+            return validation_agent
     
     def _create_expression_agent(self) -> Agent:
         """Create the sensory expression agent."""
