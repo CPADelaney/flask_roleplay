@@ -372,6 +372,16 @@ class DigitalSomatosensorySystem:
         
         # Create the main orchestrator agent with handoffs to specialized agents
         self.body_orchestrator = self._create_orchestrator_agent()
+
+    @function_tool # Keep decorator here
+    async def _get_valid_body_regions(self) -> List[str]: # <<< ADD self HERE
+        """Get a list of valid body regions."""
+        # Ensure body_regions has been initialized (safety check)
+        if not hasattr(self, 'body_regions'):
+             logger.error("_get_valid_body_regions called before self.body_regions was set.")
+             return []
+        # Access instance attribute via self
+        return list(self.body_regions.keys()) # <<< USE self.body_regions HERE
         
     def _create_stimulus_validator(self):
             """Create the stimulus validation agent."""
@@ -1465,16 +1475,6 @@ class PhysicalHarmGuardrail:
             )
     
     # =============== Tool Functions ===============
-    @function_tool # Keep decorator here
-    async def _get_valid_body_regions(self) -> List[str]: # <<< ADD self HERE
-        """Get a list of valid body regions."""
-        # Ensure body_regions has been initialized (safety check)
-        if not hasattr(self, 'body_regions'):
-             logger.error("_get_valid_body_regions called before self.body_regions was set.")
-             return []
-        # Access instance attribute via self
-        return list(self.body_regions.keys()) # <<< USE self.body_regions HERE
-
     @function_tool # <-- Keep only this decorator
     async def _process_stimulus_tool(
                               self,
