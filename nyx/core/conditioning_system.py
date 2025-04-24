@@ -238,10 +238,10 @@ class ConditioningSystem:
             Ensure personality development is consistent with overall identity and values.
             """,
             tools=[
-                function_tool(self._identify_trait_behaviors),
-                function_tool(self._calculate_conditioning_trait_adjustment),
-                function_tool(self._update_identity_trait),
-                function_tool(self._check_trait_balance)
+                self._identify_trait_behaviors,
+                self._calculate_conditioning_trait_adjustment,
+                self._update_identity_trait,
+                self._check_trait_balance
             ],
             output_type=TraitConditioningOutput,
             model_settings=ModelSettings(temperature=0.4)
@@ -833,6 +833,7 @@ class ConditioningSystem:
         
         return history
 
+    @function_tool
     @staticmethod
     async def _identify_trait_behaviors(ctx: RunContextWrapper, trait: str) -> List[str]:
         """
@@ -861,7 +862,6 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    # RENAME this function
     async def _calculate_conditioning_trait_adjustment(ctx: RunContextWrapper,
                                     current_value: float,
                                     target_value: float,
