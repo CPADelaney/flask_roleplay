@@ -389,7 +389,7 @@ class DigitalSomatosensorySystem:
             Return validation results and reasoning. Use the available tool to get valid regions.
             """,
             # Pass the decorated method object DIRECTLY to the list
-            tools=[self._get_valid_body_regions], # <-- CORRECTED
+            tools=[self._get_valid_body_regions],
             output_type=StimulusValidationOutput,
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.1) # Low temperature for consistency
@@ -1456,11 +1456,15 @@ class PhysicalHarmGuardrail:
             )
     
     # =============== Tool Functions ===============
-    @function_tool # Decorator stays on the definition
-    async def _get_valid_body_regions(self) -> List[str]: # Add self!
+    @function_tool # Keep decorator here
+    async def _get_valid_body_regions(self) -> List[str]: # <<< ADD self HERE
         """Get a list of valid body regions."""
-        # Access the instance attribute directly using self
-        return list(self.body_regions.keys())
+        # Ensure body_regions has been initialized (safety check)
+        if not hasattr(self, 'body_regions'):
+             logger.error("_get_valid_body_regions called before self.body_regions was set.")
+             return []
+        # Access instance attribute via self
+        return list(self.body_regions.keys()) # <<< USE self.body_regions HERE
 
     @function_tool # <-- Keep only this decorator
     async def _process_stimulus_tool(
@@ -1668,9 +1672,8 @@ class PhysicalHarmGuardrail:
             
             return result
 
-    @staticmethod
     @function_tool
-    async def _get_region_state(ctx: RunContextWrapper, region_name: str) -> Dict[str, Any]:
+    async def _get_region_state(self, region_name: str) -> Dict[str, Any]: 
         """
         Get the current state of a specific body region
         
@@ -1699,9 +1702,8 @@ class PhysicalHarmGuardrail:
             "sensitivity": region.sensitivity
         }
 
-    @staticmethod
     @function_tool
-    async def _get_all_region_states(ctx: RunContextWrapper) -> Dict[str, Dict[str, Any]]:
+    async def _get_all_region_states(self) -> Dict[str, Dict[str, Any]]:
         """
         Get the current state of all body regions
         
@@ -1723,9 +1725,8 @@ class PhysicalHarmGuardrail:
         
         return all_states
 
-    @staticmethod
     @function_tool
-    async def _calculate_overall_comfort(ctx: RunContextWrapper) -> float:
+    async def _calculate_overall_comfort(self) -> float:
         """
         Calculate overall physical comfort level
         
@@ -1773,9 +1774,8 @@ class PhysicalHarmGuardrail:
         # Clamp to range
         return max(-1.0, min(1.0, comfort))
 
-    @staticmethod
     @function_tool
-    async def _get_posture_effects(ctx: RunContextWrapper) -> Dict[str, str]:
+    async def _get_posture_effects(self) -> Dict[str, str]:
         """
         Get the effects of current body state on posture and movement
         
@@ -1856,9 +1856,8 @@ class PhysicalHarmGuardrail:
             "fatigue": fatigue
         }
 
-    @staticmethod
     @function_tool
-    async def _get_ambient_temperature(ctx: RunContextWrapper) -> float:
+    async def _get_ambient_temperature(self) -> float:
         """
         Get current ambient temperature value
         
@@ -1867,9 +1866,8 @@ class PhysicalHarmGuardrail:
         """
         return self.temperature_model["current_ambient"]
         
-    @staticmethod
     @function_tool
-    async def _get_body_temperature(ctx: RunContextWrapper) -> float:
+    async def _get_body_temperature(self) -> float:
         """
         Get current body temperature value
         
@@ -1878,9 +1876,8 @@ class PhysicalHarmGuardrail:
         """
         return self.temperature_model["body_temperature"]
 
-    @staticmethod
     @function_tool
-    async def _get_temperature_comfort(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_temperature_comfort(self) -> Dict[str, Any]:
         """
         Get temperature comfort assessment
         
@@ -1921,9 +1918,8 @@ class PhysicalHarmGuardrail:
             "adapting_to_ambient": abs(body_temp - ambient_temp) > 0.1
         }
 
-    @staticmethod
     @function_tool
-    async def _get_current_temperature_effects(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_current_temperature_effects(self) -> Dict[str, Any]:
         """
         Get effects of current temperature on expression and behavior
         
@@ -1977,9 +1973,8 @@ class PhysicalHarmGuardrail:
             "expression_examples": expression_examples
         }
 
-    @staticmethod
     @function_tool
-    async def _get_pain_expression(ctx: RunContextWrapper, pain_level: float, region: str) -> str:
+    async def _get_pain_expression(self, pain_level: float, region: str) -> str:
         """
         Get an expression for pain at specified level and region
         
@@ -2017,9 +2012,8 @@ class PhysicalHarmGuardrail:
         ]
         return random.choice(expressions)
 
-    @staticmethod
     @function_tool
-    async def _update_body_temperature(ctx: RunContextWrapper, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
+    async def _update_body_temperature(self, ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]:
         """
         Update body temperature based on ambient temperature
         
@@ -2066,9 +2060,8 @@ class PhysicalHarmGuardrail:
             "adaptation_applied": adaptation
         }
 
-    @staticmethod
     @function_tool
-    async def _process_memory_trigger(ctx: RunContextWrapper, trigger: str) -> Dict[str, Any]:
+    async def _process_memory_trigger(self, trigger: str) -> Dict[str, Any]:
         """
         Process a memory trigger that may have associated physical responses
         
@@ -2110,10 +2103,9 @@ class PhysicalHarmGuardrail:
         
         return results
 
-    @staticmethod
     @function_tool
     async def _link_memory_to_sensation_tool(
-        ctx: RunContextWrapper,
+        self,
         memory_id: str,
         sensation_type: str,
         body_region: str,
@@ -2189,9 +2181,8 @@ class PhysicalHarmGuardrail:
             "memory_id": memory_id
         }
 
-    @staticmethod
     @function_tool
-    async def _get_arousal_state(ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _get_arousal_state(self) -> Dict[str, Any]:
         """
         Get the current arousal state
         
@@ -2214,10 +2205,9 @@ class PhysicalHarmGuardrail:
             "time_since_update": (now - self.arousal_state.last_update).total_seconds() if self.arousal_state.last_update else None
         }
 
-    @staticmethod
     @function_tool
     async def _update_arousal_state(
-        ctx: RunContextWrapper,
+        self,
         physical_arousal: Optional[float] = None, 
         cognitive_arousal: Optional[float] = None,
         reset: bool = False,
@@ -2284,9 +2274,8 @@ class PhysicalHarmGuardrail:
             }
         }
         
-    @staticmethod
     @function_tool
-    async def _get_arousal_expression_data(ctx: RunContextWrapper, partner_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _get_arousal_expression_data(self, partner_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get expression data related to arousal state
         
