@@ -259,6 +259,10 @@ class AttentionalController:
                 "is_valid": False,
                 "reason": f"Invalid input: {str(e)}"
             }
+
+    def _create_input_validation(self) -> InputGuardrail:
+        """Create input validation guardrail"""
+        return InputGuardrail(guardrail_function=self._input_validation)
     
     async def update_attention(self, 
                              salient_items: List[Dict[str, Any]] = None,
