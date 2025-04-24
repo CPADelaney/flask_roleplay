@@ -240,8 +240,7 @@ class ConditioningSystem:
             tools=[
                 self._identify_trait_behaviors,
                 self._calculate_conditioning_trait_adjustment,
-                self._update_identity_trait,
-                self.
+                self._update_identity_trait
             ],
             output_type=TraitConditioningOutput,
             model_settings=ModelSettings(temperature=0.4)
