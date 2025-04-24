@@ -374,27 +374,26 @@ class DigitalSomatosensorySystem:
         self.body_orchestrator = self._create_orchestrator_agent()
         
     def _create_stimulus_validator(self):
-        """Create guardrail for validating stimulus inputs."""
-        # Create a validation agent that can be used as a guardrail
+        """Create the stimulus validation agent.""" # Updated docstring slightly
         validation_agent = Agent(
             name="Stimulus Validator",
             instructions="""
             You validate inputs for the Digital Somatosensory System.
-            
+    
             Check that:
             1. Stimulus types are valid (pressure, temperature, pain, pleasure, tingling)
-            2. Body regions are valid based on the provided list
+            2. Body regions are valid based on the provided list using the tool.
             3. Intensity values are within range 0.0-1.0
             4. Duration values are positive
-            
-            Return validation results and reasoning.
+    
+            Return validation results and reasoning. Use the available tool to get valid regions.
             """,
-            tools=[function_tool(self._get_valid_body_regions)],
+            # Pass the decorated method object DIRECTLY to the list
+            tools=[self._get_valid_body_regions], # <-- CORRECTED
             output_type=StimulusValidationOutput,
-            model="gpt-4o", 
+            model="gpt-4o",
             model_settings=ModelSettings(temperature=0.1) # Low temperature for consistency
         )
-        
         return validation_agent
     
     def _create_expression_agent(self) -> Agent:
@@ -1457,10 +1456,11 @@ class PhysicalHarmGuardrail:
             )
     
     # =============== Tool Functions ===============
-    @function_tool
-    async def _get_valid_body_regions(ctx: RunContextWrapper) -> List[str]:
+    @function_tool # Decorator stays on the definition
+    async def _get_valid_body_regions(self) -> List[str]: # Add self!
         """Get a list of valid body regions."""
-        return list(ctx.context.body_regions.keys())
+        # Access the instance attribute directly using self
+        return list(self.body_regions.keys())
 
     @function_tool # <-- Keep only this decorator
     async def _process_stimulus_tool(
