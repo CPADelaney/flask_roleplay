@@ -186,17 +186,23 @@ class CrossUserExperienceManager:
             6. Return the final personalized experiences
             """,
             handoffs=[
-                handoff(name="check_permissions",
-                       agent="permission_evaluation_agent",
-                       description="Check permissions for cross-user experience sharing"),
+                handoff(
+                    agent=self.permission_agent,
+                    tool_name_override="check_permissions",
+                    tool_description_override="Check permissions for cross-user experience sharing"
+                ),
                 
-                handoff(name="evaluate_relevance",
-                       agent="experience_relevance_agent",
-                       description="Evaluate relevance of experiences to query"),
+                handoff(
+                    agent=self.relevance_agent,
+                    tool_name_override="evaluate_relevance", 
+                    tool_description_override="Evaluate relevance of experiences to query"
+                ),
                 
-                handoff(name="personalize_experiences",
-                       agent="experience_personalization_agent",
-                       description="Personalize experiences for target user")
+                handoff(
+                    agent=self.personalization_agent,
+                    tool_name_override="personalize_experiences",
+                    tool_description_override="Personalize experiences for target user"
+                )
             ],
             output_type=CrossUserExperienceResult
         )
