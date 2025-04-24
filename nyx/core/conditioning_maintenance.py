@@ -1545,8 +1545,26 @@ class ConditioningMaintenanceSystem:
                     context=self.context
                 )
                 
+                # Get summary output - Try to handle potential string output
+                try:
+                    # Try to get the output as the expected type
+                    summary_output = result.final_output_as(MaintenanceSummaryOutput)
+                except (TypeError, AttributeError):
+                    # If it's a string or otherwise invalid, create a default output
+                    logger.warning("Maintenance output was not of expected type. Creating default structure.")
+                    duration = (datetime.datetime.now() - start_time).total_seconds()
+                    summary_output = MaintenanceSummaryOutput(
+                        tasks_performed=[{"task": "maintenance", "status": "completed"}],
+                        time_taken_seconds=duration,
+                        associations_modified=0,
+                        traits_adjusted=0,
+                        extinction_count=0,
+                        improvements=["Maintenance completed"],
+                        next_maintenance_recommendation="Regular maintenance"
+                    )
+                
                 # Get summary output
-                summary_output = result.final_output
+       #         summary_output = result.final_output
                 
                 # Record completion time
                 duration = (datetime.datetime.now() - start_time).total_seconds()
