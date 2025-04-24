@@ -834,7 +834,6 @@ class ConditioningSystem:
         return history
 
     @staticmethod
-    @function_tool
     async def _identify_trait_behaviors(ctx: RunContextWrapper, trait: str) -> List[str]:
         """
         Identify behaviors associated with a personality trait
