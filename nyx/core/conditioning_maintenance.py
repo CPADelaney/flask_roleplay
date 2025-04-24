@@ -50,17 +50,13 @@ class AssociationConsolidationOutput(BaseModel):
     reasoning: Optional[str] = Field(default=None, description="Reasoning for consolidations")
 
 class MaintenanceSummaryOutput(BaseModel):
-    """
-    Output schema for maintenance run summary.
-    All fields are optional in the schema to satisfy API validation,
-    but the agent should be instructed to populate all fields.
-    """
-    tasks_performed: Optional[List[Dict[str, Any]]] = Field(
-        default=None, # Default to None
+    """Output schema for maintenance run summary."""
+    tasks_performed: List[Dict[str, Any]] = Field(
+        default_factory=list,
         description="Tasks performed during the maintenance run."
     )
     time_taken_seconds: Optional[float] = Field(
-        default=None, # Default to None
+        default=None,
         description="Total time taken for the maintenance run in seconds."
     )
     associations_modified: Optional[int] = Field(
@@ -1447,32 +1443,35 @@ class ConditioningMaintenanceSystem:
             3. Determine which aspects of the system need attention
             4. Summarize maintenance results and improvements
             
+            IMPORTANT: You MUST produce a MaintenanceSummaryOutput with all fields populated
+            at the end of your execution.
+            
             Balance routine maintenance with specialized interventions based on
             system needs. Ensure the overall coherence of the conditioning system
             while optimizing for efficiency and effectiveness.
             """,
-            handoffs=[
-                handoff(self.balance_analysis_agent, 
-                       tool_name_override="analyze_personality_balance",
-                       tool_description_override="Analyze personality trait and behavior balance"),
-                
-                handoff(self.trait_maintenance_agent, 
-                       tool_name_override="maintain_traits",
-                       tool_description_override="Maintain and reinforce personality traits"),
-                
-                handoff(self.association_maintenance_agent,
-                       tool_name_override="maintain_associations",
-                       tool_description_override="Maintain conditioning associations"),
-                
-                handoff(self.consolidation_agent,
-                       tool_name_override="consolidate_associations",
-                       tool_description_override="Consolidate similar associations")
-            ],
             tools=[
                 _create_maintenance_schedule,
                 _get_maintenance_status,
                 _record_maintenance_history,
-                _analyze_system_efficiency
+                _analyze_system_efficiency,
+                # Convert handoffs to tools
+                self.balance_analysis_agent.as_tool(
+                    tool_name="analyze_personality_balance",
+                    tool_description="Analyze personality trait and behavior balance"
+                ),
+                self.trait_maintenance_agent.as_tool(
+                    tool_name="maintain_traits",
+                    tool_description="Maintain and reinforce personality traits"
+                ),
+                self.association_maintenance_agent.as_tool(
+                    tool_name="maintain_associations",
+                    tool_description="Maintain conditioning associations"
+                ),
+                self.consolidation_agent.as_tool(
+                    tool_name="consolidate_associations",
+                    tool_description="Consolidate similar associations"
+                )
             ],
             output_type=MaintenanceSummaryOutput,
             model_settings=ModelSettings(temperature=0.3)
@@ -1522,20 +1521,20 @@ class ConditioningMaintenanceSystem:
             raise
     
     async def run_maintenance(self) -> Dict[str, Any]:
-            """
-            Run maintenance on the conditioning system
+        """
+        Run maintenance on the conditioning system
     
-            Returns:
-                Maintenance results
-            """
-            workflow_name = "conditioning_maintenance"
-            group_id = f"maintenance_{datetime.datetime.now().strftime('%Y%m%d%H%M%S_%f')}" # Add microseconds for uniqueness
-            self.context.trace_group_id = group_id # Update context's group_id for potential internal traces
+        Returns:
+            Maintenance results
+        """
+        workflow_name = "conditioning_maintenance"
+        group_id = f"maintenance_{datetime.datetime.now().strftime('%Y%m%d%H%M%S_%f')}" # Add microseconds for uniqueness
+        self.context.trace_group_id = group_id # Update context's group_id for potential internal traces
     
-            # Use the updated group_id for the main trace
-            with trace(workflow_name=workflow_name, group_id=group_id):
-                logger.info(f"Starting conditioning system maintenance (Trace Group: {group_id})")
-                start_time = datetime.datetime.now()
+        # Use the updated group_id for the main trace
+        with trace(workflow_name=workflow_name, group_id=group_id):
+            logger.info(f"Starting conditioning system maintenance (Trace Group: {group_id})")
+            start_time = datetime.datetime.now()
     
                 try:
                     # Prepare input for the orchestrator (more explicit)
@@ -1613,7 +1612,10 @@ class ConditioningMaintenanceSystem:
                     }
     
                     # Update maintenance history (ensure tool handles the dict correctly)
-                    await _record_maintenance_history(RunContextWrapper(context=self.context), maintenance_record=maintenance_record)
+                    await _record_maintenance_history.on_invoke_tool(
+                        RunContextWrapper(context=self.context), 
+                        json.dumps({"maintenance_record": maintenance_record})
+                    )
     
                     logger.info(f"Conditioning system maintenance completed in {duration:.2f} seconds. Summary recorded.")
                     return maintenance_record
@@ -1632,7 +1634,10 @@ class ConditioningMaintenanceSystem:
                     }
                     try:
                         # Attempt to record failure history
-                        await _record_maintenance_history(RunContextWrapper(context=self.context), maintenance_record=failure_record)
+                        await _record_maintenance_history.on_invoke_tool(
+                            RunContextWrapper(context=self.context), 
+                            json.dumps({"maintenance_record": failure_record})
+                        )
                     except Exception as hist_e:
                          logger.error(f"Failed to record maintenance failure history: {hist_e}")
     
@@ -1640,6 +1645,7 @@ class ConditioningMaintenanceSystem:
                 finally:
                      # Ensure context is updated even if there was an error before history recording
                      self.context.last_maintenance_time = datetime.datetime.now()
+                    
     async def _check_personality_balance(self) -> Dict[str, Any]:
         """Check if personality traits are balanced"""
         with trace(workflow_name="personality_balance_check", group_id=self.context.trace_group_id):
