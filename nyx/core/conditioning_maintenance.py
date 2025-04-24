@@ -1650,7 +1650,6 @@ class ConditioningMaintenanceSystem:
                     "trace_group_id": group_id
                 }
                 logger.info(f"Conditioning system maintenance completed successfully in {duration:.2f} seconds.")
-                maintenance_trace.set_status("ok") # Explicitly set trace status
 
             except Exception as e:
                 # --- Process Failure ---
@@ -1660,7 +1659,6 @@ class ConditioningMaintenanceSystem:
                 maintenance_record["duration_seconds"] = duration
                 maintenance_record["error"] = str(e)
                 maintenance_record["traceback"] = traceback.format_exc()
-                maintenance_trace.set_status("error", description=str(e)) # Set trace status to error
 
             finally:
                 # This block now *always* has a dictionary in maintenance_record
