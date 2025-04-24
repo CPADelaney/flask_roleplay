@@ -552,7 +552,7 @@ class DigitalSomatosensorySystem:
                 function_tool(self._update_arousal_state)
             ],
             input_guardrails=[
-                InputGuardrail(guardrail_function=self._validate_input)
+                InputGuardrail(guardrail_function=PhysicalHarmGuardrail._validate_input)
             ],
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.2),
