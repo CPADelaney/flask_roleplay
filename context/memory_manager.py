@@ -421,7 +421,7 @@ class MemoryManager:
             calculated_importance = memory.calculate_importance()
             final_importance = request.importance if request.importance is not None else calculated_importance
             memory.importance = final_importance
-
+    
             metadata_json = None
             if request.metadata:
                 try:
@@ -437,10 +437,24 @@ class MemoryManager:
                 except TypeError:
                     logger.error("Failed to serialize tags", exc_info=True)
                     tags_json = "[]"
-
+    
             db_id: Optional[int] = None
             try:
                 async with get_db_connection_context() as conn:
+                    # Check if conversation exists first
+                    conversation_exists = await conn.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND user_id = $2)",
+                        self.conversation_id, self.user_id
+                    )
+                    
+                    if not conversation_exists:
+                        logger.warning(f"Cannot add memory: Conversation {self.conversation_id} does not exist for user {self.user_id}")
+                        return MemoryAddResult(
+                            success=False, 
+                            error=f"Conversation does not exist"
+                        )
+                    
+                    # Continue with memory insertion if conversation exists
                     async with conn.transaction():
                         insert_query = """
                             INSERT INTO PlayerJournal(
@@ -459,6 +473,7 @@ class MemoryManager:
                             tags_json
                         )
                 
+                # Rest of the method remains unchanged
                 if db_id is None:
                     logger.error("Failed to add memory to DB (fetchval returned None).")
                     return MemoryAddResult(success=False, error="Database error - could not create memory")
