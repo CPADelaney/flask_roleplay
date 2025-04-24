@@ -1462,14 +1462,16 @@ class PhysicalHarmGuardrail:
         """Get a list of valid body regions."""
         return list(ctx.context.body_regions.keys())
 
-    @function_tool
+    @function_tool # <-- Keep only this decorator
     async def _process_stimulus_tool(
-                              self, 
+                              self,
                               stimulus_type: str, 
                               body_region: str, 
                               intensity: float,
                               cause: str = "",
                               duration: float = 1.0,
+                              # Optional: ctx: RunContextWrapper = None # Add if context is actually needed
+                              ) -> Dict[str, Any]:
         """
         Process a sensory stimulus on a body region (internal tool function)
         
