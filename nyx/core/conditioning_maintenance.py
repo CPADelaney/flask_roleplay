@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import datetime
+import traceback
 import json
 import math
 from typing import Dict, List, Any, Optional, Tuple
@@ -1538,7 +1539,8 @@ class ConditioningMaintenanceSystem:
     
                 try:
                     # Prepare input for the orchestrator (more explicit)
-                    status_info = await _get_maintenance_status(RunContextWrapper(context=self.context))
+                    wrapper = RunContextWrapper(context=self.context)
+                    status_info = (await _get_maintenance_status.on_invoke_tool(wrapper, "{}"))
                     orchestrator_input = json.dumps({
                         "action_request": "perform_full_maintenance_run",
                         "current_status": status_info,
