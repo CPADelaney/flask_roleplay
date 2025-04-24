@@ -936,7 +936,7 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    async def _check_trait_balance(ctx: RunContextWrapper, traits: Dict[str, float]) -> Dict[str, Any]:
+    async def _check_trait_balance(ctx: RunContextWrapper, traits: Optional[Dict[str, float]] = None -> Dict[str, Any]:
         """
         Check balance of personality traits
         
@@ -947,6 +947,7 @@ class ConditioningSystem:
             Trait balance analysis
         """
         # Check for imbalances
+        traits = traits or {}
         imbalances = []
         
         # Check for extremely high or low values
