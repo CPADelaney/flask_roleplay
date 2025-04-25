@@ -433,9 +433,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             await self.digital_somatosensory_system.initialize()
             logger.debug("Digital somatosensory system initialized")
     
+            # Get the personality profile first
+            personality_profile = await self.conditioning_config.get_personality_profile()
+            
+            # Then initialize with the profile's dict
             await ConditioningSystem.initialize_baseline_personality(
                 conditioning_system=self.conditioning_system,
-                personality_profile=self.conditioning_config.get_personality_profile().dict()
+                personality_profile=personality_profile.dict()
             )
             logger.debug("Baseline personality conditioning initialized")        
     
