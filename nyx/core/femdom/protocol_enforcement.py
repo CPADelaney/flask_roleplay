@@ -124,7 +124,7 @@ class ProtocolEnforcement:
         self.ritual_library: Dict[str, Ritual] = {}
         
         # Initialize agents
-        self.protocol_enforcement_agent = self._t()
+        self.protocol_enforcement_agent = self._create_protocol_enforcement_agent()
         self.ritual_management_agent = self._create_ritual_management_agent()
         self.protocol_creation_agent = self._create_protocol_creation_agent()
         self.compliance_evaluation_agent = self._create_compliance_evaluation_agent()
