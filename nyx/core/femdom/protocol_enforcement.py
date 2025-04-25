@@ -124,7 +124,7 @@ class ProtocolEnforcement:
         self.ritual_library: Dict[str, Ritual] = {}
         
         # Initialize agents
-        self.protocol_enforcement_agent = self._create_protocol_enforcement_agent()
+        self.protocol_enforcement_agent = self._t()
         self.ritual_management_agent = self._create_ritual_management_agent()
         self.protocol_creation_agent = self._create_protocol_creation_agent()
         self.compliance_evaluation_agent = self._create_compliance_evaluation_agent()
@@ -183,7 +183,6 @@ Your enforcement should be psychologically effective and maintain the dominance 
             model="o3-mini",
             model_settings=ModelSettings(
                 temperature=0.3,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 function_tool(self.get_user_protocols),
@@ -218,7 +217,6 @@ Your evaluations should be fair and reinforce the psychological aspects of the d
             model="o3-mini",
             model_settings=ModelSettings(
                 temperature=0.4,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 function_tool(self.get_user_rituals),
@@ -253,7 +251,6 @@ Create protocols that are practical to implement while maintaining their psychol
             model="o3-mini",
             model_settings=ModelSettings(
                 temperature=0.7,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 function_tool(self.get_available_protocols),
@@ -287,7 +284,6 @@ Your evaluations should be data-driven while considering psychological aspects.
             model="o3-mini",
             model_settings=ModelSettings(
                 temperature=0.5,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 function_tool(self.get_protocol_compliance_stats),
