@@ -448,7 +448,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             if has_relationship_manager and RelationshipManager:
                 try:
                     self.relationship_manager = RelationshipManager(
-                        memory_core=self.memory_core,
+                        memory_orchestrator=self.memory_orchestrator,
                         emotional_core=self.emotional_core
                     )
                     await self.relationship_manager.initialize()
