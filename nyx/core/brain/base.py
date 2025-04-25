@@ -435,13 +435,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
             # Get the personality profile first
             personality_profile = await self.conditioning_config.get_personality_profile()
-            
+
             # Then initialize with the profile's dict
             await ConditioningSystem.initialize_baseline_personality(
                 conditioning_system=self.conditioning_system,
-                personality_profile=personality_profile.dict()
+                personality_profile=personality_profile # <--- CORRECTED: Pass the dictionary directly
             )
-            logger.debug("Baseline personality conditioning initialized")        
+            logger.debug("Baseline personality conditioning initialized")      
     
             # Initialize relationship manager if available
             self.relationship_manager = None
