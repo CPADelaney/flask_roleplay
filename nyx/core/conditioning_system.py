@@ -294,23 +294,21 @@ class ConditioningSystem:
     
     # Function tools for agents
     @staticmethod
-    async def _get_association(ctx: RunContextWrapper, key: str, association_type: str = "classical") -> Dict[str, Any]:
-        """
-        Get an association by key
-        
-        Args:
-            key: The association key
-            association_type: Type of association (classical or operant)
-            
-        Returns:
-            The association if found, or None
-        """
-        associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
-        
-        if key in associations:
-            return associations[key].model_dump()
-        else:
-            return None
+    @function_tool
+    async def _get_association(
+        ctx: RunContextWrapper,
+        key: str,
+        association_type: str
+    ) -> Optional[Dict[str, Any]]:
+        # handle missing default
+        if not association_type:
+            association_type = "classical"
+        associations = (
+            ctx.context.classical_associations
+            if association_type == "classical"
+            else ctx.context.operant_associations
+        )
+        return associations[key].model_dump() if key in associations else None
 
     @staticmethod
     async def _create_or_update_classical_association(ctx: RunContextWrapper,
@@ -535,39 +533,34 @@ class ConditioningSystem:
         return max(0.0, min(1.0, strength))
 
     @staticmethod
-    async def _check_similar_associations(ctx: RunContextWrapper,
-                                    stimulus: str,
-                                    association_type: str = "classical") -> List[Dict[str, Any]]:
-        """
-        Find associations similar to the given stimulus
-        
-        Args:
-            stimulus: The stimulus to find similar associations for
-            association_type: Type of association (classical or operant)
-            
-        Returns:
-            List of similar associations
-        """
-        associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
-        
-        similar_associations = []
-        
-        for key, association in associations.items():
-            # Simple string similarity check
-            if stimulus in association.stimulus or association.stimulus in stimulus:
-                similarity = len(set(stimulus) & set(association.stimulus)) / len(set(stimulus) | set(association.stimulus))
-                
-                if similarity > 0.3:  # Minimum similarity threshold
-                    similar_associations.append({
+    @function_tool
+    async def _check_similar_associations(
+        ctx: RunContextWrapper,
+        stimulus: str,
+        association_type: str
+    ) -> List[Dict[str, Any]]:
+        # handle missing default
+        if not association_type:
+            association_type = "classical"
+        associations = (
+            ctx.context.classical_associations
+            if association_type == "classical"
+            else ctx.context.operant_associations
+        )
+
+        similar = []
+        for key, assoc in associations.items():
+            if stimulus in assoc.stimulus or assoc.stimulus in stimulus:
+                sim = len(set(stimulus) & set(assoc.stimulus)) / len(set(stimulus) | set(assoc.stimulus))
+                if sim > 0.3:
+                    similar.append({
                         "key": key,
-                        "similarity": similarity,
-                        "association": association.model_dump()
+                        "similarity": sim,
+                        "association": assoc.model_dump()
                     })
-        
-        # Sort by similarity (highest first)
-        similar_associations.sort(key=lambda x: x["similarity"], reverse=True)
-        
-        return similar_associations
+        similar.sort(key=lambda x: x["similarity"], reverse=True)
+        return similar
+
 
     @staticmethod
     async def _calculate_valence_and_reward(ctx: RunContextWrapper,
@@ -639,53 +632,35 @@ class ConditioningSystem:
             return False
 
     @staticmethod
-    async def _get_behavior_associations(ctx: RunContextWrapper,
-                                   behavior: str,
-                                   context: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """
-        Get all associations related to a behavior
-        
-        Args:
-            behavior: The behavior to find associations for
-            context: Optional context for filtering
-            
-        Returns:
-            List of related associations
-        """
+    @function_tool
+    async def _get_behavior_associations(
+        ctx: RunContextWrapper,
+        behavior: str,
+        context: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        # handle missing default
         context = context or {}
-        
-        # Find all associations related to this behavior
-        behavior_associations = []
-        
-        for key, association in ctx.context.operant_associations.items():
-            if association.stimulus == behavior:
-                # Check context match if context keys are present
-                context_match = True
-                if association.context_keys:
-                    # Context keys are required but not provided
-                    if not context:
-                        context_match = False
-                    else:
-                        # Check if any required context keys are missing
-                        for required_key in association.context_keys:
-                            if required_key not in context:
-                                context_match = False
-                                break
-                
-                # Only include if context matches
-                if context_match:
-                    behavior_associations.append({
+
+        result = []
+        for key, assoc in ctx.context.operant_associations.items():
+            if assoc.stimulus == behavior:
+                match = True
+                for req in assoc.context_keys:
+                    if req not in context:
+                        match = False
+                        break
+                if match:
+                    result.append({
                         "key": key,
                         "behavior": behavior,
-                        "consequence_type": association.response,
-                        "strength": association.association_strength,
-                        "valence": association.valence,
-                        "reinforcement_count": association.reinforcement_count,
-                        "context_keys": association.context_keys
+                        "consequence_type": assoc.response,
+                        "strength": assoc.association_strength,
+                        "valence": assoc.valence,
+                        "reinforcement_count": assoc.reinforcement_count,
+                        "context_keys": assoc.context_keys
                     })
+        return result
         
-        return behavior_associations
-
     @staticmethod
     async def _calculate_expected_valence(ctx: RunContextWrapper,
                                     associations: List[Dict[str, Any]]) -> Dict[str, float]:
@@ -923,9 +898,10 @@ class ConditioningSystem:
             }
 
     @staticmethod
+    @function_tool
     async def _check_trait_balance(
         ctx: RunContextWrapper,
-        traits: Optional[Dict[str, float]] = None
+        traits: Dict[str, float]
     ) -> Dict[str, Any]:
         """
         Check balance of personality traits
@@ -936,11 +912,11 @@ class ConditioningSystem:
         Returns:
             Trait balance analysis
         """
-        # Check for imbalances
+        # handle missing default
         traits = traits or {}
         imbalances = []
-        
-        # Check for extremely high or low values
+
+        # 1. Check for extremely high or low values
         for trait, value in traits.items():
             if value > 0.9:
                 imbalances.append({
@@ -956,66 +932,49 @@ class ConditioningSystem:
                     "issue": "extremely_low",
                     "recommendation": f"Consider increasing {trait} slightly for more balance"
                 })
-        
-        # Check for opposing trait imbalances
+
+        # 2. Check for opposing trait imbalances
         opposing_pairs = [
             ("dominance", "patience"),
             ("playfulness", "strictness"),
             ("intensity", "calmness")
         ]
-        
-        for trait1, trait2 in opposing_pairs:
-            if trait1 in traits and trait2 in traits:
-                difference = abs(traits[trait1] - traits[trait2])
-                if difference > 0.6:  # Large imbalance
-                    higher_trait = trait1 if traits[trait1] > traits[trait2] else trait2
-                    lower_trait = trait2 if higher_trait == trait1 else trait1
-                    
+        for t1, t2 in opposing_pairs:
+            if t1 in traits and t2 in traits:
+                diff = abs(traits[t1] - traits[t2])
+                if diff > 0.6:
+                    higher = t1 if traits[t1] > traits[t2] else t2
+                    lower  = t2 if higher == t1 else t1
                     imbalances.append({
-                        "traits": [trait1, trait2],
-                        "difference": difference,
+                        "traits": [t1, t2],
+                        "difference": diff,
                         "issue": "opposing_imbalance",
-                        "recommendation": f"Consider reducing {higher_trait} or increasing {lower_trait}"
+                        "recommendation": f"Consider reducing {higher} or increasing {lower}"
                     })
-        
+
         return {
-            "balanced": len(imbalances) == 0,
-            "imbalances": imbalances,
-            "trait_count": len(traits),
+            "balanced":     len(imbalances) == 0,
+            "imbalances":   imbalances,
+            "trait_count":  len(traits),
             "average_value": sum(traits.values()) / len(traits) if traits else 0.0
         }
 
     @staticmethod
-    async def _determine_conditioning_type(ctx: RunContextWrapper,
-                                     stimulus: Optional[str] = None,
-                                     response: Optional[str] = None,
-                                     behavior: Optional[str] = None,
-                                     consequence_type: Optional[str] = None) -> str:
-        """
-        Determine the appropriate conditioning type based on inputs
-        
-        Args:
-            stimulus: Optional stimulus
-            response: Optional response
-            behavior: Optional behavior
-            consequence_type: Optional consequence type
-            
-        Returns:
-            Conditioning type (classical, operant, or unknown)
-        """
-        # Check for classical conditioning pattern
+    @function_tool
+    async def _determine_conditioning_type(
+        ctx: RunContextWrapper,
+        stimulus: Optional[str],
+        response: Optional[str],
+        behavior: Optional[str],
+        consequence_type: Optional[str]
+    ) -> str:
+        # You can assume any of these may be None
         if stimulus and response and not behavior:
             return "classical"
-        
-        # Check for operant conditioning pattern
-        if behavior and (consequence_type or "reinforcement" in str(response) or "punishment" in str(response)):
+        if behavior and (consequence_type or (response and ("reinforcement" in response or "punishment" in response))):
             return "operant"
-        
-        # Check for emotion trigger pattern
-        if stimulus and "emotion" in str(response):
+        if stimulus and response and "emotion" in response:
             return "emotion_trigger"
-        
-        # Default to unknown
         return "unknown"
 
     @staticmethod
