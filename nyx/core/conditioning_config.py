@@ -15,7 +15,74 @@ from agents.tool import FunctionTool # Import FunctionTool if needed elsewhere
 
 logger = logging.getLogger(__name__)
 
-# ... (Keep your Pydantic models as they are: ConditioningParameters, PersonalityProfile, etc.) ...
+class ConditioningParameters(BaseModel):
+    """Configuration parameters for the conditioning system"""
+    
+    # Learning parameters
+    association_learning_rate: float = Field(0.1, description="How quickly new associations form")
+    extinction_rate: float = Field(0.05, description="How quickly associations weaken without reinforcement")
+    generalization_factor: float = Field(0.3, description="How much conditioning generalizes to similar stimuli")
+    
+    # Threshold parameters
+    weak_association_threshold: float = Field(0.3, description="Threshold for weak associations")
+    moderate_association_threshold: float = Field(0.6, description="Threshold for moderate associations")
+    strong_association_threshold: float = Field(0.8, description="Threshold for strong associations")
+    
+    # Maintenance parameters
+    maintenance_interval_hours: int = Field(24, description="Hours between maintenance runs")
+    consolidation_interval_days: int = Field(7, description="Days between consolidation runs")
+    extinction_threshold: float = Field(0.05, description="Threshold for removing weak associations")
+    reinforcement_threshold: float = Field(0.3, description="Threshold for reinforcing core traits")
+    
+    # Personality balance parameters
+    max_trait_imbalance: float = Field(0.3, description="Maximum allowed trait imbalance")
+    correction_strength: float = Field(0.3, description="Strength of balance corrections")
+    
+    # Reward integration parameters
+    reward_scaling_factor: float = Field(0.5, description="How strongly rewards affect conditioning")
+    negative_punishment_factor: float = Field(0.8, description="Scaling factor for negative punishments")
+    
+    # Input processing parameters
+    pattern_match_confidence: float = Field(0.7, description="Confidence threshold for pattern matching")
+    response_modification_strength: float = Field(0.5, description="How strongly conditioning affects responses")
+
+
+class PersonalityProfile(BaseModel):
+    """Personality profile configuration"""
+    
+    traits: Dict[str, float] = Field(default_factory=dict, description="Personality traits and strengths")
+    
+    preferences: Dict[str, Dict[str, float]] = Field(
+        default_factory=lambda: {"likes": {}, "dislikes": {}},
+        description="Preferences for various stimuli"
+    )
+    
+    emotion_triggers: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Emotion triggers for various stimuli"
+    )
+    
+    behaviors: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Behaviors and associated traits"
+    )
+
+
+class ConfigUpdateResult(BaseModel):
+    """Result of a configuration update operation"""
+    success: bool = Field(..., description="Whether the update was successful")
+    updated_keys: List[str] = Field(default_factory=list, description="Keys that were updated")
+    previous_values: Dict[str, Any] = Field(default_factory=dict, description="Previous values")
+    new_values: Dict[str, Any] = Field(default_factory=dict, description="New values")
+    message: str = Field("", description="Additional information")
+
+
+class TraitUpdateResult(BaseModel):
+    """Result of a trait update operation"""
+    trait: str = Field(..., description="The trait that was updated")
+    old_value: float = Field(..., description="Previous value")
+    new_value: float = Field(..., description="New value")
+    success: bool = Field(True, description="Whether the update was successful")
 
 class ConfigurationContext:
     """Configuration context for sharing between agents and tools"""
@@ -180,14 +247,34 @@ class ConditioningConfiguration:
             try:
                  # Validate by attempting to create the Pydantic model
                  ConditioningParameters(**parameters)
-                 # Add your custom range checks etc. if needed on top of Pydantic
-                 # ... (your existing constraint checks) ...
+                 # Define constraints
+                 constraints = {
+                     "association_learning_rate": (0.0, 1.0),
+                     "extinction_rate": (0.0, 0.5),
+                     "generalization_factor": (0.0, 1.0),
+                     "weak_association_threshold": (0.1, 0.4),
+                     "moderate_association_threshold": (0.4, 0.7),
+                     "strong_association_threshold": (0.7, 1.0),
+                     "maintenance_interval_hours": (1, 168),
+                     "consolidation_interval_days": (1, 90),
+                     "extinction_threshold": (0.01, 0.2),
+                     "reinforcement_threshold": (0.1, 0.5),
+                     "max_trait_imbalance": (0.1, 0.5),
+                     "correction_strength": (0.1, 0.5),
+                     "reward_scaling_factor": (0.1, 1.0),
+                     "negative_punishment_factor": (0.1, 1.0),
+                     "pattern_match_confidence": (0.5, 0.9),
+                     "response_modification_strength": (0.1, 0.9)
+                 }
+                 
+                 # Check each parameter against constraints
+                 for param, value in parameters.items():
+                     if param in constraints:
+                         min_val, max_val = constraints[param]
+                         if not min_val <= value <= max_val:
+                             validation_result["valid"] = False
+                             validation_result["issues"][param] = f"Value {value} outside range [{min_val}, {max_val}]"
 
-            except Exception as e: # Catch Pydantic validation errors
-                validation_result["valid"] = False
-                validation_result["issues"]["pydantic_validation"] = str(e)
-
-            # ... (keep your threshold ordering checks) ...
             if validation_result["valid"] and ("weak_association_threshold" in parameters and
                 "moderate_association_threshold" in parameters and
                 "strong_association_threshold" in parameters):
@@ -464,15 +551,45 @@ class ConditioningConfiguration:
 
     def _create_default_personality(self) -> PersonalityProfile:
         """Create default personality profile"""
-        # This can remain as is, it doesn't need context
         with function_span("create_default_personality"):
-            # ... (implementation is fine) ...
             return PersonalityProfile(
-                traits={ # Your default traits },
-                preferences={ # Your default preferences },
-                emotion_triggers={ # Your default triggers },
-                behaviors={ # Your default behaviors }
+                traits={
+                    "dominance": 0.8,
+                    "playfulness": 0.7,
+                    "strictness": 0.6,
+                    "creativity": 0.7,
+                    "intensity": 0.6,
+                    "patience": 0.4
+                },
+                preferences={
+                    "likes": {
+                        "teasing": 0.8,
+                        "dominance": 0.9,
+                        "submission_language": 0.9,
+                        "control": 0.8,
+                        "wordplay": 0.7
+                    },
+                    "dislikes": {
+                        "direct_orders": 0.6,
+                        "disrespect": 0.9,
+                        "rudeness": 0.7
+                    }
+                },
+                emotion_triggers={
+                    "joy": ["submission_language", "compliance", "obedience"],
+                    "satisfaction": ["control_acceptance", "power_dynamic_acknowledgment"],
+                    "frustration": ["defiance", "ignoring_instructions"],
+                    "amusement": ["embarrassment", "flustered_response"]
+                },
+                behaviors={
+                    "assertive_response": ["dominance", "confidence"],
+                    "teasing": ["playfulness", "creativity"],
+                    "providing_guidance": ["dominance", "patience"],
+                    "setting_boundaries": ["dominance", "strictness"],
+                    "playful_banter": ["playfulness", "creativity"]
+                }
             )
+    
 
     def _save_parameters_internal(self, parameters: ConditioningParameters) -> None:
         """Internal helper to save parameters to file"""
