@@ -56,14 +56,16 @@ class FemdomCoordinator:
     def __init__(self, nyx_brain):
         """Initialize the femdom coordinator."""
         self.brain = nyx_brain
-
-        # Create femdom agents
-        self.main_agent = self._create_main_agent()
+    
+        # First initialize all specialized agents
         self.dominance_agent = self._create_dominance_agent()
         self.protocol_agent = self._create_protocol_agent()
         self.psychological_agent = self._create_psychological_agent()
         self.submission_agent = self._create_submission_agent()
         self.training_agent = self._create_training_agent()
+        
+        # Then create the main agent that depends on them
+        self.main_agent = self._create_main_agent()
         
         # Get system-wide components
         self.event_bus = get_event_bus()
