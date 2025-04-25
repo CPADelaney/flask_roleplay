@@ -295,7 +295,6 @@ Your evaluations should be data-driven while considering psychological aspects.
     
     def _create_message_compliance_guardrail(self) -> InputGuardrail:
         """Create guardrail for message compliance checking."""
-        @function_tool
         async def message_compliance_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Check message compliance with established protocols."""
             try:
@@ -364,7 +363,6 @@ Your evaluations should be data-driven while considering psychological aspects.
     
     def _create_protocol_assignment_guardrail(self) -> InputGuardrail:
         """Create guardrail for protocol assignment validation."""
-        @function_tool
         async def protocol_assignment_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Validate protocol assignment to ensure it's appropriate."""
             try:
@@ -417,7 +415,6 @@ Your evaluations should be data-driven while considering psychological aspects.
     
     def _create_ritual_assignment_guardrail(self) -> InputGuardrail:
         """Create guardrail for ritual assignment validation."""
-        @function_tool
         async def ritual_assignment_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Validate ritual assignment to ensure it's appropriate."""
             try:
