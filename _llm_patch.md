@@ -1,0 +1,1 @@
+I can help with that—please paste the lint errors and the relevant code snippets so I can propose precise, minimal unified-diff patches.
