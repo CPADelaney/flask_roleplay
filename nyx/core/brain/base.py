@@ -241,7 +241,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.apitools.thinking_tools import should_use_extended_thinking, should_use_extended_thinking, generate_reasoned_response 
             from nyx.core.dominance import create_dominance_ideation_agent, create_hard_dominance_ideation_agent
             from nyx.core.mood_manager import MoodManager
-            from nyx.core.theory_of_mind import TheoryOfMind
+            from nyx.core.theory_of_mind import TheoryOfMind, SubspaceDetectionSystem, create_theory_of_mind_agent, create_subspace_detection_agent
             from nyx.core.imagination_simulator import ImaginationSimulator
             from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
     
@@ -473,6 +473,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 relationship_manager=self.relationship_manager
             )
             logger.debug("Body service system initialized")
+
+            # Initialize theory of mind
+            self.theory_of_mind = TheoryOfMind(
+                relationship_manager=self.relationship_manager,
+                multimodal_integrator=self.multimodal_integrator,
+                memory_core=self.memory_core
+            )
+            logger.debug("Theory of mind initialized")
             
             self.psychological_dominance = PsychologicalDominance(
                 theory_of_mind=self.theory_of_mind,
@@ -573,14 +581,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 goal_manager=self.goal_manager
             )
             logger.debug("Mood manager initialized")
-            
-            # Initialize theory of mind
-            self.theory_of_mind = TheoryOfMind(
-                relationship_manager=self.relationship_manager,
-                multimodal_integrator=self.multimodal_integrator,
-                memory_core=self.memory_core
-            )
-            logger.debug("Theory of mind initialized")
             
             # Initialize imagination simulator
             self.imagination_simulator = ImaginationSimulator(
