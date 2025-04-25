@@ -451,7 +451,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                         memory_orchestrator=self.memory_orchestrator,
                         emotional_core=self.emotional_core
                     )
-                    await self.relationship_manager.initialize()
                     logger.debug("Relationship manager initialized")
                 except Exception as e:
                     logger.error(f"Failed to initialize relationship manager: {e}")
