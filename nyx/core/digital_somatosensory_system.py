@@ -1974,7 +1974,7 @@ class DigitalSomatosensorySystem:
             
             # Check for learned associations
             if cause and len(cause.strip()) > 0:
-                 if cause not in system_instance.memory_linked_sensations["associations"]:
+                if cause not in system_instance.memory_linked_sensations["associations"]:
                     system_instance.memory_linked_sensations["associations"][cause] = {}
                 
                 # Update region-specific association
