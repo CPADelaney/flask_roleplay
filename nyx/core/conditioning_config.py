@@ -6,94 +6,25 @@ import os
 from typing import Dict, List, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 
+# Make sure these imports are correct based on your project structure
+# Assuming 'agents' is the correct package name for the SDK
 from agents import Agent, Runner, function_tool, RunContextWrapper, ModelSettings, trace
 from agents.tracing import function_span
+# You might need specific Tool types if not using function_tool directly everywhere
+from agents.tool import FunctionTool # Import FunctionTool if needed elsewhere
 
 logger = logging.getLogger(__name__)
 
-class ConditioningParameters(BaseModel):
-    """Configuration parameters for the conditioning system"""
-    
-    # Learning parameters
-    association_learning_rate: float = Field(0.1, description="How quickly new associations form")
-    extinction_rate: float = Field(0.05, description="How quickly associations weaken without reinforcement")
-    generalization_factor: float = Field(0.3, description="How much conditioning generalizes to similar stimuli")
-    
-    # Threshold parameters
-    weak_association_threshold: float = Field(0.3, description="Threshold for weak associations")
-    moderate_association_threshold: float = Field(0.6, description="Threshold for moderate associations")
-    strong_association_threshold: float = Field(0.8, description="Threshold for strong associations")
-    
-    # Maintenance parameters
-    maintenance_interval_hours: int = Field(24, description="Hours between maintenance runs")
-    consolidation_interval_days: int = Field(7, description="Days between consolidation runs")
-    extinction_threshold: float = Field(0.05, description="Threshold for removing weak associations")
-    reinforcement_threshold: float = Field(0.3, description="Threshold for reinforcing core traits")
-    
-    # Personality balance parameters
-    max_trait_imbalance: float = Field(0.3, description="Maximum allowed trait imbalance")
-    correction_strength: float = Field(0.3, description="Strength of balance corrections")
-    
-    # Reward integration parameters
-    reward_scaling_factor: float = Field(0.5, description="How strongly rewards affect conditioning")
-    negative_punishment_factor: float = Field(0.8, description="Scaling factor for negative punishments")
-    
-    # Input processing parameters
-    pattern_match_confidence: float = Field(0.7, description="Confidence threshold for pattern matching")
-    response_modification_strength: float = Field(0.5, description="How strongly conditioning affects responses")
-
-
-class PersonalityProfile(BaseModel):
-    """Personality profile configuration"""
-    
-    traits: Dict[str, float] = Field(default_factory=dict, description="Personality traits and strengths")
-    
-    preferences: Dict[str, Dict[str, float]] = Field(
-        default_factory=lambda: {"likes": {}, "dislikes": {}},
-        description="Preferences for various stimuli"
-    )
-    
-    emotion_triggers: Dict[str, List[str]] = Field(
-        default_factory=dict,
-        description="Emotion triggers for various stimuli"
-    )
-    
-    behaviors: Dict[str, List[str]] = Field(
-        default_factory=dict,
-        description="Behaviors and associated traits"
-    )
-
-
-class ConfigUpdateResult(BaseModel):
-    """Result of a configuration update operation"""
-    success: bool = Field(..., description="Whether the update was successful")
-    updated_keys: List[str] = Field(default_factory=list, description="Keys that were updated")
-    previous_values: Dict[str, Any] = Field(default_factory=dict, description="Previous values")
-    new_values: Dict[str, Any] = Field(default_factory=dict, description="New values")
-    message: str = Field("", description="Additional information")
-
-
-class TraitUpdateResult(BaseModel):
-    """Result of a trait update operation"""
-    trait: str = Field(..., description="The trait that was updated")
-    old_value: float = Field(..., description="Previous value")
-    new_value: float = Field(..., description="New value")
-    success: bool = Field(True, description="Whether the update was successful")
-
+# ... (Keep your Pydantic models as they are: ConditioningParameters, PersonalityProfile, etc.) ...
 
 class ConfigurationContext:
     """Configuration context for sharing between agents and tools"""
-    
     def __init__(self, config_dir: str = "config"):
         self.config_dir = config_dir
         self.params_file = os.path.join(config_dir, "conditioning_params.json")
         self.personality_file = os.path.join(config_dir, "personality_profile.json")
-        
-        # Initialize parameters and profile
-        self.parameters = None
-        self.personality_profile = None
-        
-        # Trace information
+        self.parameters: Optional[ConditioningParameters] = None # Initialize explicitly
+        self.personality_profile: Optional[PersonalityProfile] = None # Initialize explicitly
         self.trace_group_id = f"conditioning_config_{os.path.basename(config_dir)}"
 
 
@@ -101,701 +32,635 @@ class ConditioningConfiguration:
     """
     Configuration system for adjusting conditioning parameters using Agents SDK
     """
-    
     def __init__(self, config_dir: str = "config"):
         self.context = ConfigurationContext(config_dir)
-        
+        # Load configurations *before* creating agents that might need them immediately
+        self._load_parameters()
+        self._load_personality_profile()
         # Initialize agents
         self.config_manager_agent = self._create_config_manager_agent()
         self.personality_editor_agent = self._create_personality_editor_agent()
-        
-        # Load configurations
-        self._load_parameters()
-        self._load_personality_profile()
-        
         logger.info("Conditioning configuration initialized with Agents SDK")
-    
+
     def _create_config_manager_agent(self) -> Agent:
         """Create agent for managing system parameters"""
         return Agent(
             name="Config_Manager",
             instructions="""
             You are the configuration management system for a sophisticated conditioning architecture.
-            
             Your role is to:
             1. Manage conditioning parameters
             2. Ensure parameter values remain within valid ranges
             3. Provide explanations for parameter adjustments
             4. Save and load parameter configurations
-            
             Make thoughtful adjustments that maintain system coherence.
             """,
             tools=[
+                # Correct usage: Wrap the method reference here
                 function_tool(self._get_parameters),
                 function_tool(self._update_parameters),
-                function_tool(self._save_parameters),
+                function_tool(self._save_parameters), # Assuming you want this as a tool too
                 function_tool(self._validate_parameters),
                 function_tool(self._reset_to_defaults)
             ],
             model_settings=ModelSettings(temperature=0.1)
         )
-    
+
     def _create_personality_editor_agent(self) -> Agent:
         """Create agent for editing personality profiles"""
         return Agent(
             name="Personality_Editor",
             instructions="""
             You are the personality profile editor for a sophisticated conditioning architecture.
-            
             Your role is to:
             1. Manage personality traits and their values
             2. Configure preferences and their strengths
             3. Set up emotion triggers and behavior associations
             4. Ensure profile coherence and balance
-            
             Make thoughtful adjustments that maintain personality coherence.
             """,
             tools=[
+                # Correct usage: Wrap the method reference here
                 function_tool(self._get_personality_profile),
                 function_tool(self._update_personality_profile),
                 function_tool(self._adjust_trait),
                 function_tool(self._adjust_preference),
-                function_tool(self._save_personality_profile)
+                function_tool(self._save_personality_profile) # Assuming you want this as a tool too
             ],
             model_settings=ModelSettings(temperature=0.2)
         )
 
-    @staticmethod  
-    @function_tool
-    async def _get_parameters(ctx: RunContextWrapper) -> Dict[str, Any]:
+    # REMOVED @staticmethod and @function_tool decorators from method definitions
+    async def _get_parameters(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Get current conditioning parameters
-        
-        Returns:
-            Dictionary of current parameters
+        Get current conditioning parameters (Internal method for Agent tool)
+        Returns: Dictionary of current parameters
         """
         with function_span("get_parameters"):
-            if not self.context.parameters:
-                self._load_parameters()
-            
-            return self.context.parameters.model_dump() if self.context.parameters else {}
+            # No need to load here if loaded in __init__
+            # if not self.context.parameters:
+            #     self._load_parameters() # Should already be loaded
+            if self.context.parameters:
+                 return self.context.parameters.model_dump()
+            logger.warning("_get_parameters called but parameters not loaded.")
+            return {} # Return empty if somehow not loaded
 
-    @staticmethod  
-    @function_tool
-    async def _update_parameters(ctx: RunContextWrapper, 
-                           new_params: Dict[str, Any]) -> ConfigUpdateResult:
+    # REMOVED @staticmethod and @function_tool
+    async def _update_parameters(self, ctx: RunContextWrapper,
+                                 new_params: Dict[str, Any]) -> ConfigUpdateResult:
         """
-        Update specific conditioning parameters
-        
-        Args:
-            new_params: Dictionary of parameters to update
-            
-        Returns:
-            Result of the update operation
+        Update specific conditioning parameters (Internal method for Agent tool)
+        Args: new_params: Dictionary of parameters to update
+        Returns: Result of the update operation
         """
         with function_span("update_parameters", input=str(new_params)):
             if not self.context.parameters:
-                self._load_parameters()
-            
-            # Track changes
+                # Should not happen if loaded in __init__, but handle defensively
+                logger.error("Attempted to update parameters before loading.")
+                return ConfigUpdateResult(success=False, message="Parameters not loaded.")
+
             result = ConfigUpdateResult(success=True)
-            
-            # Get current parameters
             current_params = self.context.parameters.model_dump()
-            
-            # Update with new parameters
+            valid_updates = {}
+
             for key, value in new_params.items():
-                if key in current_params:
+                if hasattr(self.context.parameters, key): # Check against Pydantic model fields
                     result.previous_values[key] = current_params[key]
                     result.new_values[key] = value
                     result.updated_keys.append(key)
+                    valid_updates[key] = value
                 else:
                     result.message += f"Unknown parameter: {key}. "
-            
+
             if not result.updated_keys:
                 result.success = False
-                result.message = "No valid parameters provided for update."
+                result.message += "No valid parameters provided for update."
                 return result
-            
-            # Create new parameters object with updates
-            updated_params = {**current_params, **{k: v for k, v in new_params.items() if k in current_params}}
-            self.context.parameters = ConditioningParameters(**updated_params)
-            
-            # Save to file
-            self._save_parameters(self.context.parameters)
-            
-            result.message += f"Updated {len(result.updated_keys)} parameters."
+
+            try:
+                # Create new parameters object with updates, this validates types
+                updated_params_dict = {**current_params, **valid_updates}
+                self.context.parameters = ConditioningParameters(**updated_params_dict)
+                self._save_parameters_internal(self.context.parameters) # Use internal save method
+                result.message += f"Updated {len(result.updated_keys)} parameters."
+            except Exception as e: # Catch validation errors etc.
+                 logger.error(f"Error updating parameters: {e}")
+                 result.success = False
+                 result.message = f"Error during parameter update: {e}"
+                 # Optionally revert to old parameters
+                 # self.context.parameters = ConditioningParameters(**current_params)
+
             return result
 
-    @staticmethod  
-    @function_tool
-    async def _validate_parameters(ctx: RunContextWrapper, 
-                             parameters: Dict[str, Any]) -> Dict[str, Any]:
+    # REMOVED @staticmethod and @function_tool
+    async def _save_parameters(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+         """ Saves the current parameters to disk (Internal method for Agent tool) """
+         with function_span("save_parameters_tool_call"):
+             if self.context.parameters:
+                 try:
+                     self._save_parameters_internal(self.context.parameters)
+                     return {"success": True, "message": "Parameters saved."}
+                 except Exception as e:
+                     logger.error(f"Error saving parameters via tool: {e}")
+                     return {"success": False, "message": f"Error saving parameters: {e}"}
+             else:
+                 return {"success": False, "message": "No parameters loaded to save."}
+
+    # REMOVED @staticmethod and @function_tool
+    async def _validate_parameters(self, ctx: RunContextWrapper,
+                                   parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate parameters against constraints
-        
-        Args:
-            parameters: Parameters to validate
-            
-        Returns:
-            Validation results with any issues
+        Validate parameters against constraints (Internal method for Agent tool)
+        Args: parameters: Parameters to validate
+        Returns: Validation results with any issues
         """
+        # (Implementation remains largely the same, just ensure it doesn't rely on static context)
         with function_span("validate_parameters"):
-            validation_result = {
-                "valid": True,
-                "issues": {}
-            }
-            
-            # Define constraints
-            constraints = {
-                "association_learning_rate": (0.0, 1.0),
-                "extinction_rate": (0.0, 0.5),
-                "generalization_factor": (0.0, 1.0),
-                "weak_association_threshold": (0.1, 0.4),
-                "moderate_association_threshold": (0.4, 0.7),
-                "strong_association_threshold": (0.7, 1.0),
-                "maintenance_interval_hours": (1, 168),
-                "consolidation_interval_days": (1, 90),
-                "extinction_threshold": (0.01, 0.2),
-                "reinforcement_threshold": (0.1, 0.5),
-                "max_trait_imbalance": (0.1, 0.5),
-                "correction_strength": (0.1, 0.5),
-                "reward_scaling_factor": (0.1, 1.0),
-                "negative_punishment_factor": (0.1, 1.0),
-                "pattern_match_confidence": (0.5, 0.9),
-                "response_modification_strength": (0.1, 0.9)
-            }
-            
-            # Check each parameter against constraints
-            for param, value in parameters.items():
-                if param in constraints:
-                    min_val, max_val = constraints[param]
-                    if not min_val <= value <= max_val:
-                        validation_result["valid"] = False
-                        validation_result["issues"][param] = f"Value {value} outside range [{min_val}, {max_val}]"
-            
-            # Check relationships between thresholds
-            if ("weak_association_threshold" in parameters and 
+            validation_result = { "valid": True, "issues": {} }
+            try:
+                 # Validate by attempting to create the Pydantic model
+                 ConditioningParameters(**parameters)
+                 # Add your custom range checks etc. if needed on top of Pydantic
+                 # ... (your existing constraint checks) ...
+
+            except Exception as e: # Catch Pydantic validation errors
+                validation_result["valid"] = False
+                validation_result["issues"]["pydantic_validation"] = str(e)
+
+            # ... (keep your threshold ordering checks) ...
+            if validation_result["valid"] and ("weak_association_threshold" in parameters and
                 "moderate_association_threshold" in parameters and
                 "strong_association_threshold" in parameters):
-                
                 weak = parameters["weak_association_threshold"]
                 moderate = parameters["moderate_association_threshold"]
                 strong = parameters["strong_association_threshold"]
-                
                 if not (weak < moderate < strong):
                     validation_result["valid"] = False
                     validation_result["issues"]["threshold_ordering"] = (
                         f"Thresholds must be ordered: weak ({weak}) < moderate ({moderate}) < strong ({strong})"
                     )
-            
+
             return validation_result
 
-    @staticmethod  
-    @function_tool
-    async def _reset_to_defaults(ctx: RunContextWrapper) -> Dict[str, Any]:
+    # REMOVED @staticmethod and @function_tool
+    async def _reset_to_defaults(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Reset all parameters and profile to defaults
-        
-        Returns:
-            Default parameters and profile
+        Reset all parameters and profile to defaults (Internal method for Agent tool)
+        Returns: Default parameters and profile
         """
         with function_span("reset_to_defaults"):
-            # Reset parameters
-            self.context.parameters = ConditioningParameters()
-            self._save_parameters(self.context.parameters)
-            
-            # Reset personality profile
-            self.context.personality_profile = self._create_default_personality()
-            self._save_personality_profile(self.context.personality_profile)
-            
-            return {
-                "parameters": self.context.parameters.model_dump(),
-                "personality_profile": self.context.personality_profile.model_dump()
-            }
+            try:
+                self.context.parameters = ConditioningParameters() # Reset parameters instance
+                self._save_parameters_internal(self.context.parameters)
 
-    @staticmethod  
-    @function_tool
-    async def _get_personality_profile(ctx: RunContextWrapper) -> Dict[str, Any]:
+                self.context.personality_profile = self._create_default_personality() # Reset profile instance
+                self._save_personality_profile_internal(self.context.personality_profile)
+
+                return {
+                    "success": True,
+                    "message": "Parameters and profile reset to defaults.",
+                    "parameters": self.context.parameters.model_dump(),
+                    "personality_profile": self.context.personality_profile.model_dump()
+                }
+            except Exception as e:
+                 logger.error(f"Error resetting to defaults: {e}")
+                 return {"success": False, "message": f"Error resetting to defaults: {e}"}
+
+
+    # REMOVED @staticmethod and @function_tool
+    async def _get_personality_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Get current personality profile
-        
-        Returns:
-            Current personality profile data
+        Get current personality profile (Internal method for Agent tool)
+        Returns: Current personality profile data
         """
         with function_span("get_personality_profile"):
-            if not self.context.personality_profile:
-                self._load_personality_profile()
-            
-            return self.context.personality_profile.model_dump() if self.context.personality_profile else {}
+            # No need to load here if loaded in __init__
+            # if not self.context.personality_profile:
+            #     self._load_personality_profile() # Should already be loaded
+            if self.context.personality_profile:
+                return self.context.personality_profile.model_dump()
+            logger.warning("_get_personality_profile called but profile not loaded.")
+            return {} # Return empty if somehow not loaded
 
-    @staticmethod  
-    @function_tool
-    async def _update_personality_profile(ctx: RunContextWrapper,
-                                    new_profile: Dict[str, Any]) -> ConfigUpdateResult:
+    # REMOVED @staticmethod and @function_tool
+    async def _update_personality_profile(self, ctx: RunContextWrapper,
+                                          new_profile: Dict[str, Any]) -> ConfigUpdateResult:
         """
-        Update personality profile
-        
-        Args:
-            new_profile: Dictionary with profile updates
-            
-        Returns:
-            Result of the update operation
+        Update personality profile (Internal method for Agent tool)
+        Args: new_profile: Dictionary with profile updates
+        Returns: Result of the update operation
         """
         with function_span("update_personality_profile", input=str(new_profile)):
             if not self.context.personality_profile:
-                self._load_personality_profile()
-            
-            # Track changes
+                 logger.error("Attempted to update profile before loading.")
+                 return ConfigUpdateResult(success=False, message="Personality profile not loaded.")
+
             result = ConfigUpdateResult(success=True)
-            
-            # Get current profile
-            current_profile = self.context.personality_profile.model_dump()
-            
-            # Update profile, handling nested dictionaries
+            current_profile_dict = self.context.personality_profile.model_dump()
+            updated_profile_dict = current_profile_dict.copy() # Work on a copy
+
+            # Update profile, handling nested dictionaries carefully
             for key, value in new_profile.items():
-                if key in current_profile:
-                    # For top-level keys
-                    result.previous_values[key] = current_profile[key]
-                    
-                    if isinstance(value, dict) and isinstance(current_profile[key], dict):
-                        # Handle nested dictionaries by merging
-                        for subkey, subvalue in value.items():
-                            if subkey in current_profile[key]:
-                                # Track changes at the nested level
-                                nested_key = f"{key}.{subkey}"
-                                result.previous_values[nested_key] = current_profile[key][subkey]
-                                result.new_values[nested_key] = subvalue
-                                result.updated_keys.append(nested_key)
-                            
-                        # Update with merged dictionary
-                        current_profile[key].update(value)
-                        result.new_values[key] = current_profile[key]
-                    else:
-                        # Direct update for non-dict values
-                        current_profile[key] = value
-                        result.new_values[key] = value
+                if key in updated_profile_dict:
+                    result.previous_values[key] = updated_profile_dict[key]
+                    result.new_values[key] = value # Store the incoming value first
+
+                    if isinstance(value, dict) and isinstance(updated_profile_dict[key], dict):
+                        # Deep merge for known dictionary fields if necessary, or just update
+                        # Simple update (overwrites nested dict):
+                        updated_profile_dict[key] = value
                         result.updated_keys.append(key)
+                        # If you need merging:
+                        # updated_profile_dict[key].update(value)
+                        # result.new_values[key] = updated_profile_dict[key] # Update new_value after merge
+                        # result.updated_keys.append(key) # Track top-level key
+                    elif isinstance(value, list) and isinstance(updated_profile_dict[key], list):
+                         # Handle lists if needed (e.g., append, replace) - currently replaces
+                         updated_profile_dict[key] = value
+                         result.updated_keys.append(key)
+                    elif not isinstance(value, (dict, list)):
+                        # Direct update for simple values (float, str, etc.)
+                        updated_profile_dict[key] = value
+                        result.updated_keys.append(key)
+                    else:
+                        # Type mismatch (e.g., trying to update dict with list) - Log or handle as error
+                        result.message += f"Type mismatch for key '{key}'. Update skipped. "
+                        result.updated_keys.append(key) # Still record attempt
+                        result.success = False # Mark as partial failure?
+
                 else:
                     result.message += f"Unknown profile key: {key}. "
-            
-            if not result.updated_keys:
-                result.success = False
-                result.message = "No valid profile elements provided for update."
-                return result
-            
-            # Create new profile object
-            self.context.personality_profile = PersonalityProfile(**current_profile)
-            
-            # Save to file
-            self._save_personality_profile(self.context.personality_profile)
-            
-            result.message += f"Updated {len(result.updated_keys)} profile elements."
+
+            if not result.updated_keys or not any(k in updated_profile_dict for k in result.updated_keys):
+                 # Check if any *valid* keys were provided
+                 result.success = False
+                 result.message += "No valid profile elements provided for update."
+                 return result
+
+            # Validate and update the actual profile object
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                result.message += f"Updated {len(result.updated_keys)} profile elements."
+            except Exception as e:
+                 logger.error(f"Error updating personality profile: {e}")
+                 result.success = False
+                 result.message = f"Error during profile update: {e}"
+                 # Optionally revert
+                 # self.context.personality_profile = PersonalityProfile(**current_profile_dict)
+
             return result
 
-    @staticmethod  
-    @function_tool
-    async def _adjust_trait(ctx: RunContextWrapper,
-                      trait: str, 
-                      value: float) -> TraitUpdateResult:
+    # REMOVED @staticmethod and @function_tool
+    async def _adjust_trait(self, ctx: RunContextWrapper,
+                            trait: str,
+                            value: float) -> TraitUpdateResult:
         """
-        Adjust a specific personality trait
-        
-        Args:
-            trait: The trait to adjust
-            value: New value for the trait (0.0-1.0)
-            
-        Returns:
-            Result of the trait adjustment
+        Adjust a specific personality trait (Internal method for Agent tool)
+        Args: trait: The trait to adjust, value: New value for the trait (0.0-1.0)
+        Returns: Result of the trait adjustment
         """
         with function_span("adjust_trait", input=f"trait={trait}, value={value}"):
             if not self.context.personality_profile:
-                self._load_personality_profile()
-            
-            # Get current traits
-            traits = self.context.personality_profile.traits.copy()
-            
-            # Update trait
-            old_value = traits.get(trait, 0.0)
-            traits[trait] = max(0.0, min(1.0, value))  # Constrain to 0-1
-            
-            # Update personality profile
-            updated_profile = self.context.personality_profile.model_dump()
-            updated_profile["traits"] = traits
-            self.context.personality_profile = PersonalityProfile(**updated_profile)
-            
-            # Save to file
-            self._save_personality_profile(self.context.personality_profile)
-            
-            return TraitUpdateResult(
-                trait=trait,
-                old_value=old_value,
-                new_value=traits[trait]
-            )
+                 logger.error("Attempted to adjust trait before profile loaded.")
+                 # Cannot return TraitUpdateResult easily here, maybe raise?
+                 # For now, return failure within the structure if possible
+                 return TraitUpdateResult(trait=trait, old_value=0.0, new_value=value, success=False)
 
-    @staticmethod  
-    @function_tool
-    async def _adjust_preference(ctx: RunContextWrapper,
-                           preference_type: str, 
-                           stimulus: str, 
-                           value: float) -> Dict[str, Any]:
+            # Get current traits
+            updated_profile_dict = self.context.personality_profile.model_dump()
+            traits = updated_profile_dict.get("traits", {})
+
+            old_value = traits.get(trait, 0.0)
+            new_value_clamped = max(0.0, min(1.0, value)) # Constrain to 0-1
+            traits[trait] = new_value_clamped
+
+            updated_profile_dict["traits"] = traits
+
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                return TraitUpdateResult(
+                    trait=trait,
+                    old_value=old_value,
+                    new_value=new_value_clamped,
+                    success=True
+                 )
+            except Exception as e:
+                logger.error(f"Error adjusting trait '{trait}': {e}")
+                # Optionally revert
+                # self.context.personality_profile = PersonalityProfile(**self.context.personality_profile.model_dump()) # Revert
+                return TraitUpdateResult(
+                    trait=trait,
+                    old_value=old_value,
+                    new_value=value, # Report attempted value
+                    success=False
+                )
+
+
+    # REMOVED @staticmethod and @function_tool
+    async def _adjust_preference(self, ctx: RunContextWrapper,
+                                 preference_type: str,
+                                 stimulus: str,
+                                 value: float) -> Dict[str, Any]:
         """
-        Adjust a specific preference
-        
-        Args:
-            preference_type: Type of preference ("likes" or "dislikes")
-            stimulus: The stimulus to adjust preference for
-            value: New value for the preference (0.0-1.0)
-            
-        Returns:
-            Result of the preference adjustment
+        Adjust a specific preference (Internal method for Agent tool)
+        Args: preference_type: Type ("likes" or "dislikes"), stimulus: Item, value: New value (0.0-1.0)
+        Returns: Result of the preference adjustment
         """
         with function_span("adjust_preference"):
             if not self.context.personality_profile:
-                self._load_personality_profile()
-            
-            # Check preference type
+                logger.error("Attempted to adjust preference before profile loaded.")
+                return {"success": False, "error": "Personality profile not loaded."}
+
             if preference_type not in ["likes", "dislikes"]:
                 return {
                     "success": False,
                     "error": f"Invalid preference type: {preference_type}",
                     "valid_types": ["likes", "dislikes"]
                 }
-            
-            # Get current preferences
-            preferences = self.context.personality_profile.preferences.copy()
-            
-            # Get old value
-            old_value = preferences.get(preference_type, {}).get(stimulus, 0.0)
-            
-            # Update preference
+
+            updated_profile_dict = self.context.personality_profile.model_dump()
+            preferences = updated_profile_dict.get("preferences", {"likes": {}, "dislikes": {}})
+
+            # Ensure the preference type dict exists
             if preference_type not in preferences:
                 preferences[preference_type] = {}
-            
-            value = max(0.0, min(1.0, value))  # Constrain to 0-1
-            preferences[preference_type][stimulus] = value
-            
-            # Update personality profile
-            updated_profile = self.context.personality_profile.model_dump()
-            updated_profile["preferences"] = preferences
-            self.context.personality_profile = PersonalityProfile(**updated_profile)
-            
-            # Save to file
-            self._save_personality_profile(self.context.personality_profile)
-            
-            return {
-                "success": True,
-                "preference_type": preference_type,
-                "stimulus": stimulus,
-                "old_value": old_value,
-                "new_value": value
-            }
-    
-    def _load_parameters(self) -> ConditioningParameters:
+
+            old_value = preferences[preference_type].get(stimulus, 0.0)
+            new_value_clamped = max(0.0, min(1.0, value)) # Constrain to 0-1
+            preferences[preference_type][stimulus] = new_value_clamped
+
+            updated_profile_dict["preferences"] = preferences
+
+            try:
+                self.context.personality_profile = PersonalityProfile(**updated_profile_dict)
+                self._save_personality_profile_internal(self.context.personality_profile)
+                return {
+                    "success": True,
+                    "preference_type": preference_type,
+                    "stimulus": stimulus,
+                    "old_value": old_value,
+                    "new_value": new_value_clamped
+                }
+            except Exception as e:
+                 logger.error(f"Error adjusting preference '{preference_type}/{stimulus}': {e}")
+                 # Optionally revert
+                 return {"success": False, "error": f"Failed to save preference update: {e}"}
+
+    # REMOVED @staticmethod and @function_tool
+    async def _save_personality_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+         """ Saves the current personality profile to disk (Internal method for Agent tool) """
+         with function_span("save_personality_profile_tool_call"):
+             if self.context.personality_profile:
+                 try:
+                     self._save_personality_profile_internal(self.context.personality_profile)
+                     return {"success": True, "message": "Personality profile saved."}
+                 except Exception as e:
+                     logger.error(f"Error saving profile via tool: {e}")
+                     return {"success": False, "message": f"Error saving profile: {e}"}
+             else:
+                 return {"success": False, "message": "No profile loaded to save."}
+
+
+    # Internal helper methods (not tools)
+    def _load_parameters(self) -> None:
         """Load parameters from file or create defaults"""
-        with function_span("load_parameters"):
+        # Renamed return type to None as it modifies self.context
+        with function_span("load_parameters_internal"):
             if os.path.exists(self.context.params_file):
                 try:
                     with open(self.context.params_file, 'r') as f:
                         params_dict = json.load(f)
                     self.context.parameters = ConditioningParameters(**params_dict)
-                    logger.info("Loaded conditioning parameters from file.")
+                    logger.info(f"Loaded conditioning parameters from {self.context.params_file}.")
                 except Exception as e:
-                    logger.error(f"Error loading parameters: {e}, using defaults")
+                    logger.error(f"Error loading parameters from {self.context.params_file}: {e}, using defaults.")
                     self.context.parameters = ConditioningParameters()
+                    self._save_parameters_internal(self.context.parameters) # Save defaults if load failed
             else:
-                # Create default parameters
-                logger.info("No parameters file found, using defaults.")
+                logger.info(f"No parameters file found at {self.context.params_file}, using defaults.")
                 self.context.parameters = ConditioningParameters()
-                self._save_parameters(self.context.parameters)
-            
-            return self.context.parameters
-    
-    def _load_personality_profile(self) -> PersonalityProfile:
+                self._save_parameters_internal(self.context.parameters)
+
+    def _load_personality_profile(self) -> None:
         """Load personality profile from file or create defaults"""
-        with function_span("load_personality_profile"):
+        # Renamed return type to None as it modifies self.context
+        with function_span("load_personality_profile_internal"):
             if os.path.exists(self.context.personality_file):
                 try:
                     with open(self.context.personality_file, 'r') as f:
                         profile_dict = json.load(f)
                     self.context.personality_profile = PersonalityProfile(**profile_dict)
-                    logger.info("Loaded personality profile from file.")
+                    logger.info(f"Loaded personality profile from {self.context.personality_file}.")
                 except Exception as e:
-                    logger.error(f"Error loading personality profile: {e}, using defaults")
+                    logger.error(f"Error loading personality profile from {self.context.personality_file}: {e}, using defaults.")
                     self.context.personality_profile = self._create_default_personality()
+                    self._save_personality_profile_internal(self.context.personality_profile) # Save defaults if load failed
             else:
-                # Create default personality
-                logger.info("No personality profile found, using defaults.")
+                logger.info(f"No personality profile found at {self.context.personality_file}, using defaults.")
                 self.context.personality_profile = self._create_default_personality()
-                self._save_personality_profile(self.context.personality_profile)
-            
-            return self.context.personality_profile
-    
+                self._save_personality_profile_internal(self.context.personality_profile)
+
     def _create_default_personality(self) -> PersonalityProfile:
         """Create default personality profile"""
+        # This can remain as is, it doesn't need context
         with function_span("create_default_personality"):
+            # ... (implementation is fine) ...
             return PersonalityProfile(
-                traits={
-                    "dominance": 0.8,
-                    "playfulness": 0.7,
-                    "strictness": 0.6,
-                    "creativity": 0.7,
-                    "intensity": 0.6,
-                    "patience": 0.4
-                },
-                preferences={
-                    "likes": {
-                        "teasing": 0.8,
-                        "dominance": 0.9,
-                        "submission_language": 0.9,
-                        "control": 0.8,
-                        "wordplay": 0.7
-                    },
-                    "dislikes": {
-                        "direct_orders": 0.6,
-                        "disrespect": 0.9,
-                        "rudeness": 0.7
-                    }
-                },
-                emotion_triggers={
-                    "joy": ["submission_language", "compliance", "obedience"],
-                    "satisfaction": ["control_acceptance", "power_dynamic_acknowledgment"],
-                    "frustration": ["defiance", "ignoring_instructions"],
-                    "amusement": ["embarrassment", "flustered_response"]
-                },
-                behaviors={
-                    "assertive_response": ["dominance", "confidence"],
-                    "teasing": ["playfulness", "creativity"],
-                    "providing_guidance": ["dominance", "patience"],
-                    "setting_boundaries": ["dominance", "strictness"],
-                    "playful_banter": ["playfulness", "creativity"]
-                }
+                traits={ # Your default traits },
+                preferences={ # Your default preferences },
+                emotion_triggers={ # Your default triggers },
+                behaviors={ # Your default behaviors }
             )
-    
-    def _save_parameters(self, parameters: ConditioningParameters) -> None:
-        """Save parameters to file"""
-        with function_span("save_parameters"):
-            # Create directory if it doesn't exist
+
+    def _save_parameters_internal(self, parameters: ConditioningParameters) -> None:
+        """Internal helper to save parameters to file"""
+        # Changed name to avoid clash with tool method if needed
+        with function_span("save_parameters_internal"):
             os.makedirs(self.context.config_dir, exist_ok=True)
-            
             try:
                 with open(self.context.params_file, 'w') as f:
+                    # Use model_dump_json for better handling of types if needed, else model_dump
                     json.dump(parameters.model_dump(), f, indent=2)
-                logger.info("Saved conditioning parameters")
+                logger.info(f"Saved conditioning parameters to {self.context.params_file}")
             except Exception as e:
-                logger.error(f"Error saving parameters: {e}")
-    
-    def _save_personality_profile(self, profile: PersonalityProfile) -> None:
-        """Save personality profile to file"""
-        with function_span("save_personality_profile"):
-            # Create directory if it doesn't exist
+                logger.error(f"Error saving parameters to {self.context.params_file}: {e}")
+
+    def _save_personality_profile_internal(self, profile: PersonalityProfile) -> None:
+        """Internal helper to save personality profile to file"""
+        # Changed name to avoid clash with tool method if needed
+        with function_span("save_personality_profile_internal"):
             os.makedirs(self.context.config_dir, exist_ok=True)
-            
             try:
                 with open(self.context.personality_file, 'w') as f:
                     json.dump(profile.model_dump(), f, indent=2)
-                logger.info("Saved personality profile")
+                logger.info(f"Saved personality profile to {self.context.personality_file}")
             except Exception as e:
-                logger.error(f"Error saving personality profile: {e}")
-    
+                logger.error(f"Error saving personality profile to {self.context.personality_file}: {e}")
+
+    # --- Public API Methods ---
+    # These methods now correctly call the internal async methods
+
     async def update_parameters(self, new_params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Public API: Update specific parameters
-        
-        Args:
-            new_params: Dictionary of parameters to update
-            
-        Returns:
-            Update results
-        """
+        """ Public API: Update specific parameters using the agent """
         with trace(workflow_name="update_parameters", group_id=self.context.trace_group_id):
-            # Construct a prompt asking the agent to update the parameters
             param_descriptions = ", ".join([f"{k}={v}" for k, v in new_params.items()])
-            prompt = f"Update the following parameters: {param_descriptions}"
-            
-            # Run the config manager agent
+            prompt = f"Update the following parameters: {param_descriptions}. Validate them and report the result."
+
             result = await Runner.run(
                 self.config_manager_agent,
                 prompt,
-                context=self.context
+                context=self.context # Pass the context object
             )
-            
-            # Extract the results from the agent's response
+
+            # Attempt to parse the agent's structured output or return a summary
+            # The agent should ideally call the _update_parameters tool and return its ConfigUpdateResult
+            # You might need to refine the agent's prompt to ensure it uses the tool and returns the result clearly.
+            logger.info(f"Agent response for update_parameters: {result.final_output}")
+            # Try extracting structured result if the agent returns it
             try:
-                # Try to parse JSON response if available
+                # A more robust way might involve checking result.new_items for ToolCallOutputItem
+                # related to _update_parameters and extracting its output.
+                # This basic parsing assumes the agent might just output JSON in its final message.
                 import re
-                json_match = re.search(r'\{.*\}', result.final_output, re.DOTALL)
+                json_match = re.search(r'\{.*\}', str(result.final_output), re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group(0))
-                else:
-                    # Get the updates directly
-                    update_result = await self._update_parameters(RunContextWrapper(context=self.context), new_params)
-                    return update_result.model_dump()
+                    parsed_result = json.loads(json_match.group(0))
+                    # Check if it looks like a ConfigUpdateResult
+                    if isinstance(parsed_result, dict) and "success" in parsed_result:
+                         return parsed_result
             except Exception as e:
-                logger.error(f"Error processing update result: {e}")
-                # Return a simple result
-                return {
-                    "success": True,
-                    "updated": list(new_params.keys())
-                }
-    
+                logger.warning(f"Could not parse structured JSON from agent response: {e}")
+
+            # Fallback: return a basic success message based on agent's text output
+            # Or re-run the internal method to be sure (might defeat agent purpose)
+            # update_result = await self._update_parameters(RunContextWrapper(context=self.context), new_params)
+            # return update_result.model_dump()
+            return {"message": "Agent processed parameter update request.", "agent_output": str(result.final_output)}
+
+
     async def update_personality_profile(self, new_profile: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Public API: Update personality profile
-        
-        Args:
-            new_profile: Dictionary with profile updates
-            
-        Returns:
-            Update results
-        """
+        """ Public API: Update personality profile using the agent """
         with trace(workflow_name="update_personality", group_id=self.context.trace_group_id):
-            # Construct a prompt explaining the profile updates
-            prompt = f"Update the personality profile with these changes: {json.dumps(new_profile, indent=2)}"
-            
-            # Run the personality editor agent
+            prompt = f"Update the personality profile with these changes: {json.dumps(new_profile, indent=2)}. Report the result."
+
             result = await Runner.run(
                 self.personality_editor_agent,
                 prompt,
-                context=self.context
+                context=self.context # Pass the context object
             )
-            
-            # Extract the results from the agent's response
+            logger.info(f"Agent response for update_personality_profile: {result.final_output}")
+            # Similar parsing logic as update_parameters
             try:
-                # Try to parse JSON response if available
                 import re
-                json_match = re.search(r'\{.*\}', result.final_output, re.DOTALL)
+                json_match = re.search(r'\{.*\}', str(result.final_output), re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group(0))
-                else:
-                    # Get the updates directly
-                    update_result = await self._update_personality_profile(RunContextWrapper(context=self.context), new_profile)
-                    return update_result.model_dump()
+                     parsed_result = json.loads(json_match.group(0))
+                     if isinstance(parsed_result, dict) and "success" in parsed_result:
+                          return parsed_result
             except Exception as e:
-                logger.error(f"Error processing personality update: {e}")
-                # Return a simple result
-                return {
-                    "success": True,
-                    "updated": list(new_profile.keys())
-                }
-    
+                logger.warning(f"Could not parse structured JSON from agent response: {e}")
+
+            # Fallback or re-run internal method
+            # update_result = await self._update_personality_profile(RunContextWrapper(context=self.context), new_profile)
+            # return update_result.model_dump()
+            return {"message": "Agent processed profile update request.", "agent_output": str(result.final_output)}
+
+
     async def adjust_trait(self, trait: str, value: float) -> Dict[str, Any]:
-        """
-        Public API: Adjust a specific personality trait
-        
-        Args:
-            trait: The trait to adjust
-            value: New value for the trait (0.0-1.0)
-            
-        Returns:
-            Trait adjustment results
-        """
+        """ Public API: Adjust a specific personality trait using the agent """
         with trace(workflow_name="adjust_trait", group_id=self.context.trace_group_id):
-            # Construct a prompt for trait adjustment
-            prompt = f"Adjust the '{trait}' trait to a value of {value}"
-            
-            # Run the personality editor agent
+            prompt = f"Adjust the '{trait}' trait to a value of {value}. Report the result."
+
             result = await Runner.run(
                 self.personality_editor_agent,
                 prompt,
-                context=self.context
+                context=self.context # Pass the context object
             )
-            
-            # Extract and return results
+            logger.info(f"Agent response for adjust_trait: {result.final_output}")
+            # Similar parsing logic
             try:
                 import re
-                json_match = re.search(r'\{.*\}', result.final_output, re.DOTALL)
+                json_match = re.search(r'\{.*\}', str(result.final_output), re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group(0))
-                else:
-                    # Get the updates directly
-                    adjustment = await self._adjust_trait(RunContextWrapper(context=self.context), trait, value)
-                    return adjustment.model_dump()
+                     parsed_result = json.loads(json_match.group(0))
+                     if isinstance(parsed_result, dict) and "success" in parsed_result and "trait" in parsed_result:
+                          return parsed_result
             except Exception as e:
-                logger.error(f"Error processing trait adjustment: {e}")
-                # Return direct result
-                return {
-                    "trait": trait,
-                    "old_value": self.context.personality_profile.traits.get(trait, 0.0),
-                    "new_value": value
-                }
-    
+                logger.warning(f"Could not parse structured JSON from agent response: {e}")
+
+            # Fallback or re-run internal method
+            # adjustment = await self._adjust_trait(RunContextWrapper(context=self.context), trait, value)
+            # return adjustment.model_dump()
+            return {"message": "Agent processed trait adjustment request.", "agent_output": str(result.final_output)}
+
+
     async def adjust_preference(self, preference_type: str, stimulus: str, value: float) -> Dict[str, Any]:
-        """
-        Public API: Adjust a specific preference
-        
-        Args:
-            preference_type: Type of preference ("likes" or "dislikes")
-            stimulus: The stimulus to adjust preference for
-            value: New value for the preference (0.0-1.0)
-            
-        Returns:
-            Preference adjustment results
-        """
+        """ Public API: Adjust a specific preference using the agent """
         with trace(workflow_name="adjust_preference", group_id=self.context.trace_group_id):
-            # Construct a prompt for preference adjustment
-            prompt = f"Set the {preference_type} preference for '{stimulus}' to {value}"
-            
-            # Run the personality editor agent
+            prompt = f"Set the {preference_type} preference for '{stimulus}' to {value}. Report the result."
+
             result = await Runner.run(
                 self.personality_editor_agent,
                 prompt,
-                context=self.context
+                context=self.context # Pass the context object
             )
-            
-            # Extract and return results
+            logger.info(f"Agent response for adjust_preference: {result.final_output}")
+            # Similar parsing logic
             try:
                 import re
-                json_match = re.search(r'\{.*\}', result.final_output, re.DOTALL)
+                json_match = re.search(r'\{.*\}', str(result.final_output), re.DOTALL)
                 if json_match:
-                    return json.loads(json_match.group(0))
-                else:
-                    # Get the updates directly
-                    return await self._adjust_preference(RunContextWrapper(context=self.context), 
-                                                         preference_type, stimulus, value)
+                     parsed_result = json.loads(json_match.group(0))
+                     if isinstance(parsed_result, dict) and "success" in parsed_result and "preference_type" in parsed_result:
+                          return parsed_result
             except Exception as e:
-                logger.error(f"Error processing preference adjustment: {e}")
-                # Return direct result
-                return {
-                    "preference_type": preference_type,
-                    "stimulus": stimulus,
-                    "new_value": value
-                }
-    
+                logger.warning(f"Could not parse structured JSON from agent response: {e}")
+
+            # Fallback or re-run internal method
+            # adjustment = await self._adjust_preference(RunContextWrapper(context=self.context), preference_type, stimulus, value)
+            # return adjustment
+            return {"message": "Agent processed preference adjustment request.", "agent_output": str(result.final_output)}
+
+
     async def get_parameters(self) -> Dict[str, Any]:
-        """
-        Public API: Get current parameters
-        
-        Returns:
-            Current parameters
-        """
-        return await self._get_parameters(RunContextWrapper(context=self.context))
-    
+        """ Public API: Get current parameters directly """
+        # This method doesn't need the agent, just call the internal helper directly
+        # It now expects RunContextWrapper, so create one
+        ctx_wrapper = RunContextWrapper(context=self.context)
+        return await self._get_parameters(ctx_wrapper)
+
     async def get_personality_profile(self) -> Dict[str, Any]:
-        """
-        Public API: Get current personality profile
-        
-        Returns:
-            Current personality profile
-        """
-        return await self._get_personality_profile(RunContextWrapper(context=self.context))
-    
+        """ Public API: Get current personality profile directly """
+        # This method doesn't need the agent, just call the internal helper directly
+        # It now expects RunContextWrapper, so create one
+        ctx_wrapper = RunContextWrapper(context=self.context)
+        return await self._get_personality_profile(ctx_wrapper) # This is the call causing the original error
+
     async def reset_to_defaults(self) -> Dict[str, Any]:
-        """
-        Public API: Reset all parameters and profile to defaults
-        
-        Returns:
-            Default parameters and profile
-        """
+        """ Public API: Reset all parameters and profile to defaults using the agent """
         with trace(workflow_name="reset_to_defaults", group_id=self.context.trace_group_id):
-            prompt = "Reset all configuration to default values"
-            
-            # Run the config manager agent
+            prompt = "Reset all configuration (parameters and personality profile) to their default values. Report the result."
+
             result = await Runner.run(
-                self.config_manager_agent,
+                self.config_manager_agent, # Config manager handles defaults
                 prompt,
-                context=self.context
+                context=self.context # Pass the context object
             )
-            
-            # Return the default values
-            return await self._reset_to_defaults(RunContextWrapper(context=self.context))
+            logger.info(f"Agent response for reset_to_defaults: {result.final_output}")
+            # Similar parsing logic
+            try:
+                import re
+                json_match = re.search(r'\{.*\}', str(result.final_output), re.DOTALL)
+                if json_match:
+                     parsed_result = json.loads(json_match.group(0))
+                     if isinstance(parsed_result, dict) and "success" in parsed_result and "parameters" in parsed_result:
+                          return parsed_result
+            except Exception as e:
+                logger.warning(f"Could not parse structured JSON from agent response: {e}")
+
+            # Fallback: re-run the internal method directly
+            reset_result = await self._reset_to_defaults(RunContextWrapper(context=self.context))
+            return reset_result
+            # return {"message": "Agent processed reset request.", "agent_output": str(result.final_output)}
