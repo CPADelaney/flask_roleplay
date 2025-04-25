@@ -648,7 +648,14 @@ class DigitalSomatosensorySystem:
             message_text: The message being formed
 
         Returns:
-            Sensory influences that could be incorporated
+            Sensory influences that could be incorporated:
+            {
+                "should_express": bool,
+                "expressions": List[Dict[str, Any]], # e.g., {"text":.., "region":.., "sensation":.., "intensity":..}
+                "tone_influence": Optional[str],
+                "posture_influence": Optional[str],
+                "error": Optional[str]
+            }
         """
         # Create context object WITH self reference
         context_obj = SomatosensorySystemContext(
@@ -657,15 +664,25 @@ class DigitalSomatosensorySystem:
             operation_start_time=datetime.datetime.now()
         )
 
-        with trace(workflow_name="Get_Sensory_Influence", group_id=self.trace_group_id):
+        # Define default return structure
+        default_results = {
+            "should_express": False, "expressions": [],
+            "tone_influence": None, "posture_influence": None,
+            "error": None
+        }
+
+        async with trace(workflow_name="Get_Sensory_Influence", group_id=self.trace_group_id):
             try:
                 # Pass context object to Runner.run
                 logger.debug("Getting sensory influence via orchestrator.")
                 result = await Runner.run(
                     self.body_orchestrator,
                     {
-                        "action": "get_sensory_influence",
-                        "message_text": message_text
+                        # Ensure the orchestrator expects this action/payload
+                        "action": "get_sensory_influence_analysis", # Might need adjustment based on orchestrator
+                        "message_text": message_text,
+                        # Include current state if orchestrator needs it
+                        "current_arousal": self.arousal_state.arousal_level,
                     },
                     context=context_obj, # Pass context object
                     hooks=self.hooks,
@@ -675,31 +692,66 @@ class DigitalSomatosensorySystem:
                         trace={"message_length": len(message_text)} # Use trace
                     )
                 )
-                if isinstance(result.final_output, dict) and "should_express" in result.final_output:
-                    return result.final_output
-                logger.warning("Orchestrator result for get_sensory_influence was unexpected.")
+
+                # Check result type and structure carefully
+                final_output = getattr(result, 'final_output', None)
+                if isinstance(final_output, dict) and "should_express" in final_output:
+                     # Ensure all expected keys are present or defaulted
+                     return {
+                         "should_express": final_output.get("should_express", False),
+                         "expressions": final_output.get("expressions", []),
+                         "tone_influence": final_output.get("tone_influence"),
+                         "posture_influence": final_output.get("posture_influence"),
+                         "error": final_output.get("error")
+                     }
+                logger.warning(f"Orchestrator result for get_sensory_influence was unexpected: {type(final_output)}")
+
             except Exception as e:
-                logger.error(f"Error in sensory influence orchestration: {e}")
+                logger.error(f"Error in sensory influence orchestration: {e}", exc_info=True) # Add traceback
 
             # Fallback implementation
             logger.warning("Falling back to manual sensory influence check.")
             try:
+                 # Create wrapper for TOOL calls, passing the CONTEXT OBJECT
                  tool_ctx_wrapper = RunContextWrapper(context=context_obj)
-                 comfort_level = await DigitalSomatosensorySystem._calculate_overall_comfort(tool_ctx_wrapper) # Static tool
+                 # Call the STATIC tool method via the class, passing the WRAPPER
+                 comfort_level = await DigitalSomatosensorySystem._calculate_overall_comfort(tool_ctx_wrapper)
 
-                 results = {
-                    "should_express": False, "expressions": [],
-                    "tone_influence": None, "posture_influence": None
-                 }
+                 # Use a copy of the default results for the fallback
+                 results = default_results.copy()
+                 results["expressions"] = [] # Ensure expressions list is new
 
                  arousal_level = self.arousal_state.arousal_level # Instance state
                  if arousal_level > 0.6:
                      results["should_express"] = True
-                     modifier = self.get_arousal_expression_modifier() # Instance method
-                     results["expressions"].append({ ... }) # Populate as before
-                     results["tone_influence"] = modifier["tone_hint"]
+                     # Instance method that returns the dictionary with relevant hints
+                     modifier = self.get_arousal_expression_modifier()
+
+                     # --- Fill the expression data using the modifier ---
+                     expression_data = {
+                         # Use the detailed hint from the modifier as the primary text
+                         "text": modifier.get("expression_hint", f"Feeling generally aroused ({arousal_level:.2f})."),
+                         # General arousal doesn't have a specific region like 'hand'
+                         "region": "system", # Or "overall", "body"
+                         # The sensation type is arousal itself
+                         "sensation": "arousal",
+                         # Use the arousal level from the modifier (or the variable) as intensity
+                         "intensity": modifier.get("arousal_level", arousal_level)
+                     }
+                     results["expressions"].append(expression_data)
+                     # --- End filling expression data ---
+
+                     # Tone influence comes directly from the modifier
+                     results["tone_influence"] = modifier.get("tone_hint")
+
+                     # Posture influence is not provided by get_arousal_expression_modifier
+                     # results["posture_influence"] = modifier.get("posture_hint") # This key doesn't exist
+
+                     # Return early as high arousal dictates the expression
+                     logger.debug(f"High arousal ({arousal_level:.2f}) triggered sensory expression.")
                      return results
 
+                 # --- Lower Arousal Probability Check ---
                  expression_probability = 0.3
                  if abs(comfort_level) > 0.7: expression_probability = 0.8
                  elif abs(comfort_level) > 0.4: expression_probability = 0.5
@@ -707,45 +759,107 @@ class DigitalSomatosensorySystem:
                  if random.random() < expression_probability:
                      results["should_express"] = True
                      significant_sensations = []
-                     for name, region in self.body_regions.items(): # Instance attribute
-                         dominant = self._get_dominant_sensation(region) # Instance method
-                         value = 0.0
-                         if dominant == "temperature": value = abs(region.temperature - 0.5) * 2.0
-                         elif dominant != "neutral": value = getattr(region, dominant, 0.0)
-                         if value >= self.response_influence["expression_threshold"]: # Instance attribute
-                             significant_sensations.append({ ... }) # Populate as before
+                     # Iterate through body regions (ensure it's a dict)
+                     if isinstance(self.body_regions, dict):
+                         for name, region in self.body_regions.items(): # Instance attribute
+                             dominant = self._get_dominant_sensation(region) # Instance method
+                             value = 0.0
+                             if dominant == "temperature": value = abs(region.temperature - 0.5) * 2.0 # Deviation from neutral
+                             elif dominant != "neutral": value = getattr(region, dominant, 0.0)
+
+                             expression_threshold = self.response_influence.get("expression_threshold", 0.4) # Safe access
+                             if value >= expression_threshold:
+                                 # Structure matches the expected expression format later
+                                 significant_sensations.append({
+                                     "intensity": value,
+                                     "sensation": dominant,
+                                     "region": name
+                                 })
+                     else:
+                        logger.warning("self.body_regions is not a dictionary, cannot check sensations.")
 
                      significant_sensations.sort(key=lambda x: x["intensity"], reverse=True)
-                     sensations_to_express = significant_sensations[:self.response_influence["max_expressions_per_response"]] # Instance attribute
+                     max_expressions = self.response_influence.get("max_expressions_per_response", 1) # Safe access
+                     sensations_to_express = significant_sensations[:max_expressions]
+
+                     logger.debug(f"Found {len(sensations_to_express)} significant sensations to potentially express.")
 
                      # Generate expressions (calls public method, which handles context internally)
+                     expression_tasks = []
                      for sensation in sensations_to_express:
-                         try:
-                             expression_task = asyncio.create_task(self.generate_sensory_expression(
-                                 stimulus_type=sensation["sensation"], body_region=sensation["region"]
-                             ))
-                             expression_result = await asyncio.wait_for(expression_task, timeout=2.0)
-                        
-                        if expression_result: results["expressions"].append({
-                                "text": expression_result,
-                                "region": sensation["region"],
-                                "sensation": sensation["sensation"],
-                                "intensity": sensation["intensity"]
-                            })
-                    except Exception as e:
-                        logger.error(f"Error generating expression: {e}")
-                
-                     # Get temperature effects (calls public method, which handles context internally)
-                     try:
-                         temperature_effects = await self.get_temperature_effects()
-                         results["tone_influence"] = temperature_effects.get("effect_on_tone")
-                         results["posture_influence"] = temperature_effects.get("effect_on_posture")
-                     except Exception as e_temp: logger.error(f"Error getting temperature effects in fallback: {e_temp}")
+                         # Create tasks to run concurrently
+                         expression_tasks.append(
+                             asyncio.create_task(
+                                 self.generate_sensory_expression(
+                                     stimulus_type=sensation["sensation"],
+                                     body_region=sensation["region"]
+                                 ),
+                                 name=f"Expr_{sensation['region']}_{sensation['sensation']}" # Optional name for debugging
+                             )
+                         )
 
-                 return results
+                     # Wait for expression generation tasks with timeout
+                     if expression_tasks:
+                         done, pending = await asyncio.wait(expression_tasks, timeout=2.0)
+
+                         for task in done:
+                             try:
+                                 expression_result = task.result()
+                                 if expression_result:
+                                     # Find the original sensation data for this task result
+                                     # This assumes task names match or we retrieve from task metadata if possible
+                                     # Simplified: find matching sensation/region from the original list
+                                     # (A more robust way might involve passing data through the task)
+                                     task_name = task.get_name()
+                                     sensation_data = next((s for s in sensations_to_express if task_name.endswith(f"_{s['region']}_{s['sensation']}")), None)
+                                     if sensation_data:
+                                         results["expressions"].append({
+                                             "text": expression_result,
+                                             "region": sensation_data["region"],
+                                             "sensation": sensation_data["sensation"],
+                                             "intensity": sensation_data["intensity"]
+                                         })
+                                     else:
+                                         logger.warning(f"Could not find original sensation data for task {task_name}")
+
+                             except Exception as e_task:
+                                 logger.error(f"Error getting result from expression task {task.get_name()}: {e_task}")
+
+                         if pending:
+                             logger.warning(f"{len(pending)} expression tasks timed out.")
+                             for task in pending:
+                                 task.cancel() # Cancel timed out tasks
+
+                     # Get temperature effects if we decided to express something
+                     # (calls public method, which handles context internally)
+                     if results["expressions"]: # Only get temp effects if other expressions were generated
+                         try:
+                             # This call should ideally use the orchestrator or agent if possible,
+                             # but here we assume it's a direct public method call for the fallback.
+                             temperature_effects_result = await self.get_temperature_effects()
+                             if isinstance(temperature_effects_result, dict):
+                                 results["tone_influence"] = temperature_effects_result.get("effect_on_tone")
+                                 results["posture_influence"] = temperature_effects_result.get("effect_on_posture")
+                         except Exception as e_temp:
+                             logger.error(f"Error getting temperature effects in fallback: {e_temp}", exc_info=True)
+
+                 # If probability check failed or no significant sensations found
+                 else:
+                     logger.debug("Expression probability check did not pass or no significant sensations found.")
+                     results["should_express"] = False # Explicitly set back if needed
+
+                 return results # Return results from the probability check path
+
             except Exception as e2:
-                 logger.error(f"Error during manual sensory influence fallback: {e2}")
-                 return {"should_express": False, "expressions": [], "error": str(e2)}
+                 logger.error(f"Error during manual sensory influence fallback: {e2}", exc_info=True)
+                 # Return default structure but include the error message
+                 error_result = default_results.copy()
+                 error_result["error"] = str(e2)
+                 return error_result
+
+        # Should not be reached if try/except logic is correct, but as a final safety net
+        logger.error("Reached end of get_sensory_influence without returning.")
+        return default_results.copy()
     
     async def simulate_gratification_sensation(self, intensity: float = 1.0) -> Dict[str, Any]:
         """
