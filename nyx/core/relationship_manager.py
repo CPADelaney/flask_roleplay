@@ -60,7 +60,7 @@ class InteractionRecord(BaseModel):
 class RelationshipManager:
     """Manages Nyx's relationship states with different users."""
 
-    def __init__(self, memory_orchestrator=None):
+    def __init__(self, memory_orchestrator=None, emotional_core=None)):
         self.memory_orchestrator = memory_orchestrator  # For storing/retrieving relationship-linked memories
         self.relationships: Dict[str, RelationshipState] = {}  # user_id -> RelationshipState
         self.interaction_history: Dict[str, List[InteractionRecord]] = {}  # user_id -> list of interactions
