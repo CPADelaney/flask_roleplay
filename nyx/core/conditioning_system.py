@@ -217,39 +217,39 @@ class ConditioningSystem:
             model_settings=ModelSettings(temperature=0.3)
         )
     
-def _create_personality_development_agent(self) -> Agent:
-    """Create agent for personality development"""
-    return Agent(
-        name="Personality_Development_Agent",
-        instructions="""
-        You are the Personality Development Agent for Nyx's learning system.
-
-        Your role is to guide the development of personality traits, preferences,
-        and emotional responses through conditioning.
-
-        Focus on:
-        1. Conditioning appropriate behaviors that reinforce target personality traits
-        2. Creating balanced trait development
-        3. Integrating conditioning with identity evolution
-        4. Creating appropriate emotion triggers
-        5. Developing coherent preferences aligned with personality
-
-        Balance stable personality characteristics with adaptability to new experiences.
-        Ensure personality development is consistent with overall identity and values.
-        """,
-        # --- FIX: Wrap tools with function_tool ---
-        tools=[
-            function_tool(self._identify_trait_behaviors),
-            function_tool(self._calculate_conditioning_trait_adjustment),
-            function_tool(self._update_identity_trait),
-            # Assuming _check_trait_balance might also be intended as a tool? If so:
-            function_tool(self._check_trait_balance) # Add if needed
-        ],
-        # --- END FIX ---
-        output_type=TraitConditioningOutput,
-        model_settings=ModelSettings(temperature=0.4)
-    )
+    def _create_personality_development_agent(self) -> Agent:
+        """Create agent for personality development"""
+        return Agent(
+            name="Personality_Development_Agent",
+            instructions="""
+            You are the Personality Development Agent for Nyx's learning system.
     
+            Your role is to guide the development of personality traits, preferences,
+            and emotional responses through conditioning.
+    
+            Focus on:
+            1. Conditioning appropriate behaviors that reinforce target personality traits
+            2. Creating balanced trait development
+            3. Integrating conditioning with identity evolution
+            4. Creating appropriate emotion triggers
+            5. Developing coherent preferences aligned with personality
+    
+            Balance stable personality characteristics with adaptability to new experiences.
+            Ensure personality development is consistent with overall identity and values.
+            """,
+            # --- FIX: Wrap tools with function_tool ---
+            tools=[
+                function_tool(self._identify_trait_behaviors),
+                function_tool(self._calculate_conditioning_trait_adjustment),
+                function_tool(self._update_identity_trait),
+                # Assuming _check_trait_balance might also be intended as a tool? If so:
+                function_tool(self._check_trait_balance) # Add if needed
+            ],
+            # --- END FIX ---
+            output_type=TraitConditioningOutput,
+            model_settings=ModelSettings(temperature=0.4)
+        )
+        
     def _create_conditioning_orchestrator(self) -> Agent:
         """Create orchestrator agent for coordinating conditioning processes"""
         return Agent(
