@@ -243,7 +243,7 @@ class ConditioningSystem:
                 function_tool(self._calculate_conditioning_trait_adjustment),
                 function_tool(self._update_identity_trait),
                 # Assuming _check_trait_balance might also be intended as a tool? If so:
-                function_tool(self._check_trait_balance) # Add if needed
+                # function_tool(self._check_trait_balance) # Add if needed
             ],
             # --- END FIX ---
             output_type=TraitConditioningOutput,
