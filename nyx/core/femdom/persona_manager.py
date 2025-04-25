@@ -175,8 +175,7 @@ Explain the strengths and potential challenges of each recommended persona.
 """,
             model="o3-mini",
             model_settings=ModelSettings(
-                temperature=0.4,
-                response_format={"type": "json_object"}
+                temperature=0.4
             ),
             tools=[
                 function_tool(self.get_available_personas),
@@ -211,8 +210,7 @@ Manage deactivations carefully to maintain psychological continuity.
 """,
             model="o3-mini",
             model_settings=ModelSettings(
-                temperature=0.3,
-                response_format={"type": "json_object"}
+                temperature=0.3
             ),
             tools=[
                 function_tool(self.get_persona_details),
@@ -245,8 +243,7 @@ Focus on creating a cohesive behavioral profile that authentically expresses the
 """,
             model="o3-mini",
             model_settings=ModelSettings(
-                temperature=0.5,
-                response_format={"type": "json_object"}
+                temperature=0.5
             ),
             tools=[
                 function_tool(self.get_persona_details),
@@ -278,8 +275,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
 """,
             model="o3-mini",
             model_settings=ModelSettings(
-                temperature=0.7,
-                response_format={"type": "json_object"}
+                temperature=0.7
             ),
             tools=[
                 function_tool(self.get_persona_details),
