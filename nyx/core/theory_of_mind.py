@@ -91,7 +91,6 @@ class TheoryOfMind:
                 """,
                 model="gpt-4o",
                 model_settings=ModelSettings(
-                    response_format={"type": "json_object"}, 
                     temperature=0.4
                 ),
                 tools=[
