@@ -56,6 +56,14 @@ class FemdomCoordinator:
     def __init__(self, nyx_brain):
         """Initialize the femdom coordinator."""
         self.brain = nyx_brain
+
+        # Create femdom agents
+        self.main_agent = self._create_main_agent()
+        self.dominance_agent = self._create_dominance_agent()
+        self.protocol_agent = self._create_protocol_agent()
+        self.psychological_agent = self._create_psychological_agent()
+        self.submission_agent = self._create_submission_agent()
+        self.training_agent = self._create_training_agent()
         
         # Get system-wide components
         self.event_bus = get_event_bus()
@@ -71,14 +79,6 @@ class FemdomCoordinator:
         self.submission_progression = getattr(self.brain, "submission_progression", None)
         self.reward_system = getattr(self.brain, "reward_system", None)
         self.theory_of_mind = getattr(self.brain, "theory_of_mind", None)
-        
-        # Create femdom agents
-        self.main_agent = self._create_main_agent()
-        self.dominance_agent = self._create_dominance_agent()
-        self.protocol_agent = self._create_protocol_agent()
-        self.psychological_agent = self._create_psychological_agent()
-        self.submission_agent = self._create_submission_agent()
-        self.training_agent = self._create_training_agent()
         
         # Active femdom sessions per user
         self.active_sessions = {}
