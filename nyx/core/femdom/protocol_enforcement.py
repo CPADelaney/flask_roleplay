@@ -110,6 +110,10 @@ class ProtocolEnforcement:
         self.reward_system = reward_system
         self.memory_core = memory_core
         self.relationship_manager = relationship_manager
+
+        self.message_compliance_guardrail = self._create_message_compliance_guardrail()
+        self.protocol_assignment_guardrail = self._create_protocol_assignment_guardrail()
+        self.ritual_assignment_guardrail = self._create_ritual_assignment_guardrail()
         
         # Store active protocols and rituals
         self.user_protocols: Dict[str, Dict[str, Protocol]] = {}  # user_id → {protocol_id → Protocol}
@@ -141,11 +145,6 @@ class ProtocolEnforcement:
             memory_core=self.memory_core,
             relationship_manager=self.relationship_manager
         )
-        
-        # Create guardrails
-        self.message_compliance_guardrail = self._create_message_compliance_guardrail()
-        self.protocol_assignment_guardrail = self._create_protocol_assignment_guardrail()
-        self.ritual_assignment_guardrail = self._create_ritual_assignment_guardrail()
         
         # Load default protocols and rituals
         self._load_default_protocols()
