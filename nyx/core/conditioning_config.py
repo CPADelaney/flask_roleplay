@@ -241,47 +241,66 @@ class ConditioningConfiguration:
         Args: parameters: Parameters to validate
         Returns: Validation results with any issues
         """
-        # (Implementation remains largely the same, just ensure it doesn't rely on static context)
         with function_span("validate_parameters"):
-            validation_result = { "valid": True, "issues": {} }
+            validation_result = {"valid": True, "issues": {}}
             try:
-                 # Validate by attempting to create the Pydantic model
-                 ConditioningParameters(**parameters)
-                 # Define constraints
-                 constraints = {
-                     "association_learning_rate": (0.0, 1.0),
-                     "extinction_rate": (0.0, 0.5),
-                     "generalization_factor": (0.0, 1.0),
-                     "weak_association_threshold": (0.1, 0.4),
-                     "moderate_association_threshold": (0.4, 0.7),
-                     "strong_association_threshold": (0.7, 1.0),
-                     "maintenance_interval_hours": (1, 168),
-                     "consolidation_interval_days": (1, 90),
-                     "extinction_threshold": (0.01, 0.2),
-                     "reinforcement_threshold": (0.1, 0.5),
-                     "max_trait_imbalance": (0.1, 0.5),
-                     "correction_strength": (0.1, 0.5),
-                     "reward_scaling_factor": (0.1, 1.0),
-                     "negative_punishment_factor": (0.1, 1.0),
-                     "pattern_match_confidence": (0.5, 0.9),
-                     "response_modification_strength": (0.1, 0.9)
-                 }
-                 
-                 # Check each parameter against constraints
-                 for param, value in parameters.items():
-                     if param in constraints:
-                         min_val, max_val = constraints[param]
-                         if not min_val <= value <= max_val:
-                             validation_result["valid"] = False
-                             validation_result["issues"][param] = f"Value {value} outside range [{min_val}, {max_val}]"
+                # Attempt Pydantic validation first (catches type errors, missing fields if required)
+                ConditioningParameters(**parameters)
 
+                # Define constraints for range checks
+                constraints = {
+                    "association_learning_rate": (0.0, 1.0),
+                    "extinction_rate": (0.0, 0.5),
+                    "generalization_factor": (0.0, 1.0),
+                    "weak_association_threshold": (0.1, 0.4),
+                    "moderate_association_threshold": (0.4, 0.7),
+                    "strong_association_threshold": (0.7, 1.0),
+                    "maintenance_interval_hours": (1, 168),
+                    "consolidation_interval_days": (1, 90),
+                    "extinction_threshold": (0.01, 0.2),
+                    "reinforcement_threshold": (0.1, 0.5),
+                    "max_trait_imbalance": (0.1, 0.5),
+                    "correction_strength": (0.1, 0.5),
+                    "reward_scaling_factor": (0.1, 1.0),
+                    "negative_punishment_factor": (0.1, 1.0),
+                    "pattern_match_confidence": (0.5, 0.9),
+                    "response_modification_strength": (0.1, 0.9)
+                }
+
+                # Perform custom range checks *inside* the try block
+                for param, value in parameters.items():
+                    if param in constraints:
+                        min_val, max_val = constraints[param]
+                        # Add a type check before comparison for robustness
+                        if not isinstance(value, (int, float)):
+                            validation_result["valid"] = False
+                            validation_result["issues"][param] = f"Invalid type for {param}: expected number, got {type(value).__name__}"
+                            continue # Skip range check if type is wrong
+
+                        if not min_val <= value <= max_val:
+                            validation_result["valid"] = False
+                            validation_result["issues"][param] = f"Value {value} outside range [{min_val}, {max_val}]"
+
+            except Exception as e:  # Catch Pydantic validation errors or other issues
+                validation_result["valid"] = False
+                # Record the specific validation error
+                validation_result["issues"]["initial_validation"] = f"Validation failed: {e}"
+
+            # Check relationships between thresholds *after* try-except,
+            # but only proceed if still considered valid so far.
             if validation_result["valid"] and ("weak_association_threshold" in parameters and
-                "moderate_association_threshold" in parameters and
-                "strong_association_threshold" in parameters):
-                weak = parameters["weak_association_threshold"]
-                moderate = parameters["moderate_association_threshold"]
-                strong = parameters["strong_association_threshold"]
-                if not (weak < moderate < strong):
+                                               "moderate_association_threshold" in parameters and
+                                               "strong_association_threshold" in parameters):
+
+                weak = parameters.get("weak_association_threshold")
+                moderate = parameters.get("moderate_association_threshold")
+                strong = parameters.get("strong_association_threshold")
+
+                # Ensure values are numbers before comparing
+                if not all(isinstance(v, (int, float)) for v in [weak, moderate, strong]):
+                     validation_result["valid"] = False
+                     validation_result["issues"]["threshold_ordering"] = "Threshold values must be numbers for ordering check."
+                elif not (weak < moderate < strong):
                     validation_result["valid"] = False
                     validation_result["issues"]["threshold_ordering"] = (
                         f"Thresholds must be ordered: weak ({weak}) < moderate ({moderate}) < strong ({strong})"
