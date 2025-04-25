@@ -2054,46 +2054,70 @@ class DigitalSomatosensorySystem:
             # Decide how to handle - maybe return triggered=True or raise?
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Internal context error"}, tripwire_triggered=True)
 
-        # Parse input (no changes needed here)
-        if isinstance(input_data, str):
-        
-        # If the input is a free text request, no need to validate
-        if input_data.get("action") == "free_text_request":
-            return GuardrailFunctionOutput(
-                output_info={"is_valid": True, "reason": "Free text request"},
-                tripwire_triggered=False
-            )
-        
-        # Create validation context
-        validation_input = {
-            "stimulus_type": input_data.get("stimulus_type"),
-            "body_region": input_data.get("body_region"),
-            "intensity": input_data.get("intensity"),
-            "action": input_data.get("action")
-        }
-        
-        # Run validation agent with tracing
-        with trace(workflow_name="Stimulus_Validation", group_id=system_instance.trace_group_id): # Use system_instance
-            # Pass the enhanced context containing the system_instance
-            result = await Runner.run(
-                system_instance.stimulus_validator,
-                validation_input,
-                context=ctx.context,
-                # Add run_config
-                run_config=RunConfig(
-                    workflow_name="StimulusValidation",
-                    trace_id=None, # Auto-generate
-                    trace={"input_type": input_data.get("action", "unknown")}
+        # --- Removed the potentially incorrect isinstance(input_data, str) check ---
+
+        # Check if input_data is dictionary-like before calling .get() for safety
+        if isinstance(input_data, dict):
+            # If the input is a free text request, no need to validate further here
+            if input_data.get("action") == "free_text_request":
+                logger.debug("Input identified as free_text_request, skipping detailed validation.")
+                return GuardrailFunctionOutput(
+                    output_info={"is_valid": True, "reason": "Free text request"},
+                    tripwire_triggered=False
                 )
-            )
-            
-            validation_output = result.final_output
-            
-            # Return guardrail output based on validation
-            return GuardrailFunctionOutput(
-                output_info=validation_output,
-                tripwire_triggered=not validation_output.is_valid
-            )
+
+            # If it's a dictionary but not free_text_request, proceed to validation
+            validation_input = {
+                "stimulus_type": input_data.get("stimulus_type"),
+                "body_region": input_data.get("body_region"),
+                "intensity": input_data.get("intensity"),
+                "action": input_data.get("action") # Pass the action itself if validator needs it
+            }
+        elif isinstance(input_data, str):
+            # Handle the case where input *is* just a string (maybe needs different validation?)
+            # For now, assume string input might be implicitly valid or needs separate handling
+            logger.warning("Received string input for validation, assuming valid for now.")
+            # Or maybe this should be invalid? Depends on expected inputs.
+            # return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Expected dictionary input, got string"}, tripwire_triggered=True)
+            validation_input = {"text_input": input_data} # Example: Pass string differently
+            # Or return directly if string inputs are not meant for this validator:
+            # return GuardrailFunctionOutput(output_info={"is_valid": True, "reason": "Raw string input, bypassing validation"}, tripwire_triggered=False)
+
+        else:
+            # Handle other unexpected input types
+            logger.error(f"Unexpected input type for validation: {type(input_data)}")
+            return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"}, tripwire_triggered=True)
+
+
+        # Run validation agent with tracing using the prepared validation_input
+        # Use async with trace if trace is an async context manager
+        async with trace(workflow_name="Stimulus_Validation", group_id=system_instance.trace_group_id): # Use system_instance
+            try:
+                # Pass the enhanced context containing the system_instance
+                result = await Runner.run(
+                    system_instance.stimulus_validator, # Agent instance
+                    validation_input,                   # Prepared input for the agent
+                    context=ctx.context,                # Original context object
+                    run_config=RunConfig(
+                        workflow_name="StimulusValidation",
+                        trace_id=None, # Auto-generate
+                        trace={"input_keys": list(validation_input.keys())} # Trace what keys were sent
+                    )
+                )
+
+                validation_output = result.final_output
+
+                # Check if validation_output has the expected structure (is_valid attribute)
+                is_valid = getattr(validation_output, 'is_valid', False) # Safer access
+
+                # Return guardrail output based on validation
+                return GuardrailFunctionOutput(
+                    output_info=validation_output,
+                    tripwire_triggered=not is_valid # Trigger if not valid
+                )
+            except Exception as e:
+                 logger.error(f"Error running stimulus validator agent: {e}", exc_info=True)
+                 return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Error during validation: {e}"}, tripwire_triggered=True)
 
 # =============== Helper Methods ===============
     
