@@ -38,7 +38,7 @@ from logic.social_links import (
 
 # Context system imports
 from context.context_service import get_context_service, get_comprehensive_context
-from context.memory_manager import get_memory_manager, search_memories_tool
+from context.memory_manager import get_memory_manager, search_memories_tool, MemorySearchRequest
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.context_performance import PerformanceMonitor, track_performance
@@ -127,58 +127,56 @@ async def get_optimized_context(
         }
 
 @function_tool
-# @track_performance("retrieve_relevant_memories") # Uncomment if track_performance is defined/imported
+# @track_performance("") # Uncomment if track_performance is defined/imported
 async def retrieve_relevant_memories(
     ctx: RunContextWrapper[ContextType],
     query_text: str,
-    memory_type: Optional[str] = None, # This one was already correct
-    # 1. Change signature: limit: Optional[int] = None
+    memory_type: Optional[str] = None,
     limit: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant memories using vector search.
-
+    
     Args:
         query_text: Query text for relevance matching.
         memory_type: Optional type filter (observation, event, etc.).
-        limit: Maximum number of memories to return. Defaults to 5 if not provided. # 2. Update docstring
-
+        limit: Maximum number of memories to return. Defaults to 5 if not provided.
+        
     Returns:
         List of relevant memories.
     """
     context = ctx.context
     user_id = context.user_id
     conversation_id = context.conversation_id
-
-    # 3. Handle the default value inside the function
+    
+    # Handle the default value inside the function
     actual_limit = limit if limit is not None else 5
-
+    
     try:
-        memory_manager = await get_memory_manager(user_id, conversation_id)
-        memory_types = [memory_type] if memory_type else None # Keep existing logic
-
-        # 4. Use the 'actual_' variable in the function call
-        memories = await memory_manager.search_memories_tool(
+        # Create a MemorySearchRequest object
+        request = MemorySearchRequest(
             query_text=query_text,
-            memory_types=memory_types,
-            limit=actual_limit, # Use actual_limit here
-            use_vector=True # Assuming this is always true for this tool
+            memory_types=[memory_type] if memory_type else None,
+            limit=actual_limit,
+            use_vector=True
         )
-
+        
+        # Call the standalone function with the right parameters
+        memory_result = await search_memories_tool(ctx, user_id, conversation_id, request)
+        
+        # Process the result
         memory_dicts = []
-        for memory in memories:
-            if hasattr(memory, 'to_dict'):
-                memory_dicts.append(memory.to_dict())
-            elif isinstance(memory, dict): # Handle if already dict
-                 memory_dicts.append(memory)
-            else:
-                 # Attempt basic conversion or log warning
-                 logger.warning(f"Cannot convert memory to dict: {type(memory)}")
-
+        if memory_result and hasattr(memory_result, 'memories'):
+            for memory in memory_result.memories:
+                if hasattr(memory, 'to_dict'):
+                    memory_dicts.append(memory.to_dict())
+                elif isinstance(memory, dict):
+                    memory_dicts.append(memory)
+                    
         return memory_dicts
     except Exception as e:
         logger.error(f"Error retrieving relevant memories: {str(e)}", exc_info=True)
-        return [] # Return empty list on error as per original logic
+        return []
         
 @function_tool
 # @track_performance("store_narrative_memory") # Uncomment if track_performance is defined/imported
