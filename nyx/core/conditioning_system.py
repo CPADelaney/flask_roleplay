@@ -595,6 +595,7 @@ class ConditioningSystem:
         }
 
     @staticmethod
+    @function_tool
     async def _generate_reward_signal(ctx: RunContextWrapper,
                                behavior: str,
                                consequence_type: str,
