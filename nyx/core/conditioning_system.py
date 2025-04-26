@@ -145,10 +145,10 @@ class ConditioningSystem:
             and decay over time. Consider the generalization of similar stimuli.
             """,
             tools=[
-                function_tool(self._get_association),
-                function_tool(self._create_or_update_classical_association),
-                function_tool(self._calculate_association_strength),
-                function_tool(self._check_similar_associations)
+                self._get_association,
+                self._create_or_update_classical_association,
+                self._calculate_association_strength,
+                self._check_similar_associations
             ],
             output_type=ClassicalConditioningOutput,
             model_settings=ModelSettings(temperature=0.2)
