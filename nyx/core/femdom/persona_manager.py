@@ -125,6 +125,10 @@ class DominancePersonaManager:
         
         # Initialize personas
         self._initialize_personas()
+
+        # Create guardrails
+        self.persona_recommendation_guardrail = self._create_persona_recommendation_guardrail()
+        self.persona_activation_guardrail = self._create_persona_activation_guardrail()
         
         # Initialize agents
         self.persona_recommendation_agent = self._create_persona_recommendation_agent()
@@ -142,10 +146,6 @@ class DominancePersonaManager:
             relationship_manager=self.relationship_manager,
             emotional_core=self.emotional_core
         )
-        
-        # Create guardrails
-        self.persona_recommendation_guardrail = self._create_persona_recommendation_guardrail()
-        self.persona_activation_guardrail = self._create_persona_activation_guardrail()
         
         # Lock for thread safety
         self._lock = asyncio.Lock()
