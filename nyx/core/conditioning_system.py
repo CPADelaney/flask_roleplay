@@ -594,42 +594,43 @@ class ConditioningSystem:
 
     @staticmethod
     @function_tool
-    async def _generate_reward_signal(ctx: RunContextWrapper,
-                               behavior: str,
-                               consequence_type: str,
-                               reward_value: float,
-                               metadata: Dict[str, Any] | None = None) -> bool: 
+    async def _generate_reward_signal(
+        ctx: RunContextWrapper,
+        behavior: str,
+        consequence_type: str,
+        reward_value: float,
+        metadata: Dict[str, Any] | None = None,
+    ) -> bool:
         """
-        Generate a reward signal for the reward system
-        
+        Generate a reward signal for the reward system.
+    
         Args:
-            behavior: The behavior being conditioned
-            consequence_type: Type of consequence
-            reward_value: Value of the reward
-            context: Additional context
-            
+            behavior: The behavior being conditioned.
+            consequence_type: The type of consequence.
+            reward_value: Numerical value of the reward (positive or negative).
+            metadata: Optional extra context to attach to the signal.
+    
         Returns:
-            Whether the reward signal was generated
+            True if the reward signal was dispatched successfully, otherwise False.
         """
         if not ctx.context.reward_system:
             return False
-        
+    
         try:
-            # Create reward signal
             reward_signal = RewardSignal(
                 value=reward_value,
                 source="operant_conditioning",
                 context={
                     "behavior": behavior,
                     "consequence_type": consequence_type,
-                    **context
-                }
+                    **(metadata or {}),
+                },
             )
-            
-            # Process reward signal
+    
+            # Dispatch the signal
             await ctx.context.reward_system.process_reward_signal(reward_signal)
-            
             return True
+    
         except Exception as e:
             logger.error(f"Error generating reward signal: {e}")
             return False
