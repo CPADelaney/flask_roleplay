@@ -544,7 +544,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Sadistic response system initialized")           
             
             # 6. Initialize perception and integration systems
-            self.multimodal_integrator = EnhancedMultiModalIntegrator(
+            self.multimodal_integrator = MultiModalIntegrator(
                 reasoning_core=self.reasoning_core,
                 attentional_controller=self.attentional_controller
             )
