@@ -118,7 +118,7 @@ class ConditioningSystem:
         
         # Create agents
         self.classical_conditioning_agent = self._create_classical_conditioning_agent()
-        self.operant_conditioning_agent = self._t()
+        self.operant_conditioning_agent = self._create_operant_conditioning_agent()
         self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
         self.personality_development_agent = self._create_personality_development_agent()
         self.conditioning_orchestrator = self._create_conditioning_orchestrator()
