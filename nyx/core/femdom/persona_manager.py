@@ -291,7 +291,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
         @function_tool
         async def recommendation_validation_function(
             ctx: RunContextWrapper,
-            agent: Agent,                       # ← was "Agent"
+            agent: Any,                       # ← was "Agent"
             input_data: Dict[str, Any],
         ) -> GuardrailFunctionOutput:
             """Validate persona-recommendation input."""
@@ -343,7 +343,7 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
     def _create_persona_activation_guardrail(self) -> InputGuardrail:
         """Create guardrail for persona activation validation."""
         @function_tool
-        async def activation_validation_function(ctx: RunContextWrapper, agent: Agent, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
+        async def activation_validation_function(ctx: RunContextWrapper, agent: Any, input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
             """Validate persona activation input to ensure it's appropriate."""
             try:
                 validation_input = PersonaActivationInput(
