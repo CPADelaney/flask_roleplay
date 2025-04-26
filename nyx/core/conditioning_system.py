@@ -118,7 +118,7 @@ class ConditioningSystem:
         
         # Create agents
         self.classical_conditioning_agent = self._create_classical_conditioning_agent()
-        self.operant_conditioning_agent = self._create_operant_conditioning_agent()
+        self.operant_conditioning_agent = self._t()
         self.behavior_evaluation_agent = self._create_behavior_evaluation_agent()
         self.personality_development_agent = self._create_personality_development_agent()
         self.conditioning_orchestrator = self._create_conditioning_orchestrator()
@@ -179,10 +179,10 @@ class ConditioningSystem:
             Adjust association strengths based on the intensity of consequences and timing.
             """,
             tools=[
-                function_tool(self._get_association),
-                function_tool(self._create_or_update_operant_association),
-                function_tool(self._calculate_valence_and_reward),
-                function_tool(self._generate_reward_signal)
+                self._get_association,
+                self._create_or_update_operant_association,
+                self._calculate_valence_and_reward,
+                self._generate_reward_signal
             ],
             output_type=OperantConditioningOutput,
             model_settings=ModelSettings(temperature=0.2)
@@ -209,10 +209,10 @@ class ConditioningSystem:
             Consider both immediate and delayed consequences when evaluating behaviors.
             """,
             tools=[
-                function_tool(self._get_behavior_associations),
-                function_tool(self._calculate_expected_valence),
-                function_tool(self._check_context_relevance),
-                function_tool(self._get_reinforcement_history)
+                self._get_behavior_associations,
+                self._calculate_expected_valence,
+                self._check_context_relevance,
+                self._get_reinforcement_history
             ],
             output_type=BehaviorEvaluationOutput,
             model_settings=ModelSettings(temperature=0.3)
@@ -238,13 +238,11 @@ class ConditioningSystem:
             Balance stable personality characteristics with adaptability to new experiences.
             Ensure personality development is consistent with overall identity and values.
             """,
-            # --- FIX: Wrap tools with function_tool ---
             tools=[
-                function_tool(self._identify_trait_behaviors),
-                function_tool(self._calculate_conditioning_trait_adjustment),
-                function_tool(self._update_identity_trait)
+                self._identify_trait_behaviors,
+                self._calculate_conditioning_trait_adjustment,
+                self._update_identity_trait
             ],
-            # --- END FIX ---
             output_type=TraitConditioningOutput,
             model_settings=ModelSettings(temperature=0.4)
         )
@@ -286,9 +284,9 @@ class ConditioningSystem:
                        tool_description_override="Condition a personality trait")
             ],
             tools=[
-                function_tool(self._determine_conditioning_type),
-                function_tool(self._prepare_conditioning_data),
-                function_tool(self._apply_association_effects)
+                self._determine_conditioning_type,
+                self._prepare_conditioning_data,
+                self._apply_association_effects
             ]
         )
     
