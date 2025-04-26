@@ -287,56 +287,58 @@ Generate original, varied, and authentic patterns that a dominatrix with this pe
     
     def _create_persona_recommendation_guardrail(self) -> InputGuardrail:
         """Create guardrail for persona recommendation validation."""
+        
         @function_tool
-        async def recommendation_validation_function(ctx: RunContextWrapper, agent: "Agent", input_data: Dict[str, Any]) -> GuardrailFunctionOutput:
-            """Validate persona recommendation input to ensure it's appropriate."""
+        async def recommendation_validation_function(
+            ctx: RunContextWrapper,
+            agent: Agent,                       # ← was "Agent"
+            input_data: Dict[str, Any],
+        ) -> GuardrailFunctionOutput:
+            """Validate persona-recommendation input."""
             try:
                 validation_input = PersonaRecommendationInput(
                     user_id=input_data.get("user_id", ""),
-                    scenario=input_data.get("scenario")
+                    scenario=input_data.get("scenario"),
                 )
-                
-                # Basic validation
-                is_valid = True
+    
+                # ----- basic checks -----
+                is_valid = bool(validation_input.user_id)
                 scenario_appropriate = True
                 reason = None
-                
-                # Check if user_id is provided
-                if not validation_input.user_id:
-                    is_valid = False
+    
+                if not is_valid:
                     reason = "User ID is required for persona recommendation"
-                
-                # Check if scenario is appropriate (if provided)
+    
                 if validation_input.scenario:
-                    inappropriate_terms = ["illegal", "underage", "noncon", "child", "children"]
-                    if any(term in validation_input.scenario.lower() for term in inappropriate_terms):
+                    bad_terms = {"illegal", "underage", "noncon", "child", "children"}
+                    if any(t in validation_input.scenario.lower() for t in bad_terms):
                         scenario_appropriate = False
                         reason = "Scenario contains inappropriate terms or context"
-                
-                # Return result
+    
                 validation_output = PersonaRecommendationOutput(
                     is_valid=is_valid,
                     scenario_appropriate=scenario_appropriate,
-                    reason=reason
+                    reason=reason,
                 )
-                
+    
                 return GuardrailFunctionOutput(
                     output_info=validation_output,
-                    tripwire_triggered=not is_valid or not scenario_appropriate
+                    tripwire_triggered=not is_valid or not scenario_appropriate,
                 )
-                
+    
             except Exception as e:
                 logger.error(f"Error in recommendation validation guardrail: {e}")
                 return GuardrailFunctionOutput(
                     output_info=PersonaRecommendationOutput(
                         is_valid=False,
                         scenario_appropriate=False,
-                        reason=f"Validation error: {str(e)}"
+                        reason=f"Validation error: {e}",
                     ),
-                    tripwire_triggered=True
+                    tripwire_triggered=True,
                 )
-        
+    
         return InputGuardrail(guardrail_function=recommendation_validation_function)
+
     
     def _create_persona_activation_guardrail(self) -> InputGuardrail:
         """Create guardrail for persona activation validation."""
