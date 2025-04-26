@@ -598,7 +598,7 @@ class ConditioningSystem:
                                behavior: str,
                                consequence_type: str,
                                reward_value: float,
-                               context: Dict[str, Any]) -> bool:
+                               metadata: Dict[str, Any] | None = None) -> bool: 
         """
         Generate a reward signal for the reward system
         
