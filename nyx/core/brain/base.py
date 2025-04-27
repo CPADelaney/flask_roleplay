@@ -550,7 +550,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             )
             logger.debug("Multimodal integrator initialized")
             
-            self.temporal_perception = TemporalPerceptionSystem()
+            self.temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
             await self.temporal_perception.initialize(self, None)
             logger.debug("Temporal perception initialized")
             
