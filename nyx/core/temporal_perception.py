@@ -305,10 +305,7 @@ async def determine_temporal_context() -> Dict[str, Any]:
     
     # Determine day of week type
     weekday = now.weekday()
-    if weekday < 5:  # Monday to Friday
-        day_type = "weekday"
-    else:
-        day_type = "weekend"
+    day_type = "weekday" if weekday < 5 else "weekend"
     
     # Determine month and season (Northern Hemisphere)
     month = now.month
@@ -330,7 +327,7 @@ async def determine_temporal_context() -> Dict[str, Any]:
         "year": now.year,
         "timestamp": now.isoformat()
     }
-
+    
 async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a reflection based on idle time
@@ -1145,10 +1142,11 @@ class TemporalPerceptionSystem:
                 if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
                     self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
                 
-                # Check for time scale transition
-                transition = await detect_time_scale_transition(previous_state, current_state)
-                if transition:
-                    self.time_scale_transitions.append(transition)
+                args = TimeScaleTransitionArgs(
+                    previous_state=previous_state,
+                    current_state=current_state
+                )
+                transition = await detect_time_scale_transition(args)
                 
                 # Update session tracking
                 if not self.session_active or time_since_last > 1800:  # 30 min break = new session
