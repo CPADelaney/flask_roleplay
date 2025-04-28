@@ -248,7 +248,8 @@ class ProceduralMemoryAgents:
         self.hooks = ProcedureMemoryHooks()
         
     def _register_functions(self):
-        """Register every tool or plain function with the AgentContext."""
+        """Register tools (wrapped or raw) so the rest of the system can
+        look them up and still rely on `.name`."""
         for obj in (
             add_procedure, execute_procedure, transfer_procedure,
             get_procedure_proficiency, list_procedures, get_transfer_statistics,
@@ -258,14 +259,18 @@ class ProceduralMemoryAgents:
             refine_step,
         ):
             if isinstance(obj, FunctionTool):
-                # unwrap the FunctionTool: its invokable is `on_invoke_tool`
-                fn   = obj.on_invoke_tool       # ← correct attribute
-                name = obj.name                 # keep the tool’s declared name
+                fn   = obj.on_invoke_tool          # async wrapper callable
+                fn_name = obj.name or fn.__name__
             else:
-                fn   = obj                      # it was an ordinary function
-                name = fn.__name__
+                fn   = obj                         # ordinary function
+                fn_name = fn.__name__
     
-            self.agent_context.register_function(name, fn)
+            # guarantee every callable has `.name` for downstream code
+            if not hasattr(fn, "name"):
+                setattr(fn, "name", fn_name)
+    
+            self.agent_context.register_function(fn_name, fn)
+
 
         
     def _create_procedure_manager_agent(self) -> Agent:
