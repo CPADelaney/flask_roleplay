@@ -129,10 +129,6 @@ class TimeScaleTransition(BaseModel):
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
 
-class TimeScaleTransitionArgs(BaseModel):
-    previous_state: Dict[str, Any] = Field(..., description="Previous temporal state")
-    current_state: Dict[str, Any]  = Field(..., description="Current temporal state")
-
 # =============== Function Tools ===============
 
 async def categorize_time_elapsed(seconds: float) -> str:
@@ -605,12 +601,12 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         "active_rhythms": active_rhythms
     }
 
-async def detect_time_scale_transition(
-    args: TimeScaleTransitionArgs        # ← ONE parameter
+async def _detect_time_scale_transition(
+    previous_state: Dict[str, Any],
+    current_state: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Detect transitions between time-scales (hour→day, day→week …)."""
-    prev = args.previous_state           # ← access through the model
-    curr = args.current_state
+    prev = previous_state
+    curr = current_state
     """
     Detect transitions between time scales
     
@@ -703,6 +699,13 @@ async def detect_time_scale_transition(
     
     # No significant transition detected
     return None
+
+async def detect_time_scale_transition_tool(
+    previous_state: Dict[str, Any],
+    current_state: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """SDK-exposed function: detect transitions between time scales."""
+    return await _detect_time_scale_transition(previous_state, current_state)
 
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
@@ -882,7 +885,7 @@ def create_time_perception_agent() -> Agent:
             function_tool(calculate_time_effects),
             function_tool(generate_time_expression),
             function_tool(determine_temporal_context),
-            function_tool(detect_time_scale_transition)
+            function_tool(detect_time_scale_transition_tool)
         ],
         output_type=TimePerceptionState
     )
@@ -908,7 +911,7 @@ def create_temporal_awareness_agent() -> Agent:
         tools=[
             function_tool(process_temporal_awareness),
             function_tool(detect_temporal_milestone),
-            function_tool(detect_time_scale_transition),
+            function_tool(detect_time_scale_transition_tool),
             function_tool(determine_temporal_context)
         ],
         output_type=TemporalAwarenessOutput
@@ -1142,11 +1145,9 @@ class TemporalPerceptionSystem:
                 if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
                     self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
                 
-                args = TimeScaleTransitionArgs(
-                    previous_state=previous_state,
-                    current_state=current_state
+                transition = await detect_time_scale_transition_tool(
+                    previous_state, current_state
                 )
-                transition = await detect_time_scale_transition(args)
                 
                 # Update session tracking
                 if not self.session_active or time_since_last > 1800:  # 30 min break = new session
@@ -1678,7 +1679,7 @@ def create_temporal_agent() -> Agent:
             function_tool(generate_time_expression),
             function_tool(process_temporal_awareness),
             function_tool(generate_time_reflection),
-            function_tool(detect_time_scale_transition),
+            function_tool(detect_time_scale_transition_tool),
             function_tool(detect_temporal_milestone),
             function_tool(calculate_time_effects)
         ],
