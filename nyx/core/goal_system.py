@@ -789,7 +789,7 @@ class GoalManager:
                 When the goal is associated with a specific need, ensure your plan includes steps that specifically address that need.
                 """,
                 model="gpt-4o",
-                model_settings=ModelSettings(response_format={"type": "json_object"}, temperature=0.1),
+                model_settings=ModelSettings(temperature=0.1),
                 tools=[
                     function_tool(self._get_available_actions),
                     function_tool(self._get_action_description),
