@@ -714,7 +714,8 @@ async def analyze_narrative_and_activity(
     conflict_manager = context.conflict_manager
 
     try:
-        conflict_analysis = await conflict_manager.add_conflict_to_narrative(narrative_text)
+        # Change this line to use the imported function
+        conflict_analysis = await add_conflict_to_narrative(ctx, narrative_text)
         results = {"conflict_analysis": conflict_analysis, "activity_effects": None, "relationship_impacts": [], "resource_changes": {}, "conflict_progression": []}
 
         if player_activity:
