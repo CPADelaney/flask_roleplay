@@ -131,7 +131,6 @@ class TimeScaleTransition(BaseModel):
 
 # =============== Function Tools ===============
 
-@function_tool
 async def categorize_time_elapsed(seconds: float) -> str:
     """
     Categorize elapsed time into descriptive buckets
@@ -157,7 +156,6 @@ async def categorize_time_elapsed(seconds: float) -> str:
     else:  # 24+ hrs
         return "very_long"
 
-@function_tool
 async def format_duration(seconds: float, granularity: int = 2) -> str:
     """
     Format duration in seconds to human-readable string
@@ -191,7 +189,6 @@ async def format_duration(seconds: float, granularity: int = 2) -> str:
     
     return ", ".join(result[:granularity])
 
-@function_tool
 async def calculate_time_effects(time_category: str, user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Calculate temporal effects based on time category and relationship data
@@ -282,7 +279,6 @@ async def calculate_time_effects(time_category: str, user_relationship_data: Dic
     
     return effects
 
-@function_tool
 async def determine_temporal_context() -> Dict[str, Any]:
     """
     Determine the current temporal context (time of day, day of week, etc.)
@@ -331,7 +327,6 @@ async def determine_temporal_context() -> Dict[str, Any]:
         "timestamp": now.isoformat()
     }
 
-@function_tool
 async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a reflection based on idle time
@@ -400,7 +395,6 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
-@function_tool
 async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
@@ -523,7 +517,6 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dic
         "time_reference": time_reference
     }
 
-@function_tool
 async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
     """
     Process awareness of different time scales and contexts
@@ -611,7 +604,6 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         "active_rhythms": active_rhythms
     }
 
-@function_tool
 async def detect_time_scale_transition(
     previous_state: Dict[str, Any], 
     current_state: Dict[str, Any]
@@ -709,7 +701,6 @@ async def detect_time_scale_transition(
     # No significant transition detected
     return None
 
-@function_tool
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
                                  total_interactions: int,
@@ -856,10 +847,10 @@ def create_time_reflection_agent() -> Agent:
         significance.""",
         model="gpt-4o",
         tools=[
-            format_duration,
-            categorize_time_elapsed,
-            generate_time_reflection,
-            determine_temporal_context
+            function_tool(format_duration),
+            function_tool(categorize_time_elapsed),
+            function_tool(generate_time_reflection),
+            function_tool(determine_temporal_context)
         ],
         output_type=TemporalReflection
     )
@@ -883,12 +874,12 @@ def create_time_perception_agent() -> Agent:
         maintaining temporal cognition across all timescales simultaneously.""",
         model="gpt-4o",
         tools=[
-            categorize_time_elapsed,
-            format_duration,
-            calculate_time_effects,
-            generate_time_expression,
-            determine_temporal_context,
-            detect_time_scale_transition
+            function_tool(categorize_time_elapsed),
+            function_tool(format_duration),
+            function_tool(calculate_time_effects),
+            function_tool(generate_time_expression),
+            function_tool(determine_temporal_context),
+            function_tool(detect_time_scale_transition)
         ],
         output_type=TimePerceptionState
     )
@@ -912,10 +903,10 @@ def create_temporal_awareness_agent() -> Agent:
         Time creates context and perspective that Nyx is always conscious of.""",
         model="gpt-4o",
         tools=[
-            process_temporal_awareness,
-            detect_temporal_milestone,
-            detect_time_scale_transition,
-            determine_temporal_context
+            function_tool(process_temporal_awareness),
+            function_tool(detect_temporal_milestone),
+            function_tool(detect_time_scale_transition),
+            function_tool(determine_temporal_context)
         ],
         output_type=TemporalAwarenessOutput
     )
@@ -1677,22 +1668,21 @@ def create_temporal_agent() -> Agent:
         actively processing. Nyx should maintain simultaneous awareness of all time scales from
         seconds to years, with a rich perception of time passing continuously.""",
         tools=[
-            categorize_time_elapsed,
-            format_duration,
-            determine_temporal_context,
-            generate_time_expression,
-            process_temporal_awareness,
-            generate_time_reflection,
-            detect_time_scale_transition,
-            detect_temporal_milestone,
-            calculate_time_effects
+            function_tool(categorize_time_elapsed),
+            function_tool(format_duration),
+            function_tool(determine_temporal_context),
+            function_tool(generate_time_expression),
+            function_tool(process_temporal_awareness),
+            function_tool(generate_time_reflection),
+            function_tool(detect_time_scale_transition),
+            function_tool(detect_temporal_milestone),
+            function_tool(calculate_time_effects)
         ],
         model="gpt-4o"
     )
 
 # Core API handlers for NyxBrain integration
 
-@function_tool
 async def initialize_temporal_perception(user_id: int, brain_context: Any) -> Dict[str, Any]:
     """
     Initialize the temporal perception system for a user
@@ -1719,7 +1709,6 @@ async def initialize_temporal_perception(user_id: int, brain_context: Any) -> Di
         }
     }
 
-@function_tool
 async def process_temporal_interaction_start(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Process the start of a new interaction with temporal effects
@@ -1737,7 +1726,6 @@ async def process_temporal_interaction_start(system_ref: TemporalSystemReference
     
     return await time_system.on_interaction_start()
 
-@function_tool
 async def process_temporal_interaction_end(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Process the end of an interaction with temporal updates
@@ -1754,7 +1742,6 @@ async def process_temporal_interaction_end(system_ref: TemporalSystemReference) 
     
     return await time_system.on_interaction_end()
 
-@function_tool
 async def get_temporal_awareness_state(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Get current temporal awareness state
@@ -1771,7 +1758,6 @@ async def get_temporal_awareness_state(system_ref: TemporalSystemReference) -> D
     
     return await time_system.get_temporal_awareness()
 
-@function_tool
 async def generate_temporal_expression(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
@@ -1805,7 +1791,6 @@ async def generate_temporal_expression(system_ref: TemporalSystemReference) -> D
     # Generate expression
     return await generate_time_expression(perception_state)
 
-@function_tool
 async def get_current_temporal_context(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
     Get current temporal context information
