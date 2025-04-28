@@ -248,25 +248,23 @@ class ProceduralMemoryAgents:
         self.hooks = ProcedureMemoryHooks()
         
     def _register_functions(self):
-        """Register function tools in the agent context"""
-        # Register all the function tools
-        for func in [
+        """Register function tools in the agent context."""
+        for obj in [
             add_procedure, execute_procedure, transfer_procedure,
             get_procedure_proficiency, list_procedures, get_transfer_statistics,
             identify_chunking_opportunities, apply_chunking,
             generalize_chunk_from_steps, find_matching_chunks,
             transfer_chunk, transfer_with_chunking, find_similar_procedures,
-            refine_step
+            refine_step,
         ]:
-            # ① unwrap if it’s already a FunctionTool
-            if isinstance(tool, FunctionTool):
-                fn   = tool.fn             # underlying python callable
-                name = tool.name or fn.__name__
+            # If it’s already wrapped as a FunctionTool, unwrap it
+            if isinstance(obj, FunctionTool):
+                fn   = obj.fn                  # underlying callable
+                name = obj.name or fn.__name__  # keep custom name if set
             else:
-                fn   = tool
+                fn   = obj
                 name = fn.__name__
-    
-            # ② register the real callable under a stable name
+
             self.agent_context.register_function(name, fn)
         
     def _create_procedure_manager_agent(self) -> Agent:
