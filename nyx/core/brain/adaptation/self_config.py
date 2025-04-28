@@ -1562,253 +1562,7 @@ class SelfConfigManager:
         }
 
 
-# Create a unified configuration manager that combines both classes
-class UnifiedConfigManager:
-    """
-    Unified configuration manager that integrates both the base SelfConfigManager 
-    and the EnhancedConfigManager functionality
-    """
-    
-    def __init__(self, brain):
-        """
-        Initialize the unified configuration manager
-        
-        Args:
-            brain: Reference to the NyxBrain instance
-        """
-        self.brain = brain
-        
-        # Initialize base manager
-        self.base_manager = SelfConfigManager(brain)
-        
-        # Initialize enhanced manager with reference to base manager
-        self.enhanced_manager = EnhancedConfigManager(brain, self.base_manager)
-        
-        logger.info("Unified configuration manager initialized")
-    
-    async def initialize(self) -> Dict[str, Any]:
-        """
-        Initialize both configuration managers
-        
-        Returns:
-            Initialization results
-        """
-        try:
-            # Enable base manager
-            base_result = await self.base_manager.enable()
-            
-            # Initialize enhanced manager
-            enhanced_result = await self.enhanced_manager.initialize()
-            
-            return {
-                "base_manager": base_result,
-                "enhanced_manager": enhanced_result,
-                "status": "initialized"
-            }
-        except Exception as e:
-            logger.error(f"Error initializing configuration managers: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    async def update_parameter(self, 
-                           param_name: str, 
-                           new_value: float, 
-                           reason: str = None) -> Dict[str, Any]:
-        """
-        Update a parameter with tracking in both managers
-        
-        Args:
-            param_name: Name of the parameter to update
-            new_value: New value for the parameter
-            reason: Reason for the update
-            
-        Returns:
-            Update result
-        """
-        try:
-            # Update via enhanced manager (which will sync with base manager)
-            return await self.enhanced_manager.update_parameter(param_name, new_value, reason)
-        except Exception as e:
-            logger.error(f"Error updating parameter {param_name}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "param_name": param_name
-            }
-    
-    async def evaluate_and_adjust_parameters(self) -> Dict[str, Any]:
-        """
-        Evaluate and adjust parameters using base manager's logic
-        
-        Returns:
-            Results of parameter adjustments
-        """
-        try:
-            return await self.base_manager.evaluate_and_adjust_parameters()
-        except Exception as e:
-            logger.error(f"Error evaluating and adjusting parameters: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    async def process_user_feedback(self,
-                                feedback_type: str,
-                                feedback_text: str,
-                                context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Process user feedback to influence configuration
-        
-        Args:
-            feedback_type: Type of feedback ("positive", "negative", "specific")
-            feedback_text: Text of user feedback
-            context: Additional context information
-            
-        Returns:
-            Processing results
-        """
-        try:
-            return await self.enhanced_manager.process_user_feedback(feedback_type, feedback_text, context)
-        except Exception as e:
-            logger.error(f"Error processing user feedback: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def get_parameter_health_report(self) -> Dict[str, Any]:
-        """
-        Get a comprehensive health report for all parameters
-        
-        Returns:
-            Health report data
-        """
-        try:
-            return await self.enhanced_manager.get_parameter_health_report()
-        except Exception as e:
-            logger.error(f"Error getting parameter health report: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
-    async def run_self_optimization(self) -> Dict[str, Any]:
-        """
-        Run an automatic self-optimization process to improve system health
-        
-        Returns:
-            Optimization results
-        """
-        try:
-            return await self.enhanced_manager.run_self_optimization()
-        except Exception as e:
-            logger.error(f"Error running self-optimization: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def experiment_with_parameter(self, 
-                                    param_name: str, 
-                                    value_range: List[float] = None,
-                                    duration: int = 5) -> Dict[str, Any]:
-        """
-        Run an experiment with a parameter
-        
-        Args:
-            param_name: Parameter to experiment with
-            value_range: Range of values to try, if None, use default range
-            duration: Number of interactions to test each value for
-            
-        Returns:
-            Experiment setup results
-        """
-        try:
-            return await self.enhanced_manager.experiment_with_parameter(param_name, value_range, duration)
-        except Exception as e:
-            logger.error(f"Error experimenting with parameter {param_name}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "param_name": param_name
-            }
-    
-    async def update_experiment(self, 
-                            experiment_id: str, 
-                            metrics: Dict[str, float] = None) -> Dict[str, Any]:
-        """
-        Update an experiment with new metrics and possibly advance to next value
-        
-        Args:
-            experiment_id: ID of the experiment
-            metrics: Current performance metrics
-            
-        Returns:
-            Update results
-        """
-        try:
-            return await self.enhanced_manager.update_experiment(experiment_id, metrics)
-        except Exception as e:
-            logger.error(f"Error updating experiment {experiment_id}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "experiment_id": experiment_id
-            }
-    
-    async def recommend_parameters_for_user(self, user_id: str) -> Dict[str, Any]:
-        """
-        Generate parameter recommendations for a specific user
-        
-        Args:
-            user_id: User ID
-            
-        Returns:
-            Parameter recommendations
-        """
-        try:
-            return await self.enhanced_manager.recommend_parameters_for_user(user_id)
-        except Exception as e:
-            logger.error(f"Error recommending parameters for user {user_id}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "user_id": user_id
-            }
-    
-    async def record_parameter_impact(self,
-                                 param_name: str,
-                                 metrics: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Record the impact of a parameter change on system metrics
-        
-        Args:
-            param_name: Name of the parameter
-            metrics: Performance metrics to record
-            
-        Returns:
-            Impact assessment
-        """
-        try:
-            return await self.enhanced_manager.record_parameter_impact(param_name, metrics)
-        except Exception as e:
-            logger.error(f"Error recording parameter impact for {param_name}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "param_name": param_name
-            }
-    
-    # Convenience methods to access managers directly
-    def get_base_manager(self) -> SelfConfigManager:
-        """Get the base configuration manager"""
-        return self.base_manager
-    
-    def get_enhanced_manager(self) -> EnhancedConfigManager:
-        """Get the enhanced configuration manager"""
-        return self.enhanced_manager
+
 
 
 class EnhancedConfigManager:
@@ -3262,3 +3016,252 @@ class EnhancedConfigManager:
                         })
         
         return result
+
+
+# Create a unified configuration manager that combines both classes
+class UnifiedConfigManager:
+    """
+    Unified configuration manager that integrates both the base SelfConfigManager 
+    and the EnhancedConfigManager functionality
+    """
+    
+    def __init__(self, brain):
+        """
+        Initialize the unified configuration manager
+        
+        Args:
+            brain: Reference to the NyxBrain instance
+        """
+        self.brain = brain
+        
+        # Initialize base manager
+        self.base_manager = SelfConfigManager(brain)
+        
+        # Initialize enhanced manager with reference to base manager
+        self.enhanced_manager = EnhancedConfigManager(brain, self.base_manager)
+        
+        logger.info("Unified configuration manager initialized")
+    
+    async def initialize(self) -> Dict[str, Any]:
+        """
+        Initialize both configuration managers
+        
+        Returns:
+            Initialization results
+        """
+        try:
+            # Enable base manager
+            base_result = await self.base_manager.enable()
+            
+            # Initialize enhanced manager
+            enhanced_result = await self.enhanced_manager.initialize()
+            
+            return {
+                "base_manager": base_result,
+                "enhanced_manager": enhanced_result,
+                "status": "initialized"
+            }
+        except Exception as e:
+            logger.error(f"Error initializing configuration managers: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def update_parameter(self, 
+                           param_name: str, 
+                           new_value: float, 
+                           reason: str = None) -> Dict[str, Any]:
+        """
+        Update a parameter with tracking in both managers
+        
+        Args:
+            param_name: Name of the parameter to update
+            new_value: New value for the parameter
+            reason: Reason for the update
+            
+        Returns:
+            Update result
+        """
+        try:
+            # Update via enhanced manager (which will sync with base manager)
+            return await self.enhanced_manager.update_parameter(param_name, new_value, reason)
+        except Exception as e:
+            logger.error(f"Error updating parameter {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
+    
+    async def evaluate_and_adjust_parameters(self) -> Dict[str, Any]:
+        """
+        Evaluate and adjust parameters using base manager's logic
+        
+        Returns:
+            Results of parameter adjustments
+        """
+        try:
+            return await self.base_manager.evaluate_and_adjust_parameters()
+        except Exception as e:
+            logger.error(f"Error evaluating and adjusting parameters: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def process_user_feedback(self,
+                                feedback_type: str,
+                                feedback_text: str,
+                                context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user feedback to influence configuration
+        
+        Args:
+            feedback_type: Type of feedback ("positive", "negative", "specific")
+            feedback_text: Text of user feedback
+            context: Additional context information
+            
+        Returns:
+            Processing results
+        """
+        try:
+            return await self.enhanced_manager.process_user_feedback(feedback_type, feedback_text, context)
+        except Exception as e:
+            logger.error(f"Error processing user feedback: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def get_parameter_health_report(self) -> Dict[str, Any]:
+        """
+        Get a comprehensive health report for all parameters
+        
+        Returns:
+            Health report data
+        """
+        try:
+            return await self.enhanced_manager.get_parameter_health_report()
+        except Exception as e:
+            logger.error(f"Error getting parameter health report: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def run_self_optimization(self) -> Dict[str, Any]:
+        """
+        Run an automatic self-optimization process to improve system health
+        
+        Returns:
+            Optimization results
+        """
+        try:
+            return await self.enhanced_manager.run_self_optimization()
+        except Exception as e:
+            logger.error(f"Error running self-optimization: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def experiment_with_parameter(self, 
+                                    param_name: str, 
+                                    value_range: List[float] = None,
+                                    duration: int = 5) -> Dict[str, Any]:
+        """
+        Run an experiment with a parameter
+        
+        Args:
+            param_name: Parameter to experiment with
+            value_range: Range of values to try, if None, use default range
+            duration: Number of interactions to test each value for
+            
+        Returns:
+            Experiment setup results
+        """
+        try:
+            return await self.enhanced_manager.experiment_with_parameter(param_name, value_range, duration)
+        except Exception as e:
+            logger.error(f"Error experimenting with parameter {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
+    
+    async def update_experiment(self, 
+                            experiment_id: str, 
+                            metrics: Dict[str, float] = None) -> Dict[str, Any]:
+        """
+        Update an experiment with new metrics and possibly advance to next value
+        
+        Args:
+            experiment_id: ID of the experiment
+            metrics: Current performance metrics
+            
+        Returns:
+            Update results
+        """
+        try:
+            return await self.enhanced_manager.update_experiment(experiment_id, metrics)
+        except Exception as e:
+            logger.error(f"Error updating experiment {experiment_id}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "experiment_id": experiment_id
+            }
+    
+    async def recommend_parameters_for_user(self, user_id: str) -> Dict[str, Any]:
+        """
+        Generate parameter recommendations for a specific user
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Parameter recommendations
+        """
+        try:
+            return await self.enhanced_manager.recommend_parameters_for_user(user_id)
+        except Exception as e:
+            logger.error(f"Error recommending parameters for user {user_id}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "user_id": user_id
+            }
+    
+    async def record_parameter_impact(self,
+                                 param_name: str,
+                                 metrics: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Record the impact of a parameter change on system metrics
+        
+        Args:
+            param_name: Name of the parameter
+            metrics: Performance metrics to record
+            
+        Returns:
+            Impact assessment
+        """
+        try:
+            return await self.enhanced_manager.record_parameter_impact(param_name, metrics)
+        except Exception as e:
+            logger.error(f"Error recording parameter impact for {param_name}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "param_name": param_name
+            }
+    
+    # Convenience methods to access managers directly
+    def get_base_manager(self) -> SelfConfigManager:
+        """Get the base configuration manager"""
+        return self.base_manager
+    
+    def get_enhanced_manager(self) -> EnhancedConfigManager:
+        """Get the enhanced configuration manager"""
+        return self.enhanced_manager
