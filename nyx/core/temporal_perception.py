@@ -893,7 +893,7 @@ def create_time_perception_agent() -> Agent:
             function_tool(calculate_time_effects),
             function_tool(generate_time_expression),
             function_tool(determine_temporal_context),
-            function_tool(detect_time_scale_transition_tool)
+            detect_time_scale_transition_tool
         ],
         output_type=TimePerceptionState
     )
@@ -919,7 +919,7 @@ def create_temporal_awareness_agent() -> Agent:
         tools=[
             function_tool(process_temporal_awareness),
             function_tool(detect_temporal_milestone),
-            function_tool(detect_time_scale_transition_tool),
+            detect_time_scale_transition_tool,
             function_tool(determine_temporal_context)
         ],
         output_type=TemporalAwarenessOutput
@@ -1687,7 +1687,7 @@ def create_temporal_agent() -> Agent:
             function_tool(generate_time_expression),
             function_tool(process_temporal_awareness),
             function_tool(generate_time_reflection),
-            function_tool(detect_time_scale_transition_tool),
+            detect_time_scale_transition_tool,
             function_tool(detect_temporal_milestone),
             function_tool(calculate_time_effects)
         ],
