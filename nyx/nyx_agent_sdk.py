@@ -12,6 +12,7 @@ import random
 
 from agents import Agent, handoff, function_tool, Runner, trace
 from agents import ModelSettings, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail, RunConfig
+from npcs.npc_agent import NPCAgent, ResourcePool
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection_context
