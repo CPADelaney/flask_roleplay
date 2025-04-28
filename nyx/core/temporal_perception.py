@@ -129,6 +129,10 @@ class TimeScaleTransition(BaseModel):
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
 
+class TimeScaleTransitionArgs(BaseModel):
+    previous_state: Dict[str, Any] = Field(..., description="Previous temporal state")
+    current_state: Dict[str, Any]  = Field(..., description="Current temporal state")
+
 # =============== Function Tools ===============
 
 async def categorize_time_elapsed(seconds: float) -> str:
@@ -605,9 +609,10 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
     }
 
 async def detect_time_scale_transition(
-    previous_state: Dict[str, Any], 
-    current_state: Dict[str, Any]
+    args: TimeScaleTransitionArgs
 ) -> Optional[Dict[str, Any]]:
+    prev = args.previous_state
+    curr = args.current_state
     """
     Detect transitions between time scales
     
