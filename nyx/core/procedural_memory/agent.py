@@ -11,7 +11,7 @@ import uuid
 from agents import (
     Agent, Runner, ModelSettings, RunConfig, WebSearchTool,
     handoff, function_tool, custom_span, trace, RunHooks,
-    input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper
+    input_guardrail, output_guardrail, GuardrailFunctionOutput, RunContextWrapper, FunctionTool
 )
 from agents.exceptions import UserError, MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field, create_model
@@ -258,8 +258,16 @@ class ProceduralMemoryAgents:
             transfer_chunk, transfer_with_chunking, find_similar_procedures,
             refine_step
         ]:
-            name = func.__name__
-            self.agent_context.register_function(name, func)
+            # ① unwrap if it’s already a FunctionTool
+            if isinstance(tool, FunctionTool):
+                fn   = tool.fn             # underlying python callable
+                name = tool.name or fn.__name__
+            else:
+                fn   = tool
+                name = fn.__name__
+    
+            # ② register the real callable under a stable name
+            self.agent_context.register_function(name, fn)
         
     def _create_procedure_manager_agent(self) -> Agent:
         """Create an agent for managing procedures"""
