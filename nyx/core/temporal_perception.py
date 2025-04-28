@@ -704,7 +704,7 @@ async def detect_time_scale_transition(
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
                                  total_interactions: int,
-                                 recent_memories: List[Dict]) -> Optional[Dict[str, Any]]:
+                                 recent_memories: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """
     Detect if a temporal milestone has been reached
     
