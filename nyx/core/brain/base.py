@@ -572,7 +572,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug("Procedural memory initialized")
             
             # 9. Initialize cognitive tools
-            self.thinking_tools = ThinkingTools()
+            from nyx.apitools.thinking_tools import (
+                should_use_extended_thinking,
+                think_before_responding,
+                generate_reasoned_response
+            )
+            
+            self.thinking_tools = {
+                "should_use_extended_thinking": should_use_extended_thinking,
+                "think_before_responding": think_before_responding,
+                "generate_reasoned_response": generate_reasoned_response
+            }
             logger.debug("Thinking tools initialized")
             
             # 10. Initialize additional cognitive systems
