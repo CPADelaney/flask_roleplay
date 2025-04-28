@@ -609,9 +609,10 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
     }
 
 async def detect_time_scale_transition(
-    args: TimeScaleTransitionArgs
+    args: TimeScaleTransitionArgs        # ← ONE parameter
 ) -> Optional[Dict[str, Any]]:
-    prev = args.previous_state
+    """Detect transitions between time-scales (hour→day, day→week …)."""
+    prev = args.previous_state           # ← access through the model
     curr = args.current_state
     """
     Detect transitions between time scales
@@ -623,8 +624,8 @@ async def detect_time_scale_transition(
     Returns:
         Time scale transition if detected, None otherwise
     """
-    prev_time = previous_state.get("last_interaction")
-    curr_time = current_state.get("last_interaction")
+    prev_time = prev.get("last_interaction")
+    curr_time = curr.get("last_interaction")
     
     if not prev_time or not curr_time:
         return None
