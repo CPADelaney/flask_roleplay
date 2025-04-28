@@ -129,6 +129,11 @@ class TimeScaleTransition(BaseModel):
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
 
+class TimeScaleTransitionInput(BaseModel):
+    """Payload for the transition detector"""
+    previous_state: Dict[str, Any]
+    current_state: Dict[str, Any]
+
 # =============== Function Tools ===============
 
 async def categorize_time_elapsed(seconds: float) -> str:
@@ -602,11 +607,9 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
     }
 
 async def _detect_time_scale_transition(
-    previous_state: Dict[str, Any],
-    current_state: Dict[str, Any],
+    data: TimeScaleTransitionInput,
 ) -> Optional[Dict[str, Any]]:
-    prev = previous_state
-    curr = current_state
+    prev, curr = data.previous_state, data.current_state
     """
     Detect transitions between time scales
     
@@ -700,12 +703,17 @@ async def _detect_time_scale_transition(
     # No significant transition detected
     return None
 
+@function_tool  # strict mode is fine now
 async def detect_time_scale_transition_tool(
     previous_state: Dict[str, Any],
     current_state: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """SDK-exposed function: detect transitions between time scales."""
-    return await _detect_time_scale_transition(previous_state, current_state)
+    return await _detect_time_scale_transition_core(
+        TimeScaleTransitionInput(
+            previous_state=previous_state,
+            current_state=current_state,
+        )
+    )
 
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
