@@ -16,6 +16,7 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
 from nyx.core.internal_thoughts import InternalThought
+from nyx.core.brain.processing.manager import ProcessingManager
 
 from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
 from nyx.core.brain.nyx_event_log import EventLogMixin
