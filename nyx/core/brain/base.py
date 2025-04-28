@@ -275,6 +275,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.context_awareness import ContextAwarenessSystem
             from nyx.core.interaction_mode_manager import InteractionModeManager
             from nyx.core.mode_integration import ModeIntegrationManager
+
+            from nyx.core.procedural_memory.manager import ProceduralMemoryManager
+            from nyx.core.procedural_memory.agent import ProceduralMemoryAgents, AgentEnhancedMemoryManager
     
             from nyx.core.memory_core import BrainMemoryCore  # or from .memory_core import BrainMemoryCore
             from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent        
