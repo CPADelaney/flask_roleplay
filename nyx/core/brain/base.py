@@ -264,7 +264,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             from nyx.core.spatial.map_visualization import MapVisualization
             from nyx.core.spatial.navigator_agent import SpatialNavigatorAgent
 
-            from nyx.core.brain.adaptation.self_config import SelfConfigManager
+            from nyx.core.brain.adaptation.self_config import SelfConfigManager, EnhancedConfigManager, UnifiedConfigManager
             
             # Sync system imports
             from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
