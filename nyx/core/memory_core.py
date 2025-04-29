@@ -2108,11 +2108,11 @@ async def construct_narrative_from_memories(
 async def retrieve_relevant_experiences(
     ctx: RunContextWrapper[MemoryCoreContext],
     query: str,
-    scenario_type: str = "",
-    emotional_state: Dict[str, Any] = None,
-    entities: List[str] = None,
-    limit: int = 3,
-    min_relevance: float = 0.6
+    scenario_type: Optional[str] = None,
+    emotional_state: Optional[Dict[str, Any]] = None,
+    entities: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+    min_relevance: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve experiences relevant to the current conversation context
@@ -2128,6 +2128,10 @@ async def retrieve_relevant_experiences(
     Returns:
         List of relevant experiences with metadata
     """
+
+    scenario_type  = scenario_type  or ""
+    limit          = limit          or 3
+    min_relevance  = min_relevance  if min_relevance is not None else 0.6
     with custom_span("retrieve_relevant_experiences", {"query": query, "scenario_type": scenario_type}):
         # Create context dictionary
         current_context = {
