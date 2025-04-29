@@ -761,8 +761,8 @@ async def query_knowledge(
     core_ctx.integration_stats["knowledge_queries"] += 1
     
     node_type = query.get("type")
-    content_filter = query.get("content_filter", {})
-    relation_filter = query.get("relation_filter", {})
+    content_filter = query.content_filter or {}
+    relation_filter = query.relation_filter or {}
     limit = query.get("limit", 10)
     
     # Build cache key
