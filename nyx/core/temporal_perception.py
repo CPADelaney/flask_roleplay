@@ -136,6 +136,7 @@ class TimeScaleTransitionInput(BaseModel):
 
 # =============== Function Tools ===============
 
+@function_tool
 async def categorize_time_elapsed(seconds: float) -> str:
     """
     Categorize elapsed time into descriptive buckets
@@ -161,6 +162,7 @@ async def categorize_time_elapsed(seconds: float) -> str:
     else:  # 24+ hrs
         return "very_long"
 
+@function_tool
 async def format_duration(seconds: float, granularity: int = 2) -> str:
     """
     Format duration in seconds to human-readable string
@@ -194,6 +196,7 @@ async def format_duration(seconds: float, granularity: int = 2) -> str:
     
     return ", ".join(result[:granularity])
 
+@function_tool
 async def calculate_time_effects(time_category: str, user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Calculate temporal effects based on time category and relationship data
@@ -284,6 +287,7 @@ async def calculate_time_effects(time_category: str, user_relationship_data: Dic
     
     return effects
 
+@function_tool
 async def determine_temporal_context() -> Dict[str, Any]:
     """
     Determine the current temporal context (time of day, day of week, etc.)
@@ -397,6 +401,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
+@function_tool
 async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a natural expression about time perception
