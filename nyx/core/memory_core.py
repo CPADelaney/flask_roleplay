@@ -1376,9 +1376,15 @@ async def mark_as_consolidated(
 @function_tool
 async def retrieve_memories_with_formatting(
     ctx: RunContextWrapper[MemoryCoreContext],
-    query: str, 
-    memory_types: List[str] = None, 
-    limit: Optional[int],         
+    query: str,
+    limit: Optional[int],                    # <- now the last non-default
+    memory_types: Optional[List[str]] = None,
+    scopes: Optional[List[str]] = None,
+    min_significance: Optional[int] = None,
+    include_archived: Optional[bool] = None,
+    entities: Optional[List[str]] = None,
+    emotional_state: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Enhanced retrieval with formatted results for agent consumption
