@@ -1378,7 +1378,7 @@ async def retrieve_memories_with_formatting(
     ctx: RunContextWrapper[MemoryCoreContext],
     query: str, 
     memory_types: List[str] = None, 
-    limit: int = 5
+    limit: Optional[int],         
 ) -> List[Dict[str, Any]]:
     """
     Enhanced retrieval with formatted results for agent consumption
@@ -1391,6 +1391,8 @@ async def retrieve_memories_with_formatting(
     Returns:
         List of formatted memories with confidence markers
     """
+    if limit is None:
+        limit = 20
     with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": limit}):
         memories = await retrieve_memories(
             ctx,
