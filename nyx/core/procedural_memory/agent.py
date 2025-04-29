@@ -303,10 +303,10 @@ class ProceduralMemoryAgents:
                 temperature=0.2,  # Lower temperature for more consistent results
             ),
             tools=[
-                function_tool(add_procedure),
-                function_tool(list_procedures),
-                function_tool(get_procedure_proficiency),
-                function_tool(refine_step),
+                add_procedure,
+                list_procedures,
+                get_procedure_proficiency,
+                refine_step,
             ],
             output_type=None,  # Default output type (string)
         )
@@ -344,8 +344,8 @@ class ProceduralMemoryAgents:
                 temperature=0.3,
             ),
             tools=[
-                function_tool(execute_procedure),
-                function_tool(get_procedure_proficiency),
+                execute_procedure,
+                get_procedure_proficiency,
             ],
             output_type=ProcedureExecutionResult,
         )
@@ -385,12 +385,12 @@ class ProceduralMemoryAgents:
                 temperature=0.3,
             ),
             tools=[
-                function_tool(transfer_procedure),
-                function_tool(find_similar_procedures),
-                function_tool(transfer_with_chunking),
-                function_tool(get_transfer_statistics),
-                function_tool(find_matching_chunks),
-                function_tool(transfer_chunk),
+                transfer_procedure,
+                find_similar_procedures,
+                transfer_with_chunking,
+                get_transfer_statistics,
+                find_matching_chunks,
+                transfer_chunk,
             ],
             output_type=ProcedureTransferResult,
         )
@@ -428,10 +428,10 @@ class ProceduralMemoryAgents:
                 temperature=0.2,
             ),
             tools=[
-                function_tool(identify_chunking_opportunities),
-                function_tool(apply_chunking),
-                function_tool(generalize_chunk_from_steps),
-                function_tool(find_matching_chunks),
+                identify_chunking_opportunities,
+                apply_chunking,
+                generalize_chunk_from_steps,
+                find_matching_chunks,
             ],
             output_type=ChunkingOpportunityResult,
         )
@@ -469,12 +469,12 @@ class ProceduralMemoryAgents:
                 temperature=0.4,
             ),
             tools=[
-                function_tool(get_procedure_proficiency),
-                function_tool(refine_step),
-                function_tool(find_similar_procedures),
-                function_tool(identify_chunking_opportunities),
+                get_procedure_proficiency,
+                refine_step,
+                find_similar_procedures,
+                identify_chunking_opportunities,
             ],
-            output_type=None,  # Default output type (string)
+            output_type=None,
         )
         
     def _create_triage_agent(self) -> Agent:
