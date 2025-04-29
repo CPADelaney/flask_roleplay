@@ -657,7 +657,7 @@ async def add_relation(
     source_id: str,
     target_id: str,
     type: str,
-    weight: float = 1.0,
+    weight: Optional[float],
     metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
@@ -673,6 +673,8 @@ async def add_relation(
     Returns:
         True if successful, False if either node doesn't exist
     """
+    if weight is None:
+        weight = 1.0
     core_ctx = ctx.context
     
     # Check if nodes exist
