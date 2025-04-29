@@ -10,8 +10,9 @@ from typing import Dict, List, Any, Optional, Tuple, Set, Union
 import numpy as np
 from pydantic import BaseModel, Field
 
+
 # OpenAI Agents SDK imports
-from agents import Agent, Runner, function_tool, handoff, trace, custom_span
+from agents import Agent, Runner, function_tool, handoff, trace, custom_span, Parameter
 from agents import RunContextWrapper, ModelSettings
 
 logger = logging.getLogger(__name__)
@@ -783,36 +784,41 @@ async def add_memory(
         logger.debug(f"Added memory {memory_id} of type {memory_type}")
         return memory_id
 
+
 @function_tool
 async def retrieve_memories(
     ctx: RunContextWrapper[MemoryCoreContext],
     query: str,
-    memory_types: List[str] = None,
-    scopes: List[str] = None,
-    limit: int = 5,
-    min_significance: int = 3,
-    include_archived: bool = False,
-    entities: List[str] = None,
-    emotional_state: Dict[str, Any] = None,
-    tags: List[str] = None
+    memory_types: Annotated[Optional[List[str]], Parameter(optional=True)] = None,
+    scopes:       Annotated[Optional[List[str]], Parameter(optional=True)] = None,
+    limit:        Annotated[Optional[int],       Parameter(optional=True)] = None,  # <- comma added
+    min_significance: Annotated[Optional[int],   Parameter(optional=True)] = None,
+    include_archived: Annotated[Optional[bool],  Parameter(optional=True)] = None,
+    entities:     Annotated[Optional[List[str]], Parameter(optional=True)] = None,
+    emotional_state: Annotated[Optional[Dict[str, Any]], Parameter(optional=True)] = None,
+    tags:         Annotated[Optional[List[str]], Parameter(optional=True)] = None
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve memories based on query and filters
-    
+    Retrieve memories based on query and filters.
+
     Args:
-        query: Search query text
-        memory_types: Types of memories to retrieve
-        scopes: Memory scopes to search in
-        limit: Maximum number of memories to return
-        min_significance: Minimum significance level
-        include_archived: Whether to include archived memories
-        entities: Entities to filter by
-        emotional_state: Emotional state for relevance boosting
-        tags: Tags to filter by
-        
-    Returns:
-        List of matching memories with relevance scores
+        query: Search text.
+        memory_types, scopes, limit, … : Optional filters.
+            • `limit` defaults to **20** if omitted.  
+            • `min_significance` defaults to **3** if omitted.  
+            • `include_archived` defaults to **False** if omitted.
     """
+    # ---------- run-time defaults ----------
+    if memory_types      is None: memory_types      = ["observation", "reflection",
+                                                      "abstraction", "experience", "semantic"]
+    if scopes            is None: scopes            = ["game", "user", "global"]
+    if limit             is None: limit             = 20
+    if min_significance  is None: min_significance  = 3
+    if include_archived  is None: include_archived  = False
+    if entities          is None: entities          = []
+    if emotional_state   is None: emotional_state   = {}
+    if tags              is None: tags              = []
+    # ---------------------------------------
     with custom_span("retrieve_memories", {
         "query": query, 
         "memory_types": str(memory_types), 
