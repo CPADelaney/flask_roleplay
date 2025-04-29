@@ -19,9 +19,6 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set, Annotated
 import random
 from collections import Counter
 
-from typing_extensions import Annotated
-from agents import Parameter
-
 from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, ModelSettings, trace, RunContextWrapper
 from pydantic import BaseModel, Field
 
@@ -580,17 +577,13 @@ class KnowledgeCoreContext:
 
 
 # Function tools for knowledge operations
-@function_tool
+@function_tool(strict_json_schema=False)  # ‘content’ can be any dict shape
 async def add_knowledge(
-    ctx: RunContextWrapper[KnowledgeCoreContext],
-    type: str,
-    # tell the SDK “this is a free-form JSON object”
-    content: Annotated[
-        Dict[str, Any],
-        Parameter(schema={"type": "object", "description": "Arbitrary JSON content"})
-    ],
-    source: str,
-    confidence: Annotated[Optional[float], Parameter(optional=True)] = None,
+    ctx: RunContextWrapper["KnowledgeCoreContext"],
+    type: str,                         # required
+    content: Dict[str, Any],           # required
+    source: str,                       # required
+    confidence: Optional[float] = None # optional – defaults handled below
 ) -> str:
     """
     Add a new knowledge node to the knowledge graph.
@@ -605,12 +598,10 @@ async def add_knowledge(
         The ID of the new node
     """
     if confidence is None:
-        confidence = 0.5    
-    core_ctx = ctx.context
-    
-    # Create node ID
-    node_id = f"node_{core_ctx.next_node_id}"
-    core_ctx.next_node_id += 1
+        confidence = 0.5
+    core = ctx.context
+    node_id = f"node_{core.next_node_id}"
+    core.next_node_id += 1
     
     # Create node
     node = KnowledgeNode(
