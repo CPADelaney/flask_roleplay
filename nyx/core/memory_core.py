@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 
 # OpenAI Agents SDK imports
-from agents import Agent, Runner, function_tool, handoff, trace, custom_span, Parameter
+from agents import Agent, Runner, function_tool, handoff, trace, custom_span
 from agents import RunContextWrapper, ModelSettings
 
 logger = logging.getLogger(__name__)
@@ -787,16 +787,16 @@ async def add_memory(
 
 @function_tool
 async def retrieve_memories(
-    ctx: RunContextWrapper[MemoryCoreContext],
+    ctx: RunContextWrapper["MemoryCoreContext"],
     query: str,
-    memory_types: Annotated[Optional[List[str]], Parameter(optional=True)] = None,
-    scopes:       Annotated[Optional[List[str]], Parameter(optional=True)] = None,
-    limit:        Annotated[Optional[int],       Parameter(optional=True)] = None,  # <- comma added
-    min_significance: Annotated[Optional[int],   Parameter(optional=True)] = None,
-    include_archived: Annotated[Optional[bool],  Parameter(optional=True)] = None,
-    entities:     Annotated[Optional[List[str]], Parameter(optional=True)] = None,
-    emotional_state: Annotated[Optional[Dict[str, Any]], Parameter(optional=True)] = None,
-    tags:         Annotated[Optional[List[str]], Parameter(optional=True)] = None
+    memory_types:  Optional[List[str]] = None,
+    scopes:        Optional[List[str]] = None,
+    limit:         Optional[int] = None,
+    min_significance: Optional[int] = None,
+    include_archived: Optional[bool] = None,
+    entities:      Optional[List[str]] = None,
+    emotional_state: Optional[Dict[str, Any]] = None,
+    tags:          Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve memories based on query and filters.
