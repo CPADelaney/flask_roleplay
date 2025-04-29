@@ -24,11 +24,23 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+
+
 class KnowledgeQuery(BaseModel):
-    type: Optional[str] = None
-    content_filter: Optional[Dict[str, Any]] = {}
-    relation_filter: Optional[Dict[str, Any]] = {}
-    limit: int = 10
+    type: Optional[str] = Field(
+        None, description="If set, only return nodes of this type"
+    )
+    content_filter: Optional[Dict[str, Any]] = Field(
+        None, description="Key/value pairs that node.content must match"
+    )
+    relation_filter: Optional[Dict[str, Any]] = Field(
+        None,
+        description=("Optional relationship constraints: "
+                     "{type, node_id, direction ('outgoing'|'incoming')}")
+    )
+    limit: int = Field(
+        10, ge=1, le=100, description="Maximum number of results"
+    )
 
 # Keep the original data models
 class KnowledgeNode:
@@ -727,10 +739,10 @@ async def add_relation(
     
     return True
 
-@function_tool
+@function_tool  # strict schema still ON (default)
 async def query_knowledge(
     ctx: RunContextWrapper[KnowledgeCoreContext],
-    query: KnowledgeQuery          # <-- typed!
+    query: KnowledgeQuery
 ) -> List[Dict[str, Any]]:
     """
     Search the knowledge graph for nodes matching certain criteria.
