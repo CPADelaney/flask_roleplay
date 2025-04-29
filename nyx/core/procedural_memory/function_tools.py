@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 @function_tool
 async def add_procedure(
-    ctx,
-    name: str, 
-    steps: List[Dict[str, Any]], 
-    description: str = None,
-    domain: str = "general"
+    ctx: RunContextWrapper[Any],
+    name: str,
+    steps: List[Dict[str, Any]],
+    description: Optional[str] = None,
+    domain: str = "general",
 ) -> Dict[str, Any]:
     """
     Add a new procedure to the procedural memory system.
