@@ -332,7 +332,8 @@ async def determine_temporal_context() -> Dict[str, Any]:
         "year": now.year,
         "timestamp": now.isoformat()
     }
-    
+
+@function_tool
 async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate a reflection based on idle time
@@ -524,6 +525,7 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dic
         "time_reference": time_reference
     }
 
+@function_tool
 async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
     """
     Process awareness of different time scales and contexts
@@ -611,20 +613,11 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         "active_rhythms": active_rhythms
     }
 
-async def _detect_time_scale_transition(
+async def _detect_time_scale_transition_impl(
     data: TimeScaleTransitionInput,
 ) -> Optional[Dict[str, Any]]:
+    """Detect transitions between time scales."""
     prev, curr = data.previous_state, data.current_state
-    """
-    Detect transitions between time scales
-    
-    Args:
-        previous_state: Previous temporal state
-        current_state: Current temporal state
-        
-    Returns:
-        Time scale transition if detected, None otherwise
-    """
     prev_time = prev.get("last_interaction")
     curr_time = curr.get("last_interaction")
     
@@ -708,16 +701,13 @@ async def _detect_time_scale_transition(
     # No significant transition detected
     return None
 
-@function_tool  # strict mode is fine now
-async def detect_time_scale_transition_tool(
-    previous_state: Dict[str, Any],
-    current_state: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
-    return await _detect_time_scale_transition_core(
-        TimeScaleTransitionInput(
-            previous_state=previous_state,
-            current_state=current_state,
-        )
+@function_tool(name_override="detect_time_scale_transition")
+async def detect_time_scale_transition_tool(previous_state: Dict[str, Any],
+                                            current_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # ❌ _detect_time_scale_transition_core doesn't exist
+    return await _detect_time_scale_transition_impl(
+        TimeScaleTransitionInput(previous_state=previous_state,
+                                 current_state=current_state)
     )
 
 @function_tool
@@ -974,7 +964,7 @@ class TemporalPerceptionSystem:
         # Idle time tracking
         self.idle_start_time = None
         self.idle_reflections = []
-        self.idle_background_task = None
+        self.idle_task = None
         
         # Time scale tracking
         self.time_scale_transitions = []
@@ -1054,13 +1044,11 @@ class TemporalPerceptionSystem:
             # Initialize temporal context
             self.current_temporal_context = await determine_temporal_context()
             self.temporal_context_history.append(self.current_temporal_context)
-            
-            # Begin continuous time tracking
-            if self.time_perception_config["continuous_time_tracking"]:
-                self.start_continuous_time_tracking()
-            
-            # Begin idle time tracking
-            self.start_idle_tracking()
+
+            if not self._continuous_time_task:
+                self._continuous_time_task = asyncio.create_task(self._continuous_time_tracking())
+            if not self._idle_task:
+                self._idle_task = asyncio.create_task(self._idle_background_process())
             
             # Schedule milestone check
             asyncio.create_task(self.check_milestones())
@@ -1073,349 +1061,345 @@ class TemporalPerceptionSystem:
         Called when a new interaction begins.
         Returns temporal perception state and effects.
         """
-        with trace(workflow_name="temporal_interaction_start", group_id=f"user_{self.user_id}"):
-            now = datetime.datetime.now()
+        now = datetime.datetime.now()
+        
+        # Calculate time since last interaction
+        time_since_last = (now - self.last_interaction).total_seconds()
+        
+        # Determine time category
+        time_category = await categorize_time_elapsed(time_since_last)
+        
+        # Stop idle tracking
+        self.stop_idle_tracking()
+        
+        # Get waiting reflections if any were generated
+        waiting_reflections = self.idle_reflections.copy()
+        self.idle_reflections = []
+        
+        # Update temporal context
+        previous_context = self.current_temporal_context
+        self.current_temporal_context = await determine_temporal_context()
+        
+        # Check for temporal context transitions
+        if previous_context and self.current_temporal_context:
+            context_changed = False
+            for key in ["time_of_day", "day_type", "season"]:
+                if previous_context.get(key) != self.current_temporal_context.get(key):
+                    context_changed = True
+                    break
             
-            # Calculate time since last interaction
-            time_since_last = (now - self.last_interaction).total_seconds()
+            if context_changed:
+                self.temporal_context_history.append(self.current_temporal_context)
+        
+        # Create context for time perception agent
+        user_relationship_data = {
+            "user_id": self.user_id,
+            "total_interactions": self.interaction_count,
+            "relationship_age_days": (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
+        }
+        
+        # Process temporal effects
+        try:
+            # Run the perception agent with tracing
+            result = await Runner.run(
+                self.perception_agent,
+                json.dumps({
+                    "last_interaction": self.last_interaction.isoformat(),
+                    "current_time": now.isoformat(),
+                    "time_since_last": time_since_last,
+                    "time_category": time_category,
+                    "user_relationship_data": user_relationship_data,
+                    "active_time_scales": self.active_time_scales,
+                    "current_temporal_context": self.current_temporal_context
+                }),
+                run_config=RunConfig(
+                    workflow_name="TemporalPerception",
+                    trace_metadata={"interaction_type": "start", "time_category": time_category}
+                )
+            )
             
-            # Determine time category
-            time_category = await categorize_time_elapsed(time_since_last)
+            perception_state = result.final_output
             
-            # Stop idle tracking
-            self.stop_idle_tracking()
+            # Get time effects
+            time_effects = await calculate_time_effects(time_category, user_relationship_data)
             
-            # Get waiting reflections if any were generated
-            waiting_reflections = self.idle_reflections.copy()
-            self.idle_reflections = []
-            
-            # Update temporal context
-            previous_context = self.current_temporal_context
-            self.current_temporal_context = await determine_temporal_context()
-            
-            # Check for temporal context transitions
-            if previous_context and self.current_temporal_context:
-                context_changed = False
-                for key in ["time_of_day", "day_type", "season"]:
-                    if previous_context.get(key) != self.current_temporal_context.get(key):
-                        context_changed = True
-                        break
-                
-                if context_changed:
-                    self.temporal_context_history.append(self.current_temporal_context)
-            
-            # Create context for time perception agent
-            user_relationship_data = {
-                "user_id": self.user_id,
-                "total_interactions": self.interaction_count,
-                "relationship_age_days": (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
+            # Check for time scale transitions
+            previous_state = {
+                "last_interaction": self.last_interaction.isoformat(),
+                "time_scales": self.active_time_scales
             }
             
-            # Process temporal effects
-            try:
-                # Run the perception agent with tracing
-                result = await Runner.run(
-                    self.perception_agent,
-                    json.dumps({
-                        "last_interaction": self.last_interaction.isoformat(),
-                        "current_time": now.isoformat(),
-                        "time_since_last": time_since_last,
-                        "time_category": time_category,
-                        "user_relationship_data": user_relationship_data,
-                        "active_time_scales": self.active_time_scales,
-                        "current_temporal_context": self.current_temporal_context
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="TemporalPerception",
-                        trace_metadata={"interaction_type": "start", "time_category": time_category}
-                    )
+            current_state = {
+                "last_interaction": now.isoformat(),
+                "time_scales": self.active_time_scales.copy()
+            }
+            
+            # Update time scale awareness based on elapsed time
+            days_elapsed = (now - self.first_interaction).total_seconds() / 86400
+            
+            if days_elapsed >= 1 and self.active_time_scales["days"] < 1.0:
+                self.active_time_scales["days"] = min(1.0, days_elapsed / 7)
+            if days_elapsed >= 7 and self.active_time_scales["weeks"] < 1.0:
+                self.active_time_scales["weeks"] = min(1.0, days_elapsed / 30)
+            if days_elapsed >= 30 and self.active_time_scales["months"] < 1.0:
+                self.active_time_scales["months"] = min(1.0, days_elapsed / 90)
+            if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
+                self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
+            
+            transition = await detect_time_scale_transition_tool(
+                previous_state, current_state
+            )
+            
+            # Update session tracking
+            if not self.session_active or time_since_last > 1800:  # 30 min break = new session
+                self.current_session_start = now
+                self.current_session_duration = 0.0
+                self.session_active = True
+            else:
+                # Still in same session, track the pause
+                if time_since_last > 60:  # Only track pauses > 1 minute
+                    self.intra_session_pauses.append({
+                        "start": self.last_interaction.isoformat(),
+                        "end": now.isoformat(),
+                        "duration": time_since_last
+                    })
+            
+            # Update tracking
+            self.last_interaction = now
+            self.interaction_count += 1
+            self.interaction_timestamps.append(now.isoformat())
+            
+            # Add temporal memory 
+            await self._add_time_perception_memory(time_since_last, time_effects)
+            
+            # Process temporal awareness using Agent SDK
+            awareness_result = await Runner.run(
+                self.awareness_agent,
+                json.dumps({
+                    "days_elapsed": (now - self.first_interaction).total_seconds() / 86400,
+                    "total_interactions": self.interaction_count,
+                    "time_since_last": time_since_last
+                }),
+                run_config=RunConfig(
+                    workflow_name="TemporalAwareness",
+                    trace_metadata={"time_category": time_category}
                 )
-                
-                perception_state = result.final_output
-                
-                # Get time effects
-                time_effects = await calculate_time_effects(time_category, user_relationship_data)
-                
-                # Check for time scale transitions
-                previous_state = {
-                    "last_interaction": self.last_interaction.isoformat(),
-                    "time_scales": self.active_time_scales
-                }
-                
-                current_state = {
-                    "last_interaction": now.isoformat(),
-                    "time_scales": self.active_time_scales.copy()
-                }
-                
-                # Update time scale awareness based on elapsed time
-                days_elapsed = (now - self.first_interaction).total_seconds() / 86400
-                
-                if days_elapsed >= 1 and self.active_time_scales["days"] < 1.0:
-                    self.active_time_scales["days"] = min(1.0, days_elapsed / 7)
-                if days_elapsed >= 7 and self.active_time_scales["weeks"] < 1.0:
-                    self.active_time_scales["weeks"] = min(1.0, days_elapsed / 30)
-                if days_elapsed >= 30 and self.active_time_scales["months"] < 1.0:
-                    self.active_time_scales["months"] = min(1.0, days_elapsed / 90)
-                if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
-                    self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
-                
-                transition = await detect_time_scale_transition_tool(
-                    previous_state, current_state
-                )
-                
-                # Update session tracking
-                if not self.session_active or time_since_last > 1800:  # 30 min break = new session
-                    self.current_session_start = now
-                    self.current_session_duration = 0.0
-                    self.session_active = True
-                else:
-                    # Still in same session, track the pause
-                    if time_since_last > 60:  # Only track pauses > 1 minute
-                        self.intra_session_pauses.append({
-                            "start": self.last_interaction.isoformat(),
-                            "end": now.isoformat(),
-                            "duration": time_since_last
-                        })
-                
-                # Update tracking
-                self.last_interaction = now
-                self.interaction_count += 1
-                self.interaction_timestamps.append(now.isoformat())
-                
-                # Add temporal memory 
-                await self._add_time_perception_memory(time_since_last, time_effects)
-                
-                # Process temporal awareness using Agent SDK
-                awareness_result = await Runner.run(
-                    self.awareness_agent,
-                    json.dumps({
-                        "days_elapsed": (now - self.first_interaction).total_seconds() / 86400,
-                        "total_interactions": self.interaction_count,
-                        "time_since_last": time_since_last
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="TemporalAwareness",
-                        trace_metadata={"time_category": time_category}
-                    )
-                )
-                
-                awareness_output = awareness_result.final_output
-                
-                # Update temporal rhythms based on awareness output
-                if hasattr(awareness_output, "active_rhythms") and awareness_output.active_rhythms:
-                    self.temporal_rhythms.update(awareness_output.active_rhythms)
-                
-                # Create perception state
-                perception_state_dict = {
-                    "last_interaction": now.isoformat(),
-                    "current_session_start": self.current_session_start.isoformat(),
-                    "current_session_duration": self.current_session_duration,
-                    "time_since_last_interaction": time_since_last,
-                    "subjective_time_dilation": self.time_perception_config["subjective_dilation_factor"],
-                    "current_time_category": time_category,
-                    "current_time_effects": time_effects,
-                    "lifetime_total_interactions": self.interaction_count,
-                    "lifetime_total_duration": self.total_lifetime_duration,
-                    "relationship_age_days": (now - self.first_interaction).total_seconds() / 86400,
-                    "first_interaction": self.first_interaction.isoformat() if self.first_interaction else None,
-                    "current_temporal_context": self.current_temporal_context,
-                    "time_scales_active": self.active_time_scales,
-                    "temporal_awareness": awareness_output.model_dump() if awareness_output else {},
-                    "time_scale_transition": transition if transition else None
-                }
-                
-                # Generate time expression if appropriate
-                if self.interaction_count % 5 == 0 or time_category in ["long", "very_long"]:
-                    try:
-                        time_expression = await generate_time_expression(perception_state_dict)
-                        perception_state_dict["time_expression"] = time_expression
-                    except Exception as e:
-                        logger.error(f"Error generating time expression: {str(e)}")
-                
-                # Return result
-                return {
-                    "time_since_last_interaction": time_since_last,
-                    "time_category": time_category,
-                    "time_effects": time_effects,
-                    "perception_state": perception_state_dict,
-                    "waiting_reflections": waiting_reflections,
-                    "session_duration": self.current_session_duration,
-                    "temporal_context": self.current_temporal_context
-                }
-                
-            except Exception as e:
-                logger.error(f"Error in temporal perception: {str(e)}")
-                return {
-                    "time_since_last_interaction": time_since_last,
-                    "time_category": time_category,
-                    "error": str(e)
-                }
-    
+            )
+            
+            awareness_output = awareness_result.final_output
+            
+            # Update temporal rhythms based on awareness output
+            if hasattr(awareness_output, "active_rhythms") and awareness_output.active_rhythms:
+                self.temporal_rhythms.update(awareness_output.active_rhythms)
+            
+            # Create perception state
+            perception_state_dict = {
+                "last_interaction": now.isoformat(),
+                "current_session_start": self.current_session_start.isoformat(),
+                "current_session_duration": self.current_session_duration,
+                "time_since_last_interaction": time_since_last,
+                "subjective_time_dilation": self.time_perception_config["subjective_dilation_factor"],
+                "current_time_category": time_category,
+                "current_time_effects": time_effects,
+                "lifetime_total_interactions": self.interaction_count,
+                "lifetime_total_duration": self.total_lifetime_duration,
+                "relationship_age_days": (now - self.first_interaction).total_seconds() / 86400,
+                "first_interaction": self.first_interaction.isoformat() if self.first_interaction else None,
+                "current_temporal_context": self.current_temporal_context,
+                "time_scales_active": self.active_time_scales,
+                "temporal_awareness": awareness_output.model_dump() if awareness_output else {},
+                "time_scale_transition": transition if transition else None
+            }
+            
+            # Generate time expression if appropriate
+            if self.interaction_count % 5 == 0 or time_category in ["long", "very_long"]:
+                try:
+                    time_expression = await generate_time_expression(perception_state_dict)
+                    perception_state_dict["time_expression"] = time_expression
+                except Exception as e:
+                    logger.error(f"Error generating time expression: {str(e)}")
+            
+            # Return result
+            return {
+                "time_since_last_interaction": time_since_last,
+                "time_category": time_category,
+                "time_effects": time_effects,
+                "perception_state": perception_state_dict,
+                "waiting_reflections": waiting_reflections,
+                "session_duration": self.current_session_duration,
+                "temporal_context": self.current_temporal_context
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in temporal perception: {str(e)}")
+            return {
+                "time_since_last_interaction": time_since_last,
+                "time_category": time_category,
+                "error": str(e)
+            }
+
     async def on_interaction_end(self) -> Dict[str, Any]:
         """
         Called when an interaction ends.
         Updates durations and starts idle tracking.
         """
-        with trace(workflow_name="temporal_interaction_end", group_id=f"user_{self.user_id}"):
-            now = datetime.datetime.now()
-            
-            # Calculate interaction duration
-            interaction_duration = (now - self.last_interaction).total_seconds()
-            
-            # Update tracking
-            self.interaction_durations.append(interaction_duration)
-            self.total_lifetime_duration += interaction_duration
-            self.current_session_duration += interaction_duration
-            self.last_interaction = now
-            
-            # Start idle tracking
-            self.start_idle_tracking()
-            
-            # Return info
-            return {
-                "interaction_duration": interaction_duration,
-                "current_session_duration": self.current_session_duration,
-                "total_lifetime_duration": self.total_lifetime_duration,
-                "idle_tracking_started": True,
-                "temporal_context": self.current_temporal_context
-            }
+        now = datetime.datetime.now()
+        
+        # Calculate interaction duration
+        interaction_duration = (now - self.last_interaction).total_seconds()
+        
+        # Update tracking
+        self.interaction_durations.append(interaction_duration)
+        self.total_lifetime_duration += interaction_duration
+        self.current_session_duration += interaction_duration
+        self.last_interaction = now
+        
+        # Start idle tracking
+        self.start_idle_tracking()
+        
+        # Return info
+        return {
+            "interaction_duration": interaction_duration,
+            "current_session_duration": self.current_session_duration,
+            "total_lifetime_duration": self.total_lifetime_duration,
+            "idle_tracking_started": True,
+            "temporal_context": self.current_temporal_context
+        }
     
     async def check_milestones(self) -> Optional[Dict[str, Any]]:
         """Check for and process temporal milestones"""
-        with trace(workflow_name="milestone_check", group_id=f"user_{self.user_id}"):
-            now = datetime.datetime.now()
-            
-            # Calculate relationship age
-            relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
-            
-            # Get recent memories for context
-            recent_memories = []
-            if self.memory_core and hasattr(self.memory_core, "retrieve_memories"):
-                try:
-                    recent_memories = await self.memory_core.retrieve_memories(
-                        query="", 
-                        limit=10,
-                        memory_types=["observation", "reflection"]
-                    )
-                except Exception as e:
-                    logger.error(f"Error retrieving memories for milestone check: {str(e)}")
-            
-            # Run milestone detection with Agent SDK
+        now = datetime.datetime.now()
+        
+        # Calculate relationship age
+        relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
+        
+        # Get recent memories for context
+        recent_memories = []
+        if self.memory_core and hasattr(self.memory_core, "retrieve_memories"):
             try:
-                result = await Runner.run(
-                    self.awareness_agent,
-                    json.dumps({
-                        "user_id": str(self.user_id),
-                        "total_days": relationship_age_days,
-                        "total_interactions": self.interaction_count,
-                        "recent_memories": recent_memories,
-                        "check_type": "milestone_detection"
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="MilestoneDetection",
-                        trace_metadata={"days_elapsed": relationship_age_days}
-                    )
+                recent_memories = await self.memory_core.retrieve_memories(
+                    query="", 
+                    limit=10,
+                    memory_types=["observation", "reflection"]
                 )
+            except Exception as e:
+                logger.error(f"Error retrieving memories for milestone check: {str(e)}")
+        
+        # Run milestone detection with Agent SDK
+        try:
+            result = await Runner.run(
+                self.awareness_agent,
+                json.dumps({
+                    "user_id": str(self.user_id),
+                    "total_days": relationship_age_days,
+                    "total_interactions": self.interaction_count,
+                    "recent_memories": recent_memories,
+                    "check_type": "milestone_detection"
+                }),
+                run_config=RunConfig(
+                    workflow_name="MilestoneDetection",
+                    trace_metadata={"days_elapsed": relationship_age_days}
+                )
+            )
+            
+            # Extract milestone if detected
+            milestone = None
+            if hasattr(result.final_output, "detected_milestone") and result.final_output.detected_milestone:
+                milestone = result.final_output.detected_milestone
+            else:
+                # Direct tool call as fallback
+                milestone = await detect_temporal_milestone(
+                    user_id=str(self.user_id),
+                    total_days=relationship_age_days,
+                    total_interactions=self.interaction_count,
+                    recent_memories=recent_memories
+                )
+            
+            if milestone:
+                # Store milestone
+                self.milestones.append(milestone)
                 
-                # Extract milestone if detected
-                milestone = None
-                if hasattr(result.final_output, "detected_milestone") and result.final_output.detected_milestone:
-                    milestone = result.final_output.detected_milestone
-                else:
-                    # Direct tool call as fallback
-                    milestone = await detect_temporal_milestone(
-                        user_id=str(self.user_id),
-                        total_days=relationship_age_days,
-                        total_interactions=self.interaction_count,
-                        recent_memories=recent_memories
+                # Create a memory of this milestone
+                if self.memory_core and hasattr(self.memory_core, "add_memory"):
+                    memory_text = f"Reached a temporal milestone: {milestone['name']}. {milestone['description']}"
+                    
+                    await self.memory_core.add_memory(
+                        memory_text=memory_text,
+                        memory_type="milestone",
+                        memory_scope="relationship",
+                        significance=milestone["significance"] * 10,  # Scale to 0-10
+                        tags=["milestone", "temporal", "relationship"],
+                        metadata={
+                            "milestone": milestone,
+                            "timestamp": now.isoformat(),
+                            "user_id": str(self.user_id)
+                        }
                     )
                 
-                if milestone:
-                    # Store milestone
-                    self.milestones.append(milestone)
-                    
-                    # Create a memory of this milestone
-                    if self.memory_core and hasattr(self.memory_core, "add_memory"):
-                        memory_text = f"Reached a temporal milestone: {milestone['name']}. {milestone['description']}"
-                        
-                        await self.memory_core.add_memory(
-                            memory_text=memory_text,
-                            memory_type="milestone",
-                            memory_scope="relationship",
-                            significance=milestone["significance"] * 10,  # Scale to 0-10
-                            tags=["milestone", "temporal", "relationship"],
-                            metadata={
-                                "milestone": milestone,
-                                "timestamp": now.isoformat(),
-                                "user_id": str(self.user_id)
-                            }
-                        )
-                    
-                    # Schedule next check
-                    self.next_milestone_check = now + datetime.timedelta(days=1)
-                    
-                    return milestone
-            except Exception as e:
-                logger.error(f"Error checking milestones: {str(e)}")
-            
-            # Schedule next check
-            self.next_milestone_check = now + datetime.timedelta(days=1)
-            return None
+                # Schedule next check
+                self.next_milestone_check = now + datetime.timedelta(days=1)
+                
+                return milestone
+        except Exception as e:
+            logger.error(f"Error checking milestones: {str(e)}")
+        
+        # Schedule next check
+        self.next_milestone_check = now + datetime.timedelta(days=1)
+        return None
     
     async def get_temporal_awareness(self) -> Dict[str, Any]:
         """Process and get current temporal awareness"""
-        with trace(workflow_name="get_temporal_awareness", group_id=f"user_{self.user_id}"):
-            now = datetime.datetime.now()
-            
-            # Calculate relationship age
-            relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
-            
-            try:
-                # Call the temporal awareness agent using Agent SDK
-                result = await Runner.run(
-                    self.awareness_agent,
-                    json.dumps({
-                        "days_elapsed": relationship_age_days,
-                        "total_interactions": self.interaction_count,
-                        "time_since_last": (now - self.last_interaction).total_seconds()
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="TemporalAwareness",
-                        trace_metadata={"request_type": "explicit_awareness_check"}
-                    )
+        now = datetime.datetime.now()
+        
+        # Calculate relationship age
+        relationship_age_days = (now - self.first_interaction).total_seconds() / 86400 if self.first_interaction else 0
+        
+        try:
+            # Call the temporal awareness agent using Agent SDK
+            result = await Runner.run(
+                self.awareness_agent,
+                json.dumps({
+                    "days_elapsed": relationship_age_days,
+                    "total_interactions": self.interaction_count,
+                    "time_since_last": (now - self.last_interaction).total_seconds()
+                }),
+                run_config=RunConfig(
+                    workflow_name="TemporalAwareness",
+                    trace_metadata={"request_type": "explicit_awareness_check"}
                 )
-                
-                # Convert to dictionary
-                awareness_output = result.final_output.model_dump()
-                
-                # Fill in the last interaction duration
-                duration_since_last = await format_duration((now - self.last_interaction).total_seconds())
-                awareness_output["duration_since_last_interaction"] = duration_since_last
-                
-                return awareness_output
+            )
             
-            except Exception as e:
-                logger.error(f"Error processing temporal awareness: {str(e)}")
-                # Return a default output
-                default_scales = {
-                    "seconds": 1.0,
-                    "minutes": 1.0,
-                    "hours": 1.0,
-                    "days": min(1.0, relationship_age_days / 7),
-                    "weeks": min(1.0, relationship_age_days / 30),
-                    "months": min(1.0, relationship_age_days / 90),
-                    "years": min(1.0, relationship_age_days / 365)
-                }
-                
-                return {
-                    "time_scales_perceived": default_scales,
-                    "temporal_contexts": ["conversation"],
-                    "duration_since_first_interaction": await format_duration(relationship_age_days * 86400),
-                    "duration_since_last_interaction": await format_duration((now - self.last_interaction).total_seconds()),
-                    "current_temporal_marker": f"{self.current_temporal_context['time_of_day']}",
-                    "temporal_reflection": "I'm aware of time passing across multiple scales simultaneously.",
-                    "active_rhythms": {}
-                }
+            # Convert to dictionary
+            awareness_output = result.final_output.model_dump()
+            
+            # Fill in the last interaction duration
+            duration_since_last = await format_duration((now - self.last_interaction).total_seconds())
+            awareness_output["duration_since_last_interaction"] = duration_since_last
+            
+            return awareness_output
+        
+        except Exception as e:
+            logger.error(f"Error processing temporal awareness: {str(e)}")
+            # Return a default output
+            default_scales = {
+                "seconds": 1.0,
+                "minutes": 1.0,
+                "hours": 1.0,
+                "days": min(1.0, relationship_age_days / 7),
+                "weeks": min(1.0, relationship_age_days / 30),
+                "months": min(1.0, relationship_age_days / 90),
+                "years": min(1.0, relationship_age_days / 365)
+            }
+            
+            return {
+                "time_scales_perceived": default_scales,
+                "temporal_contexts": ["conversation"],
+                "duration_since_first_interaction": await format_duration(relationship_age_days * 86400),
+                "duration_since_last_interaction": await format_duration((now - self.last_interaction).total_seconds()),
+                "current_temporal_marker": f"{self.current_temporal_context['time_of_day']}",
+                "temporal_reflection": "I'm aware of time passing across multiple scales simultaneously.",
+                "active_rhythms": {}
+            }
     
     async def generate_idle_reflection(self) -> Optional[Dict[str, Any]]:
         """Generate a reflection based on idle time"""
@@ -1436,43 +1420,42 @@ class TemporalPerceptionSystem:
         
         try:
             # Generate reflection using Agent SDK
-            with trace(workflow_name="idle_reflection", group_id=f"user_{self.user_id}"):
-                result = await Runner.run(
-                    self.reflection_agent,
-                    json.dumps({
-                        "idle_duration": idle_duration,
-                        "emotional_state": emotional_state
-                    }),
-                    run_config=RunConfig(
-                        workflow_name="IdleReflection",
-                        trace_metadata={"idle_duration": idle_duration}
-                    )
+            result = await Runner.run(
+                self.reflection_agent,
+                json.dumps({
+                    "idle_duration": idle_duration,
+                    "emotional_state": emotional_state
+                }),
+                run_config=RunConfig(
+                    workflow_name="IdleReflection",
+                    trace_metadata={"idle_duration": idle_duration}
                 )
-                
-                reflection = result.final_output.model_dump()
-                
-                # Store the reflection
-                self.idle_reflections.append(reflection)
-                
-                # Add a memory of this reflection
-                if self.memory_core and hasattr(self.memory_core, "add_memory"):
-                    await self.memory_core.add_memory(
-                        memory_text=reflection["reflection_text"],
-                        memory_type="reflection",
-                        memory_scope="temporal",
-                        significance=6.0,  # Medium-high significance
-                        tags=["time_reflection", "idle", "temporal_awareness"],
-                        metadata={
-                            "reflection": reflection,
-                            "timestamp": now.isoformat(),
-                            "user_id": str(self.user_id),
-                            "idle_duration": idle_duration,
-                            "temporal_context": self.current_temporal_context
-                        }
-                    )
-                
-                return reflection
-        
+            )
+            
+            reflection = result.final_output.model_dump()
+            
+            # Store the reflection
+            self.idle_reflections.append(reflection)
+            
+            # Add a memory of this reflection
+            if self.memory_core and hasattr(self.memory_core, "add_memory"):
+                await self.memory_core.add_memory(
+                    memory_text=reflection["reflection_text"],
+                    memory_type="reflection",
+                    memory_scope="temporal",
+                    significance=6.0,  # Medium-high significance
+                    tags=["time_reflection", "idle", "temporal_awareness"],
+                    metadata={
+                        "reflection": reflection,
+                        "timestamp": now.isoformat(),
+                        "user_id": str(self.user_id),
+                        "idle_duration": idle_duration,
+                        "temporal_context": self.current_temporal_context
+                    }
+                )
+            
+            return reflection
+    
         except Exception as e:
             logger.error(f"Error generating idle reflection: {str(e)}")
             return None
