@@ -136,68 +136,50 @@ class TimeScaleTransitionInput(BaseModel):
 
 # =============== Function Tools ===============
 
-@function_tool
-async def categorize_time_elapsed(seconds: float) -> str:
-    """
-    Categorize elapsed time into descriptive buckets
-    
-    Args:
-        seconds: Time elapsed in seconds
-        
-    Returns:
-        Category string for the time period
-    """
-    if seconds < 60:  # < 1 min
+async def categorize_time_elapsed_impl(seconds: float) -> str:
+    if seconds < 60:          # < 1 min
         return "very_short"
-    elif seconds < 600:  # 1-10 min
+    elif seconds < 600:       # 1-10 min
         return "short"
-    elif seconds < 1800:  # 10-30 min
+    elif seconds < 1800:      # 10-30 min
         return "medium_short"
-    elif seconds < 3600:  # 30-60 min
+    elif seconds < 3600:      # 30-60 min
         return "medium"
-    elif seconds < 21600:  # 1-6 hrs
+    elif seconds < 21600:     # 1-6 h
         return "medium_long"
-    elif seconds < 86400:  # 6-24 hrs
+    elif seconds < 86400:     # 6-24 h
         return "long"
-    else:  # 24+ hrs
+    else:                     # ≥ 1 day
         return "very_long"
 
-@function_tool
-async def format_duration(seconds: float, granularity: int = 2) -> str:
-    """
-    Format duration in seconds to human-readable string
-    
-    Args:
-        seconds: Duration in seconds
-        granularity: Number of units to include
-        
-    Returns:
-        Human-readable duration string
-    """
+@function_tool(name_override="categorize_time_elapsed")
+async def categorize_time_elapsed(seconds: float) -> str:
+    return await categorize_time_elapsed_impl(seconds)
+
+async def format_duration_impl(seconds: float, granularity: int = 2) -> str:
     units = [
-        ("year", 31536000),
-        ("month", 2592000),
-        ("week", 604800),
-        ("day", 86400),
-        ("hour", 3600),
+        ("year",   31536000),
+        ("month",  2592000),
+        ("week",   604800),
+        ("day",    86400),
+        ("hour",   3600),
         ("minute", 60),
-        ("second", 1)
+        ("second", 1),
     ]
-    
-    result = []
+    parts: list[str] = []
     for name, count in units:
         value = seconds // count
         if value:
             seconds -= value * count
-            if value == 1:
-                result.append(f"1 {name}")
-            else:
-                result.append(f"{int(value)} {name}s")
-    
-    return ", ".join(result[:granularity])
+            parts.append(f"{int(value)} {name}{'' if value == 1 else 's'}")
+    return ", ".join(parts[:granularity])
 
-@function_tool
-async def calculate_time_effects(time_category: str, user_relationship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+@function_tool(name_override="format_duration")
+async def format_duration(seconds: float, granularity: int = 2) -> str:
+    return await format_duration_impl(seconds, granularity)
+
+async def calculate_time_effects_impl(time_category: str,
+                                      user_relationship_data: dict[str, any]) -> list[dict[str, any]]:
     """
     Calculate temporal effects based on time category and relationship data
     
@@ -287,8 +269,13 @@ async def calculate_time_effects(time_category: str, user_relationship_data: Dic
     
     return effects
 
-@function_tool
-async def determine_temporal_context() -> Dict[str, Any]:
+@function_tool(name_override="calculate_time_effects")
+async def calculate_time_effects(time_category: str,
+                                 user_relationship_data: dict[str, any]) -> list[dict[str, any]]:
+    return await calculate_time_effects_impl(time_category, user_relationship_data)
+
+
+async def determine_temporal_context_impl() -> dict[str, any]:
     """
     Determine the current temporal context (time of day, day of week, etc.)
     
@@ -333,6 +320,10 @@ async def determine_temporal_context() -> Dict[str, Any]:
         "timestamp": now.isoformat()
     }
 
+@function_tool(name_override="determine_temporal_context")
+async def determine_temporal_context() -> dict[str, any]:
+    return await determine_temporal_context_impl()
+
 @function_tool
 async def generate_time_reflection(idle_duration: float, emotional_state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -346,8 +337,8 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
         Temporal reflection
     """
     # Format the duration
-    duration_str = await format_duration(idle_duration)
-    time_category = await categorize_time_elapsed(idle_duration)
+    duration_str = await format_duration_impl(idle_duration)
+    time_category = await categorize_time_elapsed_impl(idle_duration)
     
     # Determine appropriate time scales for this reflection
     time_scales = ["seconds", "minutes"]
@@ -386,7 +377,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
         focus_areas = ["day cycle awareness", "multi-day patterns", "continuous time perception"]
     
     # Include temporal context
-    temporal_context = await determine_temporal_context()
+    temporal_context = await determine_temporal_context_impl()
     reflection_content += f" I'm aware it's currently {temporal_context['time_of_day']} on a {temporal_context['day_type']}."
     
     # Create the reflection object
@@ -402,8 +393,7 @@ async def generate_time_reflection(idle_duration: float, emotional_state: Dict[s
     
     return reflection
 
-@function_tool
-async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_time_expression_impl(state: dict[str, any]) -> dict[str, any]:
     """
     Generate a natural expression about time perception
     
@@ -502,7 +492,7 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dic
     
     else:  # context
         # Expression about temporal context
-        temporal_context = await determine_temporal_context()
+        temporal_context = await determine_temporal_context_impl()
         time_of_day = temporal_context["time_of_day"]
         day_type = temporal_context["day_type"]
         
@@ -514,7 +504,7 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dic
         "time_category": time_category,
         "seconds_elapsed": time_since_last,
         "relationship_age_days": relationship_age,
-        "temporal_context": await determine_temporal_context()
+        "temporal_context": await determine_temporal_context_impl()
     }
     
     return {
@@ -524,6 +514,10 @@ async def generate_time_expression(time_perception_state: Dict[str, Any]) -> Dic
         "reference_type": reference_type,
         "time_reference": time_reference
     }
+
+@function_tool(name_override="generate_time_expression")
+async def generate_time_expression(state: dict[str, any]) -> dict[str, any]:
+    return await generate_time_expression_impl(state)
 
 @function_tool
 async def process_temporal_awareness(days_elapsed: float, total_interactions: int) -> Dict[str, Any]:
@@ -560,7 +554,7 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         temporal_contexts.append("yearly")
     
     # Get current temporal marker
-    temporal_context = await determine_temporal_context()
+    temporal_context = await determine_temporal_context_impl()
     current_marker = f"{temporal_context['time_of_day']} on a {temporal_context['day_of_week']}"
     
     # Calculate active rhythms
@@ -589,7 +583,7 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
             }
     
     # Format durations
-    duration_since_first = await format_duration(days_elapsed * 86400)
+    duration_since_first = await format_duration_impl(days_elapsed * 86400)
     
     # Generate temporal reflection
     if days_elapsed < 1:
@@ -710,11 +704,11 @@ async def detect_time_scale_transition_tool(previous_state: Dict[str, Any],
                                  current_state=current_state)
     )
 
-@function_tool
-async def detect_temporal_milestone(user_id: str, 
-                                 total_days: float, 
-                                 total_interactions: int,
-                                 recent_memories: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+async def detect_temporal_milestone_impl(user_id: str,
+                                         total_days: float,
+                                         total_interactions: int,
+                                         recent_memories: list[dict[str, any]] | None = None
+) -> dict[str, any] | None:
     """
     Detect if a temporal milestone has been reached
     
@@ -834,6 +828,17 @@ async def detect_temporal_milestone(user_id: str,
             }
     
     return None
+
+@function_tool(name_override="detect_temporal_milestone")
+async def detect_temporal_milestone(user_id: str,
+                                    total_days: float,
+                                    total_interactions: int,
+                                    recent_memories: list[dict[str, any]] | None = None
+) -> dict[str, any] | None:
+    return await detect_temporal_milestone_impl(user_id,
+                                                total_days,
+                                                total_interactions,
+                                                recent_memories)
 
 # =============== Temporal Agents ===============
 
@@ -1042,7 +1047,7 @@ class TemporalPerceptionSystem:
                 self.first_interaction = datetime.datetime.now()
             
             # Initialize temporal context
-            self.current_temporal_context = await determine_temporal_context()
+            self.current_temporal_context = await determine_temporal_context_impl()
             self.temporal_context_history.append(self.current_temporal_context)
 
             if not self._continuous_time_task:
@@ -1067,7 +1072,7 @@ class TemporalPerceptionSystem:
         time_since_last = (now - self.last_interaction).total_seconds()
         
         # Determine time category
-        time_category = await categorize_time_elapsed(time_since_last)
+        time_category = await categorize_time_elapsed_impl(time_since_last)
         
         # Stop idle tracking
         self.stop_idle_tracking()
@@ -1078,7 +1083,7 @@ class TemporalPerceptionSystem:
         
         # Update temporal context
         previous_context = self.current_temporal_context
-        self.current_temporal_context = await determine_temporal_context()
+        self.current_temporal_context = await determine_temporal_context_impl()
         
         # Check for temporal context transitions
         if previous_context and self.current_temporal_context:
@@ -1121,7 +1126,7 @@ class TemporalPerceptionSystem:
             perception_state = result.final_output
             
             # Get time effects
-            time_effects = await calculate_time_effects(time_category, user_relationship_data)
+            time_effects = await calculate_time_effects_impl(time_category, user_relationship_data)
             
             # Check for time scale transitions
             previous_state = {
@@ -1214,7 +1219,7 @@ class TemporalPerceptionSystem:
             # Generate time expression if appropriate
             if self.interaction_count % 5 == 0 or time_category in ["long", "very_long"]:
                 try:
-                    time_expression = await generate_time_expression(perception_state_dict)
+                    time_expression = await generate_time_expression_impl(perception_state_dict)
                     perception_state_dict["time_expression"] = time_expression
                 except Exception as e:
                     logger.error(f"Error generating time expression: {str(e)}")
@@ -1308,7 +1313,7 @@ class TemporalPerceptionSystem:
                 milestone = result.final_output.detected_milestone
             else:
                 # Direct tool call as fallback
-                milestone = await detect_temporal_milestone(
+                milestone = await detect_temporal_milestone_impl(
                     user_id=str(self.user_id),
                     total_days=relationship_age_days,
                     total_interactions=self.interaction_count,
@@ -1373,7 +1378,7 @@ class TemporalPerceptionSystem:
             awareness_output = result.final_output.model_dump()
             
             # Fill in the last interaction duration
-            duration_since_last = await format_duration((now - self.last_interaction).total_seconds())
+            duration_since_last = await format_duration_impl((now - self.last_interaction).total_seconds())
             awareness_output["duration_since_last_interaction"] = duration_since_last
             
             return awareness_output
@@ -1394,8 +1399,8 @@ class TemporalPerceptionSystem:
             return {
                 "time_scales_perceived": default_scales,
                 "temporal_contexts": ["conversation"],
-                "duration_since_first_interaction": await format_duration(relationship_age_days * 86400),
-                "duration_since_last_interaction": await format_duration((now - self.last_interaction).total_seconds()),
+                "duration_since_first_interaction": await format_duration_impl(relationship_age_days * 86400),
+                "duration_since_last_interaction": await format_duration_impl((now - self.last_interaction).total_seconds()),
                 "current_temporal_marker": f"{self.current_temporal_context['time_of_day']}",
                 "temporal_reflection": "I'm aware of time passing across multiple scales simultaneously.",
                 "active_rhythms": {}
@@ -1484,7 +1489,7 @@ class TemporalPerceptionSystem:
                     # Check and update temporal context hourly
                     if now.minute == 0:
                         prev_context = self.current_temporal_context
-                        self.current_temporal_context = await determine_temporal_context()
+                        self.current_temporal_context = await determine_temporal_context_impl()
                         
                         # Detect time of day transitions
                         if prev_context and prev_context.get("time_of_day") != self.current_temporal_context.get("time_of_day"):
@@ -1581,11 +1586,11 @@ class TemporalPerceptionSystem:
             return None
         
         # Format the duration
-        duration_str = await format_duration(seconds_elapsed)
-        time_category = await categorize_time_elapsed(seconds_elapsed)
+        duration_str = await format_duration_impl(seconds_elapsed)
+        time_category = await categorize_time_elapsed_impl(seconds_elapsed)
         
         # Get current temporal context
-        temporal_context = self.current_temporal_context or await determine_temporal_context()
+        temporal_context = self.current_temporal_context or await determine_temporal_context_impl()
         time_of_day = temporal_context.get("time_of_day", "")
         
         # Generate memory text based on time category and temporal context
@@ -1777,7 +1782,7 @@ async def generate_temporal_expression(system_ref: TemporalSystemReference) -> D
     # Get current state
     now = datetime.datetime.now()
     time_since_last = (now - time_system.last_interaction).total_seconds()
-    time_category = await categorize_time_elapsed(time_since_last)
+    time_category = await categorize_time_elapsed_impl(time_since_last)
     
     # Create state object
     perception_state = {
@@ -1786,12 +1791,12 @@ async def generate_temporal_expression(system_ref: TemporalSystemReference) -> D
         "current_time_category": time_category,
         "relationship_age_days": (now - time_system.first_interaction).total_seconds() / 86400 if time_system.first_interaction else 0,
         "total_interactions": time_system.interaction_count,
-        "current_temporal_context": time_system.current_temporal_context or await determine_temporal_context(),
+        "current_temporal_context": time_system.current_temporal_context or await determine_temporal_context_impl(),
         "time_scales_active": time_system.active_time_scales
     }
     
     # Generate expression
-    return await generate_time_expression(perception_state)
+    return await generate_time_expression_impl(perception_state)
 
 async def get_current_temporal_context(system_ref: TemporalSystemReference) -> Dict[str, Any]:
     """
@@ -1808,5 +1813,5 @@ async def get_current_temporal_context(system_ref: TemporalSystemReference) -> D
     time_system = brain.temporal_perception
     
     # Update temporal context
-    time_system.current_temporal_context = await determine_temporal_context()
+    time_system.current_temporal_context = await determine_temporal_context_impl()
     return time_system.current_temporal_context
