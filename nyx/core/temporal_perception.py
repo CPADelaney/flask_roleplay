@@ -861,10 +861,10 @@ def create_time_reflection_agent() -> Agent:
         significance.""",
         model="gpt-4o",
         tools=[
-            function_tool(format_duration),
-            function_tool(categorize_time_elapsed),
-            function_tool(generate_time_reflection),
-            function_tool(determine_temporal_context)
+            format_duration,
+            categorize_time_elapsed,
+            generate_time_reflection,
+            determine_temporal_context
         ],
         output_type=TemporalReflection
     )
@@ -888,11 +888,11 @@ def create_time_perception_agent() -> Agent:
         maintaining temporal cognition across all timescales simultaneously.""",
         model="gpt-4o",
         tools=[
-            function_tool(categorize_time_elapsed),
-            function_tool(format_duration),
-            function_tool(calculate_time_effects),
-            function_tool(generate_time_expression),
-            function_tool(determine_temporal_context),
+            categorize_time_elapsed,
+            format_duration,
+            calculate_time_effects,
+            generate_time_expression,
+            determine_temporal_context,
             detect_time_scale_transition_tool
         ],
         output_type=TimePerceptionState
@@ -917,10 +917,10 @@ def create_temporal_awareness_agent() -> Agent:
         Time creates context and perspective that Nyx is always conscious of.""",
         model="gpt-4o",
         tools=[
-            function_tool(process_temporal_awareness),
-            function_tool(detect_temporal_milestone),
+            process_temporal_awareness,
+            detect_temporal_milestone,
             detect_time_scale_transition_tool,
-            function_tool(determine_temporal_context)
+            determine_temporal_context
         ],
         output_type=TemporalAwarenessOutput
     )
@@ -1681,15 +1681,15 @@ def create_temporal_agent() -> Agent:
         actively processing. Nyx should maintain simultaneous awareness of all time scales from
         seconds to years, with a rich perception of time passing continuously.""",
         tools=[
-            function_tool(categorize_time_elapsed),
-            function_tool(format_duration),
-            function_tool(determine_temporal_context),
-            function_tool(generate_time_expression),
-            function_tool(process_temporal_awareness),
-            function_tool(generate_time_reflection),
+            categorize_time_elapsed,
+            format_duration,
+            determine_temporal_context,
+            generate_time_expression,
+            process_temporal_awareness,
+            generate_time_reflection,
             detect_time_scale_transition_tool,
-            function_tool(detect_temporal_milestone),
-            function_tool(calculate_time_effects)
+            detect_temporal_milestone,
+            calculate_time_effects
         ],
         model="gpt-4o"
     )
