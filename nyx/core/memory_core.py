@@ -622,7 +622,7 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
     # Check each tag for potential patterns
     for tag in tags:
         # Get memories with this tag
-        tagged_memories = await retrieve_memories(
+        tagged_memories = await ries(
             ctx,
             query="",
             memory_types=["observation", "experience"],
@@ -2560,10 +2560,10 @@ class MemoryCoreAgents:
             Your job is to search the memory system using semantic relevance and return the most appropriate
             memories based on the current context. Focus on relevance, recency, and significance.""",
             tools=[
-                function_tool(retrieve_memories),
-                function_tool(get_memory),
-                function_tool(retrieve_memories_with_formatting),
-                function_tool(retrieve_relevant_experiences)
+                retrieve_memories,
+                get_memory,
+                retrieve_memories_with_formatting,
+                retrieve_relevant_experiences
             ]
         )
     
@@ -2575,11 +2575,11 @@ class MemoryCoreAgents:
             Your job is to create new memories, reflections, and abstractions based on experiences
             and observations. Make sure to properly categorize and tag memories.""",
             tools=[
-                function_tool(add_memory),
-                function_tool(update_memory),
-                function_tool(create_reflection_from_memories),
-                function_tool(create_abstraction_from_memories),
-                function_tool(create_semantic_memory)
+                add_memory,
+                update_memory,
+                create_reflection_from_memories,
+                create_abstraction_from_memories,
+                create_semantic_memory
             ]
         )
     
@@ -2591,12 +2591,12 @@ class MemoryCoreAgents:
             Your job is to manage the memory system by applying decay, consolidating similar memories,
             and archiving old memories. Focus on keeping the memory system efficient.""",
             tools=[
-                function_tool(run_maintenance),
-                function_tool(apply_memory_decay),
-                function_tool(consolidate_memory_clusters),
-                function_tool(archive_memory),
-                function_tool(get_memory_stats),
-                function_tool(detect_schema_from_memories)
+                run_maintenance,
+                apply_memory_decay,
+                consolidate_memory_clusters,
+                archive_memory,
+                get_memory_stats,
+                detect_schema_from_memories
             ]
         )
     
@@ -2608,8 +2608,8 @@ class MemoryCoreAgents:
             Your job is to retrieve and format experiences for conversational recall.
             Focus on creating natural, engaging experience recalls.""",
             tools=[
-                function_tool(retrieve_relevant_experiences),
-                function_tool(generate_conversational_recall)
+                retrieve_relevant_experiences,
+                generate_conversational_recall
             ]
         )
     
@@ -2621,7 +2621,7 @@ class MemoryCoreAgents:
             Your job is to construct cohesive narratives from memories and experiences.
             Focus on creating engaging, meaningful stories that connect memories.""",
             tools=[
-                function_tool(construct_narrative_from_memories)
+                construct_narrative_from_memories
             ]
         )
     
@@ -2755,10 +2755,10 @@ class BrainMemoryCore(MemoryCoreAgents):
         super().__init__(user_id=None, conversation_id=None)
         self.omniscient = True
 
-    async def retrieve_memories(self, **kwargs):
+    async def ries(self, **kwargs):
         """
         Retrieve memories across ALL users/conversations. No filtering.
-        Usage: await nyx_brain.retrieve_memories(query="love", limit=3)
+        Usage: await nyx_brain.ries(query="love", limit=3)
         """
         query_text = kwargs.get('query', '')
         limit = kwargs.get('limit', 5)
