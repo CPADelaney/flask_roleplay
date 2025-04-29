@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set, Annotated
 import random
 from collections import Counter
 
-from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, ModelSettings, trace, RunContextWrapper, Parameter
+from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, ModelSettings, trace, RunContextWrapper
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
