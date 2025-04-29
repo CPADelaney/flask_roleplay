@@ -19,6 +19,9 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Set, Annotated
 import random
 from collections import Counter
 
+from typing_extensions import Annotated
+from agents import Parameter
+
 from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, ModelSettings, trace, RunContextWrapper
 from pydantic import BaseModel, Field
 
@@ -581,9 +584,13 @@ class KnowledgeCoreContext:
 async def add_knowledge(
     ctx: RunContextWrapper[KnowledgeCoreContext],
     type: str,
-    content: Dict[str, Any],
+    # tell the SDK “this is a free-form JSON object”
+    content: Annotated[
+        Dict[str, Any],
+        Parameter(schema={"type": "object", "description": "Arbitrary JSON content"})
+    ],
     source: str,
-    confidence: Optional[float] = None,
+    confidence: Annotated[Optional[float], Parameter(optional=True)] = None,
 ) -> str:
     """
     Add a new knowledge node to the knowledge graph.
