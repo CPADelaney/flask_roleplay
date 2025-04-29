@@ -24,6 +24,12 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+class KnowledgeQuery(BaseModel):
+    type: Optional[str] = None
+    content_filter: Optional[Dict[str, Any]] = {}
+    relation_filter: Optional[Dict[str, Any]] = {}
+    limit: int = 10
+
 # Keep the original data models
 class KnowledgeNode:
     """Represents a node in the knowledge graph, storing a piece of knowledge."""
@@ -724,7 +730,7 @@ async def add_relation(
 @function_tool
 async def query_knowledge(
     ctx: RunContextWrapper[KnowledgeCoreContext],
-    query: Dict[str, Any]
+    query: KnowledgeQuery          # <-- typed!
 ) -> List[Dict[str, Any]]:
     """
     Search the knowledge graph for nodes matching certain criteria.
