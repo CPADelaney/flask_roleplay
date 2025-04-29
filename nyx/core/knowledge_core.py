@@ -583,7 +583,7 @@ async def add_knowledge(
     type: str,
     content: Dict[str, Any],
     source: str,
-    confidence: Annotated[Optional[float], Parameter(optional=True)] = None,
+    confidence: Optional[float] = None,
 ) -> str:
     """
     Add a new knowledge node to the knowledge graph.
