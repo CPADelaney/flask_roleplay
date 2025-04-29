@@ -577,13 +577,13 @@ class KnowledgeCoreContext:
 
 
 # Function tools for knowledge operations
-@function_tool(strict_json_schema=False)  # ‘content’ can be any dict shape
+@function_tool
 async def add_knowledge(
     ctx: RunContextWrapper["KnowledgeCoreContext"],
-    type: str,                         # required
-    content: Dict[str, Any],           # required
-    source: str,                       # required
-    confidence: Optional[float] = None # optional – defaults handled below
+    type: str,
+    content_json: str,                 #  <-- JSON–encoded string
+    source: str,
+    confidence: Optional[float] = None
 ) -> str:
     """
     Add a new knowledge node to the knowledge graph.
@@ -599,6 +599,9 @@ async def add_knowledge(
     """
     if confidence is None:
         confidence = 0.5
+
+    content = json.loads(content_json) 
+    
     core = ctx.context
     node_id = f"node_{core.next_node_id}"
     core.next_node_id += 1
