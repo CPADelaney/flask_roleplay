@@ -10,16 +10,16 @@ import asyncio
 import json
 import logging
 import os
+import re
 import math
 import networkx as nx
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, Annotated
 import random
 from collections import Counter
 
-from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput
-from agents import ModelSettings, trace, RunContextWrapper
+from agents import Agent, Runner, function_tool, handoff, FunctionTool, InputGuardrail, GuardrailFunctionOutput, ModelSettings, trace, RunContextWrapper, Parameter
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ class KnowledgeMap:
         self.importance_levels = {}  # (domain, topic) -> importance
         self.last_updated = {}  # (domain, topic) -> datetime
         
-    def add_knowledge(self, domain: str, topic: str, 
+    def add_knowledge_to_map(self, domain: str, topic: str, 
                     level: float = 0.0, importance: float = 0.5) -> None:
         """Add or update knowledge in the map"""
         # Ensure domain exists
@@ -583,7 +583,7 @@ async def add_knowledge(
     type: str,
     content: Dict[str, Any],
     source: str,
-    confidence: float = 0.5
+    confidence: Annotated[Optional[float], Parameter(optional=True)] = None,
 ) -> str:
     """
     Add a new knowledge node to the knowledge graph.
@@ -597,6 +597,8 @@ async def add_knowledge(
     Returns:
         The ID of the new node
     """
+    if confidence is None:
+        confidence = 0.5    
     core_ctx = ctx.context
     
     # Create node ID
@@ -1027,7 +1029,7 @@ async def record_exploration(
     # Update knowledge map if knowledge gained
     if "knowledge_gained" in result and result["knowledge_gained"] > 0:
         level = 1.0 - target.knowledge_gap
-        core_ctx.knowledge_map.add_knowledge(
+        core_ctx.knowledge_map.add_knowledge_to_map(
             target.domain,
             target.topic,
             level,
@@ -1949,7 +1951,7 @@ class KnowledgeCoreAgents:
         )
         logger.info("Knowledge Core initialized with agents.")
     
-    async def add_knowledge(self, type: str, content: Dict[str, Any], 
+    async def _send_add_knowledge_prompt(self, type: str, content: Dict[str, Any], 
                            source: str, confidence: float = 0.5, 
                            relations: Optional[List[Dict[str, Any]]] = None) -> str:
         """Add a new knowledge node"""
