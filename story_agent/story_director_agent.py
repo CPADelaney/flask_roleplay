@@ -863,7 +863,13 @@ async def get_current_story_state(agent: Agent, ctx: Union[RunContextWrapper[Sto
                 # Consider if the core operation needs retry or if the cache handles it.
                 # For simplicity here, directly calling Runner.run.
                 # If retry is essential, wrap the Runner.run call.
-                operation = lambda: Runner.run(agent, prompt, context=context)
+                MAX_AGENT_TURNS = 25  
+                operation = lambda: Runner.run(
+                    agent,
+                    prompt,
+                    context=context,
+                    max_turns=MAX_AGENT_TURNS
+                )
                 # fetched_result = await retry_operation(operation) # Original retry call
                 fetched_result = await operation() # Simpler call for example
 
