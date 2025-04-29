@@ -715,6 +715,7 @@ async def detect_time_scale_transition_tool(
         )
     )
 
+@function_tool
 async def detect_temporal_milestone(user_id: str, 
                                  total_days: float, 
                                  total_interactions: int,
