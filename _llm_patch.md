@@ -1,0 +1,1 @@
+It looks like the lint errors and code snippets didn’t come through—could you please paste the specific lint warnings (and any relevant code excerpts) so I can draft precise, minimal unified‑diff fixes?
