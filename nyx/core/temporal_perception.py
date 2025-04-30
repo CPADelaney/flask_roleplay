@@ -663,29 +663,35 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         "active_rhythms": active_rhythms
     }
 
-async def __impl(
-    data: TimeScaleTransitionInput,
+
+
+async def _detect_time_scale_transition_impl(
+    data: TimeScaleTransitionInput,  # assumes your Pydantic model as above
 ) -> Optional[Dict[str, Any]]:
-    """Detect transitions between time scales."""
-    prev, curr = data.previous_state, data.current_state
+    """
+    Detect transitions between time scales (day, week, month, year) based on 'last_interaction' timestamps.
+
+    Args:
+        data: TimeScaleTransitionInput with previous_state and current_state
+
+    Returns:
+        Dictionary describing the transition if detected, otherwise None.
+    """
+    prev, curr = data.previous_state or {}, data.current_state or {}
     prev_time = prev.get("last_interaction")
     curr_time = curr.get("last_interaction")
-    
+
     if not prev_time or not curr_time:
         return None
-    
-    # Convert to datetime if they're strings
+
+    # Ensure datetime objects (can be isoformat strings)
     if isinstance(prev_time, str):
         prev_time = datetime.datetime.fromisoformat(prev_time)
     if isinstance(curr_time, str):
         curr_time = datetime.datetime.fromisoformat(curr_time)
-    
-    # Check for day boundary crossing
-    prev_day = prev_time.day
-    curr_day = curr_time.day
-    
-    if curr_day != prev_day:
-        # Day transition
+
+    # --- Check for day boundary crossing ---
+    if prev_time.date() != curr_time.date():
         return {
             "from_scale": "hours",
             "to_scale": "days",
@@ -696,13 +702,11 @@ async def __impl(
                 "intensity": 0.7
             }
         }
-    
-    # Check for week boundary crossing
-    prev_week = prev_time.isocalendar()[1]  # ISO week number
+
+    # --- Check for week boundary crossing (ISO week) ---
+    prev_week = prev_time.isocalendar()[1]
     curr_week = curr_time.isocalendar()[1]
-    
-    if curr_week != prev_week:
-        # Week transition
+    if curr_week != prev_week or curr_time.year != prev_time.year:
         return {
             "from_scale": "days",
             "to_scale": "weeks",
@@ -713,13 +717,9 @@ async def __impl(
                 "intensity": 0.8
             }
         }
-    
-    # Check for month boundary crossing
-    prev_month = prev_time.month
-    curr_month = curr_time.month
-    
-    if curr_month != prev_month:
-        # Month transition
+
+    # --- Check for month boundary crossing ---
+    if (curr_time.month != prev_time.month) or (curr_time.year != prev_time.year):
         return {
             "from_scale": "weeks",
             "to_scale": "months",
@@ -730,13 +730,9 @@ async def __impl(
                 "intensity": 0.9
             }
         }
-    
-    # Check for year boundary crossing
-    prev_year = prev_time.year
-    curr_year = curr_time.year
-    
-    if curr_year != prev_year:
-        # Year transition
+
+    # --- Check for year boundary crossing ---
+    if curr_time.year != prev_time.year:
         return {
             "from_scale": "months",
             "to_scale": "years",
@@ -747,129 +743,20 @@ async def __impl(
                 "intensity": 1.0
             }
         }
-    
-    # No significant transition detected
+
+    # --- No significant transition detected ---
     return None
 
-@function_tool(name_override="")
-async def _tool(
+@function_tool(name_override="detect_time_scale_transition")
+async def detect_time_scale_transition(
     current_state: Dict[str, Any],
     previous_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Decide whether a transition between coarse time-scales occurred
-    (e.g. hours → days, days → weeks) between two interaction states.
-
-    Args:
-        current_state: **Required.** A dictionary that MUST contain
-            at least a ``"last_interaction"`` ISO-8601 timestamp.
-        previous_state: Optional. A dictionary representing the
-            immediately-prior state; may be ``None`` or empty.
-
-    Returns:
-        • A dict describing the transition (from_scale, to_scale, …)  
-        • ``None`` if no significant boundary was crossed.
-    """
-    # --- basic validation ----------------------------------------------------
-    if not isinstance(current_state, dict):
-        raise TypeError("current_state must be a dictionary")
-
-    if "last_interaction" not in current_state:
-        raise ValueError("current_state is missing required key 'last_interaction'")
-
-    # Ensure we always hand a dict to the Pydantic model
-    safe_prev = previous_state or {}
-
-    # --- validate with Pydantic model ---------------------------------------
     input_data = TimeScaleTransitionInput(
-        previous_state=safe_prev,
+        previous_state=previous_state or {},
         current_state=current_state,
     )
-
-    # --- delegate to implementation -----------------------------------------
-    return await __impl(input_data)
-
-# --- FIX IMPLEMENTATION and TOOL DEFINITION ---
-@function_tool(name_override="detect_time_scale_transition")
-async def detect_time_scale_transition_tool(
-    current_state_json: str,
-    previous_state_json: str
-) -> Optional[Dict[str, Any]]:
-    """
-    Detects if the system's operational time scale perception should shift based
-    on crossing day, week, month, or year boundaries between interactions.
-
-    Args:
-        current_state_json: REQUIRED. A JSON string representing the current state dictionary.
-                           MUST include a key 'last_interaction' with an ISO 8601 timestamp string value.
-                           Example: '{"last_interaction": "2025-04-30T10:00:00Z", "other_key": "value"}'
-        previous_state_json: REQUIRED. A JSON string representing the previous state dictionary.
-                             **USE AN EMPTY JSON OBJECT STRING '{}' if no previous state exists.**
-                             If provided, it should include 'last_interaction'.
-                             Example: '{"last_interaction": "2025-04-29T23:59:00Z", ...}' or '{}'
-
-    Returns:
-        A dictionary describing the transition if detected (including from_scale, to_scale,
-        transition_time, description), otherwise null/None. Includes an 'error' key if parsing fails.
-    """
-    logger.debug(f"Tool 'detect_time_scale_transition_tool' called.")
-    # --- Parse States (Internal Handling of 'Optionality') ---
-    parsed_previous_state: Dict[str, Any] = {}
-    parsed_current_state: Optional[Dict[str, Any]] = None
-
-    # Handle previous state (treat empty string or "{}" as truly empty)
-    if previous_state_json and previous_state_json.strip() and previous_state_json.strip() != '{}':
-        try:
-            parsed_previous_state = json.loads(previous_state_json)
-            if not isinstance(parsed_previous_state, dict):
-                 logger.warning(f"Parsed previous_state_json ('{previous_state_json[:50]}...') is not a dict. Treating as empty.")
-                 parsed_previous_state = {}
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse previous_state_json ('{previous_state_json[:50]}...'): {e}. Treating as empty.")
-            parsed_previous_state = {}
-    else:
-        logger.debug("previous_state_json was empty or '{}'. Using empty previous state.")
-        # parsed_previous_state is already {}
-
-    # Parse current state (Required)
-    if not current_state_json or not current_state_json.strip():
-         logger.error("Required argument 'current_state_json' is empty.")
-         return {"error": "Required argument 'current_state_json' cannot be empty."}
-    try:
-        parsed_current_state = json.loads(current_state_json)
-        if not isinstance(parsed_current_state, dict):
-             logger.error(f"Parsed current_state_json ('{current_state_json[:50]}...') is not a dictionary.")
-             return {"error": "Invalid format for current_state_json, expected a JSON dictionary string."}
-        if "last_interaction" not in parsed_current_state:
-             logger.error("Required key 'last_interaction' missing in current_state_json.")
-             return {"error": "Required key 'last_interaction' missing in current_state_json."}
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse required current_state_json ('{current_state_json[:50]}...'): {e}")
-        return {"error": f"Failed to parse current_state_json: {e}"}
-    except Exception as e:
-        logger.error(f"Unexpected error parsing current_state_json: {e}")
-        return {"error": f"Unexpected error parsing current_state_json: {e}"}
-
-    # --- Prepare Input Model ---
-    try:
-        input_data = TimeScaleTransitionInput(
-            previous_state=parsed_previous_state,
-            current_state=parsed_current_state
-        )
-    except ValidationError as e:
-         logger.error(f"Validation error creating TimeScaleTransitionInput: {e}")
-         error_detail = e.errors()[0]['msg'] if e.errors() else str(e)
-         return {"error": f"Input state validation failed: {error_detail}"}
-    except Exception as e:
-        logger.error(f"Unexpected error creating TimeScaleTransitionInput model: {e}")
-        return {"error": f"Unexpected error creating input data: {e}"}
-
-    # --- Call Implementation ---
-    try:
-        return await _detect_time_scale_transition_tool(input_data)
-    except Exception as e:
-        logger.exception("Error occurred during _detect_time_scale_transition_tool execution")
-        return {"error": f"Internal error during transition detection logic."}
+    return await _detect_time_scale_transition_impl(input_data)
 
 
 # --- REVISED FUNCTION TOOL WRAPPER ---
@@ -987,7 +874,7 @@ def create_time_perception_agent() -> Agent:
             calculate_time_effects,
             generate_time_expression,
             determine_temporal_context,
-            detect_time_scale_transition_tool
+            detect_time_scale_transition
         ],
         output_type=TimePerceptionState
     )
@@ -1013,7 +900,7 @@ def create_temporal_awareness_agent() -> Agent:
         tools=[
             process_temporal_awareness,
             detect_temporal_milestone,
-            detect_time_scale_transition_tool,
+            detect_time_scale_transition,
             determine_temporal_context
         ],
         output_type=TemporalAwarenessOutput
@@ -1244,7 +1131,7 @@ class TemporalPerceptionSystem:
             if days_elapsed >= 365 and self.active_time_scales["years"] < 1.0:
                 self.active_time_scales["years"] = min(1.0, days_elapsed / 365)
             
-            transition = await detect_time_scale_transition_tool(
+            transition = await detect_time_scale_transition(
                 previous_state, current_state
             )
             
@@ -1774,7 +1661,7 @@ def create_temporal_agent() -> Agent:
             generate_time_expression,
             process_temporal_awareness,
             generate_time_reflection,
-            detect_time_scale_transition_tool,
+            detect_time_scale_transition,
             detect_temporal_milestone,
             calculate_time_effects
         ],
