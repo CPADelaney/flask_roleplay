@@ -1,0 +1,1 @@
+I’m ready to help, but I’ll need the specific lint warnings/errors along with the related code snippets in order to craft minimal unified-diff patches. Could you please post the lint messages and the relevant context?
