@@ -13,29 +13,23 @@ from agents.exceptions import UserError
 
 from .models import Procedure, ProcedureStats, TransferStats, ProcedureTransferRecord
 
+from pydantic import BaseModel, Field
+
 logger = logging.getLogger(__name__)
+
+class AddProcedureInput(BaseModel):
+    name: str = Field(..., description="Name of the procedure")
+    steps: List[Dict[str, Any]] = Field(..., description="List of step definitions")
+    description: Optional[str] = Field(None, description="Optional description")
+    domain: Optional[str] = Field(None, description="Domain/context")
 
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
-    name: str,
-    steps: List[Dict[str, Any]],
-    description: Optional[str] = None,
-    domain: Optional[str] = None,
+    input_data: AddProcedureInput
 ) -> Dict[str, Any]:
-    """
-    Add a new procedure to the procedural memory system.
-    
-    Args:
-        name: Name of the procedure
-        steps: List of step definitions with function, description and parameters
-        description: Optional description of what the procedure accomplishes
-        domain: Domain/context where this procedure applies
-        
-    Returns:
-        Information about the created procedure
-    """
-    domain = domain or "general"
+    """Add a new procedure to the procedural memory system."""
+    domain = input_data.domain or "general"
     
     manager = ctx.context.manager
     
