@@ -745,7 +745,7 @@ async def query_knowledge(
     type: Optional[str] = None,
     content_filter_json: Optional[str] = None,
     relation_filter_json: Optional[str] = None,
-    limit: Optional[int] = 10
+    limit: Optional[int] = None # <--- REMOVED default value assignment
 ) -> List[Dict[str, Any]]:
     """
     Search the knowledge graph for nodes matching certain criteria.
@@ -756,7 +756,7 @@ async def query_knowledge(
             to filter by content fields (e.g., '{"topic": "AI"}').
         relation_filter_json: Optional. JSON string representing a dictionary
             to filter by relation (e.g., '{"type": "supports", "node_id": "node_123"}').
-        limit: Optional. Maximum number of results to return (default: 10).
+        limit: Optional. Maximum number of results to return. Defaults to 10 if not provided.
 
     Returns:
         A list of matching node dictionaries, sorted by confidence.
@@ -777,15 +777,17 @@ async def query_knowledge(
         logger.warning(f"Could not parse relation_filter_json: {relation_filter_json}")
         relation_filter = {}
 
-    limit_val = limit if limit is not None else 10 # Use the provided limit or default
+    # --- Handle default value for limit INTERNALLY ---
+    limit_val = limit if limit is not None else 10
+    # Ensure limit_val is positive if needed (OpenAI might reject 0 or negative later)
+    limit_val = max(1, limit_val)
 
     # --- Build cache key ---
-    # Use parsed values for cache key consistency
     cache_key_dict = {
         "type": node_type,
         "content_filter": content_filter,
         "relation_filter": relation_filter,
-        "limit": limit_val
+        "limit": limit_val # Use the derived value
     }
     cache_key = json.dumps(cache_key_dict, sort_keys=True)
 
