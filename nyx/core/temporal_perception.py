@@ -766,6 +766,59 @@ async def detect_time_scale_transition(
     )
     return await _detect_time_scale_transition_impl(input_data)
 
+async def detect_temporal_milestone_impl(
+    user_id: str,
+    total_days: float,
+    total_interactions: int,
+    recent_memories: Optional[List["MemoryEntry"]] = None
+) -> Optional["TemporalMilestone"]:
+    """
+    Detects significant temporal milestones based on days of interaction or interaction counts.
+    Returns a TemporalMilestone instance if a milestone is reached, otherwise None.
+    """
+    now = datetime.datetime.now()
+    # Day-based milestones (in days)
+    day_milestones = [1, 7, 30, 365]
+    for milestone_day in day_milestones:
+        # Check if we've just reached this exact milestone
+        if abs(total_days - milestone_day) < 1e-6:
+            name = f"{int(milestone_day)}-day anniversary"
+            description = f"Congratulations on {int(milestone_day)} days of continuous interaction!"
+            significance = min(1.0, milestone_day / 365)
+            associated_ids = [m.id for m in recent_memories] if recent_memories else []
+            # For yearly anniversary, schedule next anniversary one year later
+            next_anniv = None
+            if milestone_day == 365:
+                next_anniv = now + datetime.timedelta(days=365)
+            return TemporalMilestone(
+                milestone_id=f"{user_id}_days_{int(milestone_day)}",
+                timestamp=now,
+                name=name,
+                description=description,
+                significance=significance,
+                associated_memory_ids=associated_ids,
+                next_anniversary=next_anniv
+            )
+    # Interaction count milestones
+    interaction_milestones = [10, 50, 100]
+    for count in interaction_milestones:
+        if total_interactions == count:
+            name = f"{count} interactions"
+            description = f"You have interacted {count} times with Nyx!"
+            significance = min(1.0, count / 100)
+            associated_ids = [m.id for m in recent_memories] if recent_memories else []
+            return TemporalMilestone(
+                milestone_id=f"{user_id}_interactions_{count}",
+                timestamp=now,
+                name=name,
+                description=description,
+                significance=significance,
+                associated_memory_ids=associated_ids,
+                next_anniversary=None
+            )
+    # No milestone reached
+    return None
+
 
 # --- REVISED FUNCTION TOOL WRAPPER ---
 @function_tool(name_override="detect_temporal_milestone")
