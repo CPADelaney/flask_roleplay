@@ -22,7 +22,7 @@ from agents import (
     RunContextWrapper
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ValidationError
 
 from typing import Dict, List, Any, Optional, Tuple, Union, TYPE_CHECKING
 
@@ -194,11 +194,6 @@ class TimeScaleTransition(BaseModel):
     transition_time: datetime.datetime = Field(..., description="When the transition occurred")
     description: str = Field(..., description="Description of the transition")
     perception_shift: Dict[str, Any] = Field(..., description="How perception shifts with this transition")
-
-class TimeScaleTransitionInput(BaseModel):
-    """Payload for the transition detector"""
-    previous_state: Dict[str, Any]
-    current_state: Dict[str, Any]
 
 # =============== Function Tools ===============
 
@@ -763,76 +758,41 @@ async def _detect_time_scale_transition_impl(
 
 @function_tool(name_override="detect_time_scale_transition")
 async def detect_time_scale_transition_tool(
-    # ctx: RunContextWrapper -> Add context type hint if needed
-    # --- Make current state required, previous optional, pass as JSON ---
-    current_state_json: str,
-    previous_state_json: Optional[str] = None
+    current_state: Dict[str, Any],
+    previous_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Detects if the system's operational time scale perception should shift based
-    on crossing day, week, month, or year boundaries between interactions.
+    Decide whether a transition between coarse time-scales occurred
+    (e.g. hours → days, days → weeks) between two interaction states.
 
     Args:
-        current_state_json: A JSON string representing the current state, MUST include
-                           a 'last_interaction' timestamp (ISO 8601 format string).
-                           Example: '{"last_interaction": "2025-04-30T10:00:00Z", ...}'
-        previous_state_json: Optional. A JSON string representing the previous state,
-                             should include 'last_interaction' for comparison.
-                             Example: '{"last_interaction": "2025-04-29T23:59:00Z", ...}'
+        current_state: **Required.** A dictionary that MUST contain
+            at least a ``"last_interaction"`` ISO-8601 timestamp.
+        previous_state: Optional. A dictionary representing the
+            immediately-prior state; may be ``None`` or empty.
 
     Returns:
-        A dictionary describing the transition if detected (including from_scale, to_scale,
-        transition_time, description), otherwise null/None.
+        • A dict describing the transition (from_scale, to_scale, …)  
+        • ``None`` if no significant boundary was crossed.
     """
-    logger.debug("Tool 'detect_time_scale_transition' called.")
+    # --- basic validation ----------------------------------------------------
+    if not isinstance(current_state, dict):
+        raise TypeError("current_state must be a dictionary")
 
-    # --- Parse and Validate States ---
-    parsed_previous_state: Dict[str, Any] = {}
-    parsed_current_state: Optional[Dict[str, Any]] = None # Mark as Optional initially
+    if "last_interaction" not in current_state:
+        raise ValueError("current_state is missing required key 'last_interaction'")
 
-    if previous_state_json:
-        try:
-            parsed_previous_state = json.loads(previous_state_json)
-            if not isinstance(parsed_previous_state, dict):
-                 logger.warning("Parsed previous_state_json is not a dictionary. Using empty dict.")
-                 parsed_previous_state = {} # Default to empty if not dict
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse previous_state_json: {e}. Using empty dict.")
-            parsed_previous_state = {} # Default to empty on error
+    # Ensure we always hand a dict to the Pydantic model
+    safe_prev = previous_state or {}
 
-    try:
-        parsed_current_state = json.loads(current_state_json)
-        if not isinstance(parsed_current_state, dict):
-             logger.error("Parsed current_state_json is not a dictionary. Cannot proceed.")
-             return {"error": "Invalid format for current_state_json, expected a JSON dictionary string."}
-        # Basic check for required key in current state
-        if "last_interaction" not in parsed_current_state:
-             logger.error("Required key 'last_interaction' missing in current_state_json.")
-             return {"error": "Required key 'last_interaction' missing in current_state_json."}
+    # --- validate with Pydantic model ---------------------------------------
+    input_data = TimeScaleTransitionInput(
+        previous_state=safe_prev,
+        current_state=current_state,
+    )
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse required current_state_json: {e}")
-        return {"error": f"Failed to parse current_state_json: {e}"}
-    except Exception as e:
-        logger.error(f"Unexpected error parsing current_state_json: {e}")
-        return {"error": f"Unexpected error parsing current_state_json: {e}"}
-
-    # --- Prepare Input for Implementation Function ---
-    try:
-        # Validate the combined structure using the Pydantic model
-        input_data = TimeScaleTransitionInput(
-            previous_state=parsed_previous_state,
-            current_state=parsed_current_state
-        )
-    except ValidationError as e:
-         logger.error(f"Validation error creating TimeScaleTransitionInput: {e}")
-         return {"error": f"Input state validation failed: {e}"}
-
-    # --- Call the Implementation ---
-    transition_result = await _detect_time_scale_transition_impl(input_data)
-
-    # --- Return Result ---
-    return transition_result
+    # --- delegate to implementation -----------------------------------------
+    return await _detect_time_scale_transition_impl(input_data)
 
 # --- FIX IMPLEMENTATION and TOOL DEFINITION ---
 async def detect_temporal_milestone_impl(user_id: str,
