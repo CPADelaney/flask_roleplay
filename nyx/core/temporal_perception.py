@@ -34,6 +34,52 @@ logger = logging.getLogger(__name__)
 
 # =============== Pydantic Models for Time Perception ===============
 
+class MemoryEntry(BaseModel):
+    """
+    Lightweight schema for a single memory returned by memory_core.retrieve_memories().
+    Only `id` is strictly required; everything else is optional and may be absent
+    depending on the memory provider.  Add or remove fields as your engine evolves.
+    """
+
+    # --- core identity ---
+    id: str = Field(..., description="Unique identifier of the memory")
+
+    # --- human-readable content ---
+    text: Optional[str] = Field(
+        None, description="Full text or summary of the memory"
+    )
+    memory_type: Optional[str] = Field(
+        None, description="Kind of memory (observation, reflection, milestone, etc.)"
+    )
+
+    # --- timing & importance ---
+    timestamp: Optional[datetime.datetime] = Field(
+        None, description="When the memory was stored (ISO 8601)"
+    )
+    significance: Optional[float] = Field(
+        None,
+        ge=0,
+        le=10,
+        description="Relative importance (0-10 scale) assigned when the memory was saved",
+    )
+
+    # --- categorisation helpers ---
+    tags: Optional[List[str]] = Field(
+        None, description="Free-form tags attached to the memory"
+    )
+
+    # --- anything else the memory system stashes ---
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Arbitrary provider-specific metadata (JSON serialisable)",
+        extra="allow",
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+        # Allow extra keys that we haven't modelled yet to pass through untouched
+        extra = "allow"
+
 class TemporalSystemReference(BaseModel):
     """Reference to a TemporalPerceptionSystem instance"""
     user_id: int = Field(..., description="User ID associated with the temporal system")
@@ -707,8 +753,8 @@ async def detect_time_scale_transition_tool(previous_state: Dict[str, Any],
 async def detect_temporal_milestone_impl(user_id: str,
                                          total_days: float,
                                          total_interactions: int,
-                                         recent_memories: list[dict[str, any]] | None = None
-) -> dict[str, any] | None:
+                                         recent_memories: Optional[List[MemoryEntry]] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Detect if a temporal milestone has been reached
     
