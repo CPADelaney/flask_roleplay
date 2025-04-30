@@ -754,6 +754,7 @@ async def detect_time_scale_transition_tool(previous_state: Dict[str, Any],
                                  current_state=current_state)
     )
 
+# --- FIX IMPLEMENTATION and TOOL DEFINITION ---
 async def detect_temporal_milestone_impl(user_id: str,
                                          total_days: float,
                                          total_interactions: int,
@@ -854,6 +855,9 @@ async def detect_temporal_milestone(user_id: str,
                                                             total_interactions,
                                                             recent_memories) # Pass MemoryEntry list directly
     return milestone_model.model_dump(mode='json') if milestone_model else None
+# --- END FIX ---
+
+
 # =============== Temporal Agents ===============
 
 def create_time_reflection_agent() -> Agent:
