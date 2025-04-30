@@ -1,0 +1,1 @@
+It looks like the specific lint violations and code snippets didn’t come through. Could you paste the reported lint errors along with the relevant code excerpts? Then I can draft targeted unified‐diff patches to clean them up.
