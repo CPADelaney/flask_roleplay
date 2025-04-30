@@ -72,13 +72,17 @@ class MemoryEntry(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         None,
         description="Arbitrary provider-specific metadata (JSON serialisable)",
-        extra="allow",
+        # Pydantic v2 automatically handles extra fields if the base model allows it.
+        # If using Pydantic v1, you might need `extra = Extra.allow` here
+        # or ensure the Dict is strictly just Any JSON-serializable types.
     )
 
     class Config:
         arbitrary_types_allowed = True
-        # Allow extra keys that we haven't modelled yet to pass through untouched
-        extra = "allow"
+        # For Pydantic v2, 'extra' is configured on the model directly if needed,
+        # but often default behavior or specific field definitions are preferred.
+        # If using Pydantic v1, use: extra = "allow"
+        # Pydantic v2: extra = 'allow' # If you need arbitrary fields beyond 'metadata'
 
 class TemporalSystemReference(BaseModel):
     """Reference to a TemporalPerceptionSystem instance"""
@@ -754,138 +758,102 @@ async def detect_temporal_milestone_impl(user_id: str,
                                          total_days: float,
                                          total_interactions: int,
                                          recent_memories: Optional[List[MemoryEntry]] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[TemporalMilestone]: # Return specific type
     """
     Detect if a temporal milestone has been reached
-    
+
     Args:
         user_id: User ID
         total_days: Total days of relationship
         total_interactions: Total interactions count
-        recent_memories: Recent memories to analyze
-        
+        recent_memories: Recent memories (as MemoryEntry objects) to analyze
+
     Returns:
-        Temporal milestone if detected, None otherwise
+        Temporal milestone object if detected, None otherwise
     """
+    now = datetime.datetime.now(datetime.timezone.utc)
+
     # Define milestones based on time or interaction count
     time_milestones = [
-        {
-            "name": "First Day Anniversary",
-            "threshold_days": 1,
-            "significance": 0.6,
-            "description": "One full day since our first interaction"
-        },
-        {
-            "name": "First Week Anniversary",
-            "threshold_days": 7,
-            "significance": 0.7,
-            "description": "One week of conversations and exchanges"
-        },
-        {
-            "name": "First Month Anniversary",
-            "threshold_days": 30,
-            "significance": 0.8,
-            "description": "One month since we began our conversations"
-        },
-        {
-            "name": "First Quarter Anniversary",
-            "threshold_days": 90,
-            "significance": 0.8,
-            "description": "Three months of developing conversation and understanding"
-        },
-        {
-            "name": "Half-Year Anniversary",
-            "threshold_days": 180,
-            "significance": 0.9,
-            "description": "Six months of shared conversations and experiences"
-        },
-        {
-            "name": "First Year Anniversary",
-            "threshold_days": 365,
-            "significance": 1.0,
-            "description": "A full year of conversations, reflections, and exchanges"
-        }
+        {"name": "First Day Anniversary", "threshold_days": 1, "significance": 0.6, "description": "One full day since our first interaction"},
+        {"name": "First Week Anniversary", "threshold_days": 7, "significance": 0.7, "description": "One week of conversations and exchanges"},
+        {"name": "First Month Anniversary", "threshold_days": 30, "significance": 0.8, "description": "One month since we began our conversations"},
+        {"name": "First Quarter Anniversary", "threshold_days": 90, "significance": 0.8, "description": "Three months of developing conversation and understanding"},
+        {"name": "Half-Year Anniversary", "threshold_days": 182, "significance": 0.9, "description": "Six months of shared conversations and experiences"}, # Adjusted 180 -> 182.5 ~ 182
+        {"name": "First Year Anniversary", "threshold_days": 365, "significance": 1.0, "description": "A full year of conversations, reflections, and exchanges"}
     ]
-    
+
     interaction_milestones = [
-        {
-            "name": "Ten Conversations",
-            "threshold_interactions": 10,
-            "significance": 0.6,
-            "description": "Ten interactions completed"
-        },
-        {
-            "name": "Fifty Conversations",
-            "threshold_interactions": 50,
-            "significance": 0.7,
-            "description": "Fifty interactions, establishing a communication pattern"
-        },
-        {
-            "name": "Hundred Conversations",
-            "threshold_interactions": 100,
-            "significance": 0.8,
-            "description": "One hundred interactions, deepening our conversational history"
-        },
-        {
-            "name": "Five Hundred Conversations",
-            "threshold_interactions": 500,
-            "significance": 0.9,
-            "description": "Five hundred interactions, a substantial history of exchanges"
-        }
+        {"name": "Ten Interactions", "threshold_interactions": 10, "significance": 0.6, "description": "Ten interactions completed"},
+        {"name": "Fifty Interactions", "threshold_interactions": 50, "significance": 0.7, "description": "Fifty interactions, establishing a communication pattern"},
+        {"name": "Hundred Interactions", "threshold_interactions": 100, "significance": 0.8, "description": "One hundred interactions, deepening our conversational history"},
+        {"name": "Five Hundred Interactions", "threshold_interactions": 500, "significance": 0.9, "description": "Five hundred interactions, a substantial history of exchanges"},
+        {"name": "Thousand Interactions", "threshold_interactions": 1000, "significance": 0.95, "description": "One thousand interactions, a significant milestone in our shared history"}
     ]
-    
-    # Check for time-based milestones
+
+    detected_milestone_data = None
+
+    # Check for time-based milestones (check if threshold is crossed *today*)
+    # This requires knowing the *previous* total_days to detect the crossing accurately.
+    # Simplified check: if total_days is very close to a threshold.
     for milestone in time_milestones:
-        if abs(total_days - milestone["threshold_days"]) < 1:  # Within one day
-            # Create milestone
-            milestone_id = f"milestone_{user_id}_{int(time.time())}"
-            next_anniversary = datetime.datetime.now() + datetime.timedelta(days=milestone["threshold_days"])
-            
-            # Find relevant memory IDs
-            memory_ids = [mem.get("id") for mem in recent_memories][:5]
-            
-            return {
-                "milestone_id": milestone_id,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "name": milestone["name"],
-                "description": milestone["description"],
-                "significance": milestone["significance"],
-                "associated_memory_ids": memory_ids,
-                "next_anniversary": next_anniversary.isoformat() if next_anniversary else None
-            }
-    
-    # Check for interaction-based milestones
-    for milestone in interaction_milestones:
-        if total_interactions == milestone["threshold_interactions"]:
-            # Create milestone
-            milestone_id = f"milestone_{user_id}_{int(time.time())}"
-            
-            # Find relevant memory IDs
-            memory_ids = [mem.get("id") for mem in recent_memories][:5]
-            
-            return {
-                "milestone_id": milestone_id,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "name": milestone["name"],
-                "description": milestone["description"],
-                "significance": milestone["significance"],
-                "associated_memory_ids": memory_ids,
-                "next_anniversary": None  # No anniversary for interaction milestones
-            }
-    
+        # Check if we are *around* the milestone day (e.g., within 0.5 days)
+        # A more robust check would compare against previously stored total_days.
+        if abs(total_days - milestone["threshold_days"]) < 0.5:
+            detected_milestone_data = milestone
+            detected_milestone_data["type"] = "time"
+            # Calculate next anniversary
+            years_passed = int(total_days // 365)
+            next_anniversary_year = now.year + (1 if total_days >= milestone["threshold_days"] else 0) # Basic estimate
+            # This needs refinement based on actual date tracking
+            next_anniversary_date = None # Placeholder - calculating exact date needs first interaction date
+            detected_milestone_data["next_anniversary_calc"] = next_anniversary_date
+            break # Detect only one milestone per check for now
+
+    # Check for interaction-based milestones if no time milestone detected
+    if not detected_milestone_data:
+        for milestone in interaction_milestones:
+             # Check if the interaction count *exactly* matches the threshold
+             # This assumes interaction count is updated *before* this check.
+            if total_interactions == milestone["threshold_interactions"]:
+                detected_milestone_data = milestone
+                detected_milestone_data["type"] = "interaction"
+                detected_milestone_data["next_anniversary_calc"] = None # No anniversary
+                break
+
+    if detected_milestone_data:
+        milestone_id = f"milestone_{user_id}_{detected_milestone_data['name'].replace(' ', '_').lower()}_{int(now.timestamp())}"
+
+        # Extract relevant memory IDs from MemoryEntry objects
+        memory_ids = [mem.id for mem in recent_memories if mem] if recent_memories else []
+        memory_ids = memory_ids[:5] # Limit associated memories
+
+        # Create TemporalMilestone object
+        return TemporalMilestone(
+            milestone_id=milestone_id,
+            timestamp=now,
+            name=detected_milestone_data["name"],
+            description=detected_milestone_data["description"],
+            significance=detected_milestone_data["significance"],
+            associated_memory_ids=memory_ids,
+            next_anniversary=detected_milestone_data["next_anniversary_calc"] # Use calculated value
+        )
+
     return None
 
 @function_tool(name_override="detect_temporal_milestone")
 async def detect_temporal_milestone(user_id: str,
                                     total_days: float,
                                     total_interactions: int,
-                                    recent_memories: list[dict[str, any]] | None = None
-) -> dict[str, any] | None:
-    return await detect_temporal_milestone_impl(user_id,
-                                                total_days,
-                                                total_interactions,
-                                                recent_memories)
-
+                                    # --- Use List[MemoryEntry] here ---
+                                    recent_memories: Optional[List[MemoryEntry]] = None
+) -> Optional[Dict[str, Any]]: # Return type remains dict for JSON compatibility if needed by caller
+    """Detects if a significant temporal milestone (e.g., anniversary, interaction count) has been reached."""
+    milestone_model = await detect_temporal_milestone_impl(user_id,
+                                                            total_days,
+                                                            total_interactions,
+                                                            recent_memories) # Pass MemoryEntry list directly
+    return milestone_model.model_dump(mode='json') if milestone_model else None
 # =============== Temporal Agents ===============
 
 def create_time_reflection_agent() -> Agent:
