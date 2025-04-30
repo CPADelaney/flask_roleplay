@@ -833,7 +833,6 @@ async def detect_time_scale_transition_tool(
 
     # --- Return Result ---
     return transition_result
-    )
 
 # --- FIX IMPLEMENTATION and TOOL DEFINITION ---
 async def detect_temporal_milestone_impl(user_id: str,
