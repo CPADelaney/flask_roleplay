@@ -431,7 +431,7 @@ class MetaCore:
                     tripwire_triggered=True
                 )
         
-        output_guardrail = OutputGuardrail(guardrail_function=validate_output)
+        output_guardrail = GuardrailFunctionOutput(guardrail_function=validate_output)
         
         # Create meta agent
         self.meta_agent = Agent(
