@@ -1,0 +1,1 @@
+It looks like the lint errors and code snippets didn’t come through. Could you paste the specific lint warnings (and relevant code context) so I can propose precise unified‑diff patches?
