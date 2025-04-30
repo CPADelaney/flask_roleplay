@@ -1,0 +1,1 @@
+It looks like the “Lint issues” list didn’t come through. Could you please paste in the specific lint errors (and any relevant code snippets) so I can craft minimal, high-impact diffs to address them?
