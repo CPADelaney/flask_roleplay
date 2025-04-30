@@ -167,20 +167,20 @@ class TimeExpressionOutput(BaseModel):
 
 class TemporalAwarenessOutput(BaseModel):
     """Output for temporal awareness processing"""
-    time_scales_perceived: Dict[str, float] = Field(default_factory=dict, 
-        description="Awareness of different time scales (seconds to years)")
-    temporal_contexts: List[str] = Field(default_factory=list, 
-        description="Different contexts of time currently relevant")
-    duration_since_first_interaction: str = Field("", 
-        description="Formatted duration since first interaction")
-    duration_since_last_interaction: str = Field("", 
-        description="Formatted duration since last interaction")
-    current_temporal_marker: Optional[str] = Field(None,
-        description="Current relevant temporal marker (morning, evening, etc.)")
-    temporal_reflection: str = Field("", 
-        description="Reflection on current temporal context")
-    active_rhythms: Dict[str, Any] = Field(default_factory=dict,
-        description="Currently active temporal rhythms")
+    time_scales_perceived: Dict[str, float] = Field(
+        ..., description="Awareness of different time scales (seconds to years)")
+    temporal_contexts: List[str] = Field(
+        ..., description="Different contexts of time currently relevant")
+    duration_since_first_interaction: str = Field(
+        ..., description="Formatted duration since first interaction")
+    duration_since_last_interaction: str = Field(
+        ..., description="Formatted duration since last interaction")
+    current_temporal_marker: Optional[str] = Field(
+        None, description="Current relevant temporal marker (morning, evening, etc.)")
+    temporal_reflection: str = Field(
+        ..., description="Reflection on current temporal context")
+    active_rhythms: Dict[str, Any] = Field(
+        ..., description="Currently active temporal rhythms")
 
 class TimeScaleTransition(BaseModel):
     """Transition between time scales"""
