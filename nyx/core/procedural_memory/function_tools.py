@@ -23,7 +23,6 @@ async def add_procedure(
     description: Optional[str] = None,
     domain: Optional[str] = None,
 ) -> Dict[str, Any]:
-    domain = domain or "general"
     """
     Add a new procedure to the procedural memory system.
     
@@ -36,6 +35,8 @@ async def add_procedure(
     Returns:
         Information about the created procedure
     """
+    domain = domain or "general"
+    
     manager = ctx.context.manager
     
     # Create trace span for this operation
