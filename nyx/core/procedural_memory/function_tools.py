@@ -23,7 +23,6 @@ class AddProcedureInput(BaseModel):
     description: Optional[str] = Field(None, description="Optional description")
     domain: Optional[str] = Field(None, description="Domain/context")
 
-@staticmethod
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
@@ -44,7 +43,6 @@ async def add_procedure(
     Returns:
         Information about the created procedure
     """
-    # Move this line here, after the docstring
     domain = domain or "general"
     
     manager = ctx.context.manager
