@@ -881,65 +881,60 @@ async def query_knowledge(
 @function_tool
 async def get_related_knowledge(
     ctx: RunContextWrapper[KnowledgeCoreContext],
+    # --- Parameters MUST be non-optional basic types ---
     node_id: str,
-    relation_type: Optional[str] = None,
-    # --- Changed direction ---
-    direction: Optional[str] = None, # <--- REMOVED default value assignment
-    limit: Optional[int] = None      # <--- Apply same fix to limit here too
+    relation_type: str, # Treat as required string
+    direction: str,     # Treat as required string
+    limit: int          # Treat as required int
 ) -> List[Dict[str, Any]]:
     """
     Get nodes related to a specific knowledge node.
 
     Args:
-        node_id: The ID of the node to find neighbors for.
-        relation_type: Optional. Filter for relation type (e.g., 'supports').
-        direction: Optional. Filter by direction: 'incoming', 'outgoing', or 'both'. Defaults to 'both' if not provided.
-        limit: Optional. Maximum number of results. Defaults to 10 if not provided.
+        node_id: REQUIRED. The ID of the node to find neighbors for.
+        relation_type: REQUIRED. Filter for relation type (e.g., 'supports').
+                       **Use an empty string "" if no specific type filter is needed.**
+        direction: REQUIRED. Filter by direction. Must be one of: 'incoming', 'outgoing', or 'both'.
+        limit: REQUIRED. Maximum number of results (e.g., 10). Must be a positive integer.
 
     Returns:
         List of dicts with 'node' and 'relation' fields, sorted by relation weight.
     """
     core_ctx = ctx.context
 
-    # --- Handle internal defaults ---
-    direction_val = direction if direction is not None else "both"
-    limit_val = limit if limit is not None else 10
-    limit_val = max(1, limit_val) # Ensure positive
+    # --- Internal Handling of "Optionality" / Defaults ---
+    # Check if relation_type was intended to be optional
+    actual_relation_type: Optional[str] = relation_type if relation_type else None
+    # Validate direction (use 'both' if invalid provided, or raise error)
+    actual_direction = direction.lower() if direction.lower() in ["incoming", "outgoing", "both"] else "both"
+    # Ensure limit is positive (use default if needed, though it's required now)
+    actual_limit = max(1, limit) if limit > 0 else 10 # Default to 10 if non-positive required value is given
 
     if node_id not in core_ctx.nodes:
         logger.warning(f"Node ID '{node_id}' not found in get_related_knowledge.")
         return []
 
-    # Update access stats for the central node
+    # Access central node
     try:
         core_ctx.nodes[node_id].access()
-        # Maybe update graph data only periodically?
-        # core_ctx.graph.nodes[node_id].update(core_ctx.nodes[node_id].to_dict())
     except KeyError:
-         # Should not happen due to the check above, but belt-and-suspenders
-         logger.error(f"Node ID '{node_id}' disappeared unexpectedly.")
+         logger.error(f"Node ID '{node_id}' disappeared after initial check.")
          return []
 
-
-    logger.debug(f"Getting related knowledge for node '{node_id}', type='{relation_type}', dir='{direction_val}', limit={limit_val}")
+    logger.debug(f"Getting related knowledge for node '{node_id}', type='{actual_relation_type}', dir='{actual_direction}', limit={actual_limit}")
     neighbors = []
+    processed_neighbors = set() # To avoid duplicates when direction='both'
 
-    # Use direction_val for logic
     # Outgoing edges
-    if direction_val in ["outgoing", "both"]:
+    if actual_direction in ["outgoing", "both"]:
         try:
-            # Use list() to avoid issues if graph changes during iteration (less likely here)
             for tgt in list(core_ctx.graph.successors(node_id)):
-                if tgt == node_id: continue # Skip self-loops
-
-                # Check if target node exists before getting data
-                if tgt not in core_ctx.nodes:
-                     logger.warning(f"Target node '{tgt}' for edge from '{node_id}' not found in nodes dict.")
-                     continue
+                if tgt == node_id: continue
+                if tgt not in core_ctx.nodes: continue
 
                 try:
                      edata = core_ctx.graph.get_edge_data(node_id, tgt)
-                     if edata and (relation_type is None or edata.get("type") == relation_type):
+                     if edata and (actual_relation_type is None or edata.get("type") == actual_relation_type):
                           neighbors.append({
                               "node": core_ctx.nodes[tgt].to_dict(),
                               "relation": {
@@ -948,56 +943,44 @@ async def get_related_knowledge(
                                   "weight": edata.get("weight", 1.0)
                               }
                           })
+                          processed_neighbors.add(tgt) # Mark as processed
                 except KeyError:
-                     logger.warning(f"Edge data not found for {node_id} -> {tgt}, though edge exists.")
-
+                     logger.warning(f"Edge data missing for {node_id} -> {tgt}")
 
         except nx.NetworkXError as e:
              logger.error(f"NetworkX error getting successors for {node_id}: {e}")
 
-
     # Incoming edges
-    if direction_val in ["incoming", "both"]:
+    if actual_direction in ["incoming", "both"]:
         try:
             for src in list(core_ctx.graph.predecessors(node_id)):
-                if src == node_id: continue # Skip self-loops
-
-                # Check if source node exists
-                if src not in core_ctx.nodes:
-                     logger.warning(f"Source node '{src}' for edge to '{node_id}' not found in nodes dict.")
-                     continue
+                if src == node_id: continue
+                if src not in core_ctx.nodes: continue
+                # Skip if already added via outgoing check when direction is 'both'
+                if actual_direction == "both" and src in processed_neighbors:
+                    continue
 
                 try:
                      edata = core_ctx.graph.get_edge_data(src, node_id)
-                     if edata and (relation_type is None or edata.get("type") == relation_type):
-                         # Avoid duplicates if direction is 'both' and node is already added from outgoing check
-                         is_duplicate = False
-                         if direction_val == "both":
-                             for item in neighbors:
-                                 if item["node"]["id"] == src:
-                                     # If already added via outgoing edge check, update if needed? Or just skip.
-                                     is_duplicate = True
-                                     break
-                         if not is_duplicate:
-                             neighbors.append({
-                                 "node": core_ctx.nodes[src].to_dict(),
-                                 "relation": {
-                                     "type": edata.get("type", "unknown"),
-                                     "direction": "incoming",
-                                     "weight": edata.get("weight", 1.0)
-                                 }
-                             })
+                     if edata and (actual_relation_type is None or edata.get("type") == actual_relation_type):
+                         neighbors.append({
+                             "node": core_ctx.nodes[src].to_dict(),
+                             "relation": {
+                                 "type": edata.get("type", "unknown"),
+                                 "direction": "incoming",
+                                 "weight": edata.get("weight", 1.0)
+                             }
+                         })
                 except KeyError:
-                     logger.warning(f"Edge data not found for {src} -> {node_id}, though edge exists.")
-
+                     logger.warning(f"Edge data missing for {src} -> {node_id}")
         except nx.NetworkXError as e:
              logger.error(f"NetworkX error getting predecessors for {node_id}: {e}")
 
     # Sort by relation weight (descending)
     neighbors.sort(key=lambda x: x["relation"].get("weight", 0.0), reverse=True)
 
-    logger.debug(f"Found {len(neighbors)} related nodes for '{node_id}', returning {min(len(neighbors), limit_val)}.")
-    return neighbors[:limit_val] # Use limit_val
+    logger.debug(f"Found {len(neighbors)} related nodes for '{node_id}', returning {min(len(neighbors), actual_limit)}.")
+    return neighbors[:actual_limit] # Use actual_limit
 
 @function_tool
 async def identify_knowledge_gaps(
