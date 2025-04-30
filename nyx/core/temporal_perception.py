@@ -666,13 +666,13 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
 
 
 async def _detect_time_scale_transition_impl(
-    data: TimeScaleTransitionInput,  # assumes your Pydantic model as above
+    data: "TimeScaleInput"  # assumes your Pydantic model as above
 ) -> Optional[Dict[str, Any]]:
     """
     Detect transitions between time scales (day, week, month, year) based on 'last_interaction' timestamps.
 
     Args:
-        data: TimeScaleTransitionInput with previous_state and current_state
+        data: TimeScaleInput with previous_state and current_state
 
     Returns:
         Dictionary describing the transition if detected, otherwise None.
@@ -754,8 +754,8 @@ async def detect_time_scale_transition(
 ) -> dict:
     if not (current_state and isinstance(current_state, dict)):
         raise ValueError("current_state is required and must be a dict")
-    from nyx.core.temporal_perception import TimeScaleTransitionInput
-    input_data = TimeScaleTransitionInput(
+    from nyx.core.temporal_perception import TimeScaleInput
+    input_data = TimeScaleInput(
         previous_state=previous_state or {},
         current_state=current_state,
     )
