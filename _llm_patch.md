@@ -1,0 +1,1 @@
+I don’t see the actual lint errors or code snippets—could you please paste the lint output and relevant context so I can suggest minimal unified-diff fixes?
