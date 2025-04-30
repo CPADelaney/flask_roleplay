@@ -8,7 +8,7 @@ import uuid
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 # OpenAI Agents SDK imports
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, custom_span
 from agents.exceptions import UserError
 
 from .models import Procedure, ProcedureStats, TransferStats, ProcedureTransferRecord
@@ -26,11 +26,8 @@ class AddProcedureInput(BaseModel):
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
-    name: str,
-    steps: List[Dict[str, Any]],
-    description: Optional[str] = None,
-    domain: Optional[str] = None,
-) -> Dict[str, Any]:
+    input: AddProcedureInput
+) -> Dict[str,Any]:
     """
     Add a new procedure to the procedural memory system.
     
@@ -43,7 +40,10 @@ async def add_procedure(
     Returns:
         Information about the created procedure
     """
-    domain = domain or "general"
+    name = input.name
+    steps = input.steps
+    description = input.description
+    domain = input.domain or "general"
     
     manager = ctx.context.manager
     
