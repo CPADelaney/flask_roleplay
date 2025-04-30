@@ -664,8 +664,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             
             # 16. Initialize reflexive system if module exists
             try:
-                from nyx.core.reflexive_system import initialize_reflexive_system
-                self.reflexive_system = await initialize_reflexive_system(self)
+                from nyx.core.reflexive_system import Reflexive_System
+                self.reflexive_system = await init(self)
                 logger.debug("Reflexive system initialized")
             except ImportError:
                 logger.info("Reflexive system module not found, skipping initialization")
