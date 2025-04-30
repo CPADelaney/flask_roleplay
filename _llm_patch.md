@@ -1,0 +1,1 @@
+I’m ready to propose targeted diffs—but I’ll need the specific lint errors and relevant code snippets. Could you please share those so I can draft minimal high‑impact patches?
