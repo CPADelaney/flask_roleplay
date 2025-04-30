@@ -1,0 +1,1 @@
+It looks like the specific lint errors and code snippets didn’t come through. Could you please paste the lint warnings and the relevant code contexts so I can propose precise, minimal patch diffs?
