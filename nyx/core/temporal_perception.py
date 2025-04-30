@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-class TimeScaleTransitionInput(BaseModel):
+class TimeScaleInput(BaseModel):
     previous_state: Dict[str, Any] = Field(default_factory=dict)
     current_state: Dict[str, Any]
 
@@ -749,9 +749,12 @@ async def _detect_time_scale_transition_impl(
 
 @function_tool(name_override="detect_time_scale_transition")
 async def detect_time_scale_transition(
-    current_state: Dict[str, Any],
-    previous_state: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+    current_state: dict,
+    previous_state: Optional[dict] = None,
+) -> dict:
+    if not (current_state and isinstance(current_state, dict)):
+        raise ValueError("current_state is required and must be a dict")
+    from nyx.core.temporal_perception import TimeScaleTransitionInput
     input_data = TimeScaleTransitionInput(
         previous_state=previous_state or {},
         current_state=current_state,
