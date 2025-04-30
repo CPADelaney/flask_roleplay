@@ -379,9 +379,13 @@ class AgentContext:
         self.error_states = {}
         self.error_recovery_strategies = {}
         self.error_log = []
-        
-        # Initialize systems
-        self._initialize_systems()
+
+    @classmethod
+    async def create(cls, user_id: int, conversation_id: int):
+        """Async factory method to properly initialize the context."""
+        context = cls(user_id, conversation_id)
+        await context._initialize_systems()
+        return context
     
     async def _initialize_systems(self):
         """Initialize core systems and load initial state."""
@@ -426,6 +430,7 @@ class AgentContext:
         
         # Start background monitoring
         self._start_background_monitoring()
+
     
     def _start_background_monitoring(self):
         """Start background monitoring tasks."""
@@ -2592,7 +2597,7 @@ async def process_user_input(
     """Process user input and generate Nyx's response"""
     
     # Initialize context
-    ctx = AgentContext(user_id, conversation_id)
+    ctx = await AgentContext.create(user_id, conversation_id)
     
     try:
         # Get memories and enhance context
