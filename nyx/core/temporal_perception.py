@@ -663,7 +663,7 @@ async def process_temporal_awareness(days_elapsed: float, total_interactions: in
         "active_rhythms": active_rhythms
     }
 
-async def _detect_time_scale_transition_impl(
+async def __impl(
     data: TimeScaleTransitionInput,
 ) -> Optional[Dict[str, Any]]:
     """Detect transitions between time scales."""
@@ -751,8 +751,8 @@ async def _detect_time_scale_transition_impl(
     # No significant transition detected
     return None
 
-@function_tool(name_override="detect_time_scale_transition")
-async def detect_time_scale_transition_tool(
+@function_tool(name_override="")
+async def _tool(
     current_state: Dict[str, Any],
     previous_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -787,11 +787,11 @@ async def detect_time_scale_transition_tool(
     )
 
     # --- delegate to implementation -----------------------------------------
-    return await _detect_time_scale_transition_impl(input_data)
+    return await __impl(input_data)
 
 # --- FIX IMPLEMENTATION and TOOL DEFINITION ---
 @function_tool(name_override="detect_time_scale_transition")
-async def detect_time_scale_transition_impl(
+async def detect_time_scale_transition_tool(
     current_state_json: str,
     previous_state_json: str
 ) -> Optional[Dict[str, Any]]:
@@ -866,9 +866,9 @@ async def detect_time_scale_transition_impl(
 
     # --- Call Implementation ---
     try:
-        return await _detect_time_scale_transition_impl(input_data)
+        return await _detect_time_scale_transition_tool(input_data)
     except Exception as e:
-        logger.exception("Error occurred during _detect_time_scale_transition_impl execution")
+        logger.exception("Error occurred during _detect_time_scale_transition_tool execution")
         return {"error": f"Internal error during transition detection logic."}
 
 
