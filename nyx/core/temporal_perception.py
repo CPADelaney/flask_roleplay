@@ -749,13 +749,19 @@ async def _detect_time_scale_transition_impl(
 
 @function_tool(name_override="detect_time_scale_transition")
 async def detect_time_scale_transition(
-    current_state: dict,
-    previous_state: Optional[dict] = None
+    previous_state: Optional[dict] = None,
+    current_state: dict = None
 ) -> Optional[dict]:
-    """Detects boundary transitions between coarse time scales."""
+    """
+    Detects boundary transitions between coarse time scales.
+    
+    Args:
+        previous_state: The previous state containing timestamp information
+        current_state: The current state containing timestamp information
+    """
     input_data = TimeScaleInput(
         previous_state=previous_state or {},
-        current_state=current_state,
+        current_state=current_state or {},
     )
     return await _detect_time_scale_transition_impl(input_data)
 
