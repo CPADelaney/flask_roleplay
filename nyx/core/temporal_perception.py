@@ -32,6 +32,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+class TimeScaleTransitionInput(BaseModel):
+    # Allow dict or a pre-validated state model if you have one
+    previous_state: Dict[str, Any] = Field(default_factory=dict)
+    current_state: Dict[str, Any]
+
+    # Add validation if needed, e.g., ensuring 'last_interaction' exists
+    @field_validator('previous_state', 'current_state')
+    @classmethod
+    def check_last_interaction(cls, v):
+        # Allow empty previous state, but current should ideally have timestamp
+        if 'last_interaction' not in v and v: # Check if dict is not empty
+            # Depending on strictness, you might raise error or just warn
+             logger.warning(f"State missing 'last_interaction': {v}")
+            # raise ValueError("State dictionary must contain 'last_interaction'")
+        return v
+
 # =============== Pydantic Models for Time Perception ===============
 
 class MemoryEntry(BaseModel):
@@ -746,12 +762,77 @@ async def _detect_time_scale_transition_impl(
     return None
 
 @function_tool(name_override="detect_time_scale_transition")
-async def detect_time_scale_transition_tool(previous_state: Dict[str, Any],
-                                            current_state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    # ❌ _detect_time_scale_transition_core doesn't exist
-    return await _detect_time_scale_transition_impl(
-        TimeScaleTransitionInput(previous_state=previous_state,
-                                 current_state=current_state)
+async def detect_time_scale_transition_tool(
+    # ctx: RunContextWrapper -> Add context type hint if needed
+    # --- Make current state required, previous optional, pass as JSON ---
+    current_state_json: str,
+    previous_state_json: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Detects if the system's operational time scale perception should shift based
+    on crossing day, week, month, or year boundaries between interactions.
+
+    Args:
+        current_state_json: A JSON string representing the current state, MUST include
+                           a 'last_interaction' timestamp (ISO 8601 format string).
+                           Example: '{"last_interaction": "2025-04-30T10:00:00Z", ...}'
+        previous_state_json: Optional. A JSON string representing the previous state,
+                             should include 'last_interaction' for comparison.
+                             Example: '{"last_interaction": "2025-04-29T23:59:00Z", ...}'
+
+    Returns:
+        A dictionary describing the transition if detected (including from_scale, to_scale,
+        transition_time, description), otherwise null/None.
+    """
+    logger.debug("Tool 'detect_time_scale_transition' called.")
+
+    # --- Parse and Validate States ---
+    parsed_previous_state: Dict[str, Any] = {}
+    parsed_current_state: Optional[Dict[str, Any]] = None # Mark as Optional initially
+
+    if previous_state_json:
+        try:
+            parsed_previous_state = json.loads(previous_state_json)
+            if not isinstance(parsed_previous_state, dict):
+                 logger.warning("Parsed previous_state_json is not a dictionary. Using empty dict.")
+                 parsed_previous_state = {} # Default to empty if not dict
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse previous_state_json: {e}. Using empty dict.")
+            parsed_previous_state = {} # Default to empty on error
+
+    try:
+        parsed_current_state = json.loads(current_state_json)
+        if not isinstance(parsed_current_state, dict):
+             logger.error("Parsed current_state_json is not a dictionary. Cannot proceed.")
+             return {"error": "Invalid format for current_state_json, expected a JSON dictionary string."}
+        # Basic check for required key in current state
+        if "last_interaction" not in parsed_current_state:
+             logger.error("Required key 'last_interaction' missing in current_state_json.")
+             return {"error": "Required key 'last_interaction' missing in current_state_json."}
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse required current_state_json: {e}")
+        return {"error": f"Failed to parse current_state_json: {e}"}
+    except Exception as e:
+        logger.error(f"Unexpected error parsing current_state_json: {e}")
+        return {"error": f"Unexpected error parsing current_state_json: {e}"}
+
+    # --- Prepare Input for Implementation Function ---
+    try:
+        # Validate the combined structure using the Pydantic model
+        input_data = TimeScaleTransitionInput(
+            previous_state=parsed_previous_state,
+            current_state=parsed_current_state
+        )
+    except ValidationError as e:
+         logger.error(f"Validation error creating TimeScaleTransitionInput: {e}")
+         return {"error": f"Input state validation failed: {e}"}
+
+    # --- Call the Implementation ---
+    transition_result = await _detect_time_scale_transition_impl(input_data)
+
+    # --- Return Result ---
+    return transition_result
     )
 
 # --- FIX IMPLEMENTATION and TOOL DEFINITION ---
