@@ -21,8 +21,9 @@ async def add_procedure(
     name: str,
     steps: List[Dict[str, Any]],
     description: Optional[str] = None,
-    domain: str = "general",
+    domain: Optional[str] = None,
 ) -> Dict[str, Any]:
+    domain = domain or "general"
     """
     Add a new procedure to the procedural memory system.
     
