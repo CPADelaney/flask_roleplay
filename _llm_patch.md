@@ -1,0 +1,1 @@
+I’ll need the specific lint errors and the relevant code snippets to propose precise fixes. Could you please paste the lint messages and the affected code sections?
