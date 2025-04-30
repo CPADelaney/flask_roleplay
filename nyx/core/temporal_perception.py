@@ -167,20 +167,21 @@ class TimeExpressionOutput(BaseModel):
 
 class TemporalAwarenessOutput(BaseModel):
     """Output for temporal awareness processing"""
-    time_scales_perceived: Dict[str, float] = Field(
-        ..., description="Awareness of different time scales (seconds to years)")
-    temporal_contexts: List[str] = Field(
-        ..., description="Different contexts of time currently relevant")
-    duration_since_first_interaction: str = Field(
-        ..., description="Formatted duration since first interaction")
-    duration_since_last_interaction: str = Field(
-        ..., description="Formatted duration since last interaction")
-    current_temporal_marker: Optional[str] = Field(
-        None, description="Current relevant temporal marker (morning, evening, etc.)")
-    temporal_reflection: str = Field(
-        ..., description="Reflection on current temporal context")
-    active_rhythms: Dict[str, Any] = Field(
-        ..., description="Currently active temporal rhythms")
+    # Make all fields optional with None defaults
+    time_scales_perceived: Dict[str, float] | None = None
+    temporal_contexts: List[str] | None = None
+    duration_since_first_interaction: str | None = None
+    duration_since_last_interaction: str | None = None
+    current_temporal_marker: str | None = None
+    temporal_reflection: str | None = None
+    active_rhythms: Dict[str, Any] | None = None
+    
+    # This is critical - no fields should be required in the schema
+    model_config = {
+        "json_schema_extra": {
+            "required": []
+        }
+    }
 
 class TimeScaleTransition(BaseModel):
     """Transition between time scales"""
