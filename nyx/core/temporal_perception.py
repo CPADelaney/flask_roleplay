@@ -33,19 +33,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class TimeScaleTransitionInput(BaseModel):
-    # Allow dict or a pre-validated state model if you have one
     previous_state: Dict[str, Any] = Field(default_factory=dict)
     current_state: Dict[str, Any]
 
-    # Add validation if needed, e.g., ensuring 'last_interaction' exists
-    @field_validator('previous_state', 'current_state')
+    @field_validator('previous_state', 'current_state', mode='before')
     @classmethod
     def check_last_interaction(cls, v):
-        # Allow empty previous state, but current should ideally have timestamp
-        if 'last_interaction' not in v and v: # Check if dict is not empty
-            # Depending on strictness, you might raise error or just warn
+        if isinstance(v, dict) and 'last_interaction' not in v and v:
              logger.warning(f"State missing 'last_interaction': {v}")
-            # raise ValueError("State dictionary must contain 'last_interaction'")
         return v
 
 # =============== Pydantic Models for Time Perception ===============
@@ -795,137 +790,95 @@ async def detect_time_scale_transition_tool(
     return await _detect_time_scale_transition_impl(input_data)
 
 # --- FIX IMPLEMENTATION and TOOL DEFINITION ---
-async def detect_temporal_milestone_impl(user_id: str,
-                                         total_days: float,
-                                         total_interactions: int,
-                                         recent_memories: Optional[List[MemoryEntry]] = None,
-) -> Optional[TemporalMilestone]:
+@function_tool(name_override="detect_time_scale_transition")
+async def detect_time_scale_transition_impl(
+    current_state_json: str,
+    previous_state_json: str
+) -> Optional[Dict[str, Any]]:
     """
-    Detect if a temporal milestone has been reached (Implementation).
+    Detects if the system's operational time scale perception should shift based
+    on crossing day, week, month, or year boundaries between interactions.
 
     Args:
-        user_id: User ID
-        total_days: Total days of relationship
-        total_interactions: Total interactions count
-        recent_memories: Recent memories (as MemoryEntry objects) to analyze
+        current_state_json: REQUIRED. A JSON string representing the current state dictionary.
+                           MUST include a key 'last_interaction' with an ISO 8601 timestamp string value.
+                           Example: '{"last_interaction": "2025-04-30T10:00:00Z", "other_key": "value"}'
+        previous_state_json: REQUIRED. A JSON string representing the previous state dictionary.
+                             **USE AN EMPTY JSON OBJECT STRING '{}' if no previous state exists.**
+                             If provided, it should include 'last_interaction'.
+                             Example: '{"last_interaction": "2025-04-29T23:59:00Z", ...}' or '{}'
 
     Returns:
-        Temporal milestone object if detected, None otherwise
+        A dictionary describing the transition if detected (including from_scale, to_scale,
+        transition_time, description), otherwise null/None. Includes an 'error' key if parsing fails.
     """
-    now = datetime.datetime.now(datetime.timezone.utc)
+    logger.debug(f"Tool 'detect_time_scale_transition_tool' called.")
+    # --- Parse States (Internal Handling of 'Optionality') ---
+    parsed_previous_state: Dict[str, Any] = {}
+    parsed_current_state: Optional[Dict[str, Any]] = None
 
-    # Define milestones based on time or interaction count
-    time_milestones = [
-        {"name": "First Day Anniversary", "threshold_days": 1, "significance": 0.6, "description": "One full day since our first interaction"},
-        {"name": "First Week Anniversary", "threshold_days": 7, "significance": 0.7, "description": "One week of conversations and exchanges"},
-        {"name": "First Month Anniversary", "threshold_days": 30, "significance": 0.8, "description": "One month since we began our conversations"},
-        {"name": "First Quarter Anniversary", "threshold_days": 90, "significance": 0.8, "description": "Three months of developing conversation and understanding"},
-        {"name": "Half-Year Anniversary", "threshold_days": 182, "significance": 0.9, "description": "Six months of shared conversations and experiences"},
-        {"name": "First Year Anniversary", "threshold_days": 365, "significance": 1.0, "description": "A full year of conversations, reflections, and exchanges"}
-    ]
-
-    interaction_milestones = [
-        {"name": "Ten Interactions", "threshold_interactions": 10, "significance": 0.6, "description": "Ten interactions completed"},
-        {"name": "Fifty Interactions", "threshold_interactions": 50, "significance": 0.7, "description": "Fifty interactions, establishing a communication pattern"},
-        {"name": "Hundred Interactions", "threshold_interactions": 100, "significance": 0.8, "description": "One hundred interactions, deepening our conversational history"},
-        {"name": "Five Hundred Interactions", "threshold_interactions": 500, "significance": 0.9, "description": "Five hundred interactions, a substantial history of exchanges"},
-        {"name": "Thousand Interactions", "threshold_interactions": 1000, "significance": 0.95, "description": "One thousand interactions, a significant milestone in our shared history"}
-    ]
-
-    detected_milestone_data = None
-    milestone_type = None # Track the type
-
-    # --- Check for time-based milestones ---
-    # Simple check: is total_days *very close* to a threshold?
-    # A robust system needs the date of the *first* interaction.
-    closest_time_milestone = None
-    min_time_diff = float('inf')
-
-    for milestone in time_milestones:
-        diff = abs(total_days - milestone["threshold_days"])
-        # Check if it's close *and* we haven't passed it by too much (e.g., > 1 day past)
-        if diff < 0.5 and total_days >= milestone["threshold_days"] - 0.1: # Allow slightly before
-             if diff < min_time_diff:
-                 min_time_diff = diff
-                 closest_time_milestone = milestone
-
-    if closest_time_milestone:
-        # Check if this milestone was already detected recently? (Needs state)
-        # For now, assume we detect it if close
-        detected_milestone_data = closest_time_milestone.copy() # Use copy
-        milestone_type = "time"
-        logger.info(f"Potential time milestone detected: {detected_milestone_data['name']}")
-        # Calculation of next anniversary needs first interaction date - skip accurate calculation for now
-        detected_milestone_data["next_anniversary_calc"] = None
-
-
-    # --- Check for interaction-based milestones ---
-    # More robust: Check if the count *crosses* a threshold compared to last known count.
-    # Simple check: is total_interactions *exactly* a threshold? (Less likely to hit exactly)
-    # Better simple check: find the highest threshold crossed
-    closest_interaction_milestone = None
-    if not detected_milestone_data: # Only check if no time milestone found
-        highest_interaction_threshold_crossed = -1
-        for milestone in interaction_milestones:
-            if total_interactions >= milestone["threshold_interactions"]:
-                 if milestone["threshold_interactions"] > highest_interaction_threshold_crossed:
-                      highest_interaction_threshold_crossed = milestone["threshold_interactions"]
-                      closest_interaction_milestone = milestone
-
-        if closest_interaction_milestone:
-             # Check if this milestone was already detected recently? (Needs state)
-             # For now, assume we detect it the first time total_interactions >= threshold
-             detected_milestone_data = closest_interaction_milestone.copy() # Use copy
-             milestone_type = "interaction"
-             logger.info(f"Potential interaction milestone detected: {detected_milestone_data['name']}")
-             detected_milestone_data["next_anniversary_calc"] = None
-
-    # --- Create Milestone Object if Detected ---
-    if detected_milestone_data:
-        # Check against previously detected milestones for this user/name (Needs state)
-        # If already detected recently, return None
-        # Example (needs proper state management):
-        # if state.was_milestone_detected_recently(user_id, detected_milestone_data['name']):
-        #     logger.info(f"Milestone {detected_milestone_data['name']} already detected recently for {user_id}. Skipping.")
-        #     return None
-
-        milestone_id = f"ms_{user_id}_{detected_milestone_data['name'].replace(' ', '_').lower()}_{int(now.timestamp())}"
-
-        # Extract relevant memory IDs from MemoryEntry objects
-        memory_ids = [mem.id for mem in recent_memories if mem] if recent_memories else []
-        memory_ids = memory_ids[:5] # Limit associated memories
-
-        # Create TemporalMilestone object
+    # Handle previous state (treat empty string or "{}" as truly empty)
+    if previous_state_json and previous_state_json.strip() and previous_state_json.strip() != '{}':
         try:
-            milestone = TemporalMilestone(
-                milestone_id=milestone_id,
-                timestamp=now,
-                name=detected_milestone_data["name"],
-                description=detected_milestone_data["description"],
-                significance=detected_milestone_data["significance"],
-                associated_memory_ids=memory_ids,
-                next_anniversary=detected_milestone_data["next_anniversary_calc"] # Use calculated value
-            )
-            logger.info(f"Created TemporalMilestone: {milestone_id} ({milestone_type})")
-            # Record detection in state (Needs state management)
-            # state.record_milestone_detection(user_id, detected_milestone_data['name'], now)
-            return milestone
-        except ValidationError as e:
-             logger.error(f"Pydantic validation error creating TemporalMilestone: {e}")
-             return None
+            parsed_previous_state = json.loads(previous_state_json)
+            if not isinstance(parsed_previous_state, dict):
+                 logger.warning(f"Parsed previous_state_json ('{previous_state_json[:50]}...') is not a dict. Treating as empty.")
+                 parsed_previous_state = {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse previous_state_json ('{previous_state_json[:50]}...'): {e}. Treating as empty.")
+            parsed_previous_state = {}
+    else:
+        logger.debug("previous_state_json was empty or '{}'. Using empty previous state.")
+        # parsed_previous_state is already {}
 
-    logger.debug(f"No temporal milestone detected for user {user_id} (Days: {total_days:.2f}, Interactions: {total_interactions})")
-    return None
+    # Parse current state (Required)
+    if not current_state_json or not current_state_json.strip():
+         logger.error("Required argument 'current_state_json' is empty.")
+         return {"error": "Required argument 'current_state_json' cannot be empty."}
+    try:
+        parsed_current_state = json.loads(current_state_json)
+        if not isinstance(parsed_current_state, dict):
+             logger.error(f"Parsed current_state_json ('{current_state_json[:50]}...') is not a dictionary.")
+             return {"error": "Invalid format for current_state_json, expected a JSON dictionary string."}
+        if "last_interaction" not in parsed_current_state:
+             logger.error("Required key 'last_interaction' missing in current_state_json.")
+             return {"error": "Required key 'last_interaction' missing in current_state_json."}
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse required current_state_json ('{current_state_json[:50]}...'): {e}")
+        return {"error": f"Failed to parse current_state_json: {e}"}
+    except Exception as e:
+        logger.error(f"Unexpected error parsing current_state_json: {e}")
+        return {"error": f"Unexpected error parsing current_state_json: {e}"}
+
+    # --- Prepare Input Model ---
+    try:
+        input_data = TimeScaleTransitionInput(
+            previous_state=parsed_previous_state,
+            current_state=parsed_current_state
+        )
+    except ValidationError as e:
+         logger.error(f"Validation error creating TimeScaleTransitionInput: {e}")
+         error_detail = e.errors()[0]['msg'] if e.errors() else str(e)
+         return {"error": f"Input state validation failed: {error_detail}"}
+    except Exception as e:
+        logger.error(f"Unexpected error creating TimeScaleTransitionInput model: {e}")
+        return {"error": f"Unexpected error creating input data: {e}"}
+
+    # --- Call Implementation ---
+    try:
+        return await _detect_time_scale_transition_impl(input_data)
+    except Exception as e:
+        logger.exception("Error occurred during _detect_time_scale_transition_impl execution")
+        return {"error": f"Internal error during transition detection logic."}
 
 
 # --- REVISED FUNCTION TOOL WRAPPER ---
 @function_tool(name_override="detect_temporal_milestone")
 async def detect_temporal_milestone(
-    # ctx: RunContextWrapper -> If context is needed, add correct type hint
     user_id: str,
     total_days: float,
     total_interactions: int,
-    recent_memories_json: Optional[str] = None # Pass list as JSON string
+    recent_memories_json: Optional[str] = None # Keep as Optional JSON string
 ) -> Optional[Dict[str, Any]]:
     """
     Detects if a significant temporal milestone (e.g., anniversary, interaction count)
@@ -948,56 +901,37 @@ async def detect_temporal_milestone(
     if recent_memories_json:
         try:
             memories_list_dict = json.loads(recent_memories_json)
-            # Validate the parsed list of dicts into a list of MemoryEntry objects
             if isinstance(memories_list_dict, list):
-                 # Use list comprehension with Pydantic validation
                  validated_memories = []
                  for mem_dict in memories_list_dict:
                      if isinstance(mem_dict, dict):
                          try:
                              validated_memories.append(MemoryEntry.model_validate(mem_dict))
                          except ValidationError as e:
-                              logger.warning(f"Skipping invalid memory dict during parsing: {mem_dict}. Error: {e}")
+                              logger.warning(f"Skipping invalid memory dict: {mem_dict}. Error: {e}")
                      else:
-                          logger.warning(f"Skipping non-dictionary item in recent_memories_json list: {mem_dict}")
+                          logger.warning(f"Skipping non-dict item in list: {mem_dict}")
                  parsed_memories = validated_memories
-                 logger.debug(f"Successfully parsed and validated {len(parsed_memories)} recent memories.")
+                 logger.debug(f"Parsed/validated {len(parsed_memories)} recent memories.")
             else:
                  logger.warning(f"Parsed recent_memories_json is not a list: {type(memories_list_dict)}")
+        except Exception as e:
+             logger.error(f"Error parsing memories for milestone check: {e}")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse recent_memories_json for user {user_id}: {e}")
-        except ValidationError as e:
-             # This catches validation errors if the overall structure was wrong,
-             # though the inner loop handles per-item validation.
-             logger.error(f"Pydantic validation error parsing memories list for user {user_id}: {e}")
-        except Exception as e: # Catch other potential errors
-             logger.error(f"Unexpected error parsing memories for user {user_id}: {e}")
-
-
-    # Call the actual implementation function
     milestone_model = await detect_temporal_milestone_impl(
-        user_id,
-        total_days,
-        total_interactions,
-        parsed_memories # Pass the validated list of MemoryEntry objects (or None)
+        user_id, total_days, total_interactions, parsed_memories
     )
-
-    # Return the result as a dictionary (or None)
-    # Use mode='json' to handle datetime serialization correctly for the agent response
     if milestone_model:
-        logger.info(f"Milestone '{milestone_model.name}' detected for user {user_id}. Returning details.")
+        logger.info(f"Milestone '{milestone_model.name}' detected for user {user_id}.")
         try:
-            # Ensure Timestamps are ISO strings in the final dict
             return milestone_model.model_dump(mode='json')
         except Exception as e:
-            logger.error(f"Error dumping milestone model to dict: {e}")
-            # Fallback if model_dump fails
+            logger.error(f"Error dumping milestone model: {e}")
             return {"milestone_id": milestone_model.milestone_id, "name": milestone_model.name, "error": "serialization failed"}
-
     else:
-        logger.debug(f"No milestone detected for user {user_id}. Returning null.")
+        logger.debug(f"No milestone detected for user {user_id}.")
         return None
+
 
 # =============== Temporal Agents ===============
 
