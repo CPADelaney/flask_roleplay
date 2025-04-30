@@ -739,105 +739,141 @@ async def add_relation(
     
     return True
 
-@function_tool  # strict schema still ON (default)
+@function_tool
 async def query_knowledge(
     ctx: RunContextWrapper[KnowledgeCoreContext],
-    query: KnowledgeQuery
+    type: Optional[str] = None,
+    content_filter_json: Optional[str] = None,
+    relation_filter_json: Optional[str] = None,
+    limit: Optional[int] = 10
 ) -> List[Dict[str, Any]]:
     """
     Search the knowledge graph for nodes matching certain criteria.
-    
+
     Args:
-        query: A dict with optional keys:
-            - type: Filter by node type
-            - content_filter: Filter by content fields
-            - relation_filter: Filter by relation
-            - limit: Maximum number of results (default: 10)
-    
+        type: Optional. Filter by node type (e.g., 'concept', 'fact').
+        content_filter_json: Optional. JSON string representing a dictionary
+            to filter by content fields (e.g., '{"topic": "AI"}').
+        relation_filter_json: Optional. JSON string representing a dictionary
+            to filter by relation (e.g., '{"type": "supports", "node_id": "node_123"}').
+        limit: Optional. Maximum number of results to return (default: 10).
+
     Returns:
-        A list of matching node dictionaries
+        A list of matching node dictionaries, sorted by confidence.
     """
     core_ctx = ctx.context
     core_ctx.integration_stats["knowledge_queries"] += 1
-    
-    node_type = query.get("type")
-    content_filter = query.content_filter or {}
-    relation_filter = query.relation_filter or {}
-    limit = query.get("limit", 10)
-    
-    # Build cache key
-    cache_key = json.dumps({
+
+    # --- Parse arguments ---
+    node_type = type
+    try:
+        content_filter = json.loads(content_filter_json) if content_filter_json else {}
+    except json.JSONDecodeError:
+        logger.warning(f"Could not parse content_filter_json: {content_filter_json}")
+        content_filter = {}
+    try:
+        relation_filter = json.loads(relation_filter_json) if relation_filter_json else {}
+    except json.JSONDecodeError:
+        logger.warning(f"Could not parse relation_filter_json: {relation_filter_json}")
+        relation_filter = {}
+
+    limit_val = limit if limit is not None else 10 # Use the provided limit or default
+
+    # --- Build cache key ---
+    # Use parsed values for cache key consistency
+    cache_key_dict = {
         "type": node_type,
         "content_filter": content_filter,
         "relation_filter": relation_filter,
-        "limit": limit
-    }, sort_keys=True)
-    
-    # Check cache
+        "limit": limit_val
+    }
+    cache_key = json.dumps(cache_key_dict, sort_keys=True)
+
+    # --- Check cache ---
     now = datetime.now()
     if cache_key in core_ctx.query_cache:
         entry = core_ctx.query_cache[cache_key]
         cached_time = datetime.fromisoformat(entry["timestamp"])
         if (now - cached_time).total_seconds() < 60:  # Cache valid for 1 minute
+            logger.debug(f"Returning cached results for query: {cache_key_dict}")
             return entry["results"]
-    
-    # Perform the search
+
+    # --- Perform the search ---
+    logger.debug(f"Performing knowledge query: {cache_key_dict}")
     matching = []
     for nid, node in core_ctx.nodes.items():
         # Type filter
         if node_type and node.type != node_type:
             continue
-        
+
         # Content filter
         content_ok = True
-        for k, v in content_filter.items():
-            if k not in node.content or node.content[k] != v:
-                content_ok = False
-                break
+        if content_filter: # Only filter if non-empty
+            for k, v in content_filter.items():
+                # Basic check, could be enhanced for nested structures or types
+                node_val = node.content.get(k)
+                if node_val != v:
+                    # Allow partial matches for strings? (Optional enhancement)
+                    # if isinstance(v, str) and isinstance(node_val, str) and v.lower() in node_val.lower():
+                    #    pass # Allow partial match
+                    # else:
+                    content_ok = False
+                    break
         if not content_ok:
             continue
-        
+
         # Relation filter
         relation_ok = True
-        if relation_filter:
+        if relation_filter: # Only filter if non-empty
             rtype = relation_filter.get("type")
             other_id = relation_filter.get("node_id")
-            direct = relation_filter.get("direction", "outgoing")
-            
+            direct = relation_filter.get("direction", "outgoing") # Default to outgoing
+
             if rtype and other_id:
+                has_relation = False
                 if direct == "outgoing":
-                    if not core_ctx.graph.has_edge(nid, other_id):
-                        relation_ok = False
-                    else:
+                    if core_ctx.graph.has_edge(nid, other_id):
                         edata = core_ctx.graph.get_edge_data(nid, other_id)
-                        if edata["type"] != rtype:
-                            relation_ok = False
-                else:  # incoming
-                    if not core_ctx.graph.has_edge(other_id, nid):
-                        relation_ok = False
-                    else:
+                        if edata and edata.get("type") == rtype:
+                            has_relation = True
+                elif direct == "incoming":
+                    if core_ctx.graph.has_edge(other_id, nid):
                         edata = core_ctx.graph.get_edge_data(other_id, nid)
-                        if edata["type"] != rtype:
-                            relation_ok = False
-        
+                        if edata and edata.get("type") == rtype:
+                            has_relation = True
+                elif direct == "both":
+                     if core_ctx.graph.has_edge(nid, other_id):
+                        edata = core_ctx.graph.get_edge_data(nid, other_id)
+                        if edata and edata.get("type") == rtype:
+                            has_relation = True
+                     if not has_relation and core_ctx.graph.has_edge(other_id, nid):
+                        edata = core_ctx.graph.get_edge_data(other_id, nid)
+                        if edata and edata.get("type") == rtype:
+                            has_relation = True
+
+                if not has_relation:
+                     relation_ok = False
+
         if not relation_ok:
             continue
-        
+
         # Node passes all filters
         node.access()
-        core_ctx.graph.nodes[nid].update(node.to_dict())
+        # Update graph node data if necessary (maybe only during integration cycle?)
+        # core_ctx.graph.nodes[nid].update(node.to_dict())
         matching.append(node.to_dict())
-    
-    # Sort by confidence
-    matching.sort(key=lambda x: x["confidence"], reverse=True)
-    results = matching[:limit]
-    
+
+    # Sort by confidence (descending)
+    matching.sort(key=lambda x: x.get("confidence", 0.0), reverse=True)
+    results = matching[:limit_val]
+
     # Update cache
     core_ctx.query_cache[cache_key] = {
         "timestamp": now.isoformat(),
         "results": results
     }
-    
+    logger.debug(f"Query yielded {len(results)} results. Caching.")
+
     return results
 
 @function_tool
