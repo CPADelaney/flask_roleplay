@@ -680,7 +680,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             
             # Initialize Issue Tracking System
             self.issue_tracking_system = IssueTrackingSystem(
-                db_path=f"issues_db_{user_id}_{conversation_id}.json"
+                db_path=f"issues_db_{self.user_id}_{self.conversation_id}.json"
             )
             logger.debug("Issue tracking system initialized")
             
