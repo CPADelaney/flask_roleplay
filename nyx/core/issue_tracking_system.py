@@ -359,16 +359,18 @@ class IssueTrackingSystem:
     def __init__(self, db_path: str = "issues_db.json"):
         """Initialize the issue tracking system"""
         self.db = IssueDatabase(db_path)
-        self.issue_analyzer_agent = self._create_issue_analyzer_agent()
-        self.issue_manager_agent = self._create_issue_manager_agent()
         
-        # Initialize tools
+        # Initialize tools first
         self.add_issue_tool = function_tool(self._add_issue)
         self.update_issue_tool = function_tool(self._update_issue)
         self.find_similar_issues_tool = function_tool(self._find_similar_issues)
         self.get_issue_tool = function_tool(self._get_issue)
         self.search_issues_tool = function_tool(self._search_issues)
         self.get_stats_tool = function_tool(self._get_stats)
+        
+        # Then create agents that use those tools
+        self.issue_analyzer_agent = self._create_issue_analyzer_agent()
+        self.issue_manager_agent = self._create_issue_manager_agent()
     
     def _create_issue_analyzer_agent(self) -> Agent:
         """Create an agent specialized in analyzing issues and ideas"""
