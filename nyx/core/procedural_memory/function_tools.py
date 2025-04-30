@@ -30,15 +30,13 @@ async def add_procedure(
 ) -> Dict[str,Any]:
     """
     Add a new procedure to the procedural memory system.
-    
+
     Args:
-        name: Name of the procedure
-        steps: List of step definitions with function, description and parameters
-        description: Optional description of what the procedure accomplishes
-        domain: Domain/context where this procedure applies
-        
-    Returns:
-        Information about the created procedure
+        input: An AddProcedureInput model containing
+               - name: Name of the procedure
+               - steps: Step defs
+               - description: Optional text
+               - domain: Optional domain
     """
     name = input.name
     steps = input.steps
