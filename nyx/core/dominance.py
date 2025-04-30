@@ -233,7 +233,6 @@ class DominanceSystem:
             model="gpt-4o",
             model_settings=ModelSettings(
                 temperature=0.8,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 self.get_user_profile_for_ideation,
@@ -279,7 +278,6 @@ class DominanceSystem:
             model="gpt-4o",
             model_settings=ModelSettings(
                 temperature=0.9,
-                response_format={"type": "json_object"}
             ),
             tools=[
                 self.get_user_profile_for_ideation,
@@ -1400,7 +1398,6 @@ def create_dominance_ideation_agent():
         model="gpt-4o",
         model_settings=ModelSettings(
             temperature=0.8,
-            response_format={"type": "json_object"}
         ),
         tools=[],  # Tools will be added by the calling code
         output_type=List[FemdomActivityIdea]
@@ -1438,7 +1435,6 @@ def create_hard_dominance_ideation_agent():
         model="gpt-4o",
         model_settings=ModelSettings(
             temperature=0.9,
-            response_format={"type": "json_object"}
         ),
         tools=[],  # Tools will be added by the calling code
         output_type=List[FemdomActivityIdea]
