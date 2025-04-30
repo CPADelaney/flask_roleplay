@@ -1,0 +1,1 @@
+I don’t see the specific lint errors or code snippets—could you please paste the reported issues (and any relevant code context) so I can draft focused patch diffs?
