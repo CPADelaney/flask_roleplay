@@ -44,9 +44,9 @@ class SpatialNavigatorAgent:
             """,
             handoffs=[
                 handoff(self.navigator_agent, 
-                        tool_description="For navigation, route finding, and direction giving tasks"),
+                        tool_description_override="For navigation, route finding, and direction giving tasks"),
                 handoff(self.mapper_agent, 
-                        tool_description="For map building, observation processing, and spatial environment understanding")
+                        tool_description_override="For map building, observation processing, and spatial environment understanding")
             ]
         )
     
