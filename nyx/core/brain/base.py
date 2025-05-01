@@ -758,6 +758,14 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
                 self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
                 logger.debug("Agent enhanced memory initialized")
+        
+            self.default_active_modules = {
+                "attentional_controller",  # Likely needed to guide focus
+                "internal_thoughts",     # Core to Nyx's internal experience? (Debatable)
+                "emotional_core",        # Usually relevant for response tone? (Debatable)
+                "mode_integration",    # Current mode influences everything
+                # Add other truly essential, low-overhead modules
+            }
     
             nyx_brain = BrainMemoryCore()
             
@@ -2627,7 +2635,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             ]
 
             femdom_tools = [
-                function_tool(self.process_dominance_action),
+                NyxBrain.process_dominance_action,
                 function_tool(self.assign_protocol),
                 function_tool(self.assign_service_task),
                 function_tool(self.process_orgasm_permission_request),
@@ -5646,3 +5654,148 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         logger.info(f"Approved testing soft limit '{limit_to_test}'. Planned action: {test_action_description}")
     
         return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
+
+    async def _determine_active_modules(self, context: Dict[str, Any], user_input: Optional[str] = None) -> Set[str]:
+        """Determines which modules should be actively engaged based on context."""
+        active_modules = self.default_active_modules.copy()
+        reasoning_log = ["Default set activated."] # For debugging
+    
+        # --- 1. Goal-Driven Activation ---
+        if self.goal_manager and hasattr(self.goal_manager, 'get_all_goals') and hasattr(self.goal_manager, '_get_goal_with_reader_lock'):
+            try:
+                # Check active goals *first* as they dictate current primary task
+                active_goals_summary = await self.goal_manager.get_all_goals(status_filter=["active"])
+                if active_goals_summary:
+                    # Focus on the highest priority active goal
+                    highest_prio_goal_summary = active_goals_summary[0] # Assumes sorted
+                    goal_id = highest_prio_goal_summary['id']
+                    goal_obj = await self.goal_manager._get_goal_with_reader_lock(goal_id)
+    
+                    if goal_obj and 0 <= goal_obj.current_step_index < len(goal_obj.plan):
+                        next_step_action = goal_obj.plan[goal_obj.current_step_index].action
+                        reason = f"Activated for active goal '{goal_id}' step '{next_step_action}':"
+                        # --- Action-to-Module Mapping (CRUCIAL - NEEDS EXPANSION) ---
+                        module_map = {
+                            "reason": "reasoning_core", "query_knowledge": "knowledge_core",
+                            "retrieve_memories": "memory_core", "add_memory": "memory_core",
+                            "create_reflection": "reflection_engine", "generate_prediction": "prediction_engine",
+                            "explore_knowledge": "knowledge_core", "issue_command": "femdom_coordinator", # Map specific actions
+                            "analyze_user_state": "theory_of_mind", # Example
+                            "process_sensory": "multimodal_integrator",
+                            "update_emotion": "emotional_core",
+                            "express_": "emotional_core", # Catch expression actions
+                            "select_strategy": "meta_core",
+                            "simulate_": "digital_somatosensory_system",
+                            # ... MUST MAP ALL ACTIONS used in Goal Steps ...
+                        }
+                        activated_for_goal = False
+                        for prefix, module_name in module_map.items():
+                            if next_step_action.startswith(prefix) and hasattr(self, module_name) and getattr(self, module_name):
+                                active_modules.add(module_name)
+                                reasoning_log.append(f"{reason} {module_name}")
+                                activated_for_goal = True
+                                break
+                        if not activated_for_goal:
+                            logger.warning(f"No module mapping found for goal action: {next_step_action}")
+                    else:
+                         reasoning_log.append(f"Active goal {goal_id} has no actionable next step.")
+                else:
+                    reasoning_log.append("No active goals driving module selection.")
+            except Exception as e:
+                logger.error(f"Error checking goals for module activation: {e}")
+    
+        # --- 2. Input/Context-Driven Activation ---
+        input_text = user_input or context.get("last_user_input", "")
+        input_lower = input_text.lower()
+        keywords_activated = set() # Track which modules activated by keywords
+    
+        keyword_map = {
+             ("why", "explain", "cause", "because", "how does", "logic"): "reasoning_core",
+             ("remember", "recall", "memory", "past", "happened when"): "memory_core",
+             ("feel", "emotion", "sad", "happy", "angry", "scared"): "emotional_core", # Often default anyway
+             ("think about", "reflect on", "consider", "meaning", "insight"): "reflection_engine",
+             ("knowledge", "learn", "fact", "information", "tell me about"): "knowledge_core",
+             ("imagine", "what if", "suppose", "create", "idea"): "imagination_simulator",
+             ("need", "want", "desire", "motivation", "drive"): "needs_system",
+             ("mood", "vibe", "atmosphere"): "mood_manager",
+             ("see", "look", "picture", "image", "visual"): "multimodal_integrator", # And maybe specific vision module
+             ("hear", "sound", "listen", "audio", "music"): "multimodal_integrator", # And maybe specific audio module
+             ("touch", "feel", "texture", "pressure", "temperature"): "digital_somatosensory_system",
+             ("relationship", "connect", "trust", "intimacy"): "relationship_manager",
+             ("future", "predict", "what next", "anticipate"): "prediction_engine",
+             ("perform", "optimize", "strategy", "efficient"): "meta_core",
+             ("observe", "notice", "pay attention"): "passive_observation_system",
+             ("proactive", "suggest", "remind", "reach out"): "proactive_communication_engine",
+             ("identity", "who are you", "personality"): "identity_evolution",
+        }
+    
+        for keywords, module_name in keyword_map.items():
+             if any(kw in input_lower for kw in keywords):
+                 if hasattr(self, module_name) and getattr(self, module_name):
+                      active_modules.add(module_name)
+                      keywords_activated.add(module_name)
+    
+        if keywords_activated:
+             reasoning_log.append(f"Activated modules based on input keywords: {keywords_activated}")
+    
+    
+        # --- 3. Mode-Driven Activation ---
+        if self.mode_integration and hasattr(self.mode_integration, "get_active_mode_name"):
+            try:
+                current_mode = await self.mode_integration.get_active_mode_name()
+                if current_mode:
+                    # --- Mode-to-Module Mapping (CRUCIAL - NEEDS EXPANSION) ---
+                    mode_module_map = {
+                        "INTELLECTUAL": ["reasoning_core", "knowledge_core", "reflection_engine"],
+                        "EMOTIONAL": ["emotional_core", "reflection_engine", "relationship_manager"],
+                        "CREATIVE": ["imagination_simulator", "novelty_engine", "reflection_engine"],
+                        "DOMINANT": ["femdom_coordinator", "psychological_dominance", "goal_manager", "needs_system", "emotional_core"],
+                        "NURTURING": ["emotional_core", "relationship_manager", "needs_system"],
+                        "PLAYFUL": ["imagination_simulator", "emotional_core"],
+                        "PROFESSIONAL": ["knowledge_core", "goal_manager"],
+                        "SERVICE": ["goal_manager", "needs_system", "body_service_system"], # Example
+                        "TRAINING": ["procedural_memory", "goal_manager", "knowledge_core"], # Example
+                        # ... map ALL modes defined in ModeIntegrationManager ...
+                    }
+                    if current_mode in mode_module_map:
+                        modules_to_activate = set()
+                        for mod_name in mode_module_map[current_mode]:
+                            if hasattr(self, mod_name) and getattr(self, mod_name):
+                                modules_to_activate.add(mod_name)
+                        if modules_to_activate:
+                            active_modules.update(modules_to_activate)
+                            reasoning_log.append(f"Activated {modules_to_activate} based on mode '{current_mode}'.")
+            except Exception as e:
+                logger.error(f"Error checking mode for module activation: {e}")
+    
+        # --- 4. Attention-Driven Activation ---
+        if self.attentional_controller:
+            try:
+                foci = self.attentional_controller.current_foci # Access directly if possible, or via a getter
+                if foci:
+                     # Example: Activate module related to the strongest focus target
+                     strongest_focus = max(foci, key=lambda f: f.strength)
+                     focus_target = strongest_focus.target
+                     # Map target string to module name (this mapping needs careful design)
+                     # Simple example:
+                     if "memory" in focus_target.lower(): active_modules.add("memory_core")
+                     elif "reason" in focus_target.lower(): active_modules.add("reasoning_core")
+                     # ... etc ...
+                     reasoning_log.append(f"Activated module for attention focus: {focus_target}")
+            except Exception as e:
+                 logger.error(f"Error checking attention for module activation: {e}")
+    
+        # --- 5. Meta-Cognitive Influence (Example) ---
+        # if self.meta_core and self.detected_bottlenecks:
+        #     for bottleneck in self.detected_bottlenecks:
+        #         if bottleneck['severity'] > 0.7:
+        #             active_modules.add(bottleneck['process_type']) # Activate bottlenecked system
+        #             reasoning_log.append(f"Activated {bottleneck['process_type']} due to detected bottleneck.")
+    
+        # --- Final Logging ---
+        final_active_list = sorted(list(active_modules))
+        logger.debug(f"Final active modules for cycle/task: {final_active_list}")
+        if len(reasoning_log) > 1: # More than just default
+            logger.debug(f"Activation Reasoning: {' | '.join(reasoning_log)}")
+    
+        return active_modules
