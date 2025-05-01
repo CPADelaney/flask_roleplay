@@ -285,7 +285,7 @@ class EnhancedAgenticActionGenerator:
         
         # Social tools
         self.computer_user = ComputerUseAgent(logger=logger)
-         self.ui_conversation_manager = UIConversationManager(system_context=self.system_context)
+        self.ui_conversation_manager = UIConversationManager(system_context=self.system_context)
        
         # Internal motivation system
         self.motivations = {
