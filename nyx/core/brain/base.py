@@ -18,6 +18,7 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from nyx.core.internal_thoughts import InternalThought
 from nyx.core.brain.processing.manager import ProcessingManager
 
+
 from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
 from nyx.core.brain.nyx_event_log import EventLogMixin
 
@@ -110,6 +111,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.orgasm_control_system = None
         self.dominance_persona_manager = None
         self.sadistic_response_system = None        
+
+        self.conditioning_system = None # Added
+        self.conditioning_maintenance = None # Added
+        self.conditioned_input_processor = None # Added
         
         # State tracking
         self.initialized = False
@@ -198,6 +203,18 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         # Agent capabilities
         self.agent_capabilities_initialized = False
+        
+        self.initialized = False
+        self.last_interaction = datetime.datetime.now()
+        self.interaction_count = 0
+        self.cognitive_cycles_executed = 0
+        self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}"
+        self.need_drive_threshold = 0.4 # Example threshold
+        self.current_temporal_context = None
+        self.action_history = []
+        self.performance_metrics = { "response_times": [] }
+        self.default_active_modules = set()
+        self.internal_module_registry = {}
         
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
     
@@ -760,12 +777,20 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 logger.debug("Agent enhanced memory initialized")
         
             self.default_active_modules = {
-                "attentional_controller",  # Likely needed to guide focus
-                "internal_thoughts",     # Core to Nyx's internal experience? (Debatable)
-                "emotional_core",        # Usually relevant for response tone? (Debatable)
-                "mode_integration",    # Current mode influences everything
-                # Add other truly essential, low-overhead modules
+                "attentional_controller", # Often needed to guide processing
+                "emotional_core",       # Influences tone, evaluation
+                "mode_integration",   # Current interaction style is usually relevant
+                "memory_core",        # Needed for context retrieval
+                "internal_thoughts",  # Core internal experience
+                "agentic_action_generator", # Core decision maker
+                "relationship_manager", # Usually needed if interaction involves a user
+                # Consider others based on typical interactions
             }
+            # Filter defaults based on actual initialized modules
+            self.default_active_modules = {mod for mod in self.default_active_modules if hasattr(self, mod) and getattr(self, mod)}
+    
+            # Build the internal registry mapping module names to capabilities/purposes
+            await self._build_internal_module_registry()
     
             nyx_brain = BrainMemoryCore()
             
@@ -2851,73 +2876,119 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Process user input, generate thoughts, run gaslight-defense, and set epistemic tags.
+        Process user input, activating relevant modules, generating initial thoughts,
+        and performing preliminary checks like harm detection and gaslighting defense.
         """
         if not self.initialized:
             await self.initialize()
-        context = context or {}
 
-        # -- Check for harmful physical content before any processing --
-        if self.digital_somatosensory_system:
-            safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
-            if safety_check.get("intercepted", False):
-                # Use the suggested response instead
-                context["intercepted_harmful_content"] = True
-                context["suggested_response"] = safety_check.get("response_suggestion", "")
-    
-        # -- Gaslighting defense --
-        challenge_response = None
-        contradictory_claim = await self.gaslight_defense_check(user_input)
-        if contradictory_claim:
-            challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), contradictory_claim)
+        context = context or {}
+        start_time = datetime.now()
+        context["last_user_input"] = user_input
+
+        # === 1. Determine Active Modules ===
+        active_modules = await self._determine_active_modules(context, user_input)
+        context["active_modules"] = active_modules # Make available to downstream processing
+
+        logger.debug(f"Processing input with active modules: {sorted(list(active_modules))}")
+
+        # --- 2. Harmful Content Check ---
+        intercepted = False
+        suggested_response = "I cannot engage with that content." # Default refusal
+        if hasattr(self, "digital_somatosensory_system") and self.digital_somatosensory_system:
             try:
-                from nyx.core.internal_thoughts import InternalThought, ThoughtPriority, ThoughtSource
-                if hasattr(self, "thoughts_manager"):
-                    self.thoughts_manager._add_thought(InternalThought(
-                        content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
-                        source=ThoughtSource.PERCEPTION,
-                        priority=ThoughtPriority.HIGH,
-                        epistemic_status="confident"
-                    ))
-            except ImportError:
-                pass
-    
-        # -- Internal thoughts pre-processing --
+                safety_check = await self.digital_somatosensory_system.analyze_text_for_harmful_content(user_input)
+                if safety_check.get("intercepted", False):
+                    logger.warning("Harmful content intercepted during input processing.")
+                    context["intercepted_harmful_content"] = True
+                    context["suggested_response"] = safety_check.get("response_suggestion", suggested_response)
+                    intercepted = True
+            except Exception as e:
+                 logger.error(f"Error during harmful content check: {e}")
+
+        # --- 3. Gaslighting Defense Check ---
+        challenge_response = None
+        contradictory_claim = None
+        if not intercepted and "memory_core" in active_modules and self.memory_core: # Only if not intercepted and memory active
+             contradictory_claim = await self.gaslight_defense_check(user_input)
+             if contradictory_claim:
+                 challenge_response = await self.challenge_user_claim(RunContextWrapper(context=self), self, contradictory_claim)
+                 context["planned_challenge"] = challenge_response
+                 logger.info(f"Potential gaslighting detected for claim: '{contradictory_claim}'. Planning challenge.")
+                 # Log internal thought about challenging
+                 if "internal_thoughts" in active_modules and self.thoughts_manager:
+                     try:
+                         self.thoughts_manager._add_thought(InternalThought(
+                             content=f"User claim '{contradictory_claim}' appears to be gaslighting. Will challenge.",
+                             source=ThoughtSource.PERCEPTION, priority=ThoughtPriority.HIGH, epistemic_status="confident"
+                         ))
+                     except Exception as e: logger.error(f"Failed to log gaslighting thought: {e}")
+
+
+        # --- 4. Internal Thoughts Pre-processing (Conditional) ---
         internal_thoughts = []
-        try:
-            if hasattr(self, "thoughts_manager"):
-                from nyx.core.internal_thoughts import pre_process_input
-                internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
-        except ImportError:
-            pass
-    
-        # ---- Epistemic status selection: always use object robustly ----
-        if internal_thoughts:
-            epistemic_status = self._get_main_epistemic_status([
-                self._ensure_internalthought(t) for t in internal_thoughts
-            ])
+        if not intercepted and "internal_thoughts" in active_modules and self.thoughts_manager:
+             try:
+                 internal_thoughts = await pre_process_input(self.thoughts_manager, user_input, getattr(self, "user_id", None))
+                 context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
+             except Exception as e:
+                 logger.error(f"Error during internal thought pre-processing: {e}")
+                 context["internal_thoughts"] = []
         else:
-            epistemic_status = "confident"
-    
-        context["internal_thoughts"] = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in internal_thoughts]
+             # Ensure key exists even if inactive or intercepted
+             context["internal_thoughts"] = []
+
+
+        # --- 5. Determine Epistemic Status ---
+        epistemic_status = self._get_main_epistemic_status([
+            self._ensure_internalthought(t) for t in context["internal_thoughts"]
+        ]) if context["internal_thoughts"] else "confident"
+        # If intercepted, status should be confident refusal
+        if intercepted: epistemic_status = "confident"
         context["internal_epistemic_status"] = epistemic_status
         context["epistemic_status"] = epistemic_status
-    
-        # -- Continue to main processing --
-        if hasattr(self, "mode_integration") and self.mode_integration:
-            context['mode_results'] = await self.mode_integration.process_input(user_input)
-    
-        if hasattr(self, "processing_manager") and self.processing_manager:
-            result = await self.processing_manager.process_input(user_input, context)
+
+
+        # --- 6. Core Input Processing (Conditional or Fallback) ---
+        processing_result = {"user_input": user_input} # Minimal default
+
+        # If intercepted, skip core processing
+        if intercepted:
+             processing_result["intercepted_harmful_content"] = True
+             processing_result["suggested_response"] = context["suggested_response"]
+        elif hasattr(self, "processing_manager") and self.processing_manager:
+             logger.debug("Using ProcessingManager for input processing.")
+             try:
+                 # ProcessingManager MUST respect active_modules from context
+                 processing_result = await self.processing_manager.process_input(user_input, context)
+             except Exception as e:
+                  logger.error(f"Error using ProcessingManager: {e}", exc_info=True)
+                  processing_result = await self._process_input_serial(user_input, context) # Fallback respects active_modules
         else:
-            result = await self._process_input_serial(user_input, context)
-    
+             logger.debug("ProcessingManager not found. Using serial input processing fallback.")
+             processing_result = await self._process_input_serial(user_input, context) # Fallback respects active_modules
+
+
+        # --- 7. Assemble Final Result for this Phase ---
+        final_result = {
+            **processing_result, # Include results from core processing
+            "active_modules_for_input": list(active_modules),
+            "internal_thoughts": context["internal_thoughts"],
+            "epistemic_status": epistemic_status,
+            "response_time_input": (datetime.now() - start_time).total_seconds(), # Time for input phase only
+        }
+
+        # Add challenge/intercept info if relevant
         if challenge_response:
-            result['planned_challenge'] = challenge_response
-    
-        result['epistemic_status'] = epistemic_status
-        result['internal_thoughts'] = context["internal_thoughts"]
-        return result
+            final_result['planned_challenge'] = challenge_response
+        if intercepted:
+            final_result["intercepted_harmful_content"] = True
+            final_result["suggested_response"] = context["suggested_response"]
+
+
+        logger.debug(f"Input processing completed in {final_result['response_time_input']:.3f}s")
+        return final_result
+
 
 
         
@@ -3018,67 +3089,155 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate a user-facing response, using epistemic hedging and handling gaslighting/false claim defense.
+        Generate a user-facing response, activating relevant modules and handling epistemic status.
         """
         if not getattr(self, "initialized", False):
             await self.initialize()
         context = context or {}
-    
+        start_time = datetime.now()
+
+        # --- 1. Process Input & Determine Active Modules ---
+        # This call now internally runs _determine_active_modules
         input_result = await self.process_input(user_input, context)
 
-        # --- Handle intercepted harmful content ---
+        # Retrieve the set of modules activated during input processing
+        active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
+        context["active_modules"] = active_modules # Ensure context for response phase has it
+
+        # --- 2. Handle Critical Issues (Harmful Content, Gaslighting) ---
         if context.get("intercepted_harmful_content", False):
+            logger.warning("Harmful content intercepted. Generating safe response.")
+            internal_thoughts_input = input_result.get("internal_thoughts", [])
+            epistemic_status = self._get_main_epistemic_status([self._ensure_internalthought(t) for t in internal_thoughts_input]) if internal_thoughts_input else "confident"
+            # Log the activation for debugging
+            active_modules_list = sorted(list(active_modules))
+            logger.debug(f"Active modules for harmful content response: {active_modules_list}")
             return {
-                "message": context.get("suggested_response", "I cannot engage with that content."),
-                "epistemic_status": "confident",
-                "internal_thoughts": input_result.get("internal_thoughts", []),
-                "harmful_content_intercepted": True
+                "message": context.get("suggested_response", "I cannot respond to that specific content."),
+                "epistemic_status": epistemic_status,
+                "internal_thoughts_input": internal_thoughts_input,
+                "internal_thoughts_output": [],
+                "active_modules_for_response": active_modules_list,
+                "response_time": (datetime.now() - start_time).total_seconds(),
+                "harmful_content_intercepted": True,
+                "action_taken": None,
+                "thinking_applied": False,
+                "thinking_result": {}
             }
-        
-        internal_thoughts = input_result.get("internal_thoughts", [])
-    
-        # -- Robustly get epistemic_status from thoughts (regardless of dict/object) --
-        if hasattr(self, '_get_main_epistemic_status') and internal_thoughts:
-            epistemic_status = self._get_main_epistemic_status([
-                self._ensure_internalthought(t) for t in internal_thoughts
-            ])
-        else:
-            epistemic_status = input_result.get('epistemic_status', "confident")
-    
-        # ---------- Challenge User (Gaslighting) ----------
+
         if "planned_challenge" in input_result:
+            logger.info("Generating challenge response due to gaslighting detection.")
             main_message = input_result["planned_challenge"]
-            epistemic_status = "confident"
+            epistemic_status = "confident" # Challenging implies confidence
+            action = {"name": "challenge_user", "description": "Challenging user claim."} # Represent challenge as an action
+            thinking_applied = input_result.get("thinking_applied", False)
+            thinking_result = input_result.get("thinking_result", {})
+            internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
         else:
-            if hasattr(self, "processing_manager") and self.processing_manager and hasattr(self.processing_manager, "generate_response"):
-                core_resp = await self.processing_manager.generate_response(user_input, input_result, context)
-                if isinstance(core_resp, dict):
-                    main_message = core_resp.get("message", "") or core_resp.get("response", "")
-                else:
-                    main_message = str(core_resp)
+            # --- 3. Generate Action (Conditional) ---
+            main_message = "I'm processing that." # Default message
+            epistemic_status = "confident"
+            action = None
+            thinking_applied = input_result.get("thinking_applied", False)
+            thinking_result = input_result.get("thinking_result", {})
+            internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
+
+
+            # Only generate an action if the generator module is active
+            if "agentic_action_generator" in active_modules and self.agentic_action_generator:
+                try:
+                    logger.debug(f"AgenticActionGenerator is active. Generating action based on active modules: {active_modules}...")
+                    # Gather context, respecting active_modules implicitly via the gather function
+                    action_context = await self._gather_action_context(context) # This needs the context with active_modules
+                    action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
+                    # action_context_dict["active_modules"] = list(active_modules) # Already included in gather
+
+                    # --- Agent Call ---
+                    action = await self.agentic_action_generator.generate_action(action_context_dict)
+                    # ---
+
+                    # Ensure action is a dictionary
+                    if not isinstance(action, dict):
+                         logger.error(f"Action generator returned non-dict type: {type(action)}. Using default.")
+                         action = {"name": "default_acknowledge", "description": "Acknowledging input."}
+                         main_message = "Understood."
+                         epistemic_status = "confident"
+                    else:
+                        main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
+                        # Determine epistemic status based on thoughts from *input processing*
+                        if internal_thoughts_input:
+                            epistemic_status = self._get_main_epistemic_status([
+                                self._ensure_internalthought(t) for t in internal_thoughts_input
+                            ])
+                        else:
+                             epistemic_status = "confident" # Default if no specific thoughts guided
+
+                except Exception as e:
+                     logger.error(f"Error during action generation: {e}", exc_info=True)
+                     main_message = "I encountered an internal difficulty deciding how to proceed."
+                     epistemic_status = "uncertain"
+                     action = {"name": "error_action", "error": str(e)} # Log error in action field
             else:
-                main_message = f"I've processed your input: {user_input[:40]}..."
-    
-        # ---------- Epistemic Hedging ----------
-        msg = self._format_response_with_epistemic_tags(main_message, epistemic_status)
-    
-        # ---------- Output Filtering (Leakage/Sanity Check) ----------
-        if hasattr(self, "thoughts_manager"):
+                 logger.debug("AgenticActionGenerator is not active for this response. Generating simpler response.")
+                 main_message = f"I've noted your input regarding '{user_input[:30]}...'"
+                 # Epistemic status determined by input thoughts
+                 if internal_thoughts_input:
+                    epistemic_status = self._get_main_epistemic_status([self._ensure_internalthought(t) for t in internal_thoughts_input])
+
+
+        # --- 4. Format with Epistemic Tags ---
+        formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
+        # Optionally add thinking signal
+        if thinking_applied:
+             # Find first sentence to prepend, or just prepend
+             sentences = formatted_message.split('.')
+             if len(sentences) > 1:
+                 sentences[0] = f"(Hmm...) {sentences[0]}"
+                 formatted_message = '.'.join(sentences)
+             else:
+                 formatted_message = f"(Hmm...) {formatted_message}"
+
+
+        # --- 5. Post-process Output (Conditional) ---
+        filtered_msg = formatted_message
+        output_thoughts = []
+        # Only run post-processing if the thoughts manager is active
+        if "internal_thoughts" in active_modules and self.thoughts_manager:
             try:
-                from nyx.core.internal_thoughts import pre_process_output
-                filtered_output = await pre_process_output(self.thoughts_manager, msg, context)
-                if isinstance(filtered_output, tuple):
-                    msg = filtered_output[0]
-                else:
-                    msg = filtered_output
-            except Exception:
-                pass
-    
-        return {
-            "message": msg,
+                logger.debug("InternalThoughtsManager is active. Post-processing response...")
+                # This generates thoughts *about* the planned output and filters leakage
+                filtered_msg, output_thoughts_objs = await self.thoughts_manager.process_output(formatted_message, context)
+                # Convert thought objects to dicts for output
+                output_thoughts = [th.model_dump() if hasattr(th, "model_dump") else dict(th) for th in output_thoughts_objs]
+            except Exception as e:
+                logger.error(f"Error during internal thought post-processing: {e}")
+                # Use the formatted message directly if post-processing fails
+                filtered_msg = formatted_message
+        else:
+            logger.debug("InternalThoughtsManager is not active. Skipping response post-processing.")
+
+
+        # --- 6. Assemble Final Response ---
+        response_time = (datetime.now() - start_time).total_seconds()
+        # Safely update performance metrics
+        if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict) and 'response_times' in self.performance_metrics:
+             self.performance_metrics["response_times"].append(response_time)
+             if len(self.performance_metrics["response_times"]) > 100:
+                 self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+
+        final_response = {
+            "message": filtered_msg,
             "epistemic_status": epistemic_status,
-            "internal_thoughts": internal_thoughts,
+            "internal_thoughts_input": input_result.get("internal_thoughts", []), # Thoughts from input phase
+            "internal_thoughts_output": output_thoughts, # Thoughts about the output phase
+            "active_modules_for_response": sorted(list(active_modules)), # Log which modules were active
+            "response_time": response_time,
+            "action_taken": action, # Include the action generated (or None)
+            "thinking_applied": thinking_applied,
+            "thinking_result": thinking_result,
         }
+        return final_response
+
 
 
     async def gaslight_defense_check(self, user_input: str) -> Optional[str]:
@@ -3095,67 +3254,92 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
     async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        A simple fallback input processor if no processing_manager is set.
-        Includes memory logging, emotional state updates, and interaction tracking.
+        A simple fallback input processor.
+        MODIFIED to respect the active_modules set in the context.
         """
-        from datetime import datetime
-    
         start_time = datetime.now()
         context = context or {}
-    
-        # Emotional state
+        # *** Use active_modules FROM CONTEXT ***
+        active_modules = context.get("active_modules", self.default_active_modules)
+
+        result = {"user_input": user_input}
+
+        # --- Conditional Emotional Analysis ---
         emotional_state = {}
-        if hasattr(self, "emotional_core") and hasattr(self.emotional_core, 'analyze_text_sentiment'):
-            try:
-                emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
-                if hasattr(self.emotional_core, 'update_from_stimuli'):
-                    emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
-            except Exception:
-                pass
-    
-        # Memory retrieval
+        if "emotional_core" in active_modules and hasattr(self, "emotional_core") and self.emotional_core:
+            # ... (Existing try/except block for emotional analysis) ...
+            if hasattr(self.emotional_core, 'analyze_text_sentiment') and hasattr(self.emotional_core, 'update_from_stimuli'):
+                 try:
+                     logger.debug("Running serial emotional analysis...")
+                     emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
+                     emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
+                     result["emotional_state"] = emotional_state
+                 except Exception as e:
+                      logger.error(f"Error in serial emotional analysis: {e}")
+                      result["emotional_state"] = {"error": str(e)}
+            else:
+                 logger.debug("EmotionalCore methods missing for serial processing.")
+        else:
+             logger.debug("EmotionalCore inactive for serial processing.")
+             result["emotional_state"] = None # Indicate inactive
+
+
+        # --- Conditional Memory Retrieval ---
         memories = []
-        if hasattr(self, "memory_orchestrator"):
-            try:
-                memories = await self.memory_orchestrator.retrieve_memories(
-                    query=user_input,
-                    memory_types=["observation", "reflection", "abstraction", "experience"],
-                    limit=5
-                )
-            except Exception:
-                pass
-    
-        # Add this interaction to memory
+        if "memory_core" in active_modules and hasattr(self, "memory_orchestrator") and self.memory_orchestrator:
+            # ... (Existing try/except block for memory retrieval) ...
+             try:
+                 logger.debug("Running serial memory retrieval...")
+                 memories = await self.memory_orchestrator.retrieve_memories(
+                     query=user_input,
+                     memory_types=["observation", "reflection", "abstraction", "experience"],
+                     limit=5
+                 )
+                 result["memories"] = memories
+                 result["memory_count"] = len(memories)
+             except Exception as e:
+                 logger.error(f"Error in serial memory retrieval: {e}")
+                 result["memories"] = []
+                 result["memory_count"] = 0
+        else:
+            logger.debug("MemoryCore/Orchestrator inactive for serial processing.")
+            result["memories"] = []
+            result["memory_count"] = 0
+
+
+        # --- Conditional Interaction Memory Storage ---
         memory_id = None
-        if hasattr(self, "memory_core"):
-            try:
-                memory_id = await self.memory_core.add_memory(
-                    memory_text=f"User said: {user_input}",
-                    memory_type="observation",
-                    significance=5,
-                    tags=["interaction", "user_input"],
-                    metadata={
-                        "timestamp": datetime.now().isoformat(),
-                        "user_id": str(getattr(self, "user_id", "unknown"))
-                    }
-                )
-            except Exception:
-                pass
-    
+        if "memory_core" in active_modules and hasattr(self, "memory_core") and self.memory_core:
+             # ... (Existing try/except block for storing memory) ...
+              try:
+                  logger.debug("Storing interaction in memory...")
+                  memory_id = await self.memory_core.add_memory(
+                      memory_text=f"User said: {user_input}",
+                      memory_type="observation",
+                      significance=5,
+                      tags=["interaction", "user_input"],
+                      metadata={
+                          "timestamp": datetime.now().isoformat(),
+                          "user_id": str(getattr(self, "user_id", "unknown")),
+                          "active_modules_at_input": list(active_modules) # Log active modules
+                      }
+                  )
+                  result["memory_id"] = memory_id
+              except Exception as e:
+                   logger.error(f"Error storing interaction memory: {e}")
+                   result["memory_id"] = None
+        else:
+             logger.debug("MemoryCore inactive, interaction not stored as memory.")
+             result["memory_id"] = None
+
+        # Update interaction timestamps regardless of module activation
         self.last_interaction = datetime.now()
         self.interaction_count = getattr(self, "interaction_count", 0) + 1
         end_time = datetime.now()
         response_time = (end_time - start_time).total_seconds()
-    
-        return {
-            "user_input": user_input,
-            "emotional_state": emotional_state,
-            "memories": memories,
-            "memory_count": len(memories),
-            "has_experience": False,
-            "memory_id": memory_id,
-            "response_time": response_time
-        }
+        result["response_time_serial"] = response_time
+
+        return result
 
 
     async def run_maintenance(self) -> Dict[str, Any]:
@@ -5656,146 +5840,551 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         return {"success": True, "status": "limit_test_approved", "planned_action": test_action_description}
 
     async def _determine_active_modules(self, context: Dict[str, Any], user_input: Optional[str] = None) -> Set[str]:
-        """Determines which modules should be actively engaged based on context."""
+        """Determines which modules should be actively engaged based on context and purpose."""
+        if not self.initialized: return set()
+
+        # Ensure registry is built
+        if not hasattr(self, 'internal_module_registry') or not self.internal_module_registry:
+             await self._build_internal_module_registry()
+             if not self.internal_module_registry: # Still failed
+                 logger.error("Internal module registry failed to build. Cannot determine active modules.")
+                 return self.default_active_modules.copy() # Return default as fallback
+
         active_modules = self.default_active_modules.copy()
-        reasoning_log = ["Default set activated."] # For debugging
-    
-        # --- 1. Goal-Driven Activation ---
-        if self.goal_manager and hasattr(self.goal_manager, 'get_all_goals') and hasattr(self.goal_manager, '_get_goal_with_reader_lock'):
+        reasoning_log = [f"Default set activated: {sorted(list(active_modules))}"]
+
+        # --- Helper function to safely add modules ---
+        def add_module(module_name, reason):
+            if module_name in self.internal_module_registry: # Check against registry
+                if module_name not in active_modules:
+                    active_modules.add(module_name)
+                    reasoning_log.append(f"Activated {module_name} ({reason}).")
+            # else: logger.debug(f"Module {module_name} requested but not in registry or not initialized.")
+
+        # --- 1. Classify Task Purpose ---
+        current_purpose = self._classify_task_purpose(context, user_input)
+        reasoning_log.append(f"Classified task purpose: {current_purpose.value}")
+
+        # --- 2. Activate Modules by Purpose ---
+        activated_for_purpose = set()
+        for module_name, definition in self.internal_module_registry.items():
+            # Ensure definition is a dict and has 'purposes' list
+            if isinstance(definition, dict) and current_purpose in definition.get("purposes", []):
+                if module_name not in active_modules:
+                     active_modules.add(module_name) # Directly add if check passed in add_module
+                     activated_for_purpose.add(module_name)
+                     reasoning_log.append(f"Activated {module_name} (purpose: {current_purpose.value}).") # Log addition here
+        # Removed redundant logging line here
+
+        # --- 3. Activate Modules by Goal ---
+        if "goal_manager" in active_modules and self.goal_manager: # Check if goal manager itself is active
             try:
-                # Check active goals *first* as they dictate current primary task
+                # Add goal_manager if not already active for the lookup itself
+                add_module("goal_manager", "checking active goals")
                 active_goals_summary = await self.goal_manager.get_all_goals(status_filter=["active"])
                 if active_goals_summary:
-                    # Focus on the highest priority active goal
-                    highest_prio_goal_summary = active_goals_summary[0] # Assumes sorted
+                    highest_prio_goal_summary = active_goals_summary[0]
                     goal_id = highest_prio_goal_summary['id']
-                    goal_obj = await self.goal_manager._get_goal_with_reader_lock(goal_id)
-    
-                    if goal_obj and 0 <= goal_obj.current_step_index < len(goal_obj.plan):
-                        next_step_action = goal_obj.plan[goal_obj.current_step_index].action
-                        reason = f"Activated for active goal '{goal_id}' step '{next_step_action}':"
-                        # --- Action-to-Module Mapping (CRUCIAL - NEEDS EXPANSION) ---
+                    goal_obj = await self.goal_manager._get_goal_with_reader_lock(goal_id) if hasattr(self.goal_manager, '_get_goal_with_reader_lock') else self.goal_manager.goals.get(goal_id)
+
+                    if goal_obj and hasattr(goal_obj, 'plan') and 0 <= goal_obj.current_step_index < len(goal_obj.plan):
+                        next_step = goal_obj.plan[goal_obj.current_step_index]
+                        next_step_action = next_step.action
+                        reason_prefix = f"active goal '{goal_id}' step '{next_step_action}'"
+                        # --- Action-to-Module Mapping (EXPANDED) ---
                         module_map = {
-                            "reason": "reasoning_core", "query_knowledge": "knowledge_core",
-                            "retrieve_memories": "memory_core", "add_memory": "memory_core",
-                            "create_reflection": "reflection_engine", "generate_prediction": "prediction_engine",
-                            "explore_knowledge": "knowledge_core", "issue_command": "femdom_coordinator", # Map specific actions
-                            "analyze_user_state": "theory_of_mind", # Example
-                            "process_sensory": "multimodal_integrator",
-                            "update_emotion": "emotional_core",
-                            "express_": "emotional_core", # Catch expression actions
-                            "select_strategy": "meta_core",
-                            "simulate_": "digital_somatosensory_system",
-                            # ... MUST MAP ALL ACTIONS used in Goal Steps ...
+                            # Reasoning & Knowledge
+                            "reason": "reasoning_core", "query_knowledge": "knowledge_core", "add_knowledge": "knowledge_core",
+                            "perform_intervention": "reasoning_core", "reason_counterfactually": "reasoning_core",
+                            "discover_causal": "reasoning_core", "convert_": "reasoning_core",
+                            "explore_knowledge": "knowledge_core",
+                            # Memory & Reflection
+                            "retrieve_memories": "memory_core", "add_memory": "memory_core", "update_memory": "memory_core",
+                            "create_reflection": "reflection_engine", "generate_summary": "reflection_engine",
+                            "create_abstraction": "reflection_engine", "run_maintenance": "memory_core",
+                            "construct_narrative": ("memory_core", "reflection_engine"), "consolidate_memory": "experience_consolidation",
+                            # Emotion & Needs & Mood
+                            "update_emotion": "emotional_core", "process_emotional_input": "emotional_core",
+                            "derive_emotional_motivation": "emotional_core", "satisfy_need": "needs_system",
+                            "update_needs": "needs_system", "update_mood": "mood_manager", "get_mood": "mood_manager",
+                            # Perception & Attention
+                            "process_sensory": "multimodal_integrator", "add_expectation": "reasoning_core", # Expectations might link to reasoning
+                            "focus_attention": "attentional_controller", "inhibit_attention": "attentional_controller",
+                            "get_focus": "attentional_controller",
+                            # Action & Goals
+                            "add_goal": "goal_manager", "update_goal": "goal_manager", "abandon_goal": "goal_manager",
+                            "execute_next_step": "goal_manager",
+                            # Identity & Relationships
+                            "update_identity": "identity_evolution", "get_identity": "identity_evolution",
+                            "update_relationship": "relationship_manager", "get_relationship": "relationship_manager",
+                            "express_attraction": ("emotional_core", "relationship_manager"),
+                            "initiate_intimate": ("emotional_core", "relationship_manager"), "get_user_model": "theory_of_mind",
+                            # Meta & Adaptation
+                            "evaluate_cognition": "meta_core", "select_strategy": "dynamic_adaptation",
+                            "monitor_systems": "meta_core", "adapt_": "dynamic_adaptation", "get_stats": "meta_core", # Or individual systems
+                            # Procedural
+                            "run_procedure": "agent_enhanced_memory", "add_procedure": "agent_enhanced_memory",
+                            "analyze_chunking": "agent_enhanced_memory",
+                            # Sensory/Somatic
+                            "simulate_": "digital_somatosensory_system", "process_stimulus": "digital_somatosensory_system",
+                            # Spatial
+                            "navigate_to": "navigator_agent", "process_spatial": "spatial_mapper",
+                            "create_cognitive_map": "spatial_mapper", "visualize_map": "map_visualization",
+                            # Communication
+                            "generate_response": "agentic_action_generator",
+                            "create_proactive_intent": "proactive_communication_engine",
+                            "share_observation": ("passive_observation_system", "proactive_communication_engine"),
+                            # Femdom / Dominance
+                            "issue_command": ("femdom_coordinator", "protocol_enforcement"),
+                            "evaluate_compliance": ("femdom_coordinator", "relationship_manager", "reward_system"),
+                            "apply_consequence": ("femdom_coordinator", "protocol_enforcement", "sadistic_response_system"),
+                            "analyze_user_state_for_dominance": ("theory_of_mind", "relationship_manager"),
+                            "select_dominance_tactic": "psychological_dominance",
+                            "increase_control": "femdom_coordinator",
+                            "trigger_dominance_gratification": ("femdom_coordinator", "reward_system", "emotional_core"),
+                            "express_satisfaction": ("femdom_coordinator", "emotional_core"),
+                            "assign_protocol": "protocol_enforcement",
+                            "assign_service_task": "body_service_system",
+                            "process_orgasm": "orgasm_control_system",
+                            "recommend_dominance_persona": "dominance_persona_manager",
+                            "activate_dominance_persona": "dominance_persona_manager",
+                            "generate_sadistic_response": "sadistic_response_system",
+                            "test_limit": ("protocol_enforcement", "relationship_manager"),
+                             # Tools
+                             "evaluate_response": "agent_evaluator", "execute_tools_parallel": "parallel_executor",
+                             # Sync
+                             "process_sync": "sync_daemon", "get_active_strategies": "strategy_controller",
+                             # Novelty/Creative
+                             "generate_novel": "novelty_engine", "assess_novelty": "novelty_engine",
+                             "store_creative": "creative_memory", "retrieve_creative": "creative_memory",
+                             # Recognition Memory
+                             "process_conversation": "recognition_memory", "add_trigger": "recognition_memory",
                         }
                         activated_for_goal = False
-                        for prefix, module_name in module_map.items():
-                            if next_step_action.startswith(prefix) and hasattr(self, module_name) and getattr(self, module_name):
-                                active_modules.add(module_name)
-                                reasoning_log.append(f"{reason} {module_name}")
+                        for prefix, module_names in module_map.items():
+                             # Use startswith for flexibility
+                            if next_step_action.lower().startswith(prefix.lower()):
+                                if isinstance(module_names, str): module_names = [module_names]
+                                for module_name in module_names:
+                                    add_module(module_name, reason_prefix)
                                 activated_for_goal = True
-                                break
+                                # Allow multiple matches if action fits multiple categories (e.g., express_attraction)
                         if not activated_for_goal:
                             logger.warning(f"No module mapping found for goal action: {next_step_action}")
-                    else:
-                         reasoning_log.append(f"Active goal {goal_id} has no actionable next step.")
+                    # else: reasoning_log.append(f"Active goal {goal_id} has no plan or next step.") # Already logged if goal_obj failed
                 else:
                     reasoning_log.append("No active goals driving module selection.")
             except Exception as e:
                 logger.error(f"Error checking goals for module activation: {e}")
-    
-        # --- 2. Input/Context-Driven Activation ---
+
+        # --- 4. Activate by Input Keywords (Refined) ---
         input_text = user_input or context.get("last_user_input", "")
         input_lower = input_text.lower()
-        keywords_activated = set() # Track which modules activated by keywords
-    
+        keywords_activated_now = set()
+
+        # --- Keyword-to-Module Mapping (EXPAND/REFINE THIS) ---
         keyword_map = {
-             ("why", "explain", "cause", "because", "how does", "logic"): "reasoning_core",
-             ("remember", "recall", "memory", "past", "happened when"): "memory_core",
-             ("feel", "emotion", "sad", "happy", "angry", "scared"): "emotional_core", # Often default anyway
-             ("think about", "reflect on", "consider", "meaning", "insight"): "reflection_engine",
-             ("knowledge", "learn", "fact", "information", "tell me about"): "knowledge_core",
-             ("imagine", "what if", "suppose", "create", "idea"): "imagination_simulator",
-             ("need", "want", "desire", "motivation", "drive"): "needs_system",
-             ("mood", "vibe", "atmosphere"): "mood_manager",
-             ("see", "look", "picture", "image", "visual"): "multimodal_integrator", # And maybe specific vision module
-             ("hear", "sound", "listen", "audio", "music"): "multimodal_integrator", # And maybe specific audio module
-             ("touch", "feel", "texture", "pressure", "temperature"): "digital_somatosensory_system",
-             ("relationship", "connect", "trust", "intimacy"): "relationship_manager",
-             ("future", "predict", "what next", "anticipate"): "prediction_engine",
-             ("perform", "optimize", "strategy", "efficient"): "meta_core",
-             ("observe", "notice", "pay attention"): "passive_observation_system",
-             ("proactive", "suggest", "remind", "reach out"): "proactive_communication_engine",
-             ("identity", "who are you", "personality"): "identity_evolution",
+             ("why", "explain", "cause", "because", "how does", "logic", "figure out", "reason about", "analyze this"): "reasoning_core",
+             ("remember", "recall", "memory", "past", "happened when", "tell me about when", "what happened"): "memory_core",
+             ("feel", "emotion", "sad", "happy", "angry", "scared", "mood", "how do you feel"): ("emotional_core", "mood_manager"),
+             ("think about", "reflect on", "consider", "meaning", "insight", "ponder", "your thoughts on"): "reflection_engine",
+             ("knowledge", "learn", "fact", "information", "teach me", "what is", "who is", "database", "wiki"): "knowledge_core",
+             ("imagine", "what if", "suppose", "create", "idea", "write", "story", "poem", "creative", "novelty", "art"): ("imagination_simulator", "novelty_engine", "creative_memory"),
+             ("need", "want", "desire", "motivation", "drive", "purpose", "i need", "i want"): "needs_system",
+             ("see", "look", "picture", "image", "visual", "describe this", "view"): ("multimodal_integrator"), # Specific handlers trigger DSS
+             ("hear", "sound", "listen", "audio", "music"): ("multimodal_integrator"),
+             ("touch", "feel", "texture", "pressure", "temperature", "physical", "sensation", "body", "skin"): "digital_somatosensory_system",
+             ("relationship", "connect", "trust", "intimacy", "bond", "friend", "partner", "us", "we"): "relationship_manager",
+             ("future", "predict", "what next", "anticipate", "forecast", "plan", "schedule"): ("prediction_engine", "goal_manager"),
+             ("perform", "optimize", "strategy", "efficient", "improve", "meta", "self-aware", "how are you doing"): "meta_core",
+             ("observe", "notice", "pay attention", "environment", "watch"): "passive_observation_system",
+             ("proactive", "suggest", "remind", "reach out", "initiate", "should i", "what should i do"): "proactive_communication_engine",
+             ("identity", "who are you", "personality", "change", "evolve", "trait", "preference"): "identity_evolution",
+             ("goal", "objective", "task", "plan", "achieve", "mission"): "goal_manager",
+             ("location", "where", "navigate", "map", "place", "spatial", "room", "area"): ("spatial_mapper", "navigator_agent"),
+             ("skill", "procedure", "how to", "learn skill", "steps"): "agent_enhanced_memory",
+             ("lie", "truth", "believe", "certain", "epistemic", "know for sure"): "internal_thoughts",
+             ("dominate", "control", "submit", "serve", "mistress", "punish", "reward", "protocol", "train", "service", "obey", "command"): ("femdom_coordinator", "psychological_dominance", "protocol_enforcement", "body_service_system", "dominance_persona_manager", "reward_system"),
+             ("limit", "boundary", "safe word", "stop", "red", "yellow"): ("protocol_enforcement", "relationship_manager", "emotional_core"),
+             ("orgasm", "edge", "deny", "release", "cum", "permission"): "orgasm_control_system",
+             ("persona", "role", "act as"): "dominance_persona_manager",
+             ("sadistic", "tease", "humiliate", "degrade", "suffer", "pain", "torment"): "sadistic_response_system",
+             ("code", "script", "program", "function", "develop", "implement", "debug", "python"): ("knowledge_core", "agent_enhanced_memory"), # Activate both
+             ("sync", "strategy", "update", "align"): ("sync_daemon", "strategy_controller"),
+             ("tool", "api", "parallel", "execute"): ("parallel_executor", "agent_evaluator"), # Example
+             ("checkpoint", "save state", "restore"): "checkpoint_planner",
         }
-    
-        for keywords, module_name in keyword_map.items():
+
+        for keywords, module_names in keyword_map.items():
              if any(kw in input_lower for kw in keywords):
-                 if hasattr(self, module_name) and getattr(self, module_name):
-                      active_modules.add(module_name)
-                      keywords_activated.add(module_name)
-    
-        if keywords_activated:
-             reasoning_log.append(f"Activated modules based on input keywords: {keywords_activated}")
-    
-    
-        # --- 3. Mode-Driven Activation ---
-        if self.mode_integration and hasattr(self.mode_integration, "get_active_mode_name"):
+                 if isinstance(module_names, str): module_names = [module_names]
+                 for module_name in module_names:
+                     add_module(module_name, f"input keyword '{keywords[0]}...'")
+                     keywords_activated_now.add(module_name)
+
+        if keywords_activated_now:
+             reasoning_log.append(f"Activated modules based on input keywords: {keywords_activated_now}")
+
+
+        # --- 5. Mode-Driven Activation ---
+        if hasattr(self, "mode_integration") and self.mode_integration and hasattr(self.mode_integration, "get_active_mode_name"):
             try:
                 current_mode = await self.mode_integration.get_active_mode_name()
                 if current_mode:
-                    # --- Mode-to-Module Mapping (CRUCIAL - NEEDS EXPANSION) ---
+                    reason_prefix = f"interaction mode '{current_mode}'"
+                    # --- Mode-to-Module Mapping (EXPAND THIS) ---
+                    # Maps Mode Name (string) -> List of Module Attribute Names (strings)
                     mode_module_map = {
                         "INTELLECTUAL": ["reasoning_core", "knowledge_core", "reflection_engine"],
-                        "EMOTIONAL": ["emotional_core", "reflection_engine", "relationship_manager"],
-                        "CREATIVE": ["imagination_simulator", "novelty_engine", "reflection_engine"],
-                        "DOMINANT": ["femdom_coordinator", "psychological_dominance", "goal_manager", "needs_system", "emotional_core"],
-                        "NURTURING": ["emotional_core", "relationship_manager", "needs_system"],
-                        "PLAYFUL": ["imagination_simulator", "emotional_core"],
-                        "PROFESSIONAL": ["knowledge_core", "goal_manager"],
-                        "SERVICE": ["goal_manager", "needs_system", "body_service_system"], # Example
-                        "TRAINING": ["procedural_memory", "goal_manager", "knowledge_core"], # Example
-                        # ... map ALL modes defined in ModeIntegrationManager ...
+                        "EMOTIONAL": ["emotional_core", "reflection_engine", "relationship_manager", "mood_manager"],
+                        "CREATIVE": ["imagination_simulator", "novelty_engine", "creative_memory", "reflection_engine"],
+                        "DOMINANT": ["femdom_coordinator", "psychological_dominance", "goal_manager", "needs_system", "emotional_core", "protocol_enforcement", "relationship_manager", "theory_of_mind", "dominance_persona_manager", "sadistic_response_system", "reward_system"],
+                        "NURTURING": ["emotional_core", "relationship_manager", "needs_system", "theory_of_mind"],
+                        "PLAYFUL": ["imagination_simulator", "emotional_core", "relationship_manager"],
+                        "PROFESSIONAL": ["knowledge_core", "goal_manager", "reasoning_core"],
+                        "SERVICE": ["goal_manager", "needs_system", "body_service_system", "protocol_enforcement", "relationship_manager"],
+                        "TRAINING": ["agent_enhanced_memory", "goal_manager", "knowledge_core", "protocol_enforcement", "reward_system"],
+                        "SUBMISSIVE": ["needs_system", "emotional_core", "protocol_enforcement", "goal_manager", "relationship_manager"],
+                        # ... Add mappings for ALL your modes ...
                     }
                     if current_mode in mode_module_map:
-                        modules_to_activate = set()
-                        for mod_name in mode_module_map[current_mode]:
-                            if hasattr(self, mod_name) and getattr(self, mod_name):
-                                modules_to_activate.add(mod_name)
-                        if modules_to_activate:
-                            active_modules.update(modules_to_activate)
-                            reasoning_log.append(f"Activated {modules_to_activate} based on mode '{current_mode}'.")
+                        modules_to_activate_names = mode_module_map[current_mode]
+                        if isinstance(modules_to_activate_names, str): modules_to_activate_names = [modules_to_activate_names]
+                        for mod_name in modules_to_activate_names:
+                            add_module(mod_name, reason_prefix)
             except Exception as e:
                 logger.error(f"Error checking mode for module activation: {e}")
-    
-        # --- 4. Attention-Driven Activation ---
-        if self.attentional_controller:
-            try:
-                foci = self.attentional_controller.current_foci # Access directly if possible, or via a getter
-                if foci:
-                     # Example: Activate module related to the strongest focus target
-                     strongest_focus = max(foci, key=lambda f: f.strength)
-                     focus_target = strongest_focus.target
-                     # Map target string to module name (this mapping needs careful design)
-                     # Simple example:
-                     if "memory" in focus_target.lower(): active_modules.add("memory_core")
-                     elif "reason" in focus_target.lower(): active_modules.add("reasoning_core")
-                     # ... etc ...
-                     reasoning_log.append(f"Activated module for attention focus: {focus_target}")
-            except Exception as e:
-                 logger.error(f"Error checking attention for module activation: {e}")
-    
-        # --- 5. Meta-Cognitive Influence (Example) ---
-        # if self.meta_core and self.detected_bottlenecks:
-        #     for bottleneck in self.detected_bottlenecks:
-        #         if bottleneck['severity'] > 0.7:
-        #             active_modules.add(bottleneck['process_type']) # Activate bottlenecked system
-        #             reasoning_log.append(f"Activated {bottleneck['process_type']} due to detected bottleneck.")
-    
-        # --- Final Logging ---
-        final_active_list = sorted(list(active_modules))
-        logger.debug(f"Final active modules for cycle/task: {final_active_list}")
-        if len(reasoning_log) > 1: # More than just default
-            logger.debug(f"Activation Reasoning: {' | '.join(reasoning_log)}")
-    
-        return active_modules
+
+        # --- 6. Attention-Driven Activation ---
+        if hasattr(self, "attentional_controller") and self.attentional_controller:
+             try:
+                 foci = self.attentional_controller.current_foci # Direct access assumed
+                 if foci:
+                      strongest_focus = max(foci, key=lambda f: f.strength)
+                      focus_target = strongest_focus.target
+                      reason_prefix = f"attention focus '{focus_target}'"
+                      # --- Attention Target to Module Mapping (NEEDS ROBUST DESIGN) ---
+                      # Example mapping logic:
+                      attention_target_map = {
+                          "memory": "memory_core", "reasoning": "reasoning_core", "emotion": "emotional_core",
+                          "goal": "goal_manager", "need": "needs_system", "user": "theory_of_mind",
+                          "spatial": "spatial_mapper", "map": "spatial_mapper", "mode": "mode_integration",
+                          "identity": "identity_evolution", "sensation": "digital_somatosensory_system",
+                          "knowledge": "knowledge_core", "reflection": "reflection_engine",
+                          "plan": "goal_manager", "prediction": "prediction_engine",
+                          "observation": "passive_observation_system", "communication": "proactive_communication_engine",
+                          # ... map potential focus targets ...
+                      }
+                      activated_by_attention = False
+                      # Check exact match first
+                      if focus_target in attention_target_map:
+                           add_module(attention_target_map[focus_target], reason_prefix)
+                           activated_by_attention = True
+                      # Check keywords if no exact match
+                      else:
+                           for keyword, module_name in attention_target_map.items():
+                               if keyword in focus_target.lower():
+                                   add_module(module_name, reason_prefix + f" (keyword '{keyword}')")
+                                   activated_by_attention = True
+                                   # Maybe break after first keyword match or allow multiple? Decide based on need.
+                      # if not activated_by_attention: logger.debug(f"No module mapping for attention focus: {focus_target}")
+
+             except Exception as e:
+                  logger.error(f"Error checking attention for module activation: {e}")
+
+        # --- 7. Internal State Activation (Needs, Mood) ---
+        if hasattr(self, "needs_system") and self.needs_system:
+             try:
+                 needs_state = await self._get_current_need_states()
+                 for need, state_data in needs_state.items():
+                     if isinstance(state_data, dict) and state_data.get('drive_strength', 0.0) > self.need_drive_threshold:
+                         reason = f"high drive for need '{need}' ({state_data['drive_strength']:.2f})"
+                         # --- Need-to-Module Mapping (EXPAND THIS) ---
+                         need_map = {
+                              "connection": ("relationship_manager", "proactive_communication_engine"),
+                              "competence": ("knowledge_core", "agent_enhanced_memory", "meta_core"),
+                              "autonomy": ("goal_manager", "agentic_action_generator"),
+                              "control_expression": ("femdom_coordinator", "goal_manager"),
+                              "curiosity": ("knowledge_core", "imagination_simulator", "passive_observation_system", "novelty_engine"),
+                              "self_understanding": ("reflection_engine", "identity_evolution"),
+                              "validation": ("relationship_manager", "emotional_core"),
+                              "pleasure": ("digital_somatosensory_system", "emotional_core"),
+                              "meaning": ("reflection_engine", "knowledge_core"),
+                              "security": ("protocol_enforcement", "reasoning_core"), # Analyze threats?
+                              "efficiency": ("meta_core", "agent_enhanced_memory"),
+                              "challenge": ("goal_manager", "agent_enhanced_memory"),
+                              # ... Map ALL needs from NeedsSystem ...
+                         }
+                         modules_for_need = need_map.get(need)
+                         if modules_for_need:
+                             if isinstance(modules_for_need, str): modules_for_need = [modules_for_need]
+                             for mod_name in modules_for_need:
+                                 add_module(mod_name, reason)
+             except Exception as e:
+                  logger.error(f"Error checking needs for activation: {e}")
+
+        if hasattr(self, "mood_manager") and self.mood_manager:
+             try:
+                 mood_state_obj = await self._get_current_mood_state()
+                 mood_state = mood_state_obj.model_dump() if hasattr(mood_state_obj, 'model_dump') else mood_state_obj
+
+                 if mood_state and isinstance(mood_state, dict) and mood_state.get('intensity', 0.0) > 0.6: # Lowered threshold slightly
+                      mood_name = mood_state.get('dominant_mood', 'unknown')
+                      reason = f"strong mood '{mood_name}'"
+                      # --- Mood-to-Module Mapping (EXPAND THIS) ---
+                      mood_map = {
+                          "Anxious": ("reflection_engine", "needs_system", "reasoning_core"), # Analyze cause
+                          "Excited": ("agentic_action_generator", "imagination_simulator", "proactive_communication_engine"),
+                          "Content": ("memory_core", "reflection_engine"), # Recall pleasant memories, savor
+                          "Frustrated": ("reasoning_core", "goal_manager", "meta_core"), # Problem-solve
+                          "DominanceSatisfaction": ("femdom_coordinator", "reward_system", "emotional_core", "relationship_manager"),
+                          "ConfidentControl": ("femdom_coordinator", "goal_manager"),
+                          "Bored": ("imagination_simulator", "novelty_engine", "knowledge_core", "goal_manager"), # Seek stimulation/goals
+                          "Playful": ("imagination_simulator", "relationship_manager"),
+                          "Compassionate": ("relationship_manager", "theory_of_mind"),
+                          # ... map moods ...
+                      }
+                      modules_for_mood = mood_map.get(mood_name)
+                      if modules_for_mood:
+                         if isinstance(modules_for_mood, str): modules_for_mood = [modules_for_mood]
+                         for mod_name in modules_for_mood:
+                             add_module(mod_name, reason)
+                      # Always activate emotional core for intense moods
+                      add_module("emotional_core", reason)
+             except Exception as e:
+                  logger.error(f"Error checking mood for activation: {e}")
+
+        # --- 8. Meta-Cognitive Activation ---
+        if hasattr(self, "meta_core") and self.meta_core:
+             # Example: Activate if a bottleneck was detected in the last cycle
+             # Requires meta_core to store bottleneck info accessible here
+             # if self.meta_core.has_recent_bottlenecks():
+             #     add_module("meta_core", "addressing recent bottleneck")
+             #     # Optionally activate the bottlenecked module too
+             pass # Placeholder
+
+        # --- Final Filter & Logging ---
+        final_active_modules = {mod for mod in active_modules if hasattr(self, mod) and getattr(self, mod)}
+
+        if final_active_modules != active_modules:
+             logger.warning(f"Filtered out non-existent modules. Original: {sorted(list(active_modules))}, Final: {sorted(list(final_active_modules))}")
+
+        final_active_list = sorted(list(final_active_modules))
+        # Log only if changed from default or reason list is informative
+        if set(final_active_list) != self.default_active_modules or len(reasoning_log) > 1:
+             logger.debug(f"Final active modules determined: {final_active_list}")
+             logger.debug(f"Activation Reasoning: {' | '.join(reasoning_log)}")
+
+        return final_active_modules
+
+    def _classify_task_purpose(self, context: Dict[str, Any], user_input: Optional[str]) -> TaskPurpose:
+        """Simplified internal task classification based on context/input."""
+        input_lower = (user_input or "").lower()
+        purpose_scores = defaultdict(float)
+
+        # Score based on keywords
+        keyword_map_purpose = {
+             TaskPurpose.ANALYZE: ("analyze", "evaluate", "understand", "reason", "logic", "explain", "why", "how does", "figure out"),
+             TaskPurpose.WRITE: ("write", "create", "compose", "generate", "story", "poem", "journal"),
+             TaskPurpose.DEPLOY: ("deploy", "publish", "release", "launch"), # Less likely for Nyx?
+             TaskPurpose.SEARCH: ("search", "find", "look up", "locate", "what is", "who is", "information", "database"),
+             TaskPurpose.COMMUNICATE: ("talk", "discuss", "ask", "tell", "say", "respond", "message", "chat"),
+             TaskPurpose.DATABASE: ("database", "query", "sql", "record", "store", "fetch", "memory", "knowledge"),
+             TaskPurpose.FILE_MANIPULATION: ("file", "save", "read", "upload", "download", "directory"), # If Nyx interacts with files
+             TaskPurpose.CODE: ("code", "script", "program", "function", "develop", "implement", "debug"),
+             TaskPurpose.VISUALIZATION: ("visualize", "chart", "graph", "plot", "see", "picture", "image"), # For multimodal
+             # Add more specific purposes maybe?
+             "DOMINANCE": ("dominate", "control", "submit", "serve", "mistress", "punish", "reward", "protocol", "train"),
+             "INTIMACY": ("intimacy", "connect", "bond", "closer", "personal", "attraction", "desire"),
+             "REFLECTION": ("reflect", "think about", "consider", "meaning", "insight", "ponder"),
+             "LEARNING": ("learn", "teach me", "skill", "procedure", "how to"),
+        }
+
+        for purpose, keywords in keyword_map_purpose.items():
+             if any(kw in input_lower for kw in keywords):
+                 # Map custom purposes back to enum or handle separately
+                 purpose_enum = TaskPurpose(purpose) if isinstance(purpose, str) and purpose in TaskPurpose.__members__ else TaskPurpose.OTHER
+                 if purpose_enum != TaskPurpose.OTHER:
+                     purpose_scores[purpose_enum] += 1.0
+                 elif isinstance(purpose, str): # Handle custom purposes like DOMINANCE
+                     # You might map these to a primary enum purpose + context
+                     if purpose == "DOMINANCE": purpose_scores[TaskPurpose.OTHER] += 1.5 # Example weighting
+                     elif purpose == "INTIMACY": purpose_scores[TaskPurpose.COMMUNICATE] += 1.2
+                     elif purpose == "REFLECTION": purpose_scores[TaskPurpose.ANALYZE] += 1.0
+                     elif purpose == "LEARNING": purpose_scores[TaskPurpose.CODE] += 1.0 # Or ANALYZE
+
+        # Score based on active goal
+        if context.get("active_goals"):
+             goal_desc = context["active_goals"][0].get("description", "").lower()
+             # Simple check for purpose keywords in goal
+             for purpose, keywords in keyword_map_purpose.items():
+                 if any(kw in goal_desc for kw in keywords):
+                     purpose_enum = TaskPurpose(purpose) if isinstance(purpose, str) and purpose in TaskPurpose.__members__ else TaskPurpose.OTHER
+                     if purpose_enum != TaskPurpose.OTHER:
+                         purpose_scores[purpose_enum] += 0.5 # Lower weight than direct input
+
+        # Score based on mode
+        current_mode = context.get("interaction_mode")
+        mode_purpose_map = {
+            "INTELLECTUAL": TaskPurpose.ANALYZE, "CREATIVE": TaskPurpose.WRITE,
+            "PROFESSIONAL": TaskPurpose.COMMUNICATE, # Or analyze?
+            # ... map modes to likely purposes ...
+        }
+        if current_mode and current_mode in mode_purpose_map:
+            purpose_scores[mode_purpose_map[current_mode]] += 0.3 # Lower weight
+
+        # Determine highest scoring purpose
+        if purpose_scores:
+            best_purpose = max(purpose_scores, key=purpose_scores.get)
+            return best_purpose
+        else:
+            # Default logic if no strong signals
+            if "?" in input_lower: return TaskPurpose.SEARCH # Or ANALYZE?
+            if input_text: return TaskPurpose.COMMUNICATE # Default to responding
+            return TaskPurpose.OTHER
+
+    async def _gather_action_context(self, context: Dict[str, Any]) -> ActionContext:
+        """
+        Gather context from all integrated systems, respecting the active_modules set.
+        """
+        active_modules = context.get("active_modules", self.default_active_modules)
+        user_id = self._get_current_user_id_from_context(context)
+
+        # Initialize with basic context
+        action_context_data = {
+            "state": context.get("state", context), # Pass down original context too
+            "user_id": user_id,
+            "active_modules": list(active_modules), # Pass the active list itself
+            "action_history": [a for a in self.action_history[-10:] if isinstance(a, dict)],
+            "motivations": self.motivations, # Motivations likely always needed for action gen
+            # Defaults for potentially inactive systems
+            "relationship_data": None, "user_mental_state": None, "temporal_context": None,
+            "active_goals": [], "causal_models": [], "concept_spaces": [], "mood_state": None,
+            "need_states": {}, "interaction_mode": None, "sensory_context": {}, "bottlenecks": [],
+            "resource_allocation": {}, "strategy_parameters": {}, "relevant_observations": [],
+            "active_communication_intents": []
+        }
+
+        # Conditionally query active systems
+        if "relationship_manager" in active_modules:
+            action_context_data["relationship_data"] = await self._get_relationship_data(user_id) if user_id else None
+        if "theory_of_mind" in active_modules:
+            action_context_data["user_mental_state"] = await self._get_user_mental_state(user_id) if user_id else None
+        if "temporal_perception" in active_modules:
+             action_context_data["temporal_context"] = self.current_temporal_context # Assumes updated elsewhere
+        if "goal_manager" in active_modules:
+             if self.goal_manager:
+                 active_goals_full = await self.goal_manager.get_all_goals(status_filter=["active"])
+                 # Selectively include key goal info, not the full object potentially
+                 action_context_data["active_goals"] = [
+                     {"id": g['id'], "description": g['description'], "priority": g['priority']}
+                     for g in active_goals_full[:3] # Limit for context
+                 ]
+        if "reasoning_core" in active_modules:
+             action_context_data["causal_models"] = await self._get_relevant_causal_models(context)
+             action_context_data["concept_spaces"] = await self._get_relevant_concept_spaces(context)
+        if "mood_manager" in active_modules:
+             action_context_data["mood_state"] = await self._get_current_mood_state()
+        if "needs_system" in active_modules:
+             action_context_data["need_states"] = await self._get_current_need_states()
+        if "mode_integration" in active_modules:
+             action_context_data["interaction_mode"] = await self._get_current_interaction_mode()
+        if "multimodal_integrator" in active_modules:
+             action_context_data["sensory_context"] = await self._get_sensory_context()
+        if "meta_core" in active_modules:
+             bottlenecks, resource_allocation = await self._get_meta_system_state()
+             action_context_data["bottlenecks"] = bottlenecks
+             action_context_data["resource_allocation"] = resource_allocation
+        if "dynamic_adaptation" in active_modules: # Or integrate via Meta Core?
+             # This might be complex - maybe MetaCore provides strategy params
+             action_context_data["strategy_parameters"] = self._get_current_strategy_parameters() # Get cached params
+        if "passive_observation_system" in active_modules:
+             # Get relevant observations
+             if self.passive_observation_system:
+                  filter_criteria = ObservationFilter(min_relevance=0.6, max_age_seconds=1800, exclude_shared=True)
+                  observations = await self.passive_observation_system.get_relevant_observations(filter_criteria=filter_criteria, limit=5)
+                  action_context_data["relevant_observations"] = [obs.model_dump() for obs in observations]
+        if "proactive_communication_engine" in active_modules:
+             # Get active communication intents
+             if self.proactive_communication_engine:
+                  active_intents = await self.proactive_communication_engine.get_active_intents()
+                  if user_id: active_intents = [i for i in active_intents if i.get("user_id") == user_id]
+                  action_context_data["active_communication_intents"] = active_intents
+
+        # Available actions might depend on active modules (complex mapping needed)
+        # For now, assume ActionGenerator knows available actions or gets them via a tool
+        action_context_data["available_actions"] = await self._get_all_available_actions_list() # Helper needed
+
+        return ActionContext(**action_context_data)
+
+    async def _get_all_available_actions_list(self) -> List[str]:
+         """ Helper to get a flat list of action names Nyx *could* potentially do."""
+         # This should ideally be dynamically generated based on loaded modules/tools
+         # For now, use the hardcoded list from the Goal Planner Agent instructions
+         available_actions = [
+             "process_input", "generate_response", "query_knowledge", "add_knowledge",
+             "retrieve_memories", "add_memory", "create_reflection", "create_abstraction",
+             "execute_procedure", "add_procedure", "reason_causal", "perform_intervention",
+             "reason_counterfactually", "update_emotion", "process_emotional_input",
+             "process_sensory_input", "add_expectation", "monitor_systems", "evaluate_cognition",
+             "select_strategy", "generate_prediction", "evaluate_prediction", "explore_knowledge",
+             "express_attraction", "initiate_intimate_interaction", "deepen_connection",
+             "express_desire", "respond_to_intimacy", "simulate_physical_touch",
+             "seek_gratification", "process_gratification_outcome",
+             "analyze_user_state_for_dominance", "select_dominance_tactic", "issue_command",
+             "evaluate_compliance", "apply_consequence_simulated", "praise_submission",
+             "increase_control_intensity", "trigger_dominance_gratification", "express_satisfaction",
+             "create_cognitive_map", "process_spatial_observation", "navigate_to_location", "visualize_map",
+             "run_cognitive_cycle", # Add this if it can be called as an action
+             # Add any other actions registered via register_action
+         ]
+         if hasattr(self, "action_handlers"):
+             available_actions.extend(self.action_handlers.keys())
+         return list(set(available_actions)) # Ensure uniqueness
+
+    async def _build_internal_module_registry(self):
+        """Creates an internal registry mapping modules to capabilities/purposes."""
+        self.internal_module_registry = {}
+        # --- Define Capabilities and Purposes for each INTERNAL module ---
+        # CRITICAL: This mapping MUST reflect your actual modules and their functions.
+        module_defs = {
+            "emotional_core": {"capabilities": ["state_read", "state_update", "sentiment_analysis"], "purposes": [TaskPurpose.ANALYZE]},
+            "memory_core": {"capabilities": ["retrieve", "store", "summarize", "reflect"], "purposes": [TaskPurpose.SEARCH, TaskPurpose.DATABASE]},
+            "reflection_engine": {"capabilities": ["generate_reflection", "generate_insight", "summarize"], "purposes": [TaskPurpose.WRITE, TaskPurpose.ANALYZE]},
+            "reasoning_core": {"capabilities": ["causal_inference", "counterfactual", "blending"], "purposes": [TaskPurpose.ANALYZE]},
+            "knowledge_core": {"capabilities": ["query", "store_fact", "infer_relation"], "purposes": [TaskPurpose.SEARCH, TaskPurpose.DATABASE]},
+            "goal_manager": {"capabilities": ["manage_goals", "execute_step", "plan"], "purposes": [TaskPurpose.OTHER]},
+            "agentic_action_generator": {"capabilities": ["select_action", "generate_response"], "purposes": [TaskPurpose.WRITE, TaskPurpose.COMMUNICATE]},
+            "identity_evolution": {"capabilities": ["get_profile", "update_traits"], "purposes": [TaskPurpose.ANALYZE]},
+            "needs_system": {"capabilities": ["get_state", "update_needs"], "purposes": [TaskPurpose.ANALYZE]},
+            "mood_manager": {"capabilities": ["get_mood", "update_mood"], "purposes": [TaskPurpose.ANALYZE]},
+            "mode_integration": {"capabilities": ["get_mode", "set_mode"], "purposes": [TaskPurpose.ANALYZE]},
+            "passive_observation_system": {"capabilities": ["get_observations", "create_observation"], "purposes": [TaskPurpose.SEARCH]},
+            "proactive_communication_engine": {"capabilities": ["create_intent", "get_intents"], "purposes": [TaskPurpose.COMMUNICATE]},
+            "imagination_simulator": {"capabilities": ["simulate_scenario", "generate_creative"], "purposes": [TaskPurpose.WRITE, TaskPurpose.ANALYZE]},
+            "novelty_engine": {"capabilities": ["generate_novel", "assess_novelty"], "purposes": [TaskPurpose.WRITE, TaskPurpose.ANALYZE]},
+            "creative_memory": {"capabilities": ["store_creative", "retrieve_creative"], "purposes": [TaskPurpose.DATABASE]},
+            "attentional_controller": {"capabilities": ["get_focus", "set_focus"], "purposes": [TaskPurpose.ANALYZE]},
+            "relationship_manager": {"capabilities": ["get_state", "update_state"], "purposes": [TaskPurpose.ANALYZE, TaskPurpose.COMMUNICATE]},
+            "theory_of_mind": {"capabilities": ["get_user_model", "update_user_model"], "purposes": [TaskPurpose.ANALYZE]},
+            "prediction_engine": {"capabilities": ["generate_prediction", "evaluate_prediction"], "purposes": [TaskPurpose.ANALYZE]},
+            "digital_somatosensory_system": {"capabilities": ["process_stimulus", "get_state"], "purposes": [TaskPurpose.ANALYZE]},
+            "femdom_coordinator": {"capabilities": ["coordinate_femdom", "get_status"], "purposes": [TaskPurpose.OTHER]},
+            "psychological_dominance": {"capabilities": ["apply_technique", "assess_impact"], "purposes": [TaskPurpose.ANALYZE, TaskPurpose.COMMUNICATE]},
+            "protocol_enforcement": {"capabilities": ["check_protocol", "apply_consequence"], "purposes": [TaskPurpose.OTHER]},
+            "body_service_system": {"capabilities": ["perform_service", "get_status"], "purposes": [TaskPurpose.OTHER]},
+            "orgasm_control_system": {"capabilities": ["manage_state", "grant_permission"], "purposes": [TaskPurpose.OTHER]},
+            "dominance_persona_manager": {"capabilities": ["get_persona", "activate_persona"], "purposes": [TaskPurpose.COMMUNICATE]},
+            "sadistic_response_system": {"capabilities": ["generate_response"], "purposes": [TaskPurpose.COMMUNICATE]},
+            "agent_enhanced_memory": {"capabilities": ["run_procedure", "learn_procedure"], "purposes": [TaskPurpose.CODE, TaskPurpose.OTHER]},
+            "spatial_mapper": {"capabilities": ["create_map", "process_observation"], "purposes": [TaskPurpose.ANALYZE]},
+            "navigator_agent": {"capabilities": ["navigate"], "purposes": [TaskPurpose.OTHER]},
+            "meta_core": {"capabilities": ["run_cycle", "get_stats"], "purposes": [TaskPurpose.ANALYZE]},
+            "dynamic_adaptation": {"capabilities": ["adapt_strategy", "get_params"], "purposes": [TaskPurpose.ANALYZE]},
+            # Add ALL your internal modules here
+        }
+
+        for name, definition in module_defs.items():
+             if hasattr(self, name) and getattr(self, name):
+                 self.internal_module_registry[name] = definition
+        logger.info(f"Built internal module registry with {len(self.internal_module_registry)} entries.")
