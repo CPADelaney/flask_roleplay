@@ -103,9 +103,9 @@ async def add_procedure(
             "success": True
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def execute_procedure(
-    ctx,
+    ctx: RunContextWrapper[Any],
     name: str,
     context: Dict[str, Any] = None,
     force_conscious: bool = False
@@ -189,9 +189,9 @@ async def execute_procedure(
                 "results": []
             }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def transfer_procedure(
-    ctx,
+    ctx: RunContextWrapper[Any],
     source_name: str,
     target_name: str,
     target_domain: str
@@ -260,6 +260,7 @@ async def transfer_procedure(
             }
         
         # Create new procedure
+        import json
         new_procedure = await add_procedure(
             ctx,
             name=target_name,
@@ -309,8 +310,11 @@ async def transfer_procedure(
             "procedure_id": new_procedure["procedure_id"]
         }
 
-@function_tool
-async def get_procedure_proficiency(ctx, name: str) -> ProcedureStats:
+@function_tool(use_docstring_info=True)
+async def get_procedure_proficiency(
+    ctx: RunContextWrapper[Any], 
+    name: str
+) -> ProcedureStats:
     """
     Get the current proficiency level for a procedure.
     
@@ -365,8 +369,11 @@ async def get_procedure_proficiency(ctx, name: str) -> ProcedureStats:
             refinement_opportunities=len(procedure.refinement_opportunities) if hasattr(procedure, "refinement_opportunities") else 0
         )
 
-@function_tool
-async def list_procedures(ctx, domain: Optional[str] = None) -> List[Dict[str, Any]]:
+@function_tool(use_docstring_info=True)
+async def list_procedures(
+    ctx: RunContextWrapper[Any],
+    domain: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
     List all procedures, optionally filtered by domain.
     
@@ -423,8 +430,10 @@ async def list_procedures(ctx, domain: Optional[str] = None) -> List[Dict[str, A
         
         return procedure_list
 
-@function_tool
-async def get_transfer_statistics(ctx) -> TransferStats:
+@function_tool(use_docstring_info=True)
+async def get_transfer_statistics(
+    ctx: RunContextWrapper[Any]
+) -> TransferStats:
     """
     Get statistics about procedure transfers across domains.
     
@@ -474,8 +483,11 @@ async def get_transfer_statistics(ctx) -> TransferStats:
             actions_count=len(manager.chunk_library.action_templates) if hasattr(manager, "chunk_library") else 0
         )
 
-@function_tool
-async def identify_chunking_opportunities(ctx, procedure_name: str) -> Dict[str, Any]:
+@function_tool(use_docstring_info=True)
+async def identify_chunking_opportunities(
+    ctx: RunContextWrapper[Any], 
+    procedure_name: str
+) -> Dict[str, Any]:
     """
     Identify opportunities to chunk steps in a procedure.
     
@@ -546,8 +558,11 @@ async def identify_chunking_opportunities(ctx, procedure_name: str) -> Dict[str,
             "procedure_name": procedure_name
         }
 
-@function_tool
-async def apply_chunking(ctx, procedure_name: str) -> Dict[str, Any]:
+@function_tool(use_docstring_info=True)
+async def apply_chunking(
+    ctx: RunContextWrapper[Any], 
+    procedure_name: str
+) -> Dict[str, Any]:
     """
     Apply chunking to a procedure based on execution patterns.
     
@@ -608,9 +623,9 @@ async def apply_chunking(ctx, procedure_name: str) -> Dict[str, Any]:
             "procedure_name": procedure_name
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def generalize_chunk_from_steps(
-    ctx,
+    ctx: RunContextWrapper[Any],
     chunk_name: str,
     procedure_name: str,
     step_ids: List[str],
@@ -690,9 +705,9 @@ async def generalize_chunk_from_steps(
             "can_transfer": True
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def find_matching_chunks(
-    ctx,
+    ctx: RunContextWrapper[Any],
     procedure_name: str,
     target_domain: str
 ) -> Dict[str, Any]:
@@ -753,9 +768,9 @@ async def find_matching_chunks(
             "success": True
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def transfer_chunk(
-    ctx,
+    ctx: RunContextWrapper[Any],
     template_id: str,
     target_domain: str
 ) -> Dict[str, Any]:
@@ -805,9 +820,9 @@ async def transfer_chunk(
             "target_domain": target_domain
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def transfer_with_chunking(
-    ctx,
+    ctx: RunContextWrapper[Any],
     source_name: str,
     target_name: str,
     target_domain: str
@@ -982,6 +997,7 @@ async def transfer_with_chunking(
             }
         
         # Create new procedure
+        import json
         new_procedure = await add_procedure(
             ctx,
             name=target_name,
@@ -1037,9 +1053,9 @@ async def transfer_with_chunking(
             "chunk_transfer_details": transferred_chunks
         }
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def find_similar_procedures(
-    ctx,
+    ctx: RunContextWrapper[Any],
     name: str, 
     target_domain: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -1097,9 +1113,9 @@ async def find_similar_procedures(
         
         return similar_procedures
 
-@function_tool
+@function_tool(use_docstring_info=True)
 async def refine_step(
-    ctx,
+    ctx: RunContextWrapper[Any],
     procedure_name: str,
     step_id: str,
     new_function: Optional[str] = None,
