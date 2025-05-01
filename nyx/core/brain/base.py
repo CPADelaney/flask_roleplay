@@ -721,7 +721,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             
             self.recognition_memory = RecognitionMemorySystem(
                 memory_core=self.memory_core,
-                context_awareness=self.context_awareness
+                context_awareness=self.context_system
             )
             
             self.creative_memory = CreativeMemoryIntegration(
