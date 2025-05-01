@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import logging
 import random
+import json
 import uuid
 from typing import Dict, List, Any, Optional, Tuple, Union
 
@@ -17,45 +18,34 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-add_procedure_schema = {
-    "type": "object",
-    "properties": {
-        "name": {
-            "type": "string", 
-            "description": "Name of the procedure"
-        },
-        "steps": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": True
-            },
-            "description": "List of step definitions"
-        },
-        "description": {
-            "type": ["string", "null"],
-            "description": "Optional description"
-        },
-        "domain": {
-            "type": ["string", "null"],
-            "description": "Domain/context"
-        }
-    },
-    "required": ["name", "steps"],
-    "additionalProperties": False
-}
-
-async def add_procedure_implementation(ctx: RunContextWrapper[Any], args_str: str) -> str:
-    """Add a new procedure to the procedural memory system."""
-    # Parse the arguments
+@function_tool
+async def add_procedure(
+    ctx: RunContextWrapper[Any],
+    name: str,
+    steps_json: str,
+    description: Optional[str] = None,
+    domain: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Add a new procedure to the procedural memory system.
+    
+    Args:
+        name: Name of the procedure
+        steps_json: JSON string representation of steps
+        description: Optional description
+        domain: Optional domain/context
+    """
+    # Parse the steps from JSON
     import json
-    args = json.loads(args_str)
+    try:
+        steps = json.loads(steps_json)
+    except json.JSONDecodeError:
+        return {
+            "error": "Invalid steps JSON",
+            "success": False
+        }
     
-    name = args["name"]
-    steps = args["steps"]
-    description = args.get("description")
-    domain = args.get("domain", "general")
-    
+    domain = domain or "general"
     manager = ctx.context.manager
     
     # Create trace span for this operation
@@ -75,10 +65,10 @@ async def add_procedure_implementation(ctx: RunContextWrapper[Any], args_str: st
             if "id" not in step:
                 step["id"] = f"step_{i+1}"
             if "function" not in step:
-                return json.dumps({
+                return {
                     "error": f"Step {i+1} is missing a function name",
                     "success": False
-                })
+                }
         
         # Create procedure object
         procedure = Procedure(
@@ -105,21 +95,13 @@ async def add_procedure_implementation(ctx: RunContextWrapper[Any], args_str: st
         
         logger.info(f"Added new procedure '{name}' with {len(steps)} steps in {domain} domain")
         
-        return json.dumps({
+        return {
             "procedure_id": procedure_id,
             "name": name,
             "domain": domain,
             "steps_count": len(steps),
             "success": True
-        })
-
-# Create the function tool manually with the proper schema
-add_procedure = FunctionTool(
-    name="add_procedure",
-    description="Add a new procedure to the procedural memory system.",
-    params_json_schema=add_procedure_schema,
-    on_invoke_tool=add_procedure_implementation
-)
+        }
 
 @function_tool
 async def execute_procedure(
@@ -281,7 +263,7 @@ async def transfer_procedure(
         new_procedure = await add_procedure(
             ctx,
             name=target_name,
-            steps=mapped_steps,
+            steps_json=json.dumps(mapped_steps),
             description=f"Transferred from {source_name} ({source.domain} to {target_domain})",
             domain=target_domain
         )
@@ -1003,7 +985,7 @@ async def transfer_with_chunking(
         new_procedure = await add_procedure(
             ctx,
             name=target_name,
-            steps=all_steps,
+            steps_json=json.dumps(all_steps),
             description=f"Transferred from {source_name} ({source.domain} to {target_domain})",
             domain=target_domain
         )
