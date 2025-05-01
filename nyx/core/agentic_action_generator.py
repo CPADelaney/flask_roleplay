@@ -248,6 +248,10 @@ class EnhancedAgenticActionGenerator:
                  multimodal_integrator=None,
                  # New observation systems
                  passive_observation_system=None,
+                 creative_system=None,
+                 creative_memory=None,
+                 capability_assessor=None,
+                 issue_tracker=None,
                  proactive_communication_engine=None):
         """Initialize with references to required subsystems"""
         # Core systems 
@@ -282,6 +286,38 @@ class EnhancedAgenticActionGenerator:
         self.multimodal_integrator = multimodal_integrator
         self.passive_observation_system = passive_observation_system
         self.proactive_communication_engine = proactive_communication_engine
+
+        # Creativity
+
+        self.creative_system = creative_system
+        self.creative_memory = creative_memory
+        self.capability_assessor = capability_assessor
+        self.issue_tracker = issue_tracker
+
+        if self.creative_system:
+            # code‐analysis
+            self.register_action(
+                "incremental_analysis",
+                self.creative_system.incremental_codebase_analysis
+            )
+            # semantic search & prompt prep
+            self.register_action(
+                "semantic_search",
+                self.creative_system.semantic_search
+            )
+            self.register_action(
+                "prepare_prompt",
+                self.creative_system.prepare_prompt
+            )
+            # creative generation
+            self.register_action(
+                "create_story",
+                self.creative_system.create_story     # ← make sure this exists
+            )
+            self.register_action(
+                "create_poem",
+                self.creative_system.create_poem      # ← make sure this exists
+            )
         
         # Social tools
         self.computer_user = ComputerUseAgent(logger=logger)
@@ -1699,6 +1735,12 @@ class EnhancedAgenticActionGenerator:
         except Exception as e:
             logger.error(f"Error finding relevant concept spaces: {e}")
             return []
+
+    async def create_story(self, title: str, outline: str="") -> str:
+        return await self.your_story_method(title, outline)
+    
+    async def create_poem(self, prompt: str) -> str:
+        return await self.your_poem_method(prompt)
     
     async def _update_temporal_context(self, context: Dict[str, Any]) -> None:
         """Update temporal awareness context"""
