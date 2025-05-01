@@ -27,6 +27,16 @@ from nyx.core.novelty_engine import NoveltyEngine
 from nyx.core.recognition_memory import RecognitionMemorySystem
 from nyx.core.creative_memory_integration import CreativeMemoryIntegration
 
+from nyx.creative.agentic_system import AgenticCreativitySystem, integrate_with_existing_system
+from nyx.creative.analysis_sandbox import CodeAnalyzer
+
+# Add:
+from nyx.creative.content_system import CreativeContentSystem
+from nyx.creative.capability_system import (
+    CapabilityModel,
+    CapabilityAssessmentSystem
+)
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -115,6 +125,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.conditioning_system = None # Added
         self.conditioning_maintenance = None # Added
         self.conditioned_input_processor = None # Added
+
+        self.content_store: CreativeContentSystem      = None
+        self.capability_model: CapabilityModel         = None
+        self.capability_assessor: CapabilityAssessmentSystem = None
         
         # State tracking
         self.initialized = False
@@ -859,7 +873,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             # Integrate procedural memory with action generator
             await self.integrate_procedural_memory_with_actions()
     
+            # --- integrate agentic creativity system (already in your code) ---
             self.creative_system = await integrate_with_existing_system(self)
+            self._start_creative_review_task()
+            
+            # --- wire up the raw file‐based store (parallel to SQLiteContentSystem) ---
+            self.content_store = CreativeContentSystem()
+            logger.debug("CreativeContentSystem initialized")
+            
+            # --- wire up the “what-can-we-do?” capability registry ---
+            creations_dir = Path(self.creative_system.storage.db_path).parent
+            model_filename = f"capability_model_{self.user_id}_{self.conversation_id}.json"
+            model_path = creations_dir / model_filename
+            
+            self.capability_model = CapabilityModel(
+                storage_path=str(model_path)
+            )
+            # now point your assessor at that same file
+            self.capability_assessor = CapabilityAssessmentSystem(
+                creative_content_system=self.creative_system.storage,
+                capability_model_path=str(model_path)
+            )
+            logger.debug("CapabilityAssessmentSystem initialized at %s", model_path)
     
             self._start_creative_review_task()
             
