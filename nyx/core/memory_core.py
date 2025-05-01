@@ -2502,6 +2502,7 @@ class MemoryCoreAgents:
         )
         
         return result.final_output
+        
 class BrainMemoryCore(MemoryCoreAgents):
     """
     Special memory core for the ultimate 'Nyx Brain' -- one global memory.
@@ -2513,10 +2514,10 @@ class BrainMemoryCore(MemoryCoreAgents):
         super().__init__(user_id=None, conversation_id=None)
         self.omniscient = True
 
-    async def ries(self, **kwargs):
+    async def retrieve_memories(self, **kwargs):
         """
         Retrieve memories across ALL users/conversations. No filtering.
-        Usage: await nyx_brain.ries(query="love", limit=3)
+        Usage: await nyx_brain.retrieve_memories(query="love", limit=3)
         """
         query_text = kwargs.get('query', '')
         limit = kwargs.get('limit', 5)
