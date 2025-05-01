@@ -17,12 +17,6 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-class AddProcedureInput(BaseModel):
-    name: str = Field(..., description="Name of the procedure")
-    steps: List[Dict[str, Any]] = Field(..., description="List of step definitions")
-    description: Optional[str] = Field(None, description="Optional description")
-    domain: Optional[str] = Field(None, description="Domain/context")
-
 @function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
@@ -30,7 +24,7 @@ async def add_procedure(
     steps: List[Dict[str, Any]],
     description: Optional[str] = None,
     domain: Optional[str] = None
-) -> Dict[str,Any]:
+) -> Dict[str, Any]:
     """
     Add a new procedure to the procedural memory system.
     
