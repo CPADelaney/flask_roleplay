@@ -2338,8 +2338,8 @@ class EnhancedAgenticActionGenerator:
         
                     # Sleep until next run
                     await asyncio.sleep(interval)
-                except Exception as exc:
-                    logger.error(f"Error in periodic_hobby_meta_loop: {exc}", exc_info=True)
-                    await asyncio.sleep(interval)
+            except Exception as exc:
+                logger.error(f"Error in periodic_hobby_meta_loop: {exc}", exc_info=True)
+                await asyncio.sleep(interval)
 
 AgenticActionGenerator = EnhancedAgenticActionGenerator
