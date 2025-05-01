@@ -23,16 +23,25 @@ class AddProcedureInput(BaseModel):
     description: Optional[str] = Field(None, description="Optional description")
     domain: Optional[str] = Field(None, description="Domain/context")
 
-@function_tool(use_docstring_info=False)
+@function_tool
 async def add_procedure(
     ctx: RunContextWrapper[Any],
-    input: AddProcedureInput
+    name: str,
+    steps: List[Dict[str, Any]],
+    description: Optional[str] = None,
+    domain: Optional[str] = None
 ) -> Dict[str,Any]:
-    """Add a new procedure to the procedural memory system."""
-    name = input.name
-    steps = input.steps
-    description = input.description
-    domain = input.domain or "general"
+    """
+    Add a new procedure to the procedural memory system.
+    
+    Args:
+        name: Name of the procedure
+        steps: List of step definitions
+        description: Optional description
+        domain: Domain/context
+    """
+    # Use domain default if not provided
+    domain = domain or "general"
     
     manager = ctx.context.manager
     
