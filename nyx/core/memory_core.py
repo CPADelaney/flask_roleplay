@@ -41,6 +41,7 @@ class MemorySchema(BaseModel):
     evolution_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 class MemoryMetadata(BaseModel):
+    """Enhanced metadata including hierarchical information."""
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     entities: List[str] = Field(default_factory=list)
     emotional_context: Optional[EmotionalMemoryContext] = None
@@ -51,57 +52,96 @@ class MemoryMetadata(BaseModel):
     consolidated_into: Optional[str] = None
     consolidation_date: Optional[str] = None
     original_significance: Optional[int] = None
-    source_memory_ids: Optional[List[str]] = None
-    fidelity: float = 1.0  # How accurate the memory is (decays over time)
-    original_form: Optional[str] = None  # Original text before reconsolidation
+    original_form: Optional[str] = None
     reconsolidation_history: List[Dict[str, Any]] = Field(default_factory=list)
     semantic_abstractions: List[str] = Field(default_factory=list)
-    
-    # Fields for crystallization
     is_crystallized: bool = False
     crystallization_reason: Optional[str] = None
     crystallization_date: Optional[str] = None
     decay_resistance: float = 1.0
 
+    # --- NEW HIERARCHICAL & FIDELITY FIELDS ---
+    memory_level: Literal['detail', 'summary', 'abstraction'] = Field(
+        default='detail',
+        description="Level of detail/abstraction of this memory"
+    )
+    source_memory_ids: Optional[List[str]] = Field(
+        default=None,
+        description="IDs of source memories if this is a summary/abstraction"
+    )
+    fidelity: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in the accuracy/reliability of this memory detail (0.0-1.0)"
+    )
+    summary_of: Optional[str] = Field(
+        default=None,
+        description="Brief description of what this summarizes, if applicable (e.g., 'User conversation on topic X')"
+    )
+
 class Memory(BaseModel):
+    """Core memory object."""
     id: str
     memory_text: str
-    memory_type: str
-    memory_scope: str
-    significance: int
+    memory_type: str # observation, reflection, experience, summary, abstraction, semantic, etc.
+    memory_scope: str # game, user, global
+    significance: int # 1-10 importance
     tags: List[str] = Field(default_factory=list)
     metadata: MemoryMetadata = Field(default_factory=MemoryMetadata)
     embedding: List[float] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     times_recalled: int = 0
     is_archived: bool = False
-    is_consolidated: bool = False
+    is_consolidated: bool = False # Kept for compatibility, indicates it was *used* in consolidation
 
 class MemoryQuery(BaseModel):
+    """Input model for retrieving memories."""
     query: str
-    memory_types: List[str] = Field(default_factory=lambda: ["observation", "reflection", "abstraction", "experience"])
+    memory_types: List[str] = Field(default_factory=lambda: ["observation", "reflection", "abstraction", "experience", "summary", "semantic"])
     scopes: List[str] = Field(default_factory=lambda: ["game", "user", "global"])
-    limit: int = 5
+    limit: int = 10 # Adjusted default limit
     min_significance: int = 3
     include_archived: bool = False
     entities: Optional[List[str]] = None
     emotional_state: Optional[Dict[str, Any]] = None
+    tags: Optional[List[str]] = None
+    # --- NEW PARAMS ---
+    retrieval_level: Literal['detail', 'summary', 'abstraction', 'auto'] = 'auto'
+    min_fidelity: Optional[float] = 0.0 # Default allows all fidelities initially
 
 class MemoryCreateParams(BaseModel):
+    """Input model for creating memories."""
     memory_text: str
     memory_type: str = "observation"
     memory_scope: str = "game"
     significance: int = 5
     tags: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict) # Base metadata passed in
+    # --- NEW PARAMS ---
+    memory_level: Literal['detail', 'summary', 'abstraction'] = 'detail'
+    source_memory_ids: Optional[List[str]] = None
+    fidelity: float = 1.0
+    summary_of: Optional[str] = None # Optional description of what's summarized
+
+class MemoryUpdateParams(BaseModel):
+     """Input model for updating memories."""
+     memory_id: str
+     updates: Dict[str, Any] # Fields to update, can include nested metadata changes
 
 class MemoryRetrieveResult(BaseModel):
+    """Structured result for retrieval, including hierarchical info."""
     memory_id: str
     memory_text: str
     memory_type: str
     significance: int
     relevance: float
     confidence_marker: Optional[str] = None
+    # --- NEW FIELDS ---
+    memory_level: Literal['detail', 'summary', 'abstraction']
+    source_memory_ids: Optional[List[str]] = None
+    fidelity: float
+    summary_of: Optional[str] = None
 
 class MemoryMaintenanceResult(BaseModel):
     memories_decayed: int
@@ -114,58 +154,41 @@ class NarrativeResult(BaseModel):
     experience_count: int
 
 class MemoryCoreContext:
-    """Context object for memory core operations"""
-    
-    def __init__(self, user_id: int, conversation_id: int):
+    """Context object for memory core operations (Enhanced)"""
+    def __init__(self, user_id: Optional[int], conversation_id: Optional[int]):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        
-        # Memory storage containers
-        self.memories = {}  # Main memory storage: memory_id -> memory_data
-        self.memory_embeddings = {}  # memory_id -> embedding vector
-        
-        # Indices for efficient retrieval
-        self.type_index = {}  # memory_type -> [memory_ids]
-        self.tag_index = {}  # tag -> [memory_ids]
-        self.scope_index = {}  # memory_scope -> [memory_ids]
-        self.entity_index = {}  # entity_id -> [memory_ids]
-        self.emotional_index = {}  # emotion -> [memory_ids]
-        
-        # Schema registry and indexing
-        self.schemas = {}  # schema_id -> schema
-        self.schema_index = {}  # schema_id -> [memory_ids]
-        
-        # Temporal index for chronological retrieval
-        self.temporal_index = []  # [(timestamp, memory_id)]
-        
-        # Significance tracking for memory importance
-        self.significance_index = {}  # significance_level -> [memory_ids]
-        
-        # Archive status
-        self.archived_memories = set()  # Set of archived memory_ids
-        self.consolidated_memories = set()  # Set of memory_ids that have been consolidated
-        
-        # Configuration
-        self.embed_dim = 1536  # Default embedding dimension
-        self.max_memory_age_days = 90  # Default max memory age before archival consideration
-        self.decay_rate = 0.1  # Default decay rate per day
-        self.consolidation_threshold = 0.85  # Similarity threshold for memory consolidation
-        self.reconsolidation_probability = 0.3  # Probability of reconsolidation on recall
-        self.reconsolidation_strength = 0.1  # Strength of alterations during reconsolidation
-        self.abstraction_threshold = 3  # Memories needed for semantic abstraction
-        
-        # Caches for performance
-        self.query_cache = {}  # query -> (timestamp, results)
-        self.cache_ttl = 300  # Cache TTL in seconds
-        
-        # Initialized flag
+        self.memories: Dict[str, Memory] = {} # Store Memory model instances
+        self.memory_embeddings: Dict[str, List[float]] = {}
+        self.type_index: Dict[str, Set[str]] = defaultdict(set)
+        self.tag_index: Dict[str, Set[str]] = defaultdict(set)
+        self.scope_index: Dict[str, Set[str]] = defaultdict(set)
+        self.entity_index: Dict[str, Set[str]] = defaultdict(set)
+        self.emotional_index: Dict[str, Set[str]] = defaultdict(set)
+        self.schemas: Dict[str, MemorySchema] = {}
+        self.schema_index: Dict[str, Set[str]] = defaultdict(set)
+        self.temporal_index: List[Tuple[datetime.datetime, str]] = []
+        self.significance_index: Dict[int, Set[str]] = defaultdict(set)
+        self.archived_memories: Set[str] = set()
+        self.consolidated_memories: Set[str] = set()
+
+        # --- NEW INDEX & LINKS ---
+        self.level_index: Dict[str, Set[str]] = defaultdict(set) # 'detail', 'summary', 'abstraction' -> {ids}
+        self.summary_links: Dict[str, List[str]] = defaultdict(list) # detail_id -> [summary_ids] (optional reverse link)
+
+        # --- Configuration ---
+        self.embed_dim = 1536 # Example dimension
+        self.max_memory_age_days = 90
+        self.decay_rate = 0.1
+        self.consolidation_threshold = 0.85
+        self.reconsolidation_probability = 0.3 # Probability of reconsolidation on recall
+        self.reconsolidation_strength = 0.1 # How much text changes during reconsolidation
+        self.abstraction_threshold = 3
+        self.query_cache: Dict[str, Tuple[datetime.datetime, List[str]]] = {} # query_key -> (timestamp, [memory_ids])
+        self.cache_ttl = 300 # seconds
         self.initialized = False
-        
-        # Initialization timestamp
         self.init_time = datetime.datetime.now()
-        
-        # Template patterns for experience recall formatting
-        self.recall_templates = {
+        self.recall_templates: Dict[str, List[str]] = {
             # Basic recall templates
             "standard": [
                 "That reminds me of {timeframe} when {brief_summary}... {detail}",
@@ -209,9 +232,11 @@ class MemoryCoreContext:
             ]
         }
         
+        self.level_index: Dict[str, Set[str]] = {"detail": set(), "summary": set(), "abstraction": set()}
+        
         # Confidence marker mapping for experience relevance scores
-        self.confidence_markers = {
-            (0.8, 1.0): "vividly recall",
+        self.confidence_markers: Dict[Tuple[float, float], str] = {
+            (0.8, 1.01): "vividly recall", # Use 1.01 to include 1.0
             (0.6, 0.8): "clearly remember",
             (0.4, 0.6): "remember",
             (0.2, 0.4): "think I recall",
@@ -219,31 +244,14 @@ class MemoryCoreContext:
         }
     
     def initialize(self):
-        """Initialize memory system structures"""
-        if self.initialized:
-            return
-        
+        if self.initialized: return
         # Initialize indices
-        self.type_index = {
-            "observation": set(),
-            "reflection": set(),
-            "abstraction": set(),
-            "experience": set(),
-            "consolidated": set(),
-            "semantic": set()  # Added semantic memory type
-        }
-        
-        self.scope_index = {
-            "game": set(),
-            "user": set(),
-            "global": set()
-        }
-        
-        # Initialize significance index
-        self.significance_index = {level: set() for level in range(1, 11)}
-        
+        for level in ['detail', 'summary', 'abstraction']: self.level_index[level] = set()
+        for i in range(1, 11): self.significance_index[i] = set()
+        for t in ["observation", "reflection", "abstraction", "experience", "summary", "semantic"]: self.type_index[t]
+        for s in ["game", "user", "global"]: self.scope_index[s]
         self.initialized = True
-
+        logger.info(f"MemoryCoreContext initialized for user {self.user_id}")
 
 # Utility functions for memory operations
 
@@ -646,592 +654,344 @@ async def _check_for_patterns(ctx: RunContextWrapper[MemoryCoreContext], tags: L
 @function_tool
 async def add_memory(
     ctx: RunContextWrapper[MemoryCoreContext],
-    memory_text: str,
-    memory_type: str = "observation",
-    memory_scope: str = "game",
-    significance: int = 5,
-    tags: List[str] = None,
-    metadata: Dict[str, Any] = None
+    params: MemoryCreateParams
 ) -> str:
     """
-    Add a new memory to the system
-    
-    Args:
-        memory_text: Text content of the memory
-        memory_type: Type of memory (observation, reflection, abstraction, experience, semantic)
-        memory_scope: Scope of memory (game, user, global)
-        significance: Importance level (1-10)
-        tags: Optional tags for categorization
-        metadata: Additional metadata
-        
-    Returns:
-        Memory ID
+    Add a new memory to the system, including hierarchical details.
+    Restored full indexing and pattern check call.
     """
-    with custom_span("add_memory", {"memory_type": memory_type, "memory_scope": memory_scope}):
+    with custom_span("add_memory", {"memory_type": params.memory_type, "memory_level": params.memory_level}):
         memory_core = ctx.context
-        if not memory_core.initialized:
-            memory_core.initialize()
-        
-        # Generate memory ID
-        memory_id = str(uuid.uuid4())
-        
-        # Normalize tags
-        if tags is None:
-            tags = []
-        
-        # Initialize metadata
-        if metadata is None:
-            metadata = {}
-        
-        # Set timestamp if not provided
-        if "timestamp" not in metadata:
-            metadata["timestamp"] = datetime.datetime.now().isoformat()
-            
-        # Set fidelity default if not provided
-        if "fidelity" not in metadata:
-            metadata["fidelity"] = 1.0
-            
-        # Set original form if not already present
-        if "original_form" not in metadata:
-            metadata["original_form"] = memory_text
-        
-        # Generate embedding
-        embedding = await _generate_embedding(ctx, memory_text)
-        
-        # Create memory object
-        memory = {
-            "id": memory_id,
-            "memory_text": memory_text,
-            "memory_type": memory_type,
-            "memory_scope": memory_scope,
-            "significance": significance,
-            "tags": tags,
-            "metadata": metadata,
-            "embedding": embedding,
-            "created_at": datetime.datetime.now().isoformat(),
-            "times_recalled": 0,
-            "is_archived": False,
-            "is_consolidated": False
-        }
-        
-        # Store memory
-        memory_core.memories[memory_id] = memory
-        memory_core.memory_embeddings[memory_id] = embedding
-        
-        # Update indices
-        if memory_type in memory_core.type_index:
-            memory_core.type_index[memory_type].add(memory_id)
-        else:
-            memory_core.type_index[memory_type] = {memory_id}
-        
-        if memory_scope in memory_core.scope_index:
-            memory_core.scope_index[memory_scope].add(memory_id)
-        else:
-            memory_core.scope_index[memory_scope] = {memory_id}
-        
-        # Update tag index
-        for tag in tags:
-            if tag in memory_core.tag_index:
-                memory_core.tag_index[tag].add(memory_id)
-            else:
-                memory_core.tag_index[tag] = {memory_id}
-        
-        # Update temporal index
-        timestamp = datetime.datetime.fromisoformat(metadata["timestamp"].replace("Z", "+00:00"))
-        memory_core.temporal_index.append((timestamp, memory_id))
-        memory_core.temporal_index.sort(key=lambda x: x[0])  # Keep sorted by timestamp
-        
-        # Update significance index
-        sig_level = min(10, max(1, int(significance)))
-        memory_core.significance_index[sig_level].add(memory_id)
-        
-        # Update entity index if entities are specified
-        entities = metadata.get("entities", [])
-        for entity_id in entities:
-            if entity_id in memory_core.entity_index:
-                memory_core.entity_index[entity_id].add(memory_id)
-            else:
-                memory_core.entity_index[entity_id] = {memory_id}
-        
-        # Update emotional index if emotional context is specified
-        if "emotional_context" in metadata:
-            emotional_context = metadata["emotional_context"]
-            primary_emotion = emotional_context.get("primary_emotion")
-            if primary_emotion:
-                if primary_emotion in memory_core.emotional_index:
-                    memory_core.emotional_index[primary_emotion].add(memory_id)
-                else:
-                    memory_core.emotional_index[primary_emotion] = {memory_id}
-        
-        # Update schema index if schemas are specified
-        if "schemas" in metadata:
-            for schema_ref in metadata["schemas"]:
-                schema_id = schema_ref.get("schema_id")
-                if schema_id:
-                    if schema_id in memory_core.schema_index:
-                        memory_core.schema_index[schema_id].add(memory_id)
-                    else:
-                        memory_core.schema_index[schema_id] = {memory_id}
-        
-        # Clear query cache since memory store has changed
-        memory_core.query_cache = {}
-        
-        # Check for potential patterns after adding memory
-        if memory_type == "observation" and len(tags) > 0:
-            # Only check patterns for certain types of memories
-            asyncio.create_task(_check_for_patterns(ctx, tags))
-        
-        logger.debug(f"Added memory {memory_id} of type {memory_type}")
-        return memory_id
+        if not memory_core.initialized: memory_core.initialize()
 
+        memory_id = str(uuid.uuid4())
+        timestamp = datetime.datetime.now().isoformat()
+
+        metadata = MemoryMetadata(
+            timestamp=timestamp,
+            fidelity=params.fidelity,
+            memory_level=params.memory_level,
+            source_memory_ids=params.source_memory_ids,
+            summary_of=params.summary_of,
+            original_form=params.memory_text, # Store original form on creation
+            **params.metadata
+        )
+        if 'emotional_context' in params.metadata and isinstance(params.metadata['emotional_context'], dict):
+            metadata.emotional_context = EmotionalMemoryContext(**params.metadata['emotional_context'])
+
+        embedding = await _generate_embedding(ctx, params.memory_text)
+
+        memory_data = Memory(
+            id=memory_id, memory_text=params.memory_text, memory_type=params.memory_type,
+            memory_scope=params.memory_scope, significance=params.significance,
+            tags=params.tags or [], metadata=metadata, embedding=embedding,
+            created_at=timestamp
+        )
+
+        memory_core.memories[memory_id] = memory_data
+        memory_core.memory_embeddings[memory_id] = embedding
+
+        # --- Update Indices ---
+        memory_core.type_index[params.memory_type].add(memory_id)
+        memory_core.scope_index[params.memory_scope].add(memory_id)
+        memory_core.level_index[params.memory_level].add(memory_id)
+        sig_level = min(10, max(1, int(params.significance)))
+        memory_core.significance_index[sig_level].add(memory_id)
+        for tag in params.tags or []: memory_core.tag_index[tag].add(memory_id)
+        dt_timestamp = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        memory_core.temporal_index.append((dt_timestamp, memory_id))
+        memory_core.temporal_index.sort(key=lambda x: x[0])
+        for entity_id in metadata.entities: memory_core.entity_index[entity_id].add(memory_id)
+        if metadata.emotional_context and metadata.emotional_context.primary_emotion:
+             memory_core.emotional_index[metadata.emotional_context.primary_emotion].add(memory_id)
+        for schema_ref in metadata.schemas:
+             if schema_id := schema_ref.get("schema_id"): memory_core.schema_index[schema_id].add(memory_id)
+        if params.memory_level in ['summary', 'abstraction'] and params.source_memory_ids:
+            for source_id in params.source_memory_ids: memory_core.summary_links[source_id].append(memory_id)
+
+        memory_core.query_cache = {}
+        # --- Call _check_for_patterns (Restored) ---
+        if params.memory_type == "observation" and (params.tags or []):
+            asyncio.create_task(_check_for_patterns(ctx, params.tags))
+
+        logger.debug(f"Added {params.memory_level} memory {memory_id} of type {params.memory_type}")
+        return memory_id
 
 @function_tool
 async def retrieve_memories(
-    ctx: RunContextWrapper["MemoryCoreContext"],
-    query: str,
-    memory_types:  Optional[List[str]] = None,
-    scopes:        Optional[List[str]] = None,
-    limit:         Optional[int] = None,
-    min_significance: Optional[int] = None,
-    include_archived: Optional[bool] = None,
-    entities:      Optional[List[str]] = None,
-    emotional_state: Optional[Dict[str, Any]] = None,
-    tags:          Optional[List[str]] = None,
+    ctx: RunContextWrapper[MemoryCoreContext],
+    params: MemoryQuery
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve memories based on query and filters.
-
-    Args:
-        query: Search text.
-        memory_types, scopes, limit, … : Optional filters.
-            • `limit` defaults to **20** if omitted.  
-            • `min_significance` defaults to **3** if omitted.  
-            • `include_archived` defaults to **False** if omitted.
+    Retrieve memories based on query and filters, supporting hierarchical levels.
+    Restored full boost logic. Returns raw memory dicts.
     """
-    # ---------- run-time defaults ----------
-    if memory_types      is None: memory_types      = ["observation", "reflection",
-                                                      "abstraction", "experience", "semantic"]
-    if scopes            is None: scopes            = ["game", "user", "global"]
-    if limit             is None: limit             = 20
-    if min_significance  is None: min_significance  = 3
-    if include_archived  is None: include_archived  = False
-    if entities          is None: entities          = []
-    if emotional_state   is None: emotional_state   = {}
-    if tags              is None: tags              = []
-    # ---------------------------------------
     with custom_span("retrieve_memories", {
-        "query": query, 
-        "memory_types": str(memory_types), 
-        "limit": limit
+        "query": params.query, "level": params.retrieval_level, "limit": params.limit, "fidelity": params.min_fidelity
     }):
         memory_core = ctx.context
-        if not memory_core.initialized:
-            memory_core.initialize()
-        
-        # Set defaults
-        memory_types = memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"]
-        scopes = scopes or ["game", "user", "global"]
-        context = {
-            "include_archived": include_archived,
-            "entities": entities or [],
-            "emotional_state": emotional_state or {}
-        }
-        
-        # Check cache first
-        cache_key = f"{query}_{','.join(memory_types)}_{','.join(scopes)}_{limit}_{min_significance}_{include_archived}"
-        if tags:
-            cache_key += f"_tags:{','.join(tags)}"
-        
+        if not memory_core.initialized: memory_core.initialize()
+
+        # Cache key generation (ensure stability)
+        param_items = sorted([(k, v) for k, v in params.model_dump().items() if v is not None])
+        cache_key_str = "&".join([f"{k}={json.dumps(v, sort_keys=True)}" for k, v in param_items])
+        cache_key = f"retrieve:{hash(cache_key_str)}"
+
         if cache_key in memory_core.query_cache:
-            cache_time, cache_results = memory_core.query_cache[cache_key]
-            cache_age = (datetime.datetime.now() - cache_time).total_seconds()
-            if cache_age < memory_core.cache_ttl:
-                # Return cached results
-                results = [memory_core.memories[mid] for mid in cache_results if mid in memory_core.memories]
-                
-                # Apply reconsolidation if appropriate
-                results = await _apply_reconsolidation_to_results(ctx, results)
-                
-                return results
-        
-        # Generate query embedding
-        query_embedding = await _generate_embedding(ctx, query)
-        
-        # Get IDs of memories matching type and scope filters
-        type_matches = set()
-        for memory_type in memory_types:
-            if memory_type in memory_core.type_index:
-                type_matches.update(memory_core.type_index[memory_type])
-        
-        scope_matches = set()
-        for scope in scopes:
-            if scope in memory_core.scope_index:
-                scope_matches.update(memory_core.scope_index[scope])
-        
-        significance_matches = set()
-        for sig_level in range(min_significance, 11):
-            significance_matches.update(memory_core.significance_index[sig_level])
-        
-        # Apply tag filter if specified
-        tag_matches = set()
-        if tags:
-            for tag in tags:
-                if tag in memory_core.tag_index:
-                    if not tag_matches:
-                        tag_matches = memory_core.tag_index[tag].copy()
-                    else:
-                        tag_matches.intersection_update(memory_core.tag_index[tag])
-        
-        # Find intersection of all filters
-        candidate_ids = type_matches.intersection(scope_matches, significance_matches)
-        if tags:
-            candidate_ids = candidate_ids.intersection(tag_matches)
-        
-        # Remove archived memories unless explicitly requested
-        if not context.get("include_archived", False):
-            candidate_ids = candidate_ids - memory_core.archived_memories
-        
-        # Calculate relevance for candidates
+             cache_time, cached_ids = memory_core.query_cache[cache_key]
+             if (datetime.datetime.now() - cache_time).total_seconds() < memory_core.cache_ttl:
+                 results_models = [memory_core.memories[mid] for mid in cached_ids if mid in memory_core.memories]
+                 # Apply reconsolidation on cache hit if desired
+                 results_models = await _apply_reconsolidation_to_results(ctx, results_models)
+                 # Convert Pydantic models back to dicts for return
+                 results = [mem.model_dump() for mem in results_models]
+                 # Add relevance back (or recalculate if needed, though cache implies stable relevance)
+                 for i, mem_id in enumerate(cached_ids):
+                      if i < len(results): # Ensure index exists
+                           # Note: Relevance isn't stored in cache, might need recalculation or approximation
+                           results[i]['relevance'] = 0.8 # Placeholder relevance for cached items
+                 logger.debug(f"Cache hit for retrieve_memories: {params.query}")
+                 return results
+
+        query_embedding = await _generate_embedding(ctx, params.query)
+
+        # 1. Initial Filtering (Optimized Set Operations)
+        candidate_ids = set(memory_core.memories.keys())
+        candidate_ids &= set().union(*(memory_core.type_index.get(mt, set()) for mt in params.memory_types))
+        candidate_ids &= set().union(*(memory_core.scope_index.get(s, set()) for s in params.scopes))
+        candidate_ids &= set().union(*(memory_core.significance_index.get(i, set()) for i in range(params.min_significance, 11)))
+        if params.tags:
+            tag_matches = set(candidate_ids) # Start with current candidates
+            for i, tag in enumerate(params.tags):
+                ids_for_tag = memory_core.tag_index.get(tag, set())
+                if i == 0: tag_matches = ids_for_tag
+                else: tag_matches &= ids_for_tag
+            candidate_ids &= tag_matches
+        if params.entities:
+            # Option 1: Memory must match ANY entity (Union)
+            # entity_matches = set().union(*(memory_core.entity_index.get(e, set()) for e in params.entities))
+            # Option 2: Memory must match ALL entities (Intersection)
+            entity_matches = set(candidate_ids) # Start with current
+            for i, entity in enumerate(params.entities):
+                ids_for_entity = memory_core.entity_index.get(entity, set())
+                if i == 0: entity_matches = ids_for_entity
+                else: entity_matches &= ids_for_entity
+            candidate_ids &= entity_matches
+
+        if not params.include_archived: candidate_ids -= memory_core.archived_memories
+
+        # 3. Level and Fidelity Filtering
+        final_candidate_ids = set()
+        for mem_id in candidate_ids:
+            memory = memory_core.memories.get(mem_id)
+            if not memory: continue
+            passes_level = (params.retrieval_level == 'auto' or memory.metadata.memory_level == params.retrieval_level)
+            passes_fidelity = memory.metadata.fidelity >= params.min_fidelity
+            if passes_level and passes_fidelity: final_candidate_ids.add(mem_id)
+
+        # 4. Relevance Scoring & Sorting
         scored_candidates = []
-        for memory_id in candidate_ids:
-            if memory_id in memory_core.memory_embeddings:
-                embedding = memory_core.memory_embeddings[memory_id]
-                relevance = _cosine_similarity(query_embedding, embedding)
-                
-                # Apply entity relevance boost if context includes entities
-                entity_boost = 0.0
-                if "entities" in context and memory_core.memories[memory_id].get("metadata", {}).get("entities"):
-                    memory_entities = memory_core.memories[memory_id]["metadata"]["entities"]
-                    context_entities = context["entities"]
-                    matching_entities = set(memory_entities).intersection(set(context_entities))
-                    entity_boost = len(matching_entities) * 0.05  # 5% boost per matching entity
-                
-                # Apply emotional relevance boost if context includes emotional state
-                emotional_boost = 0.0
-                if "emotional_state" in context and memory_core.memories[memory_id].get("metadata", {}).get("emotional_context"):
-                    memory_emotion = memory_core.memories[memory_id]["metadata"]["emotional_context"]
-                    context_emotion = context["emotional_state"]
-                    emotional_boost = _calculate_emotional_relevance(memory_emotion, context_emotion)
-                
-                # Apply schema relevance boost if memory has schemas
-                schema_boost = 0.0
-                if memory_core.memories[memory_id].get("metadata", {}).get("schemas"):
-                    schema_boost = 0.05  # 5% boost for schematized memories
-                
-                # Apply temporal recency boost
-                temporal_boost = 0.0
-                memory_timestamp = datetime.datetime.fromisoformat(
-                    memory_core.memories[memory_id].get("metadata", {}).get("timestamp", memory_core.init_time.isoformat()).replace("Z", "+00:00")
-                )
-                days_old = (datetime.datetime.now() - memory_timestamp).days
-                if days_old < 7:  # Boost recent memories
-                    temporal_boost = 0.1 * (1 - (days_old / 7))
-                
-                # Apply fidelity factor - memories with higher fidelity are more reliable
-                fidelity = memory_core.memories[memory_id].get("metadata", {}).get("fidelity", 1.0)
-                fidelity_factor = 0.8 + (0.2 * fidelity)  # Scale from 0.8 to 1.0
-                
-                # Calculate final relevance score
-                final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + 
-                                           schema_boost + temporal_boost) * fidelity_factor)
-                
-                scored_candidates.append((memory_id, final_relevance))
-        
-        # Sort by relevance
+        for memory_id in final_candidate_ids:
+            embedding = memory_core.memory_embeddings.get(memory_id)
+            if not embedding: continue
+            relevance = _cosine_similarity(query_embedding, embedding)
+            memory = memory_core.memories[memory_id]
+
+            # --- Boosts (Restored Logic) ---
+            entity_boost = 0.0
+            if params.entities and memory.metadata.entities:
+                 common_entities = set(params.entities) & set(memory.metadata.entities)
+                 entity_boost = min(0.2, len(common_entities) * 0.05) # Cap boost
+
+            emotional_boost = _calculate_emotional_relevance(memory.metadata.emotional_context, params.emotional_state or {})
+
+            schema_boost = min(0.1, len(memory.metadata.schemas) * 0.05) if memory.metadata.schemas else 0.0
+
+            dt_timestamp = datetime.datetime.fromisoformat(memory.metadata.timestamp.replace("Z", "+00:00"))
+            days_old = max(0, (datetime.datetime.now() - dt_timestamp).days)
+            temporal_boost = max(0.0, 0.15 * math.exp(-0.1 * days_old)) # Exponential decay boost for recency
+
+            level_boost = 0.0
+            if params.retrieval_level == 'auto' and memory.metadata.memory_level == 'detail': level_boost = 0.1
+            elif params.retrieval_level == 'detail' and memory.metadata.memory_level == 'detail': level_boost = 0.15 # Stronger boost if detail explicitly requested
+            elif params.retrieval_level == 'summary' and memory.metadata.memory_level == 'summary': level_boost = 0.1
+            elif params.retrieval_level == 'abstraction' and memory.metadata.memory_level == 'abstraction': level_boost = 0.1
+
+            # --- Final Score ---
+            fidelity_factor = 0.7 + (0.3 * memory.metadata.fidelity) # Weighted fidelity influence
+            final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + schema_boost + temporal_boost + level_boost) * fidelity_factor)
+
+            scored_candidates.append((memory_id, final_relevance))
+
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
-        
-        # Get top results
-        top_memory_ids = [mid for mid, _ in scored_candidates[:limit]]
-        
-        # Prepare results with relevance scores
+
+        # 5. Limit and Prepare Results
+        top_memory_ids = [mid for mid, _ in scored_candidates[:params.limit]]
+        results_models = [memory_core.memories[mid] for mid in top_memory_ids]
+
+        # 6. Apply Reconsolidation (Moved outside core retrieval logic, apply if needed by caller)
+        # results_models = await _apply_reconsolidation_to_results(ctx, results_models)
+
+        # 7. Prepare results as dicts and add relevance
         results = []
-        for memory_id, relevance in scored_candidates[:limit]:
-            if memory_id in memory_core.memories:
-                memory = memory_core.memories[memory_id].copy()
-                memory["relevance"] = relevance
-                
-                # Add confidence marker for experiences
-                if memory["memory_type"] == "experience":
-                    memory["confidence_marker"] = _get_confidence_marker(ctx, relevance)
-                
-                # Update recall count
-                await _update_memory_recall(ctx, memory_id)
-                
-                results.append(memory)
-        
-        # Apply reconsolidation to results if appropriate
-        results = await _apply_reconsolidation_to_results(ctx, results)
-        
-        # Cache results
+        for i, mem_id in enumerate(top_memory_ids):
+            relevance_score = scored_candidates[i][1]
+            mem_dict = results_models[i].model_dump()
+            mem_dict["relevance"] = relevance_score
+            results.append(mem_dict)
+            await _update_memory_recall(ctx, mem_id)
+
+        # 8. Cache results (IDs only)
         memory_core.query_cache[cache_key] = (datetime.datetime.now(), top_memory_ids)
-        
+        logger.debug(f"Retrieved {len(results)} memories for query: {params.query}")
+
         return results
 
 @function_tool
-async def get_memory(
-    ctx: RunContextWrapper[MemoryCoreContext], 
-    memory_id: str
-) -> Optional[Dict[str, Any]]:
+async def get_memory_details(
+    ctx: RunContextWrapper[MemoryCoreContext],
+    memory_ids: List[str],
+    min_fidelity: float = 0.0, # Changed Optional[float] to float
+) -> List[Dict[str, Any]]:
     """
-    Get a specific memory by ID
-    
-    Args:
-        memory_id: The unique ID of the memory to retrieve
-        
-    Returns:
-        Memory object or None if not found
+    Retrieve full details for a specific list of memory IDs ('zoom-in').
+    Filters for 'detail' level memories and minimum fidelity.
     """
-    memory_core = ctx.context
-    if not memory_core.initialized:
-        memory_core.initialize()
-    
-    if memory_id in memory_core.memories:
-        memory = memory_core.memories[memory_id].copy()
-        
-        # Update recall count
-        await _update_memory_recall(ctx, memory_id)
-        
-        # Apply reconsolidation if appropriate
-        if random.random() < memory_core.reconsolidation_probability:
-            memory = await _apply_reconsolidation(ctx, memory)
-        
-        return memory
-    
-    return None
+    with custom_span("get_memory_details", {"num_ids": len(memory_ids), "min_fidelity": min_fidelity}):
+        memory_core = ctx.context
+        if not memory_core.initialized: memory_core.initialize()
+
+        detailed_memories = []
+        for mem_id in memory_ids:
+            memory = memory_core.memories.get(mem_id)
+            if memory:
+                 # Ensure it's a detail memory and meets fidelity
+                 if memory.metadata.memory_level == 'detail' and memory.metadata.fidelity >= min_fidelity:
+                     # Apply reconsolidation *before* returning details? Decision point.
+                     # Let's assume zoom-in implies trying to get the *current* state including reconsolidation effects.
+                     memory_copy = memory.model_copy(deep=True) # Work on a copy
+                     if random.random() < memory_core.reconsolidation_probability:
+                         memory_copy = await _apply_reconsolidation(ctx, memory_copy)
+                         # If _apply_reconsolidation saved changes, fine. If not, we return the altered copy.
+
+                     mem_dict = memory_copy.model_dump()
+                     mem_dict["relevance"] = 1.0 # Assume high relevance when directly requested
+                     detailed_memories.append(mem_dict)
+                     await _update_memory_recall(ctx, mem_id) # Mark original ID as recalled
+
+        logger.debug(f"Retrieved details for {len(detailed_memories)} out of {len(memory_ids)} requested IDs.")
+        return detailed_memories
 
 @function_tool
 async def update_memory(
     ctx: RunContextWrapper[MemoryCoreContext],
-    memory_id: str, 
-    updates: Dict[str, Any]
+    params: MemoryUpdateParams
 ) -> bool:
     """
-    Update an existing memory
-    
-    Args:
-        memory_id: ID of the memory to update
-        updates: Dictionary of fields to update
-        
-    Returns:
-        True if successful, False if memory not found
+    Update an existing memory, handling index updates for hierarchical fields.
+    Restored more robust index update logic.
     """
+    memory_id = params.memory_id
+    updates = params.updates
     with custom_span("update_memory", {"memory_id": memory_id}):
         memory_core = ctx.context
-        if not memory_core.initialized:
-            memory_core.initialize()
-        
+        if not memory_core.initialized: memory_core.initialize()
+
         if memory_id not in memory_core.memories:
+            logger.warning(f"Attempted to update non-existent memory: {memory_id}")
             return False
-        
-        # Get existing memory
+
         memory = memory_core.memories[memory_id]
-        
-        # Track indices to update
-        index_updates = {
-            "type": False,
-            "scope": False,
-            "tags": False,
-            "significance": False,
-            "entities": False,
-            "emotional": False,
-            "schemas": False
-        }
-        
-        # Update fields
-        for key, value in updates.items():
-            if key in memory:
-                # Check if indices need updating
-                if key == "memory_type" and value != memory["memory_type"]:
-                    index_updates["type"] = True
-                elif key == "memory_scope" and value != memory["memory_scope"]:
-                    index_updates["scope"] = True
-                elif key == "tags" and set(value) != set(memory["tags"]):
-                    index_updates["tags"] = True
-                elif key == "significance" and value != memory["significance"]:
-                    index_updates["significance"] = True
-                elif key == "metadata":
-                    # Check for entity changes
-                    old_entities = memory.get("metadata", {}).get("entities", [])
-                    new_entities = value.get("entities", old_entities)
-                    if set(new_entities) != set(old_entities):
-                        index_updates["entities"] = True
-                    
-                    # Check for emotional context changes
-                    old_emotion = memory.get("metadata", {}).get("emotional_context", {}).get("primary_emotion")
-                    new_emotion = value.get("emotional_context", {}).get("primary_emotion", old_emotion)
-                    if new_emotion != old_emotion:
-                        index_updates["emotional"] = True
-                        
-                    # Check for schema changes
-                    old_schemas = memory.get("metadata", {}).get("schemas", [])
-                    new_schemas = value.get("schemas", old_schemas)
-                    if len(old_schemas) != len(new_schemas) or set(s.get("schema_id", "") for s in old_schemas) != set(s.get("schema_id", "") for s in new_schemas):
-                        index_updates["schemas"] = True
-                
-                # Update the field
-                memory[key] = value
-        
-        # Update embedding if text changed
-        if "memory_text" in updates:
-            memory["embedding"] = await _generate_embedding(ctx, updates["memory_text"])
-            memory_core.memory_embeddings[memory_id] = memory["embedding"]
-        
-        # Perform index updates
-        if index_updates["type"]:
-            # Get old type from existing indices
-            old_type = None
-            for t, ids in memory_core.type_index.items():
-                if memory_id in ids:
-                    old_type = t
-                    break
-            
-            # Remove from old type index
-            if old_type and old_type in memory_core.type_index and memory_id in memory_core.type_index[old_type]:
-                memory_core.type_index[old_type].remove(memory_id)
-            
-            # Add to new type index
-            new_type = memory["memory_type"]
-            if new_type in memory_core.type_index:
-                memory_core.type_index[new_type].add(memory_id)
-            else:
-                memory_core.type_index[new_type] = {memory_id}
-        
-        if index_updates["scope"]:
-            # Get old scope from existing indices
-            old_scope = None
-            for s, ids in memory_core.scope_index.items():
-                if memory_id in ids:
-                    old_scope = s
-                    break
-            
-            # Remove from old scope index
-            if old_scope and old_scope in memory_core.scope_index and memory_id in memory_core.scope_index[old_scope]:
-                memory_core.scope_index[old_scope].remove(memory_id)
-            
-            # Add to new scope index
-            new_scope = memory["memory_scope"]
-            if new_scope in memory_core.scope_index:
-                memory_core.scope_index[new_scope].add(memory_id)
-            else:
-                memory_core.scope_index[new_scope] = {memory_id}
-        
-        if index_updates["tags"]:
-            # Get old tags from memory
-            old_tags = []
-            for tag, ids in memory_core.tag_index.items():
-                if memory_id in ids:
-                    old_tags.append(tag)
-            
-            # Remove from old tag indices
-            for tag in old_tags:
-                if tag in memory_core.tag_index and memory_id in memory_core.tag_index[tag]:
-                    memory_core.tag_index[tag].remove(memory_id)
-            
-            # Add to new tag indices
-            new_tags = memory["tags"]
-            for tag in new_tags:
-                if tag in memory_core.tag_index:
-                    memory_core.tag_index[tag].add(memory_id)
-                else:
-                    memory_core.tag_index[tag] = {memory_id}
-        
-        if index_updates["significance"]:
-            # Get old significance from existing indices
-            old_sig = None
-            for sig, ids in memory_core.significance_index.items():
-                if memory_id in ids:
-                    old_sig = sig
-                    break
-            
-            # Remove from old significance index
-            if old_sig and old_sig in memory_core.significance_index and memory_id in memory_core.significance_index[old_sig]:
-                memory_core.significance_index[old_sig].remove(memory_id)
-            
-            # Add to new significance index
-            new_sig = min(10, max(1, int(memory["significance"])))
-            if new_sig in memory_core.significance_index:
-                memory_core.significance_index[new_sig].add(memory_id)
-            else:
-                memory_core.significance_index[new_sig] = {memory_id}
-        
-        if index_updates["entities"]:
-            # Get old entities from memory
-            old_entities = []
-            for entity, ids in memory_core.entity_index.items():
-                if memory_id in ids:
-                    old_entities.append(entity)
-            
-            # Remove from old entity indices
-            for entity_id in old_entities:
-                if entity_id in memory_core.entity_index and memory_id in memory_core.entity_index[entity_id]:
-                    memory_core.entity_index[entity_id].remove(memory_id)
-            
-            # Add to new entity indices
-            new_entities = memory.get("metadata", {}).get("entities", [])
-            for entity_id in new_entities:
-                if entity_id in memory_core.entity_index:
-                    memory_core.entity_index[entity_id].add(memory_id)
-                else:
-                    memory_core.entity_index[entity_id] = {memory_id}
-        
-        if index_updates["emotional"]:
-            # Get old emotion from existing indices
-            old_emotion = None
-            for emotion, ids in memory_core.emotional_index.items():
-                if memory_id in ids:
-                    old_emotion = emotion
-                    break
-            
-            # Remove from old emotional index
-            if old_emotion and old_emotion in memory_core.emotional_index and memory_id in memory_core.emotional_index[old_emotion]:
-                memory_core.emotional_index[old_emotion].remove(memory_id)
-            
-            # Add to new emotional index
-            new_emotion = memory.get("metadata", {}).get("emotional_context", {}).get("primary_emotion")
-            if new_emotion:
-                if new_emotion in memory_core.emotional_index:
-                    memory_core.emotional_index[new_emotion].add(memory_id)
-                else:
-                    memory_core.emotional_index[new_emotion] = {memory_id}
-        
-        if index_updates["schemas"]:
-            # Get old schemas from existing indices
-            old_schemas = []
-            for schema_id, ids in memory_core.schema_index.items():
-                if memory_id in ids:
-                    old_schemas.append(schema_id)
-            
-            # Remove from old schema indices
-            for schema_id in old_schemas:
-                if schema_id in memory_core.schema_index and memory_id in memory_core.schema_index[schema_id]:
-                    memory_core.schema_index[schema_id].remove(memory_id)
-            
-            # Add to new schema indices
-            for schema_ref in memory.get("metadata", {}).get("schemas", []):
-                schema_id = schema_ref.get("schema_id")
-                if schema_id:
-                    if schema_id in memory_core.schema_index:
-                        memory_core.schema_index[schema_id].add(memory_id)
-                    else:
-                        memory_core.schema_index[schema_id] = {memory_id}
-        
-        # Update archived status if specified
-        if "is_archived" in updates:
-            if updates["is_archived"] and memory_id not in memory_core.archived_memories:
-                memory_core.archived_memories.add(memory_id)
-            elif not updates["is_archived"] and memory_id in memory_core.archived_memories:
-                memory_core.archived_memories.remove(memory_id)
-        
-        # Update consolidated status if specified
-        if "is_consolidated" in updates:
-            if updates["is_consolidated"] and memory_id not in memory_core.consolidated_memories:
-                memory_core.consolidated_memories.add(memory_id)
-            elif not updates["is_consolidated"] and memory_id in memory_core.consolidated_memories:
-                memory_core.consolidated_memories.remove(memory_id)
-        
-        # Clear query cache as memory store has changed
+        original_data = memory.model_copy(deep=True)
+
+        # --- Apply Updates ---
+        try:
+            for key, value in updates.items():
+                if key == "metadata" and isinstance(value, dict):
+                    # Use Pydantic's update mechanism if available or manual merge
+                    current_meta_dict = memory.metadata.model_dump()
+                    # Merge carefully, potentially handling nested dicts if needed
+                    updated_meta_dict = {**current_meta_dict, **value}
+                    # Handle nested Pydantic models within metadata
+                    if 'emotional_context' in updated_meta_dict and isinstance(updated_meta_dict['emotional_context'], dict):
+                         # Validate and create/update the nested model
+                        try:
+                            updated_meta_dict['emotional_context'] = EmotionalMemoryContext(**updated_meta_dict['emotional_context'])
+                        except Exception as pydantic_error:
+                             logger.error(f"Pydantic validation error updating emotional_context for {memory_id}: {pydantic_error}")
+                             # Decide how to handle - skip update, use original, etc.
+                             updated_meta_dict['emotional_context'] = original_data.metadata.emotional_context # Revert on error
+
+                    memory.metadata = MemoryMetadata(**updated_meta_dict)
+                elif hasattr(memory, key):
+                    setattr(memory, key, value)
+        except Exception as e:
+            logger.error(f"Error applying updates to memory {memory_id}: {e}", exc_info=True)
+            memory_core.memories[memory_id] = original_data
+            return False
+
+        # --- Update Embedding ---
+        if memory.memory_text != original_data.memory_text:
+            memory.embedding = await _generate_embedding(ctx, memory.memory_text)
+            memory_core.memory_embeddings[memory_id] = memory.embedding
+
+        # --- Update Indices (using comparison with original_data) ---
+        def update_index_set(index_dict, key, old_value, new_value):
+            if old_value in index_dict: index_dict[old_value].discard(memory_id)
+            if new_value: index_dict[new_value].add(memory_id)
+
+        update_index_set(memory_core.type_index, 'memory_type', original_data.memory_type, memory.memory_type)
+        update_index_set(memory_core.scope_index, 'memory_scope', original_data.memory_scope, memory.memory_scope)
+        update_index_set(memory_core.level_index, 'memory_level', original_data.metadata.memory_level, memory.metadata.memory_level)
+
+        old_sig_level = min(10, max(1, int(original_data.significance)))
+        new_sig_level = min(10, max(1, int(memory.significance)))
+        if old_sig_level != new_sig_level:
+             memory_core.significance_index[old_sig_level].discard(memory_id)
+             memory_core.significance_index[new_sig_level].add(memory_id)
+
+        old_tags = set(original_data.tags)
+        new_tags = set(memory.tags)
+        for tag in old_tags - new_tags: memory_core.tag_index[tag].discard(memory_id)
+        for tag in new_tags - old_tags: memory_core.tag_index[tag].add(memory_id)
+
+        old_entities = set(original_data.metadata.entities)
+        new_entities = set(memory.metadata.entities)
+        for entity in old_entities - new_entities: memory_core.entity_index[entity].discard(memory_id)
+        for entity in new_entities - old_entities: memory_core.entity_index[entity].add(memory_id)
+
+        old_emotion = original_data.metadata.emotional_context.primary_emotion if original_data.metadata.emotional_context else None
+        new_emotion = memory.metadata.emotional_context.primary_emotion if memory.metadata.emotional_context else None
+        if old_emotion != new_emotion:
+             if old_emotion: memory_core.emotional_index[old_emotion].discard(memory_id)
+             if new_emotion: memory_core.emotional_index[new_emotion].add(memory_id)
+
+        # Schema index update (more complex if relevance changes)
+        old_schema_ids = {s.get("schema_id") for s in original_data.metadata.schemas if s.get("schema_id")}
+        new_schema_ids = {s.get("schema_id") for s in memory.metadata.schemas if s.get("schema_id")}
+        for schema_id in old_schema_ids - new_schema_ids: memory_core.schema_index[schema_id].discard(memory_id)
+        for schema_id in new_schema_ids - old_schema_ids: memory_core.schema_index[schema_id].add(memory_id)
+
+        # --- Update Archived/Consolidated Status ---
+        if memory.is_archived != original_data.is_archived:
+            if memory.is_archived: memory_core.archived_memories.add(memory_id)
+            else: memory_core.archived_memories.discard(memory_id)
+        if memory.is_consolidated != original_data.is_consolidated:
+             if memory.is_consolidated: memory_core.consolidated_memories.add(memory_id)
+             else: memory_core.consolidated_memories.discard(memory_id)
+
+        # Update reverse summary links if structure changed
+        old_sources = set(original_data.metadata.source_memory_ids or [])
+        new_sources = set(memory.metadata.source_memory_ids or [])
+        if memory.metadata.memory_level in ['summary', 'abstraction'] and old_sources != new_sources:
+             for source_id in old_sources - new_sources:
+                 if memory_id in memory_core.summary_links.get(source_id,[]):
+                     memory_core.summary_links[source_id].remove(memory_id)
+                     if not memory_core.summary_links[source_id]: del memory_core.summary_links[source_id]
+             for source_id in new_sources - old_sources:
+                 memory_core.summary_links[source_id].append(memory_id)
+
         memory_core.query_cache = {}
-        
         logger.debug(f"Updated memory {memory_id}")
         return True
 
@@ -1241,79 +1001,48 @@ async def delete_memory(
     memory_id: str
 ) -> bool:
     """
-    Delete a memory from the system
-    
-    Args:
-        memory_id: ID of the memory to delete
-        
-    Returns:
-        True if successful, False if memory not found
+    Delete a memory from the system, cleaning up all indices.
+    Restored full index cleanup.
     """
     with custom_span("delete_memory", {"memory_id": memory_id}):
         memory_core = ctx.context
-        if not memory_core.initialized:
-            memory_core.initialize()
-        
-        if memory_id not in memory_core.memories:
+        if not memory_core.initialized: memory_core.initialize()
+
+        memory = memory_core.memories.pop(memory_id, None)
+        if not memory:
+            logger.warning(f"Attempted to delete non-existent memory: {memory_id}")
             return False
-        
-        # Get memory for index cleanup
-        memory = memory_core.memories[memory_id]
-        
-        # Remove from type index
-        memory_type = memory["memory_type"]
-        if memory_type in memory_core.type_index and memory_id in memory_core.type_index[memory_type]:
-            memory_core.type_index[memory_type].remove(memory_id)
-        
-        # Remove from scope index
-        memory_scope = memory["memory_scope"]
-        if memory_scope in memory_core.scope_index and memory_id in memory_core.scope_index[memory_scope]:
-            memory_core.scope_index[memory_scope].remove(memory_id)
-        
-        # Remove from tag index
-        for tag in memory["tags"]:
-            if tag in memory_core.tag_index and memory_id in memory_core.tag_index[tag]:
-                memory_core.tag_index[tag].remove(memory_id)
-        
-        # Remove from significance index
-        sig_level = min(10, max(1, int(memory["significance"])))
-        if sig_level in memory_core.significance_index and memory_id in memory_core.significance_index[sig_level]:
-            memory_core.significance_index[sig_level].remove(memory_id)
-        
-        # Remove from entity index
-        entities = memory.get("metadata", {}).get("entities", [])
-        for entity_id in entities:
-            if entity_id in memory_core.entity_index and memory_id in memory_core.entity_index[entity_id]:
-                memory_core.entity_index[entity_id].remove(memory_id)
-        
-        # Remove from emotional index
-        emotion = memory.get("metadata", {}).get("emotional_context", {}).get("primary_emotion")
-        if emotion and emotion in memory_core.emotional_index and memory_id in memory_core.emotional_index[emotion]:
-            memory_core.emotional_index[emotion].remove(memory_id)
-            
-        # Remove from schema index
-        for schema_ref in memory.get("metadata", {}).get("schemas", []):
-            schema_id = schema_ref.get("schema_id")
-            if schema_id and schema_id in memory_core.schema_index and memory_id in memory_core.schema_index[schema_id]:
-                memory_core.schema_index[schema_id].remove(memory_id)
-        
-        # Remove from temporal index
+
+        memory_core.memory_embeddings.pop(memory_id, None)
+
+        # --- Remove from all indices ---
+        memory_core.type_index[memory.memory_type].discard(memory_id)
+        memory_core.scope_index[memory.memory_scope].discard(memory_id)
+        memory_core.level_index[memory.metadata.memory_level].discard(memory_id)
+        sig_level = min(10, max(1, int(memory.significance)))
+        memory_core.significance_index[sig_level].discard(memory_id)
+
+        for tag in memory.tags: memory_core.tag_index[tag].discard(memory_id)
+        for entity in memory.metadata.entities: memory_core.entity_index[entity].discard(memory_id)
+        if memory.metadata.emotional_context and memory.metadata.emotional_context.primary_emotion:
+             memory_core.emotional_index[memory.metadata.emotional_context.primary_emotion].discard(memory_id)
+        for schema_ref in memory.metadata.schemas:
+             if schema_id := schema_ref.get("schema_id"): memory_core.schema_index[schema_id].discard(memory_id)
+
+        # Remove from temporal index (more efficient than rebuilding)
         memory_core.temporal_index = [(ts, mid) for ts, mid in memory_core.temporal_index if mid != memory_id]
-        
-        # Remove from archived or consolidated sets if present
-        if memory_id in memory_core.archived_memories:
-            memory_core.archived_memories.remove(memory_id)
-        if memory_id in memory_core.consolidated_memories:
-            memory_core.consolidated_memories.remove(memory_id)
-        
-        # Delete memory and embedding
-        del memory_core.memories[memory_id]
-        if memory_id in memory_core.memory_embeddings:
-            del memory_core.memory_embeddings[memory_id]
-        
-        # Clear query cache as memory store has changed
+
+        memory_core.archived_memories.discard(memory_id)
+        memory_core.consolidated_memories.discard(memory_id)
+
+        # Remove from summary links
+        for source_id, summary_list in list(memory_core.summary_links.items()):
+             if memory_id in summary_list:
+                 summary_list.remove(memory_id)
+                 if not summary_list: del memory_core.summary_links[source_id]
+        memory_core.summary_links.pop(memory_id, None) # Remove if it was a source for others
+
         memory_core.query_cache = {}
-        
         logger.debug(f"Deleted memory {memory_id}")
         return True
 
@@ -2192,12 +1921,12 @@ async def generate_conversational_recall(
     context: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
-    Generate a natural, conversational recall of an experience
-    
+    Generate a natural, conversational recall of an experience.
+
     Args:
         experience: The experience to recall
         context: Current conversation context
-        
+
     Returns:
         Conversational recall with reflection
     """
@@ -2207,80 +1936,88 @@ async def generate_conversational_recall(
         content = experience.get("content", experience.get("memory_text", ""))
         emotional_context = experience.get("emotional_context", {})
         scenario_type = experience.get("scenario_type", "general")
-        timestamp = experience.get("timestamp", experience.get("metadata", {}).get("timestamp"))
-        fidelity = experience.get("fidelity", experience.get("metadata", {}).get("fidelity", 1.0))
-        
+        timestamp = experience.get(
+            "timestamp",
+            experience.get("metadata", {}).get("timestamp")
+        )
+        fidelity = experience.get(
+            "fidelity",
+            experience.get("metadata", {}).get("fidelity", 1.0)
+        )
+
         # Get timeframe text
         timeframe = _get_timeframe_text(timestamp)
-        
+
         # Determine tone for recall
         emotional_tone = _get_emotional_tone(emotional_context)
         scenario_tone = _get_scenario_tone(scenario_type)
-        
+
         # Select tone (prioritize scenario tone if available)
         tone = scenario_tone or emotional_tone
-        
-        # Get templates for this tone
+
+        # Select a random template for this tone
         templates = memory_core.recall_templates.get(tone, memory_core.recall_templates["standard"])
-        
-        # Select a random template
         template = random.choice(templates)
-        
-        # Generate components for template filling using a specialized agent
+
+        # Build the recall agent
         recall_agent = Agent(
             name="Experience Recall Agent",
-            instructions=f"""Create a natural, conversational recall of this experience.
-            The recall should match a {tone} tone and feel authentic.
-            Extract a brief summary, a relevant detail, and a thoughtful reflection from the experience."""
+            instructions=(
+                f"Create a natural, conversational recall of this experience.\n"
+                f"The recall should match a {tone} tone and feel authentic.\n"
+                "Extract a brief summary, a relevant detail, and a thoughtful reflection from the experience."
+            )
         )
-        
-        # Prepare prompt
-        prompt = f"""Given this experience: "{content}"
-        
-        Create three components for a conversational recall:
-        1. A brief summary (15-20 words)
-        2. A relevant detail (10-15 words)
-        3. A thoughtful reflection (15-20 words)
-        
-        Format your response as:
-        Brief Summary: [brief summary]
-        Detail: [detail]
-        Reflection: [reflection]"""
-        
-        # Get result from agent
+
+        # Prepare the prompt
+        prompt = (
+            f'Given this experience: "{content}"\n\n'
+            "Create three components for a conversational recall:\n"
+            "1. A brief summary (15-20 words)\n"
+            "2. A relevant detail (10-15 words)\n"
+            "3. A thoughtful reflection (15-20 words)\n\n"
+            "Format your response as:\n"
+            "Brief Summary: [brief summary]\n"
+            "Detail: [detail]\n"
+            "Reflection: [reflection]"
+        )
+
+        # Run the agent
         result = await Runner.run(recall_agent, prompt)
-        parts = result.final_output.strip().split("\n")
-        
+        parts = result.final_output.strip().splitlines()
+
+        # Default fallbacks
         brief_summary = content
         detail = "It was quite memorable."
         reflection = "I found it quite interesting to observe."
-        
-        # Parse the result
+
+        # Parse the agent's output
         for part in parts:
             if part.startswith("Brief Summary:"):
-                brief_summary = part.replace("Brief Summary:", "").strip()
+                brief_summary = part.split("Brief Summary:", 1)[1].strip()
             elif part.startswith("Detail:"):
-                detail = part.replace("Detail:", "").strip()
+                detail = part.split("Detail:", 1)[1].strip()
             elif part.startswith("Reflection:"):
-                reflection = part.replace("Reflection:", "").strip()
-        
-        # Add fidelity qualifier if memory is less reliable
+                reflection = part.split("Reflection:", 1)[1].strip()
+
+        # Add qualifier if fidelity is low
         if fidelity < 0.7:
-            reflection += f" Though, I'm not entirely certain about all the details."
-        
-        # Fill in the template
+            reflection += " Though, I'm not entirely certain about all the details."
+
+        # Fill in the selected template
         recall_text = template.format(
             timeframe=timeframe,
             brief_summary=brief_summary,
             detail=detail,
             reflection=reflection
         )
-        
+
         return {
             "recall_text": recall_text,
             "tone": tone,
             "confidence": experience.get("relevance_score", 0.5) * fidelity
         }
+
 
 @function_tool
 async def detect_schema_from_memories(
@@ -2579,6 +2316,7 @@ class MemoryCoreAgents:
             memories based on the current context. Focus on relevance, recency, and significance.""",
             tools=[
                 retrieve_memories,
+                get_memory_details,
                 get_memory,
                 retrieve_memories_with_formatting,
                 retrieve_relevant_experiences
@@ -2595,6 +2333,7 @@ class MemoryCoreAgents:
             tools=[
                 add_memory,
                 update_memory,
+                delete_memory,
                 create_reflection_from_memories,
                 create_abstraction_from_memories,
                 create_semantic_memory
@@ -2613,6 +2352,7 @@ class MemoryCoreAgents:
                 apply_memory_decay,
                 consolidate_memory_clusters,
                 archive_memory,
+                unarchive_memory,
                 get_memory_stats,
                 detect_schema_from_memories
             ]
