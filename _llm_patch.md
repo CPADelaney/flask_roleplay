@@ -1,0 +1,1 @@
+I’ll need the specific lint warnings/errors and the relevant code snippets (file names, line numbers and surrounding context) to craft precise unified-diff patches. Could you please share those details?
