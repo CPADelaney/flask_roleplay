@@ -1152,83 +1152,144 @@ class ExperienceConsolidationSystem:
     
     async def run_consolidation_cycle(self, experience_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Run a complete consolidation cycle using the orchestrator agent
-        
-        Args:
-            experience_ids: Optional list of experience IDs to consider (if None, uses all available)
-            
-        Returns:
-            Results of the consolidation cycle
+        Run a complete consolidation cycle using direct logic (not orchestrator).
+        Modified to correctly store consolidated memories with hierarchical data.
         """
-        with trace(
-            workflow_name="consolidation_cycle", 
-            group_id=self.trace_group_id,
-            trace_metadata={"custom_ids_provided": experience_ids is not None}
-        ):
-            # Check if enough time has passed since last consolidation
-            now = datetime.now()
-            time_since_last = (now - self.last_consolidation).total_seconds() / 3600  # hours
-            
-            if time_since_last < self.consolidation_interval:
-                return {
-                    "status": "skipped",
-                    "reason": f"Not enough time elapsed since last consolidation ({time_since_last:.1f} hours of {self.consolidation_interval} required)"
-                }
-            
+        # --- Time Check (Keep this) ---
+        now = datetime.now()
+        time_since_last = (now - self.last_consolidation).total_seconds() / 3600
+        if time_since_last < self.consolidation_interval:
+            logger.info(f"Skipping consolidation cycle: Only {time_since_last:.1f} hours passed ({self.consolidation_interval} required).")
+            return {"status": "skipped", "reason": "Interval not met"}
+
+        logger.info("Starting experience consolidation cycle...")
+        with trace(workflow_name="consolidation_cycle", group_id=self.trace_group_id):
+            consolidations_created = 0
+            total_memories_affected = 0
+
             try:
-                # Get experience IDs if not provided
-                if not experience_ids and self.memory_core:
-                    # Get experiences from memory core
-                    # Exclude already consolidated experiences to avoid double consolidation
-                    memories = await self.memory_core.search_memories(
-                        query="",
-                        memory_types=["experience"],
-                        exclude_tags=["consolidated"],
-                        limit=100
-                    )
-                    
-                    experience_ids = [memory["id"] for memory in memories]
-                
-                if not experience_ids:
-                    return {
-                        "status": "skipped",
-                        "reason": "No experiences available for consolidation"
-                    }
-                
-                # Use the orchestrator agent to run the full cycle
+                # 1. Find candidate groups
                 result = await Runner.run(
-                    self.orchestrator_agent,
-                    {
-                        "action": "run_consolidation_cycle",
-                        "experience_ids": experience_ids,
-                        "similarity_threshold": self.similarity_threshold,
-                        "max_group_size": self.max_group_size,
-                        "min_group_size": self.min_group_size,
-                        "quality_threshold": self.quality_threshold
-                    },
+                    self.candidate_finder_agent,
+                    {"experience_ids": experience_ids or [], 
+                     "similarity_threshold": self.similarity_threshold,
+                     "max_group_size": self.max_group_size,
+                     "min_group_size": self.min_group_size},
                     context=self.context,
-                    hooks=self.run_hooks,
-                    run_config=RunConfig(
-                        workflow_name="ConsolidationCycle",
-                        trace_metadata={
-                            "experience_count": len(experience_ids),
-                            "time_since_last": time_since_last
-                        }
-                    )
+                    run_config=RunConfig(workflow_name="CandidateFinder")
                 )
-                
-                # Update last consolidation time
+                raw = result.final_output or []
+                candidate_groups = [ConsolidationCandidate(**c) for c in raw]
+
+                if not candidate_groups:
+                    logger.info("No candidate groups found.")
+                    self.last_consolidation = now
+                    return {"status": "completed", "consolidations_created": 0, "source_memories_processed": 0}
+
+                # 2. Loop over each group
+                for cand in candidate_groups:
+                    cluster = cand.source_ids
+                    if len(cluster) < self.min_group_size:
+                        continue
+
+                    # 2a. Retrieve full memory details
+                    try:
+                        retrieved = await self.memory_core.retrieve_memories(
+                            query=f"ids:{','.join(cluster)}",
+                            limit=len(cluster),
+                            retrieval_level='detail'
+                        )
+                        details = {m['id']: m for m in retrieved}
+                        source_details = [details[i] for i in cluster if i in details]
+                        if len(source_details) < self.min_group_size:
+                            logger.warning(f"Incomplete details for {cluster}, skipping.")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Retrieval error for {cluster}: {e}")
+                        continue
+
+                    # 2b. Generate consolidated text
+                    try:
+                        res = await Runner.run(
+                            self.consolidation_agent,
+                            {"source_ids": cluster,
+                             "consolidation_type": cand.consolidation_type,
+                             "theme": cand.theme,
+                             "scenario_type": cand.scenario_type,
+                             "similarity_score": cand.similarity_score},
+                            context=self.context,
+                            run_config=RunConfig(workflow_name="Consolidator")
+                        )
+                        out: ConsolidationOutput = res.final_output
+                        text = out.consolidation_text
+                        if not text:
+                            raise ValueError("Empty consolidation text")
+                    except Exception as e:
+                        logger.error(f"Consolidator failed for {cluster}: {e}")
+                        continue
+
+                    # 2c. Compute metadata
+                    significance = out.significance
+                    avg_fidelity = sum(m.get('metadata', {}).get('fidelity', 1.0) for m in source_details) / len(source_details)
+                    fidelity = max(0.1, avg_fidelity * 0.9)
+                    level = 'abstraction' if any(w in text.lower() for w in ('pattern','abstract')) else 'summary'
+                    tags = out.tags.copy()
+                    for t in (level, 'consolidated_experience'):
+                        if t not in tags:
+                            tags.append(t)
+                    scopes = {m.get('memory_scope','game') for m in source_details}
+                    scope = 'user' if scopes=={'user'} else 'game'
+                    summary_desc = f"{level.capitalize()} of {len(cluster)} experiences on '{cand.theme}'"
+
+                    # 2d. Store the consolidated memory
+                    try:
+                        params = MemoryCreateParams(
+                            memory_text=text,
+                            memory_type="consolidated_experience",
+                            memory_level=level,
+                            source_memory_ids=cluster,
+                            fidelity=fidelity,
+                            summary_of=summary_desc,
+                            memory_scope=scope,
+                            significance=int(significance),
+                            tags=tags,
+                            metadata={}  # or pull any emotional context here
+                        )
+                        new_id = await self.memory_core.add_memory(**params.model_dump())
+                        if new_id:
+                            consolidations_created += 1
+                            total_memories_affected += len(cluster)
+                            logger.info(f"Stored consolidated memory {new_id} (level={level})")
+
+                            # 2e. Mark each source
+                            for sid in cluster:
+                                meta = details[sid].get('metadata', {})
+                                meta.update({
+                                    "consolidated_into": new_id,
+                                    "consolidation_date": datetime.now().isoformat()
+                                })
+                                await self.memory_core.update_memory(
+                                    memory_id=sid,
+                                    updates={"is_consolidated": True, "metadata": meta}
+                                )
+                        else:
+                            logger.error(f"Failed to store consolidation for {cluster}")
+                    except Exception as e:
+                        logger.error(f"Error storing consolidation for {cluster}: {e}", exc_info=True)
+
+                # 3. Wrap up
                 self.last_consolidation = now
-                
-                # Return the orchestrator's output
-                return result.final_output
-                
-            except Exception as e:
-                logger.error(f"Error in consolidation cycle: {e}")
+                logger.info(f"Cycle done: created={consolidations_created}, affected={total_memories_affected}")
                 return {
-                    "status": "error",
-                    "error": str(e)
+                    "status": "completed",
+                    "consolidations_created": consolidations_created,
+                    "source_memories_processed": total_memories_affected
                 }
+
+            except Exception as e:
+                logger.error(f"Unexpected error in consolidation cycle: {e}", exc_info=True)
+                return {"status": "error", "error": str(e)}
+
     
     async def get_consolidation_insights(self) -> Dict[str, Any]:
         """
