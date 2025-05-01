@@ -32,7 +32,7 @@ from .temporal import TemporalProcedureGraph
 
 # Import function tools to make them available
 from .function_tools import (
-    add_procedure, execue, transfer_procedure,
+    add_procedure, execute_procedure, transfer_procedure,
     get_procedure_proficiency, list_procedures, get_transfer_statistics,
     identify_chunking_opportunities, apply_chunking,
     generalize_chunk_from_steps, find_matching_chunks,
