@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Define a manually constructed schema that follows proper OpenAI schema format
 add_procedure_schema = {
     "type": "object",
     "properties": {
@@ -28,7 +27,8 @@ add_procedure_schema = {
         "steps": {
             "type": "array",
             "items": {
-                "type": "object"
+                "type": "object",
+                "additionalProperties": True
             },
             "description": "List of step definitions"
         },
@@ -41,10 +41,11 @@ add_procedure_schema = {
             "description": "Domain/context"
         }
     },
-    "required": ["name", "steps"]
+    "required": ["name", "steps"],
+    "additionalProperties": False
 }
 
-async def add_procedure_function(ctx: RunContextWrapper[Any], args_str: str) -> str:
+async def add_procedure_implementation(ctx: RunContextWrapper[Any], args_str: str) -> str:
     """Add a new procedure to the procedural memory system."""
     # Parse the arguments
     import json
@@ -112,12 +113,12 @@ async def add_procedure_function(ctx: RunContextWrapper[Any], args_str: str) -> 
             "success": True
         })
 
-# Create the function tool manually with the custom schema
+# Create the function tool manually with the proper schema
 add_procedure = FunctionTool(
     name="add_procedure",
     description="Add a new procedure to the procedural memory system.",
     params_json_schema=add_procedure_schema,
-    on_invoke_tool=add_procedure_function
+    on_invoke_tool=add_procedure_implementation
 )
 
 @function_tool
