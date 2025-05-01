@@ -981,7 +981,7 @@ async def analyze_narrative_for_conflict(ctx: RunContextWrapper[ContextType], na
     conflict_manager = context.conflict_manager
 
     try:
-        result = await conflict_manager.add_conflict_to_narrative(narrative_text)
+        result = await add_conflict_to_narrative(ctx, narrative_text)
         if hasattr(context, 'add_narrative_memory') and result.get("conflict_generated", False):
             conflict_info = result.get("conflict", {})
             memory_content = f"Analysis detected conflict in narrative and generated new {conflict_info.get('conflict_type', 'unknown')} conflict: {conflict_info.get('conflict_name', 'Unnamed conflict')}"
