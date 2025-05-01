@@ -899,574 +899,574 @@ class RecognitionMemorySystem:
             "in_cooldown": False
         }
 
-        @staticmethod
-        @function_tool
-        async def _analyze_context_state(
-            ctx: RunContextWrapper[RecognitionMemoryContext]
-        ) -> Dict[str, Any]:
-            """
-            Analyze current context state for recognition parameters
+    @staticmethod
+    @function_tool
+    async def _analyze_context_state(
+        ctx: RunContextWrapper[RecognitionMemoryContext]
+    ) -> Dict[str, Any]:
+        """
+        Analyze current context state for recognition parameters
+        
+        Returns:
+            Context state analysis
+        """
+        # Get conversation context
+        conversation = ctx.context.recent_conversation
+        
+        # Default parameters
+        recognition_sensitivity = 0.7
+        max_recognitions = 3
+        
+        # Adjust based on conversation state
+        if len(conversation) > 0:
+            # Check for questions (may indicate higher interest in memories)
+            last_message = conversation[-1].get("text", "")
+            if "?" in last_message:
+                recognition_sensitivity += 0.1
+                max_recognitions += 1
+                
+            # Check for emotional content (may trigger more memories)
+            if any(word in last_message.lower() for word in ["feel", "happy", "sad", "angry", "excited"]):
+                recognition_sensitivity += 0.1
+                
+            # Check for memory-related terms
+            if any(word in last_message.lower() for word in ["remember", "recall", "memory", "forget", "remembered"]):
+                recognition_sensitivity += 0.2
+                max_recognitions += 1
+        
+        # Update context parameters
+        ctx.context.recognition_sensitivity = min(1.0, recognition_sensitivity)
+        ctx.context.max_recognitions_per_turn = min(5, max_recognitions)
+        
+        return {
+            "recognition_sensitivity": ctx.context.recognition_sensitivity,
+            "max_recognitions": ctx.context.max_recognitions_per_turn,
+            "context_complexity": len(conversation),
+            "active_triggers_count": len(ctx.context.active_triggers)
+        }
+
+    @staticmethod
+    @function_tool
+    async def _analyze_narrative_elements(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        text: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Analyze text for narrative elements that might trigger recognition
+        
+        Args:
+            text: Text to analyze
             
-            Returns:
-                Context state analysis
-            """
-            # Get conversation context
-            conversation = ctx.context.recent_conversation
+        Returns:
+            List of narrative elements
+        """
+        narrative_elements = []
+        
+        # Check for narrative markers
+        narrative_markers = [
+            "then", "after that", "before", "while", "during",
+            "first", "second", "finally", "lastly", "next"
+        ]
+        
+        for marker in narrative_markers:
+            marker_position = text.lower().find(f" {marker} ")
+            if marker_position >= 0:
+                # Get surrounding context
+                start = max(0, marker_position - 20)
+                end = min(len(text), marker_position + 20)
+                context = text[start:end]
+                
+                narrative_elements.append({
+                    "element_type": "narrative_marker",
+                    "marker": marker,
+                    "context": context,
+                    "salience": 0.7,
+                    "position": marker_position
+                })
+        
+        # Check for event descriptions
+        event_indicators = ["happened", "occurred", "took place", "experienced", "went to"]
+        
+        for indicator in event_indicators:
+            indicator_position = text.lower().find(indicator)
+            if indicator_position >= 0:
+                # Get surrounding context
+                start = max(0, indicator_position - 25)
+                end = min(len(text), indicator_position + 25)
+                context = text[start:end]
+                
+                narrative_elements.append({
+                    "element_type": "event_description",
+                    "indicator": indicator,
+                    "context": context,
+                    "salience": 0.8,
+                    "position": indicator_position
+                })
+        
+        return narrative_elements
+
+    @staticmethod
+    @function_tool
+    async def _leverage_context_awareness(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        text: str
+    ) -> Dict[str, Any]:
+        """
+        Leverage context awareness system for enhanced salience detection
+        
+        Args:
+            text: Text to analyze
             
-            # Default parameters
-            recognition_sensitivity = 0.7
-            max_recognitions = 3
-            
-            # Adjust based on conversation state
-            if len(conversation) > 0:
-                # Check for questions (may indicate higher interest in memories)
-                last_message = conversation[-1].get("text", "")
-                if "?" in last_message:
-                    recognition_sensitivity += 0.1
-                    max_recognitions += 1
-                    
-                # Check for emotional content (may trigger more memories)
-                if any(word in last_message.lower() for word in ["feel", "happy", "sad", "angry", "excited"]):
-                    recognition_sensitivity += 0.1
-                    
-                # Check for memory-related terms
-                if any(word in last_message.lower() for word in ["remember", "recall", "memory", "forget", "remembered"]):
-                    recognition_sensitivity += 0.2
-                    max_recognitions += 1
-            
-            # Update context parameters
-            ctx.context.recognition_sensitivity = min(1.0, recognition_sensitivity)
-            ctx.context.max_recognitions_per_turn = min(5, max_recognitions)
-            
+        Returns:
+            Context awareness results
+        """
+        if not ctx.context.context_awareness:
             return {
-                "recognition_sensitivity": ctx.context.recognition_sensitivity,
-                "max_recognitions": ctx.context.max_recognitions_per_turn,
-                "context_complexity": len(conversation),
-                "active_triggers_count": len(ctx.context.active_triggers)
+                "entities": [],
+                "topics": [],
+                "emotions": []
+            }
+        
+        try:
+            # Use context awareness system
+            awareness_result = await ctx.context.context_awareness.analyze_content(text)
+            
+            # Extract elements
+            entities = []
+            for entity in awareness_result.get("entities", []):
+                entities.append({
+                    "entity": entity.get("text", ""),
+                    "type": entity.get("type", "unknown"),
+                    "salience": entity.get("salience", 0.5)
+                })
+                
+            topics = []
+            for topic in awareness_result.get("topics", []):
+                topics.append({
+                    "topic": topic.get("name", ""),
+                    "confidence": topic.get("confidence", 0.5),
+                    "keywords": topic.get("keywords", [])
+                })
+                
+            emotions = []
+            for emotion in awareness_result.get("emotions", []):
+                emotions.append({
+                    "emotion": emotion.get("name", ""),
+                    "intensity": emotion.get("score", 0.5)
+                })
+                
+            return {
+                "entities": entities,
+                "topics": topics,
+                "emotions": emotions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error leveraging context awareness: {e}")
+            return {
+                "entities": [],
+                "topics": [],
+                "emotions": []
             }
 
-        @staticmethod
-        @function_tool
-        async def _analyze_narrative_elements(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            text: str
-        ) -> List[Dict[str, Any]]:
-            """
-            Analyze text for narrative elements that might trigger recognition
+    @staticmethod
+    @function_tool
+    async def _query_with_prioritization(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        query: str,
+        trigger: Dict[str, Any] = None,
+        memory_types: List[str] = None,
+        prioritization: Dict[str, float] = None,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Query memory system with type prioritization
+        
+        Args:
+            query: Search query
+            trigger: Trigger information
+            memory_types: Types of memories to retrieve
+            prioritization: Priority weights for different memory types
+            limit: Maximum number of memories to return
             
-            Args:
-                text: Text to analyze
+        Returns:
+            List of matching memories with prioritization applied
+        """
+        # Ensure memory core exists
+        if not ctx.context.memory_core:
+            return []
+            
+        # Default memory types
+        if not memory_types:
+            memory_types = ["experience", "reflection", "abstraction", "observation"]
+            
+        # Default prioritization
+        if not prioritization:
+            prioritization = {
+                "experience": 0.4,
+                "reflection": 0.3,
+                "abstraction": 0.2,
+                "observation": 0.1
+            }
+            
+        try:
+            # Use memory_core's prioritized retrieval
+            if hasattr(ctx.context.memory_core, "retrieve_memories_with_prioritization"):
+                memories = await ctx.context.memory_core.retrieve_memories_with_prioritization(
+                    query=query,
+                    memory_types=memory_types,
+                    prioritization=prioritization,
+                    limit=limit
+                )
+            else:
+                # Fall back to standard retrieval
+                memories = await ctx.context.memory_core.retrieve_memories(
+                    query=query,
+                    memory_types=memory_types,
+                    limit=limit
+                )
                 
-            Returns:
-                List of narrative elements
-            """
-            narrative_elements = []
-            
-            # Check for narrative markers
-            narrative_markers = [
-                "then", "after that", "before", "while", "during",
-                "first", "second", "finally", "lastly", "next"
-            ]
-            
-            for marker in narrative_markers:
-                marker_position = text.lower().find(f" {marker} ")
-                if marker_position >= 0:
-                    # Get surrounding context
-                    start = max(0, marker_position - 20)
-                    end = min(len(text), marker_position + 20)
-                    context = text[start:end]
+            # Add trigger information
+            if trigger:
+                for memory in memories:
+                    memory["activation_trigger"] = trigger
                     
-                    narrative_elements.append({
-                        "element_type": "narrative_marker",
-                        "marker": marker,
-                        "context": context,
-                        "salience": 0.7,
-                        "position": marker_position
-                    })
+            return memories
             
-            # Check for event descriptions
-            event_indicators = ["happened", "occurred", "took place", "experienced", "went to"]
-            
-            for indicator in event_indicators:
-                indicator_position = text.lower().find(indicator)
-                if indicator_position >= 0:
-                    # Get surrounding context
-                    start = max(0, indicator_position - 25)
-                    end = min(len(text), indicator_position + 25)
-                    context = text[start:end]
-                    
-                    narrative_elements.append({
-                        "element_type": "event_description",
-                        "indicator": indicator,
-                        "context": context,
-                        "salience": 0.8,
-                        "position": indicator_position
-                    })
-            
-            return narrative_elements
+        except Exception as e:
+            logger.error(f"Error in prioritized memory query: {e}")
+            return []
 
-        @staticmethod
-        @function_tool
-        async def _leverage_context_awareness(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            text: str
-        ) -> Dict[str, Any]:
-            """
-            Leverage context awareness system for enhanced salience detection
+    @staticmethod
+    @function_tool
+    async def _query_memories_parallel(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        triggers: List[Dict[str, Any]],
+        memory_types: List[str] = None,
+        limit_per_trigger: int = 3
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Query memory system in parallel for multiple triggers
+        
+        Args:
+            triggers: List of triggers to query
+            memory_types: Types of memories to retrieve
+            limit_per_trigger: Maximum number of memories per trigger
             
-            Args:
-                text: Text to analyze
-                
-            Returns:
-                Context awareness results
-            """
-            if not ctx.context.context_awareness:
-                return {
-                    "entities": [],
-                    "topics": [],
-                    "emotions": []
-                }
+        Returns:
+            Dictionary of trigger_id -> memories
+        """
+        # Ensure memory core exists
+        if not ctx.context.memory_core:
+            return {}
             
-            try:
-                # Use context awareness system
-                awareness_result = await ctx.context.context_awareness.analyze_content(text)
-                
-                # Extract elements
-                entities = []
-                for entity in awareness_result.get("entities", []):
-                    entities.append({
-                        "entity": entity.get("text", ""),
-                        "type": entity.get("type", "unknown"),
-                        "salience": entity.get("salience", 0.5)
-                    })
-                    
-                topics = []
-                for topic in awareness_result.get("topics", []):
-                    topics.append({
-                        "topic": topic.get("name", ""),
-                        "confidence": topic.get("confidence", 0.5),
-                        "keywords": topic.get("keywords", [])
-                    })
-                    
-                emotions = []
-                for emotion in awareness_result.get("emotions", []):
-                    emotions.append({
-                        "emotion": emotion.get("name", ""),
-                        "intensity": emotion.get("score", 0.5)
-                    })
-                    
-                return {
-                    "entities": entities,
-                    "topics": topics,
-                    "emotions": emotions
-                }
-                
-            except Exception as e:
-                logger.error(f"Error leveraging context awareness: {e}")
-                return {
-                    "entities": [],
-                    "topics": [],
-                    "emotions": []
-                }
-
-        @staticmethod
-        @function_tool
-        async def _query_with_prioritization(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            query: str,
-            trigger: Dict[str, Any] = None,
-            memory_types: List[str] = None,
-            prioritization: Dict[str, float] = None,
-            limit: int = 5
-        ) -> List[Dict[str, Any]]:
-            """
-            Query memory system with type prioritization
+        # Default memory types
+        if not memory_types:
+            memory_types = ["experience", "reflection", "abstraction", "observation"]
             
-            Args:
-                query: Search query
-                trigger: Trigger information
-                memory_types: Types of memories to retrieve
-                prioritization: Priority weights for different memory types
-                limit: Maximum number of memories to return
+        try:
+            # Create tasks for each trigger
+            trigger_tasks = {}
+            for trigger in triggers:
+                trigger_id = trigger.get("trigger_id", str(uuid.uuid4()))
+                trigger_value = trigger.get("trigger_value", "")
+                trigger_type = trigger.get("trigger_type", "unknown")
                 
-            Returns:
-                List of matching memories with prioritization applied
-            """
-            # Ensure memory core exists
-            if not ctx.context.memory_core:
-                return []
-                
-            # Default memory types
-            if not memory_types:
-                memory_types = ["experience", "reflection", "abstraction", "observation"]
-                
-            # Default prioritization
-            if not prioritization:
-                prioritization = {
-                    "experience": 0.4,
-                    "reflection": 0.3,
-                    "abstraction": 0.2,
-                    "observation": 0.1
-                }
-                
-            try:
-                # Use memory_core's prioritized retrieval
-                if hasattr(ctx.context.memory_core, "retrieve_memories_with_prioritization"):
-                    memories = await ctx.context.memory_core.retrieve_memories_with_prioritization(
-                        query=query,
+                # Create retrieval task
+                if hasattr(ctx.context.memory_core, "retrieve_memories_parallel"):
+                    # Use parallel retrieval if available
+                    trigger_tasks[trigger_id] = ctx.context.memory_core.retrieve_memories(
+                        query=trigger_value,
                         memory_types=memory_types,
-                        prioritization=prioritization,
-                        limit=limit
+                        limit=limit_per_trigger
                     )
                 else:
                     # Fall back to standard retrieval
-                    memories = await ctx.context.memory_core.retrieve_memories(
-                        query=query,
-                        memory_types=memory_types,
-                        limit=limit
+                    trigger_tasks[trigger_id] = self._query_memory(
+                        ctx,
+                        ContextualTrigger(
+                            trigger_id=trigger_id,
+                            trigger_type=trigger_type,
+                            trigger_value=trigger_value
+                        ),
+                        memory_types,
+                        limit_per_trigger
                     )
+            
+            # Wait for all tasks to complete
+            results = {}
+            for trigger_id, task in trigger_tasks.items():
+                try:
+                    results[trigger_id] = await task
+                except Exception as e:
+                    logger.error(f"Error in parallel query for trigger {trigger_id}: {e}")
+                    results[trigger_id] = []
                     
-                # Add trigger information
-                if trigger:
-                    for memory in memories:
-                        memory["activation_trigger"] = trigger
-                        
-                return memories
-                
-            except Exception as e:
-                logger.error(f"Error in prioritized memory query: {e}")
-                return []
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in parallel memory queries: {e}")
+            return {}
 
-        @staticmethod
-        @function_tool
-        async def _query_memories_parallel(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            triggers: List[Dict[str, Any]],
-            memory_types: List[str] = None,
-            limit_per_trigger: int = 3
-        ) -> Dict[str, List[Dict[str, Any]]]:
-            """
-            Query memory system in parallel for multiple triggers
+    @staticmethod
+    @function_tool
+    async def _track_query_performance(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        trigger_id: str,
+        memories_found: int,
+        avg_relevance: float
+    ) -> Dict[str, Any]:
+        """
+        Track query performance for trigger optimization
+        
+        Args:
+            trigger_id: ID of the trigger
+            memories_found: Number of memories found
+            avg_relevance: Average relevance of retrieved memories
             
-            Args:
-                triggers: List of triggers to query
-                memory_types: Types of memories to retrieve
-                limit_per_trigger: Maximum number of memories per trigger
-                
-            Returns:
-                Dictionary of trigger_id -> memories
-            """
-            # Ensure memory core exists
-            if not ctx.context.memory_core:
-                return {}
-                
-            # Default memory types
-            if not memory_types:
-                memory_types = ["experience", "reflection", "abstraction", "observation"]
-                
-            try:
-                # Create tasks for each trigger
-                trigger_tasks = {}
-                for trigger in triggers:
-                    trigger_id = trigger.get("trigger_id", str(uuid.uuid4()))
-                    trigger_value = trigger.get("trigger_value", "")
-                    trigger_type = trigger.get("trigger_type", "unknown")
-                    
-                    # Create retrieval task
-                    if hasattr(ctx.context.memory_core, "retrieve_memories_parallel"):
-                        # Use parallel retrieval if available
-                        trigger_tasks[trigger_id] = ctx.context.memory_core.retrieve_memories(
-                            query=trigger_value,
-                            memory_types=memory_types,
-                            limit=limit_per_trigger
-                        )
-                    else:
-                        # Fall back to standard retrieval
-                        trigger_tasks[trigger_id] = self._query_memory(
-                            ctx,
-                            ContextualTrigger(
-                                trigger_id=trigger_id,
-                                trigger_type=trigger_type,
-                                trigger_value=trigger_value
-                            ),
-                            memory_types,
-                            limit_per_trigger
-                        )
-                
-                # Wait for all tasks to complete
-                results = {}
-                for trigger_id, task in trigger_tasks.items():
-                    try:
-                        results[trigger_id] = await task
-                    except Exception as e:
-                        logger.error(f"Error in parallel query for trigger {trigger_id}: {e}")
-                        results[trigger_id] = []
-                        
-                return results
-                
-            except Exception as e:
-                logger.error(f"Error in parallel memory queries: {e}")
-                return {}
-
-        @staticmethod
-        @function_tool
-        async def _track_query_performance(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            trigger_id: str,
-            memories_found: int,
-            avg_relevance: float
-        ) -> Dict[str, Any]:
-            """
-            Track query performance for trigger optimization
-            
-            Args:
-                trigger_id: ID of the trigger
-                memories_found: Number of memories found
-                avg_relevance: Average relevance of retrieved memories
-                
-            Returns:
-                Performance metrics
-            """
-            # Create performance entry if it doesn't exist
-            if trigger_id not in ctx.context.trigger_performance:
-                ctx.context.trigger_performance[trigger_id] = {
-                    "query_count": 0,
-                    "total_memories": 0,
-                    "avg_relevance": 0.0,
-                    "last_updated": datetime.datetime.now().isoformat()
-                }
-                
-            # Update performance metrics
-            performance = ctx.context.trigger_performance[trigger_id]
-            performance["query_count"] += 1
-            performance["total_memories"] += memories_found
-            
-            # Calculate new average relevance
-            old_avg = performance.get("avg_relevance", 0.0)
-            old_count = performance.get("query_count", 1) - 1  # Subtract the one we just added
-            
-            if old_count > 0:
-                performance["avg_relevance"] = (old_avg * old_count + avg_relevance) / (old_count + 1)
-            else:
-                performance["avg_relevance"] = avg_relevance
-                
-            performance["last_updated"] = datetime.datetime.now().isoformat()
-            
-            # Check if trigger needs optimization
-            needs_optimization = False
-            
-            # If too many queries with no results
-            if performance["query_count"] >= 3 and performance["total_memories"] == 0:
-                needs_optimization = True
-                
-            # If consistently low relevance
-            if performance["query_count"] >= 5 and performance["avg_relevance"] < 0.3:
-                needs_optimization = True
-                
-            return {
-                "trigger_id": trigger_id,
-                "query_count": performance["query_count"],
-                "total_memories": performance["total_memories"],
-                "avg_relevance": performance["avg_relevance"],
-                "needs_optimization": needs_optimization
-            }
-
-        @staticmethod
-        @function_tool
-        async def _assess_trigger_quality(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            trigger_type: str,
-            trigger_value: str
-        ) -> Dict[str, Any]:
-            """
-            Assess quality of a potential trigger
-            
-            Args:
-                trigger_type: Type of trigger
-                trigger_value: Value of the trigger
-                
-            Returns:
-                Quality assessment
-            """
-            # Check if trigger is too generic
-            generic_terms = {
-                "entity": ["person", "place", "thing", "someone", "something"],
-                "concept": ["idea", "thought", "concept", "notion"],
-                "emotion": ["feeling", "emotion", "mood"],
-                "event": ["happening", "occurrence", "incident"],
-                "topic": ["subject", "matter", "issue"]
+        Returns:
+            Performance metrics
+        """
+        # Create performance entry if it doesn't exist
+        if trigger_id not in ctx.context.trigger_performance:
+            ctx.context.trigger_performance[trigger_id] = {
+                "query_count": 0,
+                "total_memories": 0,
+                "avg_relevance": 0.0,
+                "last_updated": datetime.datetime.now().isoformat()
             }
             
-            is_generic = trigger_value.lower() in generic_terms.get(trigger_type, [])
+        # Update performance metrics
+        performance = ctx.context.trigger_performance[trigger_id]
+        performance["query_count"] += 1
+        performance["total_memories"] += memories_found
+        
+        # Calculate new average relevance
+        old_avg = performance.get("avg_relevance", 0.0)
+        old_count = performance.get("query_count", 1) - 1  # Subtract the one we just added
+        
+        if old_count > 0:
+            performance["avg_relevance"] = (old_avg * old_count + avg_relevance) / (old_count + 1)
+        else:
+            performance["avg_relevance"] = avg_relevance
             
-            # Check if similar to existing triggers
-            similar_triggers = []
-            for existing_id, existing in ctx.context.active_triggers.items():
-                if existing.trigger_type == trigger_type:
-                    # Simple string similarity
-                    similarity = self._calculate_string_similarity(
-                        existing.trigger_value.lower(),
-                        trigger_value.lower()
-                    )
-                    
-                    if similarity > 0.7:  # High similarity
-                        similar_triggers.append({
-                            "trigger_id": existing_id,
-                            "trigger_value": existing.trigger_value,
-                            "similarity": similarity
-                        })
+        performance["last_updated"] = datetime.datetime.now().isoformat()
+        
+        # Check if trigger needs optimization
+        needs_optimization = False
+        
+        # If too many queries with no results
+        if performance["query_count"] >= 3 and performance["total_memories"] == 0:
+            needs_optimization = True
             
-            # Check specificity
-            words = trigger_value.split()
-            specificity = min(1.0, len(words) / 3)  # More words = more specific
+        # If consistently low relevance
+        if performance["query_count"] >= 5 and performance["avg_relevance"] < 0.3:
+            needs_optimization = True
             
-            # Overall quality score
-            quality = 0.5
-            
-            if is_generic:
-                quality -= 0.3
-            
-            if len(similar_triggers) > 0:
-                quality -= 0.2
-                
-            quality += specificity * 0.3
-            
-            # Bound score
-            quality = max(0.1, min(1.0, quality))
-            
-            return {
-                "quality_score": quality,
-                "is_generic": is_generic,
-                "similar_triggers": similar_triggers,
-                "specificity": specificity,
-                "recommended_threshold": max(0.5, 0.7 - (quality * 0.2))  # Adjust threshold based on quality
-            }
+        return {
+            "trigger_id": trigger_id,
+            "query_count": performance["query_count"],
+            "total_memories": performance["total_memories"],
+            "avg_relevance": performance["avg_relevance"],
+            "needs_optimization": needs_optimization
+        }
 
-        @staticmethod
-        @function_tool
-        async def _calibrate_trigger_parameters(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            trigger_type: str,
-            trigger_value: str,
-            quality_assessment: Dict[str, Any]
-        ) -> Dict[str, float]:
-            """
-            Calibrate trigger parameters based on quality assessment
+    @staticmethod
+    @function_tool
+    async def _assess_trigger_quality(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        trigger_type: str,
+        trigger_value: str
+    ) -> Dict[str, Any]:
+        """
+        Assess quality of a potential trigger
+        
+        Args:
+            trigger_type: Type of trigger
+            trigger_value: Value of the trigger
             
-            Args:
-                trigger_type: Type of trigger
-                trigger_value: Value of the trigger
-                quality_assessment: Quality assessment data
+        Returns:
+            Quality assessment
+        """
+        # Check if trigger is too generic
+        generic_terms = {
+            "entity": ["person", "place", "thing", "someone", "something"],
+            "concept": ["idea", "thought", "concept", "notion"],
+            "emotion": ["feeling", "emotion", "mood"],
+            "event": ["happening", "occurrence", "incident"],
+            "topic": ["subject", "matter", "issue"]
+        }
+        
+        is_generic = trigger_value.lower() in generic_terms.get(trigger_type, [])
+        
+        # Check if similar to existing triggers
+        similar_triggers = []
+        for existing_id, existing in ctx.context.active_triggers.items():
+            if existing.trigger_type == trigger_type:
+                # Simple string similarity
+                similarity = self._calculate_string_similarity(
+                    existing.trigger_value.lower(),
+                    trigger_value.lower()
+                )
                 
-            Returns:
-                Calibrated parameters
-            """
-            quality = quality_assessment.get("quality_score", 0.5)
-            is_generic = quality_assessment.get("is_generic", False)
-            specificity = quality_assessment.get("specificity", 0.5)
+                if similarity > 0.7:  # High similarity
+                    similar_triggers.append({
+                        "trigger_id": existing_id,
+                        "trigger_value": existing.trigger_value,
+                        "similarity": similarity
+                    })
+        
+        # Check specificity
+        words = trigger_value.split()
+        specificity = min(1.0, len(words) / 3)  # More words = more specific
+        
+        # Overall quality score
+        quality = 0.5
+        
+        if is_generic:
+            quality -= 0.3
+        
+        if len(similar_triggers) > 0:
+            quality -= 0.2
             
-            # Base parameters
+        quality += specificity * 0.3
+        
+        # Bound score
+        quality = max(0.1, min(1.0, quality))
+        
+        return {
+            "quality_score": quality,
+            "is_generic": is_generic,
+            "similar_triggers": similar_triggers,
+            "specificity": specificity,
+            "recommended_threshold": max(0.5, 0.7 - (quality * 0.2))  # Adjust threshold based on quality
+        }
+
+    @staticmethod
+    @function_tool
+    async def _calibrate_trigger_parameters(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        trigger_type: str,
+        trigger_value: str,
+        quality_assessment: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        Calibrate trigger parameters based on quality assessment
+        
+        Args:
+            trigger_type: Type of trigger
+            trigger_value: Value of the trigger
+            quality_assessment: Quality assessment data
+            
+        Returns:
+            Calibrated parameters
+        """
+        quality = quality_assessment.get("quality_score", 0.5)
+        is_generic = quality_assessment.get("is_generic", False)
+        specificity = quality_assessment.get("specificity", 0.5)
+        
+        # Base parameters
+        relevance_threshold = 0.6
+        activation_strength = 0.8
+        
+        # Adjust threshold based on quality
+        if quality < 0.3:
+            # Low quality triggers need higher threshold to avoid false positives
+            relevance_threshold = 0.8
+        elif quality < 0.6:
+            relevance_threshold = 0.7
+        else:
+            # High quality triggers can use lower threshold
             relevance_threshold = 0.6
-            activation_strength = 0.8
             
-            # Adjust threshold based on quality
-            if quality < 0.3:
-                # Low quality triggers need higher threshold to avoid false positives
-                relevance_threshold = 0.8
-            elif quality < 0.6:
-                relevance_threshold = 0.7
-            else:
-                # High quality triggers can use lower threshold
-                relevance_threshold = 0.6
-                
-            # Adjust strength based on trigger type and specificity
-            if trigger_type == "entity":
-                # Entities typically have higher activation
-                activation_strength = 0.9
-            elif trigger_type == "emotion":
-                # Emotions can be powerful triggers
-                activation_strength = 0.85
-            else:
-                # Base strength on specificity
-                activation_strength = 0.7 + (specificity * 0.2)
-                
-            # Adjustments for generic triggers
-            if is_generic:
-                activation_strength *= 0.8  # Reduce strength for generic triggers
-                
-            return {
-                "relevance_threshold": relevance_threshold,
-                "activation_strength": activation_strength
-            }
+        # Adjust strength based on trigger type and specificity
+        if trigger_type == "entity":
+            # Entities typically have higher activation
+            activation_strength = 0.9
+        elif trigger_type == "emotion":
+            # Emotions can be powerful triggers
+            activation_strength = 0.85
+        else:
+            # Base strength on specificity
+            activation_strength = 0.7 + (specificity * 0.2)
+            
+        # Adjustments for generic triggers
+        if is_generic:
+            activation_strength *= 0.8  # Reduce strength for generic triggers
+            
+        return {
+            "relevance_threshold": relevance_threshold,
+            "activation_strength": activation_strength
+        }
 
-        @staticmethod
-        @function_tool
-        async def _assess_conversational_impact(
-            ctx: RunContextWrapper[RecognitionMemoryContext],
-            memory: Dict[str, Any],
-            conversation_context: List[Dict[str, Any]]
-        ) -> Dict[str, Any]:
-            """
-            Assess potential conversational impact of a recognized memory
+    @staticmethod
+    @function_tool
+    async def _assess_conversational_impact(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        memory: Dict[str, Any],
+        conversation_context: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Assess potential conversational impact of a recognized memory
+        
+        Args:
+            memory: Memory to evaluate
+            conversation_context: Recent conversation context
             
-            Args:
-                memory: Memory to evaluate
-                conversation_context: Recent conversation context
-                
-            Returns:
-                Impact assessment
-            """
-            # Get memory properties
-            memory_text = memory.get("memory_text", "")
-            memory_type = memory.get("memory_type", "")
-            memory_significance = memory.get("significance", 5)
+        Returns:
+            Impact assessment
+        """
+        # Get memory properties
+        memory_text = memory.get("memory_text", "")
+        memory_type = memory.get("memory_type", "")
+        memory_significance = memory.get("significance", 5)
+        
+        # Extract last message
+        last_message = ""
+        if conversation_context:
+            last_message = conversation_context[-1].get("text", "")
             
-            # Extract last message
-            last_message = ""
-            if conversation_context:
-                last_message = conversation_context[-1].get("text", "")
-                
-            # Default impact scores
-            novelty = 0.5
-            relevance = 0.5
-            coherence = 0.5
+        # Default impact scores
+        novelty = 0.5
+        relevance = 0.5
+        coherence = 0.5
+        
+        # Assess novelty
+        words_last_message = set(last_message.lower().split())
+        words_memory = set(memory_text.lower().split())
+        
+        # New information rate
+        if words_last_message:
+            unique_to_memory = words_memory - words_last_message
+            novelty = min(1.0, len(unique_to_memory) / len(words_memory))
             
-            # Assess novelty
-            words_last_message = set(last_message.lower().split())
-            words_memory = set(memory_text.lower().split())
+        # Assess coherence
+        if words_last_message and words_memory:
+            overlap = words_last_message.intersection(words_memory)
+            coherence = min(1.0, len(overlap) / min(len(words_last_message), len(words_memory)))
             
-            # New information rate
-            if words_last_message:
-                unique_to_memory = words_memory - words_last_message
-                novelty = min(1.0, len(unique_to_memory) / len(words_memory))
-                
-            # Assess coherence
-            if words_last_message and words_memory:
-                overlap = words_last_message.intersection(words_memory)
-                coherence = min(1.0, len(overlap) / min(len(words_last_message), len(words_memory)))
-                
-            # Assess relevance based on memory type and significance
-            if memory_type == "experience":
-                relevance += 0.1  # Slight boost for experiences
-            
-            # Significance boost
-            relevance += (memory_significance / 10) * 0.2
-            
-            # Calculate overall impact
-            impact_score = (novelty * 0.4) + (relevance * 0.4) + (coherence * 0.2)
-            
-            # Assess specific impact types
-            elaboration = coherence > 0.3 and novelty > 0.3
-            contrast = coherence < 0.3 and novelty > 0.7
-            reinforcement = coherence > 0.7 and novelty < 0.3
-            
-            return {
-                "impact_score": impact_score,
-                "novelty": novelty,
-                "relevance": relevance,
-                "coherence": coherence,
-                "impact_type": "elaboration" if elaboration else "contrast" if contrast else "reinforcement" if reinforcement else "mixed"
-            }
+        # Assess relevance based on memory type and significance
+        if memory_type == "experience":
+            relevance += 0.1  # Slight boost for experiences
+        
+        # Significance boost
+        relevance += (memory_significance / 10) * 0.2
+        
+        # Calculate overall impact
+        impact_score = (novelty * 0.4) + (relevance * 0.4) + (coherence * 0.2)
+        
+        # Assess specific impact types
+        elaboration = coherence > 0.3 and novelty > 0.3
+        contrast = coherence < 0.3 and novelty > 0.7
+        reinforcement = coherence > 0.7 and novelty < 0.3
+        
+        return {
+            "impact_score": impact_score,
+            "novelty": novelty,
+            "relevance": relevance,
+            "coherence": coherence,
+            "impact_type": "elaboration" if elaboration else "contrast" if contrast else "reinforcement" if reinforcement else "mixed"
+        }
     
     # Main public methods for using the recognition memory system
     
