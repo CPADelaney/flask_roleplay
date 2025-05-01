@@ -1735,12 +1735,6 @@ class EnhancedAgenticActionGenerator:
         except Exception as e:
             logger.error(f"Error finding relevant concept spaces: {e}")
             return []
-
-    async def create_story(self, title: str, outline: str="") -> str:
-        return await self.your_story_method(title, outline)
-    
-    async def create_poem(self, prompt: str) -> str:
-        return await self.your_poem_method(prompt)
     
     async def _update_temporal_context(self, context: Dict[str, Any]) -> None:
         """Update temporal awareness context"""
