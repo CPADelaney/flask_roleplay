@@ -1344,6 +1344,34 @@ class RecognitionMemorySystem:
 
     @staticmethod
     @function_tool
+    async def _assess_memory_causality(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        memory: Dict[str, Any],
+        conversation_context: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Assess causal connections between a recognized memory and the current conversation.
+        Returns a simple causality strength score and any trigger keywords found.
+        """
+        # Combine memory text and recent conversation
+        mem_text = memory.get("memory_text", "")
+        convo_text = " ".join(msg.get("text", "") for msg in conversation_context)
+        full_text = f"{mem_text} {convo_text}".lower()
+
+        # Look for basic causal markers
+        causality_markers = ["because", "due to", "as a result", "therefore", "so that"]
+        found = [kw for kw in causality_markers if kw in full_text]
+
+        # Simple strength: proportion of markers found capped at 1.0
+        strength = min(1.0, len(found) / len(causality_markers))
+
+        return {
+            "causality_strength": strength,
+            "causality_markers_found": found
+        }
+
+    @staticmethod
+    @function_tool
     async def _calibrate_trigger_parameters(
         ctx: RunContextWrapper[RecognitionMemoryContext],
         trigger_type: str,
