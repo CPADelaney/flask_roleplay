@@ -16,6 +16,8 @@ from agents import (
 )
 from pydantic import BaseModel, Field
 
+from nyx.core.memory_core import MemoryCoreAgents
+
 # Configure OpenAI API key
 if "OPENAI_API_KEY" not in os.environ:
     # Replace with your actual key if not using environment variable
@@ -101,7 +103,7 @@ class ExperienceConsolidationSystem:
     Identifies patterns, trends, and recurring themes across experiences.
     """
     
-    def __init__(self, memory_core=None, experience_interface=None):
+    def __init__(self, memory_core: MemoryCoreAgents, experience_interface=None):
         """
         Initialize the experience consolidation system.
         
