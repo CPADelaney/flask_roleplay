@@ -32,7 +32,7 @@ from .temporal import TemporalProcedureGraph
 
 # Import function tools to make them available
 from .function_tools import (
-    add_procedure, execute_procedure, transfer_procedure,
+    add_procedure, execue, transfer_procedure,
     get_procedure_proficiency, list_procedures, get_transfer_statistics,
     identify_chunking_opportunities, apply_chunking,
     generalize_chunk_from_steps, find_matching_chunks,
@@ -600,8 +600,12 @@ class ProceduralMemoryAgents:
             trace_id=f"trace_{uuid.uuid4().hex}"
         )
         
+        # Convert steps to JSON for the updated function
+        import json
+        steps_json = json.dumps(steps)
+        
         with trace(workflow_name="create_procedure"):
-            # Prepare input for the agent
+            # Prepare input for the agent with explicit JSON handling instructions
             agent_input = f"""
             Create a new procedure with the following details:
             - Name: {name}
@@ -609,7 +613,8 @@ class ProceduralMemoryAgents:
             - Description: {description or f'Procedure for {name}'}
             - Steps: {steps}
             
-            Please add this procedure to the system.
+            IMPORTANT: You must use the add_procedure function with steps_json parameter that takes a JSON string.
+            Convert the steps to a JSON string before passing them to the function.
             """
             
             try:
