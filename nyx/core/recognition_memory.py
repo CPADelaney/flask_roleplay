@@ -79,9 +79,10 @@ class RecognitionFilterOutput(BaseModel):
 class RecognitionMemoryContext:
     """Context object for recognition memory operations"""
     
-    def __init__(self, memory_core=None, context_awareness=None):
+    def __init__(self, memory_core=None, context_awareness=None, reasoning_core=None):
         self.memory_core = memory_core
         self.context_awareness = context_awareness
+        self.reasoning_core = reasoning_core  # Add this line
         
         # Recent context tracking
         self.recent_conversation: List[Dict[str, Any]] = []
