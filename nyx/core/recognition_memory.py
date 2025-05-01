@@ -428,6 +428,44 @@ class RecognitionMemorySystem:
 
     @staticmethod
     @function_tool
+    async def _blend_memory_with_context(
+        ctx: RunContextWrapper[RecognitionMemoryContext],
+        memory: Dict[str, Any],
+        conversation_context: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Create a lightweight “blend” of a memory and the current conversation context
+        so the filter agent can present how they interrelate.
+        """
+        mem_text = memory.get("memory_text", "")
+        convo_text = " ".join(msg.get("text", "") for msg in conversation_context)
+
+        # Pick a sentence from memory that overlaps with context, or fallback
+        overlap_words = set(mem_text.lower().split()) & set(convo_text.lower().split())
+        if overlap_words:
+            # find first sentence containing any overlap word
+            for sentence in mem_text.split("."):
+                if any(w in sentence.lower() for w in overlap_words):
+                    snippet = sentence.strip()
+                    break
+            else:
+                snippet = mem_text[:100].strip()
+        else:
+            snippet = mem_text[:100].strip()
+
+        # A very simple “blend score” based on proportion of shared words
+        shared = len(overlap_words)
+        total = len(set(mem_text.lower().split()) | set(convo_text.lower().split()))
+        blend_score = round(shared / total, 2) if total > 0 else 0.0
+
+        return {
+            "blended_snippet": snippet,
+            "blend_score": blend_score
+        }
+
+
+    @staticmethod
+    @function_tool
     async def _get_active_triggers(ctx: RunContextWrapper[RecognitionMemoryContext]) -> Dict[str, ContextualTrigger]:
         """
         Get the dictionary of currently active triggers
