@@ -252,25 +252,25 @@ class RecognitionMemorySystem:
                     self.salience_detector_agent,
                     tool_name_override="detect_salient_elements",
                     tool_description_override="Detect salient elements in conversation that could trigger memory recognition",
-                    on_handoff=self._prepare_for_salience_detection
+                    on_handoff=prepare_for_salience_detection
                 ),
                 handoff(
                     self.trigger_extraction_agent,
                     tool_name_override="extract_contextual_triggers",
                     tool_description_override="Extract contextual triggers from the salient elements detected in conversation",
-                    on_handoff=self._prepare_for_trigger_extraction
+                    on_handoff=prepare_for_trigger_extraction
                 ),
                 handoff(
                     self.memory_query_agent,
                     tool_name_override="query_based_on_triggers",
                     tool_description_override="Query memory system based on the extracted contextual triggers",
-                    on_handoff=self._prepare_for_memory_query
+                    on_handoff=prepare_for_memory_query
                 ),
                 handoff(
                     self.relevance_filter_agent,
                     tool_name_override="filter_recognition_results",
                     tool_description_override="Filter memory recognition results for contextual relevance and quality",
-                    on_handoff=self._prepare_for_relevance_filtering
+                    on_handoff=prepare_for_relevance_filtering
                 )
             ],
             output_type=List[RecognitionResult],
@@ -1808,55 +1808,7 @@ class RecognitionMemorySystem:
             
             return generated_triggers
 
-    async def _prepare_for_salience_detection(self, ctx, agent, input_data):
-        """Prepare context for salience detection handoff"""
-        # Extract content and current context
-        text = ""
-        if isinstance(input_data, str):
-            text = input_data
-        else:
-            # Try to find text in a list of messages
-            for item in input_data:
-                if isinstance(item, dict) and "content" in item:
-                    text += item["content"] + " "
-                elif isinstance(item, dict) and "text" in item:
-                    text += item["text"] + " "
-        
-        # Reset context fields for this analysis
-        ctx.context.context_topics = []
-        ctx.context.context_entities = []
-        ctx.context.context_emotions = []
-        
-        return input_data
-    
-    async def _prepare_for_trigger_extraction(self, ctx, agent, input_data):
-        """Prepare context for trigger extraction handoff"""
-        # Set the maximum number of triggers to extract
-        ctx.context.max_triggers_current = min(
-            ctx.context.max_triggers_per_turn,
-            len(ctx.context.context_entities) + len(ctx.context.context_topics) + len(ctx.context.context_emotions)
-        )
-        
-        return input_data
-    
-    async def _prepare_for_memory_query(self, ctx, agent, input_data):
-        """Prepare context for memory query handoff"""
-        # Set maximum number of memories to retrieve per trigger
-        max_memories_per_trigger = 3
-        if len(ctx.context.active_triggers) > 5:
-            max_memories_per_trigger = 2
-        
-        # Store in context
-        ctx.context.max_memories_per_trigger = max_memories_per_trigger
-        
-        return input_data
-    
-    async def _prepare_for_relevance_filtering(self, ctx, agent, input_data):
-        """Prepare context for relevance filtering handoff"""
-        # Set maximum number of memories to return after filtering
-        ctx.context.max_memories_to_return = ctx.context.max_recognitions_per_turn
-        
-        return input_data
+
     
     # Helper methods
     
@@ -1937,3 +1889,44 @@ class RecognitionMemorySystem:
             except Exception as e:
                 logger.error(f"Error integrating with novelty engine: {e}")
                 return {"status": "error", "error": str(e)}
+                
+async def prepare_for_salience_detection(ctx: RunContextWrapper[RecognitionMemoryContext]):
+    """Prepare context for salience detection handoff"""
+    logger.debug("Preparing context for Salience Detector Agent Handoff.")
+    # Access context via ctx.context
+    recent_convo = ctx.context.recent_conversation
+    logger.debug(f"Standalone: Recent conversation length: {len(recent_convo)}")
+    # Modify context if needed: ctx.context.some_field = ...
+    return None # on_handoff usually doesn't need to return
+
+async def prepare_for_trigger_extraction(ctx: RunContextWrapper[RecognitionMemoryContext]):
+    """Prepare context for trigger extraction handoff"""
+    logger.debug("Preparing context for Trigger Extraction Agent Handoff.")
+    # Access context via ctx.context
+    # Example:
+    # num_salient_elements = len(ctx.context.context_entities) + len(ctx.context.context_topics) + len(ctx.context.context_emotions)
+    # ctx.context.max_triggers_current = min(
+    #     ctx.context.max_triggers_per_turn,
+    #     num_salient_elements
+    # )
+    # logger.debug(f"Standalone: Set max_triggers_current to: {ctx.context.max_triggers_current}")
+    return None
+
+async def prepare_for_memory_query(ctx: RunContextWrapper[RecognitionMemoryContext]):
+    """Prepare context for memory query handoff"""
+    logger.debug("Preparing context for Memory Query Agent Handoff.")
+    # Access context via ctx.context
+    max_memories_per_trigger = 3
+    if len(ctx.context.active_triggers) > 5:
+        max_memories_per_trigger = 2
+    ctx.context.max_memories_per_trigger = max_memories_per_trigger
+    logger.debug(f"Standalone: Set max_memories_per_trigger to: {ctx.context.max_memories_per_trigger}")
+    return None
+
+async def prepare_for_relevance_filtering(ctx: RunContextWrapper[RecognitionMemoryContext]):
+    """Prepare context for relevance filtering handoff"""
+    logger.debug("Preparing context for Relevance Filter Agent Handoff.")
+    # Access context via ctx.context
+    ctx.context.max_memories_to_return = ctx.context.max_recognitions_per_turn
+    logger.debug(f"Standalone: Set max_memories_to_return to: {ctx.context.max_memories_to_return}")
+    return None
