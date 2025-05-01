@@ -79,6 +79,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.spatial_memory = None
         self.map_visualization = None
         self.navigator_agent = None
+
+        self.dominance_system = None
         
         # Sync system components
         self.sync_daemon = None
@@ -500,6 +502,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.femdom_coordinator = FemdomCoordinator(self)
             await self.femdom_coordinator.initialize()
             logger.debug("Femdom coordinator initialized")
+            
+            # Set the dominance_system to the femdom_coordinator
+            self.dominance_system = self.femdom_coordinator
             
             # Initialize femdom integration manager
             self.femdom_integration_manager = FemdomIntegrationManager(
