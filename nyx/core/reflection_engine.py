@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+from nyx.core.memory_core import MemoryCoreAgents
+
 # Import for integrated systems
 from nyx.core.passive_observation import (
     ObservationSource, ObservationFilter, Observation
@@ -42,6 +44,7 @@ class AbstractionOutput(BaseModel):
     entity_focus: str = Field(description="Primary entity this abstraction focuses on")
     neurochemical_insight: Dict[str, str] = Field(description="Insights about neurochemical patterns")
     supporting_evidence: List[str] = Field(description="References to supporting memories")
+    abstraction_id: Optional[str] = None
 
 class IntrospectionOutput(BaseModel):
     """Structured output for system introspection"""
@@ -898,15 +901,15 @@ class ReflectionEngine:
     and communication systems for comprehensive self-reflection.
     """
     
-    def __init__(self, 
+    def __init__(self,
+                 memory_core_ref: MemoryCoreAgents, # Pass memory core instance
                  emotional_core=None,
-                 passive_observation_system=None,  # New parameter
-                 proactive_communication_engine=None):  # New parameter
+                 passive_observation_system=None,
+                 proactive_communication_engine=None):
         """Initialize with references to required subsystems"""
         # Store reference to emotional core if provided
+        self.memory_core = memory_core_ref # Store memory core instance
         self.emotional_core = emotional_core
-        
-        # New references to integrated systems
         self.passive_observation_system = passive_observation_system
         self.proactive_communication_engine = proactive_communication_engine
         
@@ -1037,6 +1040,8 @@ class ReflectionEngine:
     
     def _init_agents(self):
         """Initialize the reflection system's specialized agents"""
+        tool_summarize = generate_summary_from_memories 
+        
         # Emotional Reflection Generator Agent
         self.reflection_agent = Agent(
             name="Emotional Reflection Generator",
@@ -1061,7 +1066,8 @@ class ReflectionEngine:
                 function_tool(extract_scenario_type),
                 function_tool(extract_neurochemical_influence),
                 function_tool(record_reflection),
-                function_tool(process_emotional_content)
+                function_tool(process_emotional_content),
+                tool_summarize
             ],
             output_type=ReflectionOutput
         )
@@ -1089,7 +1095,8 @@ class ReflectionEngine:
             tools=[
                 function_tool(format_memories_for_reflection),
                 function_tool(extract_neurochemical_influence),
-                function_tool(process_emotional_content)
+                function_tool(process_emotional_content),
+                tool_summarize
             ],
             output_type=AbstractionOutput
         )
@@ -1117,7 +1124,8 @@ class ReflectionEngine:
             tools=[
                 function_tool(get_agent_stats),
                 function_tool(analyze_emotional_patterns_reflect),
-                function_tool(process_emotional_content)
+                function_tool(process_emotional_content),
+                tool_summarize
             ],
             output_type=IntrospectionOutput
         )
@@ -1143,7 +1151,8 @@ class ReflectionEngine:
             model_settings=self.model_settings,
             tools=[
                 function_tool(process_emotional_content),
-                function_tool(analyze_emotional_patterns_reflect)
+                function_tool(analyze_emotional_patterns_reflect),
+                tool_summarize
             ],
             output_type=EmotionalProcessingOutput
         )
@@ -1170,7 +1179,8 @@ class ReflectionEngine:
             tools=[
                 function_tool(format_observations_for_reflection),
                 function_tool(analyze_observation_patterns),
-                function_tool(generate_observation_reflection)
+                function_tool(generate_observation_reflection),
+                tool_summarize
             ],
             output_type=ObservationReflectionOutput
         )
@@ -1196,7 +1206,8 @@ class ReflectionEngine:
             tools=[
                 function_tool(format_communications_for_reflection),
                 function_tool(analyze_communication_patterns),
-                function_tool(generate_communication_reflection)
+                function_tool(generate_communication_reflection),
+                tool_summarize
             ],
             output_type=CommunicationReflectionOutput
         )
@@ -2236,3 +2247,144 @@ class ReflectionEngine:
         impacts["focus_areas"] = list(impacts["focus_areas"])
         
         return impacts
+@function_tool
+async def generate_summary_from_memories(
+    ctx: RunContextWrapper[Any], # Context might need memory_core access via ctx.context or ctx.instance
+    source_memory_ids: List[str],
+    topic: Optional[str] = None,
+    max_length: int = 150, # Target summary length (in characters)
+    summary_type: Literal['summary', 'abstraction'] = 'summary'
+) -> Optional[SummaryOutput]: # Return SummaryOutput or None on failure
+    """
+    Generates a concise summary or abstraction from a list of related memories
+    and stores it as a new memory with appropriate links and metadata.
+
+    Args:
+        ctx: Run context wrapper, potentially holding memory_core access.
+        source_memory_ids: List of memory IDs to summarize.
+        topic: Optional topic focus for the summary.
+        max_length: Approximate maximum character length for the summary.
+        summary_type: Whether to generate a factual 'summary' or a higher-level 'abstraction'.
+
+    Returns:
+        SummaryOutput containing the generated text and its ID, or None if failed.
+    """
+    with custom_span("generate_summary_from_memories", {
+        "num_sources": len(source_memory_ids), "type": summary_type, "topic": topic
+    }):
+        memory_core = await get_memory_core_instance(ctx)
+        if not memory_core:
+            logger.error("Cannot generate summary: Memory Core not accessible.")
+            return None
+
+        # 1. Retrieve Source Memory Details
+        source_memories = []
+        try:
+            # Use get_memory_details which filters for 'detail' level if available
+            # If summaries can be based on other summaries, adjust this call
+            source_memories = await memory_core.get_memory_details(memory_ids=source_memory_ids, min_fidelity=0.3) # Fetch even lower fidelity sources for summarization
+            if not source_memories:
+                 # Fallback: try getting any level if details weren't found (maybe summarizing summaries?)
+                 logger.warning(f"No 'detail' memories found for summarization sources: {source_memory_ids}. Attempting general retrieval.")
+                 all_retrieved = await memory_core.retrieve_memories(query=f"ids:{','.join(source_memory_ids)}", limit=len(source_memory_ids))
+                 # Filter by ID again just in case retrieve_memories doesn't support exact ID query well
+                 source_memories = [m for m in all_retrieved if m.get('memory_id') in source_memory_ids]
+
+            if not source_memories:
+                logger.error(f"Failed to retrieve any source memories for summarization: {source_memory_ids}")
+                return None
+        except Exception as e:
+            logger.error(f"Error retrieving source memories for summarization: {e}", exc_info=True)
+            return None
+
+        # 2. Prepare Prompt for LLM
+        source_texts = [f"Source {i+1} (ID: {m.get('memory_id', 'N/A')}, Fidelity: {m.get('metadata', {}).get('fidelity', 1.0):.2f}):\n{m.get('memory_text', '')}"
+                        for i, m in enumerate(source_memories)]
+        source_context = "\n\n---\n\n".join(source_texts)
+        topic_instruction = f"Focus the {summary_type} on the topic: {topic}." if topic else ""
+        type_instruction = ("Generate a concise, factual summary of the key points." if summary_type == 'summary'
+                           else "Generate a higher-level abstraction identifying the core theme, pattern, or insight.")
+
+        prompt = f"""Please analyze the following source memories:
+{source_context}
+
+Instructions:
+- {type_instruction}
+- {topic_instruction}
+- Ensure the output is no more than approximately {max_length} characters.
+- Synthesize the information, don't just list points.
+- Base the output *only* on the provided sources.
+
+Generated {summary_type.capitalize()}:"""
+
+        # 3. Run LLM Agent (Using a generic agent here, replace if you have a dedicated one)
+        summarization_agent = Agent(
+            name="Summarization Agent",
+            instructions="You are an expert at summarizing and abstracting information from provided texts.",
+            model_settings=ModelSettings(temperature=0.5 if summary_type == 'summary' else 0.7) # Lower temp for factual summary
+        )
+        try:
+            result = await Runner.run(summarization_agent, prompt)
+            generated_text = result.final_output if hasattr(result, 'final_output') else str(result)
+            if not generated_text or len(generated_text) < 10: # Basic check for empty/trivial output
+                 raise ValueError("LLM returned empty or trivial summary.")
+        except Exception as e:
+            logger.error(f"Error generating {summary_type} text from LLM: {e}", exc_info=True)
+            return None
+
+        # 4. Calculate Metadata for the new summary/abstraction memory
+        avg_significance = sum(m.get('significance', 5) for m in source_memories) / len(source_memories)
+        # Summary significance = avg + bonus for consolidation; Abstraction = higher bonus
+        significance_bonus = 1 if summary_type == 'summary' else 2
+        new_significance = min(10, int(avg_significance + significance_bonus))
+
+        # Fidelity starts high but is penalized by lowest source fidelity and summary process
+        min_source_fidelity = min(m.get('metadata', {}).get('fidelity', 1.0) for m in source_memories)
+        fidelity_penalty = 0.1 if summary_type == 'summary' else 0.2 # Abstraction reduces fidelity more
+        new_fidelity = max(0.1, min_source_fidelity - fidelity_penalty) # Ensure fidelity doesn't drop below 0.1
+
+        # Combine tags - get common tags, add 'summary'/'abstraction', add topic
+        all_tags = [tag for mem in source_memories for tag in mem.get('tags', [])]
+        tag_counts = defaultdict(int)
+        for tag in all_tags: tag_counts[tag] += 1
+        common_tags = {tag for tag, count in tag_counts.items() if count >= len(source_memories) / 2}
+        # Remove generic tags that shouldn't propagate
+        common_tags -= {"observation", "experience", "detail"}
+        final_tags = list(common_tags | {summary_type})
+        if topic and topic not in final_tags: final_tags.append(topic)
+
+        # Determine scope (e.g., if all sources are 'user', make summary 'user')
+        scopes = {m.get('memory_scope', 'game') for m in source_memories}
+        new_scope = 'user' if scopes == {'user'} else 'game' # Simplified logic
+
+        # 5. Store the new Summary/Abstraction Memory
+        try:
+            create_params = MemoryCreateParams(
+                memory_text=generated_text,
+                memory_type=summary_type, # Use 'summary' or 'abstraction' as type
+                memory_level=summary_type, # Level matches type here
+                memory_scope=new_scope,
+                significance=new_significance,
+                fidelity=new_fidelity,
+                tags=final_tags,
+                source_memory_ids=[m['memory_id'] for m in source_memories],
+                summary_of=topic or f"{len(source_memories)} related memories",
+                metadata={} # Add any other relevant base metadata if needed
+            )
+            summary_id = await memory_core.add_memory(**create_params.model_dump()) # Use the API method which calls the tool
+            if not summary_id:
+                 raise ValueError("Failed to store the generated summary memory.")
+
+            logger.info(f"Generated and stored {summary_type} memory {summary_id} from {len(source_memory_ids)} sources.")
+
+            # 6. Return the result
+            return SummaryOutput(
+                summary_text=generated_text,
+                summary_id=summary_id,
+                fidelity=new_fidelity,
+                significance=new_significance
+            )
+
+        except Exception as e:
+            logger.error(f"Error storing generated {summary_type}: {e}", exc_info=True)
+            return None
