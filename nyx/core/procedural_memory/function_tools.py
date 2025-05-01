@@ -8,7 +8,7 @@ import uuid
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 # OpenAI Agents SDK imports
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, custom_span
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, custom_span, FunctionTool
 from agents.exceptions import UserError
 
 from .models import Procedure, ProcedureStats, TransferStats, ProcedureTransferRecord
@@ -17,25 +17,43 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-@function_tool
-async def add_procedure(
-    ctx: RunContextWrapper[Any],
-    name: str,
-    steps: List[Dict[str, Any]],
-    description: Optional[str] = None,
-    domain: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Add a new procedure to the procedural memory system.
+# Define a manually constructed schema that follows proper OpenAI schema format
+add_procedure_schema = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string", 
+            "description": "Name of the procedure"
+        },
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object"
+            },
+            "description": "List of step definitions"
+        },
+        "description": {
+            "type": ["string", "null"],
+            "description": "Optional description"
+        },
+        "domain": {
+            "type": ["string", "null"],
+            "description": "Domain/context"
+        }
+    },
+    "required": ["name", "steps"]
+}
+
+async def add_procedure_function(ctx: RunContextWrapper[Any], args_str: str) -> str:
+    """Add a new procedure to the procedural memory system."""
+    # Parse the arguments
+    import json
+    args = json.loads(args_str)
     
-    Args:
-        name: Name of the procedure
-        steps: List of step definitions
-        description: Optional description
-        domain: Domain/context
-    """
-    # Use domain default if not provided
-    domain = domain or "general"
+    name = args["name"]
+    steps = args["steps"]
+    description = args.get("description")
+    domain = args.get("domain", "general")
     
     manager = ctx.context.manager
     
@@ -56,10 +74,10 @@ async def add_procedure(
             if "id" not in step:
                 step["id"] = f"step_{i+1}"
             if "function" not in step:
-                return {
+                return json.dumps({
                     "error": f"Step {i+1} is missing a function name",
                     "success": False
-                }
+                })
         
         # Create procedure object
         procedure = Procedure(
@@ -86,13 +104,21 @@ async def add_procedure(
         
         logger.info(f"Added new procedure '{name}' with {len(steps)} steps in {domain} domain")
         
-        return {
+        return json.dumps({
             "procedure_id": procedure_id,
             "name": name,
             "domain": domain,
             "steps_count": len(steps),
             "success": True
-        }
+        })
+
+# Create the function tool manually with the custom schema
+add_procedure = FunctionTool(
+    name="add_procedure",
+    description="Add a new procedure to the procedural memory system.",
+    params_json_schema=add_procedure_schema,
+    on_invoke_tool=add_procedure_function
+)
 
 @function_tool
 async def execute_procedure(
