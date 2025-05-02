@@ -129,7 +129,8 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
         # 2. Influence from Hormones
         if manager_ctx.hormone_system:
             try:
-                hormone_levels = manager_ctx.hormone_system.get_hormone_levels()
+                # Add await here to properly get hormone levels
+                hormone_levels = await manager_ctx.hormone_system.get_hormone_levels()
                 hormone_influence_valence = 0.0
                 hormone_influence_arousal = 0.0
                 hormone_influence_control = 0.0
@@ -196,7 +197,10 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
                     needs_influence_valence = -avg_deficit * 1.5  # Strong negative impact
                     needs_influence_arousal = avg_deficit * 0.3   # Slight agitation
                     needs_influence_control = -avg_deficit * 0.2  # Reduced sense of control
-
+        
+                    # Get weight first before using it
+                    weight = manager_ctx.influence_weights["needs"]
+        
                     # Add valence/arousal/control from pleasure deprivation
                     pleasure_state = needs_state.get("pleasure_indulgence", {})
                     pleasure_deficit = pleasure_state.get("deficit", 0.0)
@@ -211,9 +215,8 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
                     target_control += control_bias * weight
                     
                     influences["pleasure_deprivation"] = pleasure_deficit * weight
-
-                    # Apply needs weight
-                    weight = manager_ctx.influence_weights["needs"]
+        
+                    # Apply needs weight (already defined above)
                     target_valence += needs_influence_valence * weight
                     target_arousal += needs_influence_arousal * weight
                     target_control += needs_influence_control * weight
@@ -311,22 +314,36 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
         return manager_ctx.current_mood.dict()
 
 @function_tool
-async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, Any]:
-    """
-    Returns the current mood state, updating if needed.
+async def get_current_mood(self) -> MoodState:
+    """Returns the current mood state, updating if needed."""
+    result = await Runner.run(
+        self.agent,
+        "Get the current mood state.",
+        context=self.context
+    )
     
-    Returns:
-        Current mood state information
-    """
-    manager_ctx = ctx.context
-    
-    async with manager_ctx._lock:
-        # Check if we should update
-        now = datetime.datetime.now()
-        if (now - manager_ctx.last_update_time).total_seconds() > manager_ctx.update_interval_seconds:
-            return await update_mood(ctx)
-        return manager_ctx.current_mood.dict()
-
+    try:
+        mood_data = result.final_output
+        # Handle string result by attempting to parse it as JSON
+        if isinstance(mood_data, str):
+            import json
+            try:
+                # Try to parse the string as JSON
+                mood_data = json.loads(mood_data)
+                logger.info("Successfully parsed string result as JSON dictionary")
+            except json.JSONDecodeError:
+                logger.warning(f"Could not parse string result as JSON: {mood_data[:100]}...")
+                return self.context.current_mood
+                
+        if isinstance(mood_data, dict):
+            return MoodState(**mood_data)
+        else:
+            logger.warning(f"Unexpected get_current_mood result format: {type(result.final_output)}")
+            return self.context.current_mood
+    except Exception as e:
+        logger.error(f"Error parsing current mood result: {e}")
+        return self.context.current_mood
+        
 @function_tool
 async def modify_mood(
     ctx: RunContextWrapper[MoodManagerContext], 
