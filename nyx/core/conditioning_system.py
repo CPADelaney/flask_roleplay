@@ -182,7 +182,7 @@ class ConditioningSystem:
                 self._get_association,
                 self._create_or_update_operant_association,
                 self._calculate_valence_and_reward,
-                self._generate_reward_signal
+                self._generate_reward_signal_tool
             ],
             output_type=OperantConditioningOutput,
             model_settings=ModelSettings(temperature=0.2)
@@ -2005,3 +2005,42 @@ class ConditioningSystem:
                 "total_items": total_items,
                 "personality_profile": personality_profile
             }
+@staticmethod
+async def _generate_reward_signal_logic(
+    ctx: RunContextWrapper,
+    behavior: str,
+    consequence_type: str,
+    reward_value: float,
+    metadata: Dict[str, Any] | None = None,
+) -> bool:
+    """
+    Generate a reward signal for the reward system.
+    """
+    if not ctx.context.reward_system:
+        return False
+
+    try:
+        reward_signal = RewardSignal(
+            value=reward_value,
+            source="operant_conditioning",
+            context={
+                "behavior": behavior,
+                "consequence_type": consequence_type,
+                **(metadata or {}),
+            },
+        )
+
+        # Dispatch the signal
+        await ctx.context.reward_system.process_reward_signal(reward_signal)
+        return True
+
+    except Exception as e:
+        logger.error(f"Error generating reward signal: {e}")
+        return False
+
+# 2. Create the FunctionTool object FROM the logic function
+_generate_reward_signal_tool = function_tool(
+    _generate_reward_signal_logic,
+    name_override="_generate_reward_signal",
+    description_override="Generate a reward signal for the reward system"
+)
