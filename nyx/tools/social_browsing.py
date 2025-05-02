@@ -5,6 +5,7 @@ Nyx's autonomous doomscrolling, emotional engagement, social presence, and ident
 
 import random
 import datetime
+from typing import Dict, Any, List
 from nyx.tools.claim_validation import validate_social_claim
 
 
