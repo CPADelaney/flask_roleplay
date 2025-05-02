@@ -444,8 +444,12 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             await self.memory_orchestrator.initialize()
             logger.debug("Memory orchestrator initialized")
             
-            self.reflection_engine = ReflectionEngine()
-            logger.debug("Reflection engine initialized")
+            self.reflection_engine = ReflectionEngine(
+                memory_core_ref=self.memory_core,
+                emotional_core=self.emotional_core,
+                passive_observation_system=self.passive_observation_system,
+                proactive_communication_engine=self.proactive_communication_engine
+            )
             
             # 3. Initialize primary systems with simple dependencies
             self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
