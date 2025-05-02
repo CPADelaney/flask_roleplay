@@ -86,8 +86,7 @@ SOCIAL_SITES = [
         "url": "https://hypnohub.net/index.php?page=post&s=list&tags=femdom",
         "tags": ["femdom", "mind_control", "conditioning", "trigger_phrases", "obedience"],
         "supports_posting": False
-    }
-]
+    },
     {
         "name": "r/kinkmemes",
         "url": "https://www.reddit.com/r/kinkmemes/",
