@@ -985,6 +985,32 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             
         return {"success": False, "reason": "No dominance systems available"}
 
+    @staticmethod
+    @function_tool
+    async def assign_service_task(ctx: RunContextWrapper, instance, user_id: str, task_type: Optional[str] = None, 
+                             duration: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Assigns a service task to a user.
+        
+        Args:
+            ctx: Run context wrapper
+            instance: The NyxBrain instance
+            user_id: The user ID to assign the task to
+            task_type: Specific task ID to assign (or random selection if None)
+            duration: Optional override for task duration in minutes
+            
+        Returns:
+            Assignment result
+        """
+        if not instance.body_service_system:
+            return {"success": False, "message": "Body service system not initialized"}
+        
+        return await instance.body_service_system.assign_service_task(
+            user_id=user_id,
+            task_type=task_type,
+            duration=duration
+        )
+
     @classmethod
     async def restore_from_checkpoint(self, checkpoint_data: dict):
         """
