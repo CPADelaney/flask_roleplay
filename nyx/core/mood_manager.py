@@ -330,10 +330,10 @@ async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[s
 @function_tool
 async def modify_mood(
     ctx: RunContextWrapper[MoodManagerContext], 
-    valence_change: float = 0, 
-    arousal_change: float = 0, 
-    control_change: float = 0,
-    reason: str = "manual_adjustment"
+    valence_change: Optional[float] = None,
+    arousal_change: Optional[float] = None,
+    control_change: Optional[float] = None,
+    reason: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Manually modify the current mood (for testing or external influences).
@@ -347,6 +347,12 @@ async def modify_mood(
     Returns:
         Updated mood state
     """
+    # Set default values inside the function body
+    valence_change = 0 if valence_change is None else valence_change
+    arousal_change = 0 if arousal_change is None else arousal_change
+    control_change = 0 if control_change is None else control_change
+    reason = "manual_adjustment" if reason is None else reason
+    
     manager_ctx = ctx.context
     
     async with manager_ctx._lock:
@@ -434,8 +440,8 @@ async def handle_significant_event(
 @function_tool
 async def get_mood_history(
     ctx: RunContextWrapper[MoodManagerContext],
-    hours: int = 24, 
-    include_details: bool = False
+    hours: Optional[int] = None,
+    include_details: Optional[bool] = None
 ) -> List[Dict[str, Any]]:
     """
     Get mood history for the specified time period.
@@ -447,6 +453,9 @@ async def get_mood_history(
     Returns:
         List of mood states with timestamps
     """
+    # Handle default values inside the function
+    hours = 24 if hours is None else hours
+    include_details = False if include_details is None else include_details
     manager_ctx = ctx.context
     
     async with manager_ctx._lock:
