@@ -1579,9 +1579,18 @@ class ConditioningSystem:
                     chemical = chemical_map[emotion_lower]
                     test_intensity = intensity * 0.1  # Very mild test activation
                     
-                    emotional_test = await self.context.emotional_core.update_neurochemical(
+                    # Use the neurochemical_tools to update the neurochemical
+                    # Create a context wrapper to use with the tools
+                    from agents import RunContextWrapper
+                    ctx = RunContextWrapper(context=self.context.emotional_core.context)
+                    ctx.context.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
+                    
+                    # Call the update_neurochemical tool via the neurochemical_tools instance
+                    emotional_test = await self.context.emotional_core.neurochemical_tools.update_neurochemical(
+                        ctx,
                         chemical=chemical,
-                        value=test_intensity
+                        value=test_intensity,
+                        source="emotion_trigger"
                     )
             except Exception as e:
                 logger.error(f"Error creating test emotion activation: {e}")
