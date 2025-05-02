@@ -257,7 +257,8 @@ class EnhancedAgenticActionGenerator:
                  capability_assessor=None,
                  issue_tracker=None,
                  proactive_communication_engine=None,
-                 system_context=None
+                 system_context=None,
+                 relationship_reflection=None,
                  ):
                      
         """Initialize with references to required subsystems"""
