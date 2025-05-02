@@ -729,7 +729,7 @@ async def retrieve_memories(
     entities: Optional[List[str]] = None,
     emotional_state: Optional[Dict[str, Any]] = None,
     tags: Optional[List[str]] = None,
-    retrieval_level: str = "auto",
+    retrieval_level: Optional[str] = None,  # Changed from str="auto" to Optional[str]=None
     min_fidelity: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """
