@@ -57,6 +57,29 @@ class TaskPurpose(Enum):
     VISUALIZATION = auto()
     OTHER = auto()
 
+class ActionContext(BaseModel):
+    """Context for action selection and generation"""
+    state: Dict[str, Any] = Field(default_factory=dict, description="Current system state")
+    user_id: Optional[str] = None
+    relationship_data: Optional[Dict[str, Any]] = None
+    user_mental_state: Optional[Dict[str, Any]] = None
+    temporal_context: Optional[Dict[str, Any]] = None
+    active_goals: List[Dict[str, Any]] = Field(default_factory=list)
+    motivations: Dict[str, float] = Field(default_factory=dict)
+    available_actions: List[str] = Field(default_factory=list)
+    action_history: List[Dict[str, Any]] = Field(default_factory=list)
+    causal_models: List[str] = Field(default_factory=list, description="IDs of relevant causal models")
+    concept_spaces: List[str] = Field(default_factory=list, description="IDs of relevant concept spaces")
+    mood_state: Optional[Dict[str, Any]] = None
+    need_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    interaction_mode: Optional[str] = None
+    sensory_context: Dict[str, Any] = Field(default_factory=dict)
+    bottlenecks: List[Dict[str, Any]] = Field(default_factory=list)
+    resource_allocation: Dict[str, float] = Field(default_factory=dict)
+    strategy_parameters: Dict[str, Any] = Field(default_factory=dict)
+    relevant_observations: List[Dict[str, Any]] = Field(default_factory=list)
+    active_communication_intents: List[Dict[str, Any]] = Field(default_factory=list)
+
 class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     """
     Central integration point for all Nyx systems.
