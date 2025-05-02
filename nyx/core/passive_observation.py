@@ -250,7 +250,7 @@ async def generate_observation_from_action(
 @function_tool
 async def generate_observation_from_source(
     source: str, 
-    context: Dict[str, Any],
+    context: Dict[str, Any] = {},  # Add default empty dict
     template_options: List[str] = None
 ) -> Dict[str, Any]:
     """Generate an observation based on a specific source"""
@@ -810,13 +810,13 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         
         logger.info("PassiveObservationSystem initialized with action integration")
     
-    def _create_agent_with_instructions(self, name, instructions, tools, output_type):
+    def _create_agent_with_instructions(self, name, instructions, tools_functions, output_type):
         """Helper method to create an agent with given instructions"""
         return Agent(
             name=name,
             instructions=instructions,
             model="gpt-4o",
-            tools=tools,
+            tools=tools_functions,  # Pass the functions directly
             output_type=output_type
         )
     
