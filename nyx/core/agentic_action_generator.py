@@ -2091,7 +2091,7 @@ class EnhancedAgenticActionGenerator:
                 "error_type": type(e).__name__
             }
     
-    def register_action(self, action_name: str, handler: Callable) -> None:
+    async def register_action(self, action_name: str, handler: Callable) -> None:
         """
         Register a handler for a specific action
         
