@@ -19,6 +19,7 @@ from nyx.core.reasoning_core import (
     ConceptSpace, ConceptualBlend, Intervention
 )
 from nyx.core.reflection_engine import ReflectionEngine
+from nyx.core.relationship_reflection import RelationshipReflectionSystem
 from nyx.core.multimodal_integrator import (
     MultimodalIntegrator, Modality, SensoryInput, ExpectationSignal, IntegratedPercept
 )
@@ -284,6 +285,7 @@ class EnhancedAgenticActionGenerator:
         self.body_image = body_image
         self.conditioning_system = conditioning_system
         self.conditioning_maintenance = conditioning_maintenance
+        self.relationship_reflection = RelationshipReflectionSystem()
         
         # Enhanced systems
         self.reward_system = reward_system
