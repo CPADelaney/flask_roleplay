@@ -13,6 +13,8 @@ from enum import Enum
 
 from nyx.core.context import NyxSystemContext
 
+from nyx.core.procedural_memory.manager import ProceduralMemoryManager
+
 # Core system imports
 from nyx.core.reasoning_core import (
     ReasoningCore, CausalModel, CausalNode, CausalRelation,
@@ -260,6 +262,7 @@ class EnhancedAgenticActionGenerator:
                  proactive_communication_engine=None,
                  system_context=None,
                  relationship_reflection=None,
+                 procedural_memory_manager=None, 
                  ):
                      
         """Initialize with references to required subsystems"""
@@ -286,6 +289,8 @@ class EnhancedAgenticActionGenerator:
         self.conditioning_system = conditioning_system
         self.conditioning_maintenance = conditioning_maintenance
         self.relationship_reflection = RelationshipReflectionSystem()
+        self.procedural_memory_manager = procedural_memory_manager or ProceduralMemoryManager()
+
         
         # Enhanced systems
         self.reward_system = reward_system
