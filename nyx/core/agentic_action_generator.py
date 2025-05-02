@@ -440,7 +440,7 @@ class EnhancedAgenticActionGenerator:
             imagination_simulator=imagination_simulator,
             theory_of_mind=theory_of_mind,
             relationship_reflection=relationship_reflection,
-            proactive_communication=proactive_communication,
+            proactive_communication=proactive_communication_engine,
             emotional_core=emotional_core,
             memory_core=memory_core
         )    
