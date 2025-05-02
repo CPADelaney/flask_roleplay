@@ -6,7 +6,7 @@ import json
 import logging
 import random
 import uuid
-from typing import Dict, List, Any, Optional, Tuple, Set, Union
+from typing import Dict, List, Any, Optional, Tuple, Set, Union, Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
