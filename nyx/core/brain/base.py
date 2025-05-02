@@ -9,6 +9,7 @@ import math
 from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal
 import json
 from collections import defaultdict # Added
+from enum import Enum, auto
 
 from agents import (
     Agent, Runner, trace, function_tool, handoff, RunContextWrapper,
@@ -43,6 +44,18 @@ from nyx.core.passive_observation import ObservationFilter
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+class TaskPurpose(Enum):
+    ANALYZE = auto()
+    WRITE = auto()
+    DEPLOY = auto()
+    SEARCH = auto()
+    COMMUNICATE = auto()
+    DATABASE = auto()
+    FILE_MANIPULATION = auto()
+    CODE = auto()
+    VISUALIZATION = auto()
+    OTHER = auto()
 
 class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     """
