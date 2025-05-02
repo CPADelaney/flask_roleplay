@@ -3342,41 +3342,54 @@ System Prompt End
     async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Generate a user-facing response, activating relevant modules and handling epistemic status.
+        Now enhanced with hierarchical memory context for improved response quality.
         """
         if not getattr(self, "initialized", False):
             await self.initialize()
         context = context or {}
         start_time = datetime.now()
-
+    
         # --- 1. Process Input & Determine Active Modules ---
         # This call now internally runs _determine_active_modules
         input_result = await self.process_input(user_input, context)
-
+    
         # Retrieve the set of modules activated during input processing
         active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
         context["active_modules"] = active_modules # Ensure context for response phase has it
-
-        focus_query = user_input
-        # Example: Get recent conversation topics or active goal descriptions
-        background_topics = list(context.get('recent_topics', []))
-        if 'active_goals' in context and context['active_goals']:
-             background_topics.append(context['active_goals'][0]['description']) # Add top goal description
-        background_topics = list(set(background_topics))[:3] # Limit background topics
-
-        current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
-        # If an action was planned in input processing, adjust task description
-        if action := input_result.get('action_taken'):
-            current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
-
-
-        # --- 3. Assemble Hierarchical Context ---
-        llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
-            current_task_description=current_task_desc,
-            focus_query=focus_query,
-            background_topics=background_topics
-        )
-
-        # --- 2. Handle Critical Issues (Harmful Content, Gaslighting) ---
+    
+        # --- 2. Assemble Hierarchical Memory Context ---
+        # Only attempt to build hierarchical context if memory_core is active
+        if "memory_core" in active_modules and self.memory_core:
+            try:
+                # Define query and background topics for memory retrieval
+                focus_query = user_input
+                # Example: Get recent conversation topics or active goal descriptions
+                background_topics = list(context.get('recent_topics', []))
+                if 'active_goals' in context and context['active_goals']:
+                    background_topics.append(context['active_goals'][0]['description']) # Add top goal description
+                background_topics = list(set(background_topics))[:3] # Limit background topics
+    
+                current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
+                # If an action was planned in input processing, adjust task description
+                if action := input_result.get('action_taken'):
+                    current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
+    
+                # Build hierarchical memory context
+                llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
+                    current_task_description=current_task_desc,
+                    focus_query=focus_query,
+                    background_topics=background_topics
+                )
+                
+                # Store in context for downstream use
+                context['hierarchical_memory_context'] = llm_prompt_context
+                context['memory_retrieval_stats'] = assembly_meta
+                logger.debug(f"Built hierarchical memory context with {assembly_meta['focus_retrieved_count']} focus and {assembly_meta['background_retrieved_count']} background memories")
+            except Exception as e:
+                logger.error(f"Error building hierarchical memory context: {e}", exc_info=True)
+                # Don't let failed context building prevent response generation
+    
+        # --- 3. Handle Critical Issues (Harmful Content, Gaslighting) ---
         if context.get("intercepted_harmful_content", False):
             logger.warning("Harmful content intercepted. Generating safe response.")
             internal_thoughts_input = input_result.get("internal_thoughts", [])
@@ -3387,16 +3400,17 @@ System Prompt End
             return {
                 "message": context.get("suggested_response", "I cannot respond to that specific content."),
                 "epistemic_status": epistemic_status,
-                "internal_thoughts_input": internal_thoughts_input,
+                "internal_thoughts_input": input_result.get("internal_thoughts", []),
                 "internal_thoughts_output": [],
                 "active_modules_for_response": active_modules_list,
                 "response_time": (datetime.now() - start_time).total_seconds(),
                 "harmful_content_intercepted": True,
                 "action_taken": None,
                 "thinking_applied": False,
-                "thinking_result": {}
+                "thinking_result": {},
+                "memory_context_used": False
             }
-
+    
         if "planned_challenge" in input_result:
             logger.info("Generating challenge response due to gaslighting detection.")
             main_message = input_result["planned_challenge"]
@@ -3406,15 +3420,14 @@ System Prompt End
             thinking_result = input_result.get("thinking_result", {})
             internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
         else:
-            # --- 3. Generate Action (Conditional) ---
+            # --- 4. Generate Action (Conditional) ---
             main_message = "I'm processing that." # Default message
             epistemic_status = "confident"
             action = None
             thinking_applied = input_result.get("thinking_applied", False)
             thinking_result = input_result.get("thinking_result", {})
             internal_thoughts_input = input_result.get("internal_thoughts", []) # Get thoughts from input phase
-
-
+    
             # Only generate an action if the generator module is active
             if "agentic_action_generator" in active_modules and self.agentic_action_generator:
                 try:
@@ -3422,18 +3435,21 @@ System Prompt End
                     # Gather context, respecting active_modules implicitly via the gather function
                     action_context = await self._gather_action_context(context) # This needs the context with active_modules
                     action_context_dict = action_context.model_dump() if hasattr(action_context, "model_dump") else dict(action_context)
-                    # action_context_dict["active_modules"] = list(active_modules) # Already included in gather
-
+                    
+                    # --- Add hierarchical memory context to action context if available ---
+                    if 'hierarchical_memory_context' in context:
+                        action_context_dict["hierarchical_memory_context"] = context['hierarchical_memory_context']
+                    
                     # --- Agent Call ---
                     action = await self.agentic_action_generator.generate_action(action_context_dict)
                     # ---
-
+    
                     # Ensure action is a dictionary
                     if not isinstance(action, dict):
-                         logger.error(f"Action generator returned non-dict type: {type(action)}. Using default.")
-                         action = {"name": "default_acknowledge", "description": "Acknowledging input."}
-                         main_message = "Understood."
-                         epistemic_status = "confident"
+                        logger.error(f"Action generator returned non-dict type: {type(action)}. Using default.")
+                        action = {"name": "default_acknowledge", "description": "Acknowledging input."}
+                        main_message = "Understood."
+                        epistemic_status = "confident"
                     else:
                         main_message = action.get("response_text", action.get("description", "Okay, I will proceed with that action."))
                         # Determine epistemic status based on thoughts from *input processing*
@@ -3442,35 +3458,33 @@ System Prompt End
                                 self._ensure_internalthought(t) for t in internal_thoughts_input
                             ])
                         else:
-                             epistemic_status = "confident" # Default if no specific thoughts guided
-
+                            epistemic_status = "confident" # Default if no specific thoughts guided
+    
                 except Exception as e:
-                     logger.error(f"Error during action generation: {e}", exc_info=True)
-                     main_message = "I encountered an internal difficulty deciding how to proceed."
-                     epistemic_status = "uncertain"
-                     action = {"name": "error_action", "error": str(e)} # Log error in action field
+                    logger.error(f"Error during action generation: {e}", exc_info=True)
+                    main_message = "I encountered an internal difficulty deciding how to proceed."
+                    epistemic_status = "uncertain"
+                    action = {"name": "error_action", "error": str(e)} # Log error in action field
             else:
-                 logger.debug("AgenticActionGenerator is not active for this response. Generating simpler response.")
-                 main_message = f"I've noted your input regarding '{user_input[:30]}...'"
-                 # Epistemic status determined by input thoughts
-                 if internal_thoughts_input:
+                logger.debug("AgenticActionGenerator is not active for this response. Generating simpler response.")
+                main_message = f"I've noted your input regarding '{user_input[:30]}...'"
+                # Epistemic status determined by input thoughts
+                if internal_thoughts_input:
                     epistemic_status = self._get_main_epistemic_status([self._ensure_internalthought(t) for t in internal_thoughts_input])
-
-
-        # --- 4. Format with Epistemic Tags ---
+    
+        # --- 5. Format with Epistemic Tags ---
         formatted_message = self._format_response_with_epistemic_tags(main_message, epistemic_status)
         # Optionally add thinking signal
         if thinking_applied:
-             # Find first sentence to prepend, or just prepend
-             sentences = formatted_message.split('.')
-             if len(sentences) > 1:
-                 sentences[0] = f"(Hmm...) {sentences[0]}"
-                 formatted_message = '.'.join(sentences)
-             else:
-                 formatted_message = f"(Hmm...) {formatted_message}"
-
-
-        # --- 5. Post-process Output (Conditional) ---
+            # Find first sentence to prepend, or just prepend
+            sentences = formatted_message.split('.')
+            if len(sentences) > 1:
+                sentences[0] = f"(Hmm...) {sentences[0]}"
+                formatted_message = '.'.join(sentences)
+            else:
+                formatted_message = f"(Hmm...) {formatted_message}"
+    
+        # --- 6. Post-process Output (Conditional) ---
         filtered_msg = formatted_message
         output_thoughts = []
         # Only run post-processing if the thoughts manager is active
@@ -3487,16 +3501,15 @@ System Prompt End
                 filtered_msg = formatted_message
         else:
             logger.debug("InternalThoughtsManager is not active. Skipping response post-processing.")
-
-
-        # --- 6. Assemble Final Response ---
+    
+        # --- 7. Assemble Final Response ---
         response_time = (datetime.now() - start_time).total_seconds()
         # Safely update performance metrics
         if hasattr(self, 'performance_metrics') and isinstance(self.performance_metrics, dict) and 'response_times' in self.performance_metrics:
-             self.performance_metrics["response_times"].append(response_time)
-             if len(self.performance_metrics["response_times"]) > 100:
-                 self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
-
+            self.performance_metrics["response_times"].append(response_time)
+            if len(self.performance_metrics["response_times"]) > 100:
+                self.performance_metrics["response_times"] = self.performance_metrics["response_times"][-100:]
+    
         final_response = {
             "message": filtered_msg,
             "epistemic_status": epistemic_status,
@@ -3507,10 +3520,150 @@ System Prompt End
             "action_taken": action, # Include the action generated (or None)
             "thinking_applied": thinking_applied,
             "thinking_result": thinking_result,
+            "memory_context_used": 'hierarchical_memory_context' in context # Flag whether hierarchical context was used
         }
+        
+        # Add memory retrieval stats if available
+        if 'memory_retrieval_stats' in context:
+            final_response["memory_retrieval_stats"] = {
+                "focus_count": context['memory_retrieval_stats'].get('focus_retrieved_count', 0),
+                "background_count": context['memory_retrieval_stats'].get('background_retrieved_count', 0),
+                "zoom_in_count": context['memory_retrieval_stats'].get('zoom_in_details_count', 0)
+            }
+        
         return final_response
 
+    async def trigger_memory_summarization(self, topic: str = None, min_memories: int = 5, force: bool = False) -> Dict[str, Any]:
+        """
+        Trigger the creation of summary memories for clusters of related detail memories.
+        
+        Args:
+            topic: Optional topic to focus summarization on
+            min_memories: Minimum number of memories needed to create a summary
+            force: Whether to force summarization even if threshold not met
+            
+        Returns:
+            Summary of the summarization process
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        if not self.memory_core:
+            return {"success": False, "error": "Memory core not available"}
+        
+        result = {"success": True, "summaries_created": 0, "topics_summarized": []}
+        
+        try:
+            # Find clusters of related memories
+            if topic:
+                # For targeted summarization
+                query = topic
+                memory_types = ["observation", "experience", "detail"]
+                memories = await self.memory_core.retrieve_memories(
+                    query=query,
+                    memory_types=memory_types,
+                    limit=20,
+                    retrieval_level='detail'  # Only get detail memories
+                )
+                
+                # Only proceed if we have enough memories
+                if len(memories) >= min_memories or force:
+                    # Group by semantic similarity (simplified)
+                    clusters = [[memories[0]]]
+                    for mem in memories[1:]:
+                        added = False
+                        for cluster in clusters:
+                            if self._calculate_memory_similarity(mem, cluster[0]) > 0.7:
+                                cluster.append(mem)
+                                added = True
+                                break
+                        if not added:
+                            clusters.append([mem])
+                    
+                    # Create summaries for each valid cluster
+                    for cluster in clusters:
+                        if len(cluster) >= min_memories or force:
+                            summary_result = await self._create_summary_for_cluster(cluster, topic)
+                            if summary_result.get("success"):
+                                result["summaries_created"] += 1
+                                result["topics_summarized"].append(summary_result.get("summary_topic"))
+            else:
+                # For general periodic summarization
+                # 1. Get common tags as potential topics
+                if hasattr(self.memory_core, "tag_index"):
+                    for tag, memory_ids in self.memory_core.tag_index.items():
+                        if len(memory_ids) >= min_memories:
+                            # Try to summarize this tag cluster
+                            tag_memories = await self.memory_core.retrieve_memories(
+                                query="",
+                                tags=[tag],
+                                memory_types=["observation", "experience", "detail"],
+                                limit=15,
+                                retrieval_level='detail'
+                            )
+                            
+                            if len(tag_memories) >= min_memories:
+                                summary_result = await self._create_summary_for_cluster(tag_memories, tag)
+                                if summary_result.get("success"):
+                                    result["summaries_created"] += 1
+                                    result["topics_summarized"].append(summary_result.get("summary_topic"))
+            
+            # Log summarization activity
+            if result["summaries_created"] > 0:
+                logger.info(f"Created {result['summaries_created']} memory summaries on topics: {result['topics_summarized']}")
+                
+        except Exception as e:
+            logger.error(f"Error in trigger_memory_summarization: {e}", exc_info=True)
+            result["success"] = False
+            result["error"] = str(e)
+        
+        return result
 
+    async def _create_summary_for_cluster(self, memories: List[Dict[str, Any]], topic: str = None) -> Dict[str, Any]:
+        """
+        Create a summary memory for a cluster of related detail memories.
+        
+        Args:
+            memories: List of detail memories to summarize
+            topic: Optional topic label for the summary
+            
+        Returns:
+            Result of the summarization
+        """
+        if not self.memory_core or not self.reflection_engine:
+            return {"success": False, "error": "Required components not available"}
+        
+        result = {"success": False}
+        
+        # Ensure we have memory IDs
+        memory_ids = [mem["id"] for mem in memories if "id" in mem]
+        if not memory_ids:
+            return {"success": False, "error": "No valid memory IDs found"}
+        
+        try:
+            # Use reflection engine to generate summary
+            summary_params = {
+                "source_memory_ids": memory_ids,
+                "summary_topic": topic or "Related experiences",
+                "abstraction_level": "summary"  # Could be 'summary' or 'abstraction'
+            }
+            
+            if hasattr(self.reflection_engine, "generate_summary_from_memories"):
+                summary_result = await self.reflection_engine.generate_summary_from_memories(
+                    RunContextWrapper(context=self), **summary_params
+                )
+                
+                # Check for success
+                if summary_result and "summary_id" in summary_result:
+                    result["success"] = True
+                    result["summary_id"] = summary_result["summary_id"]
+                    result["summary_topic"] = summary_result.get("summary_topic", topic)
+            
+        except Exception as e:
+            logger.error(f"Error creating summary for cluster: {e}", exc_info=True)
+            result["error"] = str(e)
+        
+        return result
 
     async def gaslight_defense_check(self, user_input: str) -> Optional[str]:
         import re
@@ -3626,6 +3779,18 @@ System Prompt End
         
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
             results = {}
+
+            try:
+                # Run summarization every N maintenance cycles
+                if instance.cognitive_cycles_executed % 10 == 0:  # Adjust frequency as needed
+                    summarization_result = await instance.trigger_memory_summarization()
+                    results["hierarchical_memory_maintenance"] = {
+                        "summaries_created": summarization_result.get("summaries_created", 0),
+                        "topics_summarized": summarization_result.get("topics_summarized", [])
+                    }
+            except Exception as e:
+                logger.error(f"Error in hierarchical memory maintenance: {e}")
+                results["hierarchical_memory_maintenance"] = {"error": str(e)}
             
             # Define maintenance tasks
             maintenance_tasks = [
@@ -3671,6 +3836,42 @@ System Prompt End
             results["maintenance_time"] = datetime.datetime.now().isoformat()
             logger.info("System maintenance finished")
             return results
+
+    def _calculate_memory_similarity(self, memory1: Dict[str, Any], memory2: Dict[str, Any]) -> float:
+        """Calculate similarity between two memories for clustering."""
+        # Get embeddings if available
+        if self.memory_core and hasattr(self.memory_core, "memory_embeddings"):
+            id1, id2 = memory1.get("id"), memory2.get("id")
+            if id1 in self.memory_core.memory_embeddings and id2 in self.memory_core.memory_embeddings:
+                # Use cosine similarity on embeddings
+                vec1 = self.memory_core.memory_embeddings[id1]
+                vec2 = self.memory_core.memory_embeddings[id2]
+                
+                # Cosine similarity calculation
+                dot_product = sum(a * b for a, b in zip(vec1, vec2))
+                norm1 = sum(a * a for a in vec1) ** 0.5
+                norm2 = sum(b * b for b in vec2) ** 0.5
+                
+                if norm1 * norm2 == 0:
+                    return 0.0
+                    
+                return dot_product / (norm1 * norm2)
+        
+        # Fallback to simpler text similarity if embeddings not available
+        text1 = memory1.get("memory_text", "")
+        text2 = memory2.get("memory_text", "")
+        
+        # Simple Jaccard similarity
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        return intersection / union
 
     @function_tool 
     async def get_system_stats(self) -> Dict[str, Any]:
