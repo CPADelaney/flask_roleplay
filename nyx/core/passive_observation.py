@@ -249,9 +249,9 @@ async def generate_observation_from_action(
 
 @function_tool
 async def generate_observation_from_source(
-    source: str, 
-    context: Dict[str, Any] = {},  # Add default empty dict
-    template_options: List[str] = None
+    source: Optional[str] = None
+    context:  Optional[Dict[str, Any]] = None,  # Add default empty dict
+    template_options: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Generate an observation based on a specific source"""
     # Default templates by source if none provided
