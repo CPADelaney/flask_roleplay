@@ -721,15 +721,38 @@ async def add_memory(
 @function_tool
 async def retrieve_memories(
     ctx: RunContextWrapper[MemoryCoreContext],
-    params: MemoryQuery
+    query: str,
+    memory_types: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+    min_significance: Optional[int] = None,
+    include_archived: Optional[bool] = None,
+    entities: Optional[List[str]] = None,
+    emotional_state: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    retrieval_level: str = "auto",
+    min_fidelity: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve memories based on query and filters, supporting hierarchical levels.
     Restored full boost logic. Returns raw memory dicts.
     """
+    params = MemoryQuery(
+        query=query,
+        memory_types=memory_types or ["observation", "reflection", "abstraction", "experience", "summary", "semantic"],
+        limit=limit or 10,  # Default value applied in code, not in schema
+        min_significance=min_significance or 3,
+        include_archived=include_archived or False,
+        entities=entities,
+        emotional_state=emotional_state,
+        tags=tags,
+        retrieval_level=retrieval_level,
+        min_fidelity=min_fidelity or 0.0
+    )
+
     with custom_span("retrieve_memories", {
         "query": params.query, "level": params.retrieval_level, "limit": params.limit, "fidelity": params.min_fidelity
     }):
+
         memory_core = ctx.context
         if not memory_core.initialized: memory_core.initialize()
 
