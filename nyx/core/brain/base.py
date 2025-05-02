@@ -963,6 +963,28 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.error(f"Error initializing NyxBrain: {str(e)}", exc_info=True)
             raise
 
+    @staticmethod
+    @function_tool
+    async def process_dominance_action(ctx: RunContextWrapper, instance, action_type: str, user_id: str, intensity: float) -> Dict:
+        """Process a dominance action."""
+        # Use femdom_coordinator if available
+        if instance.femdom_coordinator:
+            return await instance.femdom_coordinator.process_dominance_action(action_type, user_id, intensity)
+        
+        # Fallback to dominance_integration_manager if available
+        if hasattr(instance, "dominance_integration_manager") and instance.dominance_integration_manager:
+            return await instance.dominance_integration_manager.process_dominance_action(
+                action_type=action_type, 
+                user_id=user_id,
+                intensity=intensity
+            )
+            
+        # Another fallback if needed
+        if instance.dominance_system:
+            return await instance.dominance_system.process_dominance_action(action_type, user_id, intensity)
+            
+        return {"success": False, "reason": "No dominance systems available"}
+
     @classmethod
     async def restore_from_checkpoint(self, checkpoint_data: dict):
         """
