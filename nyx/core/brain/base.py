@@ -6,8 +6,9 @@ import datetime
 import random
 import os
 import math
-from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, Literal
 import json
+from collections import defaultdict # Added
 
 from agents import (
     Agent, Runner, trace, function_tool, handoff, RunContextWrapper,
@@ -36,6 +37,8 @@ from nyx.creative.capability_system import (
     CapabilityModel,
     CapabilityAssessmentSystem
 )
+
+from nyx.core.passive_observation import ObservationFilter
 
 from pydantic import BaseModel, Field
 
@@ -406,7 +409,17 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.emotional_core.set_hormone_system(self.hormone_system)
             logger.debug("Emotional core and hormone system connected")
 
-            self.checkpoint_planner = CheckpointingPlannerAgent()           
+            self.checkpoint_planner = CheckpointingPlannerAgent() 
+
+            self.context_config = {
+                "focus_limit": 4,           # Max detailed memories for focus
+                "background_limit": 3,      # Max summaries per background topic
+                "zoom_in_limit": 2,         # Max details to fetch per zoom-in request
+                "high_fidelity_threshold": 0.7, # Min fidelity for focus details
+                "med_fidelity_threshold": 0.5,  # Min fidelity for background summaries
+                "low_fidelity_threshold": 0.3,  # Min fidelity for zoomed-in details (might be lower)
+                "max_context_tokens": 3500, # Rough estimate, adjust based on LLM
+            }
             
             self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
@@ -2055,6 +2068,210 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 "success": False, 
                 "error": "Action generator doesn't support direct execution"
             }
+
+    def _format_memory_for_prompt(self, memory: Dict[str, Any], is_focus: bool) -> str:
+        """Helper to format a single memory for the LLM prompt."""
+        level = memory.get('metadata', {}).get('memory_level', 'detail')
+        fidelity = memory.get('metadata', {}).get('fidelity', 1.0)
+        timestamp = memory.get('metadata', {}).get('timestamp', 'unknown')
+        mem_id = memory.get('id', 'N/A')
+        source_count = len(memory.get('metadata', {}).get('source_memory_ids', []))
+
+        prefix = f"[MEM ID: {mem_id}] [Level: {level}] [Fidelity: {fidelity:.2f}]"
+        if level == 'summary':
+            prefix += f" [Sources: {source_count}] [Summary]"
+            summary_of = memory.get('metadata',{}).get('summary_of')
+            if summary_of: prefix += f" [Topic: {summary_of}]"
+        elif level == 'abstraction':
+             prefix += f" [Sources: {source_count}] [Abstraction]"
+             summary_of = memory.get('metadata',{}).get('summary_of')
+             if summary_of: prefix += f" [Topic: {summary_of}]"
+        else: # detail
+             prefix += " [Detail]"
+
+
+        # Include timestamp for context
+        time_str = f" ({timestamp[:10]})" # Just date for brevity
+
+        return f"{prefix}{time_str}: {memory.get('memory_text', '')}"
+
+    async def _assemble_llm_prompt_context(
+        self,
+        current_task_description: str,
+        focus_query: str,
+        background_topics: List[str]
+    ) -> Tuple[str, Dict[str, Any]]: # Return prompt string and context metadata
+        """
+        Intelligently construct the context string passed to the LLM.
+        Handles hierarchical retrieval and zoom-in.
+        """
+        if not self.memory_core:
+            logger.error("Memory core not available for context assembly.")
+            return "Context Error: Memory Core Unavailable.", {}
+
+        focus_details = []
+        background_summaries = []
+        zoomed_in_details = []
+        retrieved_ids = set() # Keep track of IDs already fetched
+
+        context_assembly_metadata = {
+            "focus_query": focus_query,
+            "background_topics": background_topics,
+            "focus_retrieved_count": 0,
+            "background_retrieved_count": 0,
+            "zoom_in_requests": 0,
+            "zoom_in_details_count": 0,
+            "final_token_estimate": 0 # Placeholder
+        }
+
+        with trace(workflow_name="AssembleLLMContext", group_id=self.trace_group_id):
+            # 1. Retrieve Focus Details (High Fidelity Details)
+            try:
+                focus_params = MemoryQuery(
+                    query=focus_query,
+                    limit=self.context_config['focus_limit'],
+                    retrieval_level='detail', # Explicitly ask for details
+                    min_fidelity=self.context_config['high_fidelity_threshold'],
+                    memory_types=["observation", "experience", "reflection"] # Prioritize these for focus
+                )
+                focus_details = await self.memory_core.retrieve_memories(**focus_params.model_dump())
+                retrieved_ids.update(m['id'] for m in focus_details)
+                context_assembly_metadata["focus_retrieved_count"] = len(focus_details)
+                logger.debug(f"Retrieved {len(focus_details)} focus details for query: '{focus_query}'")
+            except Exception as e:
+                logger.error(f"Error retrieving focus details: {e}", exc_info=True)
+
+            # 2. Retrieve Background Summaries (Lower Fidelity Summaries/Abstractions)
+            temp_background = []
+            for topic in background_topics:
+                try:
+                    bg_params = MemoryQuery(
+                        query=topic,
+                        limit=self.context_config['background_limit'],
+                        # Retrieve summaries or abstractions primarily
+                        retrieval_level='summary', # Explicitly ask for summaries first
+                        min_fidelity=self.context_config['med_fidelity_threshold'],
+                        memory_types=["summary", "abstraction", "consolidated_experience", "reflection"] # Types likely to be summaries
+                    )
+                    summaries = await self.memory_core.retrieve_memories(**bg_params.model_dump())
+
+                    # Fallback: If no summaries found, get best available (even detail)
+                    if not summaries:
+                         fallback_params = MemoryQuery(
+                              query=topic,
+                              limit=1, # Just get one fallback
+                              retrieval_level='auto', # Get best match regardless of level
+                              min_fidelity=self.context_config['low_fidelity_threshold']
+                         )
+                         summaries = await self.memory_core.retrieve_memories(**fallback_params.model_dump())
+
+                    temp_background.extend(summaries)
+                    context_assembly_metadata["background_retrieved_count"] += len(summaries)
+                    logger.debug(f"Retrieved {len(summaries)} background items for topic: '{topic}'")
+                except Exception as e:
+                    logger.error(f"Error retrieving background summaries for topic '{topic}': {e}", exc_info=True)
+
+            # Dedup and limit background summaries (prefer higher relevance)
+            unique_background = {}
+            for mem in temp_background:
+                if mem['id'] not in retrieved_ids and mem['id'] not in unique_background:
+                    unique_background[mem['id']] = mem
+            # Sort by relevance before limiting overall background context
+            sorted_background = sorted(unique_background.values(), key=lambda m: m.get('relevance', 0.0), reverse=True)
+            background_summaries = sorted_background[:self.context_config['background_limit'] * len(background_topics)] # Overall limit
+            retrieved_ids.update(m['id'] for m in background_summaries)
+
+
+            # 3. "Zoom-In" Logic (Simple Example: Based on Task Keywords)
+            # More sophisticated logic could involve LLM call to check if summaries are sufficient
+            required_detail_keywords = ["code", "exact quote", "specific steps", "command output", "error message"] # Keywords indicating need for detail
+            needs_detail = any(keyword in current_task_description.lower() for keyword in required_detail_keywords)
+
+            if needs_detail:
+                summaries_needing_zoom = []
+                # Check if focus details already cover the need (simplistic check)
+                focus_text_combined = " ".join(m.get('memory_text', '') for m in focus_details).lower()
+                focus_has_keywords = any(keyword in focus_text_combined for keyword in required_detail_keywords)
+
+                if not focus_has_keywords:
+                    # Identify relevant summaries that might contain the needed details
+                    for summary in background_summaries:
+                        # Check if summary text hints at relevant details
+                        summary_text_lower = summary.get('memory_text', '').lower()
+                        if any(keyword in summary_text_lower for keyword in required_detail_keywords):
+                             summaries_needing_zoom.append(summary)
+                        elif focus_query.lower() in summary.get('metadata', {}).get('summary_of', '').lower(): # Check if summary topic matches focus query
+                             summaries_needing_zoom.append(summary)
+
+
+                # Perform zoom-in for identified summaries
+                for summary in summaries_needing_zoom[:self.context_config['zoom_in_limit']]: # Limit zoom-ins
+                    source_ids = summary.get('metadata', {}).get('source_memory_ids')
+                    if source_ids:
+                        context_assembly_metadata["zoom_in_requests"] += 1
+                        logger.info(f"Zooming into memory {summary['id']} (sources: {len(source_ids)}) for task: {current_task_description}")
+                        try:
+                            details = await self.memory_core.get_memory_details(
+                                memory_ids=source_ids,
+                                min_fidelity=self.context_config['low_fidelity_threshold']
+                            )
+                            # Add details not already retrieved
+                            for detail in details:
+                                if detail['id'] not in retrieved_ids:
+                                    zoomed_in_details.append(detail)
+                                    retrieved_ids.add(detail['id'])
+                            context_assembly_metadata["zoom_in_details_count"] += len(details)
+                        except Exception as e:
+                            logger.error(f"Error zooming into details for summary {summary['id']}: {e}", exc_info=True)
+
+
+            # 4. Construct Prompt String
+            focus_section = "<ImmediateFocus>\n" + \
+                            "\n".join([self._format_memory_for_prompt(m, True) for m in focus_details]) + \
+                            "\n</ImmediateFocus>"
+
+            zoomed_section = ""
+            if zoomed_in_details:
+                zoomed_section = "\n\n<RequestedDetails (Zoomed-In)>\n" + \
+                                 "\n".join([self._format_memory_for_prompt(m, True) for m in zoomed_in_details]) + \
+                                 "\n</RequestedDetails>"
+
+            background_section = "\n\n<BackgroundContext>\n" + \
+                                 "\n".join([self._format_memory_for_prompt(m, False) for m in background_summaries]) + \
+                                 "\n</BackgroundContext>"
+
+            instruction_section = f"""
+---
+**Instructions:**
+- Base your response *only* on the information provided in <ImmediateFocus>, <RequestedDetails (Zoomed-In)>, and <BackgroundContext>.
+- Prioritize information in <ImmediateFocus> and <RequestedDetails (Zoomed-In)>.
+- For information only present in <BackgroundContext> summaries, state that you have a summary but lack specific details, **do not invent or hallucinate details**.
+- Pay attention to the `Fidelity` score of memories; treat low-fidelity information (e.g., below {self.context_config['med_fidelity_threshold']:.1f}) with caution and indicate uncertainty if necessary.
+- If the necessary details for the task are not present in any section, explicitly state that the information is missing or insufficient.
+---"""
+
+            # Assemble final prompt structure
+            # Estimate token count roughly (very basic)
+            # In production, use a proper tokenizer (e.g., tiktoken)
+            estimated_tokens = len(current_task_description.split()) + \
+                               sum(len(m.get('memory_text','').split()) for m in focus_details) + \
+                               sum(len(m.get('memory_text','').split()) for m in zoomed_in_details) + \
+                               sum(len(m.get('memory_text','').split()) for m in background_summaries) + \
+                               len(instruction_section.split())
+            context_assembly_metadata["final_token_estimate"] = estimated_tokens
+
+            # Truncate sections if exceeding limit (start with background)
+            # TODO: Implement more sophisticated truncation if needed
+
+            final_prompt = f"""System Prompt Start
+---
+**Current Task:** {current_task_description}
+{focus_section}{zoomed_section}{background_section}{instruction_section}
+System Prompt End
+
+""" # Ready for User input to be appended
+
+            return final_prompt, context_assembly_metadata
     
     async def _evaluate_action_outcome_wrapper(self, action: Dict[str, Any], outcome: Dict[str, Any], context: Dict[str, Any] = None):
         """
@@ -3138,6 +3355,26 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         # Retrieve the set of modules activated during input processing
         active_modules = set(input_result.get("active_modules_for_input", self.default_active_modules))
         context["active_modules"] = active_modules # Ensure context for response phase has it
+
+        focus_query = user_input
+        # Example: Get recent conversation topics or active goal descriptions
+        background_topics = list(context.get('recent_topics', []))
+        if 'active_goals' in context and context['active_goals']:
+             background_topics.append(context['active_goals'][0]['description']) # Add top goal description
+        background_topics = list(set(background_topics))[:3] # Limit background topics
+
+        current_task_desc = f"Respond conversationally to the user input: '{user_input}'"
+        # If an action was planned in input processing, adjust task description
+        if action := input_result.get('action_taken'):
+            current_task_desc = f"Execute action '{action.get('name')}' and respond based on user input: '{user_input}'"
+
+
+        # --- 3. Assemble Hierarchical Context ---
+        llm_prompt_context, assembly_meta = await self._assemble_llm_prompt_context(
+            current_task_description=current_task_desc,
+            focus_query=focus_query,
+            background_topics=background_topics
+        )
 
         # --- 2. Handle Critical Issues (Harmful Content, Gaslighting) ---
         if context.get("intercepted_harmful_content", False):
