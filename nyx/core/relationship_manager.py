@@ -461,6 +461,12 @@ class RelationshipManager:
             return {"status": "error", "reason": str(e)}
 
     @function_tool
+    async def get_all_relationship_ids(self) -> List[str]:
+        """Returns a list of all user IDs with relationship states."""
+        async with self._lock:
+            return list(self.relationships.keys())
+
+    @function_tool
     async def get_relationship_state(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Gets the current relationship state for a user."""
         # Apply time decay before returning if significant time has passed
