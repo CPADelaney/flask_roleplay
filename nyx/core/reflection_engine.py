@@ -6,7 +6,7 @@ import random
 import datetime
 import math
 import re
-from typing import Dict, List, Any, Optional, Tuple, Union, Callable
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 
 from agents import Agent, Runner, trace, function_tool, custom_span, handoff, RunContextWrapper, ModelSettings, RunConfig
 from agents.tracing.util import gen_trace_id
