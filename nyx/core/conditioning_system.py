@@ -115,6 +115,12 @@ class ConditioningSystem:
             memory_core=memory_core,
             somatosensory_system=somatosensory_system
         )
+
+        self._generate_reward_signal_tool = function_tool(
+            self._generate_reward_signal_logic,
+            name_override="_generate_reward_signal",
+            description_override="Generate a reward signal for the reward system"
+        )
         
         # Create agents
         self.classical_conditioning_agent = self._create_classical_conditioning_agent()
@@ -397,6 +403,47 @@ class ConditioningSystem:
             }
 
     @staticmethod
+    async def _generate_reward_signal_logic(
+        ctx: RunContextWrapper,
+        behavior: str,
+        consequence_type: str,
+        reward_value: float,
+        metadata: Dict[str, Any] | None = None,
+    ) -> bool:
+        """
+        Generate a reward signal for the reward system.
+        """
+        if not ctx.context.reward_system:
+            return False
+    
+        try:
+            reward_signal = RewardSignal(
+                value=reward_value,
+                source="operant_conditioning",
+                context={
+                    "behavior": behavior,
+                    "consequence_type": consequence_type,
+                    **(metadata or {}),
+                },
+            )
+    
+            # Dispatch the signal
+            await ctx.context.reward_system.process_reward_signal(reward_signal)
+            return True
+    
+        except Exception as e:
+            logger.error(f"Error generating reward signal: {e}")
+            return False
+    
+    # 2. Create the FunctionTool object FROM the logic function
+    _generate_reward_signal_tool = function_tool(
+        _generate_reward_signal_logic,
+        name_override="_generate_reward_signal",
+        description_override="Generate a reward signal for the reward system"
+    )
+
+
+    @staticmethod
     @function_tool
     async def _create_or_update_operant_association(ctx: RunContextWrapper,
                                              behavior: str,
@@ -592,48 +639,6 @@ class ConditioningSystem:
             "reward_value": reward_value
         }
 
-    @staticmethod
-    @function_tool
-    async def _generate_reward_signal(
-        ctx: RunContextWrapper,
-        behavior: str,
-        consequence_type: str,
-        reward_value: float,
-        metadata: Dict[str, Any] | None = None,
-    ) -> bool:
-        """
-        Generate a reward signal for the reward system.
-    
-        Args:
-            behavior: The behavior being conditioned.
-            consequence_type: The type of consequence.
-            reward_value: Numerical value of the reward (positive or negative).
-            metadata: Optional extra context to attach to the signal.
-    
-        Returns:
-            True if the reward signal was dispatched successfully, otherwise False.
-        """
-        if not ctx.context.reward_system:
-            return False
-    
-        try:
-            reward_signal = RewardSignal(
-                value=reward_value,
-                source="operant_conditioning",
-                context={
-                    "behavior": behavior,
-                    "consequence_type": consequence_type,
-                    **(metadata or {}),
-                },
-            )
-    
-            # Dispatch the signal
-            await ctx.context.reward_system.process_reward_signal(reward_signal)
-            return True
-    
-        except Exception as e:
-            logger.error(f"Error generating reward signal: {e}")
-            return False
 
     @staticmethod
     @function_tool
@@ -2005,42 +2010,3 @@ class ConditioningSystem:
                 "total_items": total_items,
                 "personality_profile": personality_profile
             }
-@staticmethod
-async def _generate_reward_signal_logic(
-    ctx: RunContextWrapper,
-    behavior: str,
-    consequence_type: str,
-    reward_value: float,
-    metadata: Dict[str, Any] | None = None,
-) -> bool:
-    """
-    Generate a reward signal for the reward system.
-    """
-    if not ctx.context.reward_system:
-        return False
-
-    try:
-        reward_signal = RewardSignal(
-            value=reward_value,
-            source="operant_conditioning",
-            context={
-                "behavior": behavior,
-                "consequence_type": consequence_type,
-                **(metadata or {}),
-            },
-        )
-
-        # Dispatch the signal
-        await ctx.context.reward_system.process_reward_signal(reward_signal)
-        return True
-
-    except Exception as e:
-        logger.error(f"Error generating reward signal: {e}")
-        return False
-
-# 2. Create the FunctionTool object FROM the logic function
-_generate_reward_signal_tool = function_tool(
-    _generate_reward_signal_logic,
-    name_override="_generate_reward_signal",
-    description_override="Generate a reward signal for the reward system"
-)
