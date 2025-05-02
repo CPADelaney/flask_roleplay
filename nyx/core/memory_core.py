@@ -7,6 +7,7 @@ import logging
 import random
 import uuid
 from typing import Dict, List, Any, Optional, Tuple, Set, Union, Literal
+from collections import defaultdict
 import numpy as np
 from pydantic import BaseModel, Field
 
