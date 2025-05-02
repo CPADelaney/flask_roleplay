@@ -908,7 +908,7 @@ async def get_memory(
 async def get_memory_details(
     ctx: RunContextWrapper[MemoryCoreContext],
     memory_ids: List[str],
-    min_fidelity: float = 0.0, # Changed Optional[float] to float
+    min_fidelity: Optional[float] = None  
 ) -> List[Dict[str, Any]]:
     """
     Retrieve full details for a specific list of memory IDs ('zoom-in').
@@ -1163,7 +1163,7 @@ async def mark_as_consolidated(
 async def retrieve_memories_with_formatting(
     ctx: RunContextWrapper[MemoryCoreContext],
     query: str,
-    limit: Optional[int],                    # <- now the last non-default
+    limit: Optional[int] = None,                    
     memory_types: Optional[List[str]] = None,
     scopes: Optional[List[str]] = None,
     min_significance: Optional[int] = None,
@@ -1183,14 +1183,16 @@ async def retrieve_memories_with_formatting(
     Returns:
         List of formatted memories with confidence markers
     """
-    if limit is None:
-        limit = 20
-    with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": limit}):
+    # Apply defaults inside the function
+    actual_limit = 20 if limit is None else limit
+    actual_memory_types = memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"]
+    
+    with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": actual_limit}):
         memories = await retrieve_memories(
             ctx,
             query=query,
-            memory_types=memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"],
-            limit=limit
+            memory_types=actual_memory_types,
+            limit=actual_limit
         )
         
         # Format memories with confidence markers
