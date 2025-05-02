@@ -6,6 +6,7 @@ import random
 import datetime
 import math
 import re
+from collections import defaultdict
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Literal
 
 from agents import Agent, Runner, trace, function_tool, custom_span, handoff, RunContextWrapper, ModelSettings, RunConfig
@@ -26,6 +27,13 @@ from nyx.core.proactive_communication import (
 )
 
 # =============== Models for Structured Output ===============
+
+class SummaryOutput(BaseModel):
+    """Structured output for generated summaries"""
+    summary_text: str = Field(description="The generated summary text")
+    summary_id: str = Field(description="ID of the created summary memory")
+    fidelity: float = Field(description="Fidelity score of the summary (0.0-1.0)")
+    significance: int = Field(description="Significance score of the summary (0-10)")
 
 class ReflectionOutput(BaseModel):
     """Structured output for reflection generations"""
