@@ -848,6 +848,39 @@ async def retrieve_memories(
         return results
 
 @function_tool
+async def get_memory(
+    ctx: RunContextWrapper[MemoryCoreContext], 
+    memory_id: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Get a specific memory by ID
+    
+    Args:
+        memory_id: The unique ID of the memory to retrieve
+        
+    Returns:
+        Memory object or None if not found
+    """
+    memory_core = ctx.context
+    if not memory_core.initialized:
+        memory_core.initialize()
+    
+    if memory_id in memory_core.memories:
+        memory = memory_core.memories[memory_id]
+        memory_copy = memory.model_copy(deep=True)
+        
+        # Update recall count
+        await _update_memory_recall(ctx, memory_id)
+        
+        # Apply reconsolidation if appropriate
+        if random.random() < memory_core.reconsolidation_probability:
+            memory_copy = await _apply_reconsolidation(ctx, memory_copy)
+        
+        return memory_copy.model_dump()
+    
+    return None
+
+@function_tool
 async def get_memory_details(
     ctx: RunContextWrapper[MemoryCoreContext],
     memory_ids: List[str],
