@@ -5989,6 +5989,26 @@ System Prompt End
         except Exception as e:
             logger.exception(f"Error in generate_femdom_activity_ideas: {e}")
             return {"success": False, "error": f"Error: {str(e)}", "ideas": []}
+    
+    @staticmethod
+    @function_tool
+    async def assign_protocol(ctx: RunContextWrapper, instance, user_id: str, protocol_id: str) -> Dict[str, Any]:
+        """
+        Assigns a protocol to a user.
+        
+        Args:
+            ctx: Run context wrapper
+            instance: The NyxBrain instance
+            user_id: User ID to assign protocol to
+            protocol_id: ID of the protocol to assign
+            
+        Returns:
+            Assignment result dictionary
+        """
+        if not instance.protocol_enforcement:
+            return {"success": False, "reason": "Protocol enforcement system not available"}
+        
+        return await instance.protocol_enforcement.assign_protocol(user_id, protocol_id)
 
     async def _filter_activity_ideas_safety(self,
                                        ideas: List[Any],
