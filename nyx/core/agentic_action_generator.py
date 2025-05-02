@@ -32,6 +32,8 @@ from nyx.core.proactive_communication import (
 )
 from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
 
+from nyx.core.context_awareness import ContextAwarenessSystem
+
 from nyx.tools.computer_use_agent import ComputerUseAgent
 from nyx.tools.social_browsing import maybe_browse_social_feeds, maybe_post_to_social
 from nyx.tools.ui_interaction import UIConversationManager
@@ -256,6 +258,11 @@ class EnhancedAgenticActionGenerator:
                      
         """Initialize with references to required subsystems"""
         # Core systems 
+
+        self.system_context = system_context or NyxSystemContext(
+            system_name="AgenticActionGenerator", 
+            system_state={}
+        )
         self.emotional_core = emotional_core
         self.hormone_system = hormone_system
         self.experience_interface = experience_interface
