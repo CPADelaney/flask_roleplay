@@ -696,8 +696,8 @@ async def generate_intent_for_action(
 async def generate_reflection_on_communications(
     intents: List[Dict[str, Any]],
     focus: str,
-    user_id: Optional[str] = None,
-    time_period: str = "all"
+    user_id: Optional[str] = None,  # This is already None which is allowed
+    time_period: Optional[str] = None  # Changed from "all" to None
 ) -> Dict[str, Any]:
     """
     Generate a reflection on communication patterns
@@ -711,6 +711,8 @@ async def generate_reflection_on_communications(
     Returns:
         Reflection with patterns and insights
     """
+    actual_time_period = time_period or "all"
+    
     if not intents:
         return {
             "reflection_text": "I haven't initiated enough communication to form meaningful patterns yet.",
