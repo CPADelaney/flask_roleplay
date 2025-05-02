@@ -11,6 +11,8 @@ from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
 
+from nyx.core.context import NyxSystemContext
+
 # Core system imports
 from nyx.core.reasoning_core import (
     ReasoningCore, CausalModel, CausalNode, CausalRelation,
@@ -254,7 +256,9 @@ class EnhancedAgenticActionGenerator:
                  creative_memory=None,
                  capability_assessor=None,
                  issue_tracker=None,
-                 proactive_communication_engine=None):
+                 proactive_communication_engine=None,
+                 system_context=None
+                 ):
                      
         """Initialize with references to required subsystems"""
         # Core systems 
