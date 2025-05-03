@@ -249,7 +249,7 @@ async def generate_observation_from_action(
 
 @function_tool
 async def generate_observation_from_source(
-    source: Optional[str] = None
+    source: Optional[str] = None,
     context:  Optional[Dict[str, Any]] = None,  # Add default empty dict
     template_options: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
