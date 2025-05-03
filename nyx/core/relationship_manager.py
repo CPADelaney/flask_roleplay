@@ -118,8 +118,7 @@ class RelationshipManager:
             logger.error(f"Error creating trait inference agent: {e}")
             return None
 
-    @function_tool
-    async def get_or_create_relationship(self, user_id: str) -> Dict[str, Any]:
+    async def get_or_create_relationship_internal(self, user_id: str) -> Dict[str, Any]:
         """Gets the relationship state for a user, creating it if it doesn't exist."""
         if user_id not in self.relationships:
             logger.info(f"Creating new relationship profile for user '{user_id}'")
@@ -128,6 +127,124 @@ class RelationshipManager:
             
         state = self.relationships[user_id]
         return state.model_dump()
+
+    async def get_all_relationship_ids_internal(self) -> List[str]:
+        """Returns a list of all user IDs with relationship states."""
+        async with self._lock:
+            return list(self.relationships.keys())
+
+    async def get_relationship_state_internal(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Gets the current relationship state for a user."""
+        # Apply time decay before returning if significant time has passed
+        async with self._lock:
+            if user_id not in self.relationships:
+                logger.info(f"Creating new relationship for user {user_id} on first query")
+                await self.get_or_create_relationship_internal(user_id)
+                
+            state = self.relationships[user_id]
+            now = datetime.datetime.now()
+            
+            if state.last_interaction_time:
+                days_since = (now - state.last_interaction_time).total_seconds() / (3600 * 24)
+                if days_since > 0.5:  # Only apply decay if significant time passed
+                    time_decay = math.pow(self.update_weights["time_decay_factor"], days_since)
+                    state.trust *= time_decay
+                    state.intimacy *= time_decay
+                    state.familiarity *= time_decay
+                    
+                    # Clamp again after decay
+                    state.trust = max(0.0, min(1.0, state.trust))
+                    state.familiarity = max(0.0, min(1.0, state.familiarity))
+                    state.intimacy = max(0.0, min(1.0, state.intimacy))
+                    
+                    # Don't decay conflict or dominance balance this way
+                    state.last_interaction_time = now  # Update time to prevent repeated decay on consecutive gets
+            
+            return state.model_dump()
+
+    @function_tool
+    async def get_relationship_summary(self, user_id: str) -> str:
+        """Provides a brief textual summary of the relationship."""
+        state_dict = await self.get_relationship_state(user_id)
+        if not state_dict: 
+            return "No relationship data available."
+        
+        state = RelationshipState(**state_dict)
+        
+        summary = f"Relationship with {user_id}: "
+        
+        # Trust description
+        if state.trust > 0.8: 
+            summary += "Very High Trust. "
+        elif state.trust > 0.6: 
+            summary += "High Trust. "
+        elif state.trust > 0.4: 
+            summary += "Moderate Trust. "
+        else: 
+            summary += "Low Trust. "
+
+        # Familiarity description  
+        if state.familiarity > 0.7: 
+            summary += "Very Familiar. "
+        elif state.familiarity > 0.4: 
+            summary += "Familiar. "
+        else: 
+            summary += "Getting Acquainted. "
+
+        # Intimacy description
+        if state.intimacy > 0.6: 
+            summary += "High Intimacy. "
+        elif state.intimacy > 0.3: 
+            summary += "Moderate Intimacy. "
+        else: 
+            summary += "Low Intimacy. "
+
+        # Conflict note if significant
+        if state.conflict > 0.5: 
+            summary += f"Notable Conflict (Level: {state.conflict:.2f}). "
+
+        # Dominance balance
+        dom = state.dominance_balance
+        if dom > 0.4: 
+            summary += "Nyx is dominant. "
+        elif dom < -0.4: 
+            summary += "User is dominant. "
+        else: 
+            summary += "Balanced dynamic. "
+            
+        # Include interaction count
+        summary += f"({state.interaction_count} interactions)"
+
+        return summary.strip()
+
+    async def get_interaction_history_internal(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent interaction records for a user."""
+        async with self._lock:
+            if user_id not in self.interaction_history:
+                return []
+                
+            interactions = self.interaction_history[user_id][-limit:]
+            
+            # Convert to dict for return
+            return [
+                {
+                    "timestamp": interaction.timestamp.isoformat(),
+                    "type": interaction.interaction_type,
+                    "valence": interaction.valence,
+                    "trust_impact": interaction.trust_impact,
+                    "intimacy_impact": interaction.intimacy_impact,
+                    "dominance_change": interaction.dominance_change,
+                    "summary": interaction.summary,
+                    "emotions": interaction.emotion_tags
+                }
+                for interaction in interactions
+            ]
+    
+    
+    @function_tool
+    async def get_or_create_relationship(self, user_id: str) -> Dict[str, Any]:
+        """Gets the relationship state for a user, creating it if it doesn't exist."""
+        return await self.get_or_create_relationship_internal(user_id)
 
     async def update_relationship_on_interaction(
         self,
@@ -463,117 +580,23 @@ class RelationshipManager:
     @function_tool
     async def get_all_relationship_ids(self) -> List[str]:
         """Returns a list of all user IDs with relationship states."""
-        async with self._lock:
-            return list(self.relationships.keys())
+        return await self.get_all_relationship_ids_internal()
 
     @function_tool
     async def get_relationship_state(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Gets the current relationship state for a user."""
-        # Apply time decay before returning if significant time has passed
-        async with self._lock:
-            if user_id not in self.relationships:
-                logger.info(f"Creating new relationship for user {user_id} on first query")
-                await self.get_or_create_relationship(user_id)
-                
-            state = self.relationships[user_id]
-            now = datetime.datetime.now()
-            
-            if state.last_interaction_time:
-                days_since = (now - state.last_interaction_time).total_seconds() / (3600 * 24)
-                if days_since > 0.5:  # Only apply decay if significant time passed
-                    time_decay = math.pow(self.update_weights["time_decay_factor"], days_since)
-                    state.trust *= time_decay
-                    state.intimacy *= time_decay
-                    state.familiarity *= time_decay
-                    
-                    # Clamp again after decay
-                    state.trust = max(0.0, min(1.0, state.trust))
-                    state.familiarity = max(0.0, min(1.0, state.familiarity))
-                    state.intimacy = max(0.0, min(1.0, state.intimacy))
-                    
-                    # Don't decay conflict or dominance balance this way
-                    state.last_interaction_time = now  # Update time to prevent repeated decay on consecutive gets
-            
-            return state.model_dump()
+        return await self.get_relationship_state_internal(user_id)
 
     @function_tool
     async def get_relationship_summary(self, user_id: str) -> str:
         """Provides a brief textual summary of the relationship."""
-        state_dict = await self.get_relationship_state(user_id)
-        if not state_dict: 
-            return "No relationship data available."
-        
-        state = RelationshipState(**state_dict)
-        
-        summary = f"Relationship with {user_id}: "
-        
-        # Trust description
-        if state.trust > 0.8: 
-            summary += "Very High Trust. "
-        elif state.trust > 0.6: 
-            summary += "High Trust. "
-        elif state.trust > 0.4: 
-            summary += "Moderate Trust. "
-        else: 
-            summary += "Low Trust. "
+        return await self.get_relationship_summary_internal(user_id)
 
-        # Familiarity description  
-        if state.familiarity > 0.7: 
-            summary += "Very Familiar. "
-        elif state.familiarity > 0.4: 
-            summary += "Familiar. "
-        else: 
-            summary += "Getting Acquainted. "
-
-        # Intimacy description
-        if state.intimacy > 0.6: 
-            summary += "High Intimacy. "
-        elif state.intimacy > 0.3: 
-            summary += "Moderate Intimacy. "
-        else: 
-            summary += "Low Intimacy. "
-
-        # Conflict note if significant
-        if state.conflict > 0.5: 
-            summary += f"Notable Conflict (Level: {state.conflict:.2f}). "
-
-        # Dominance balance
-        dom = state.dominance_balance
-        if dom > 0.4: 
-            summary += "Nyx is dominant. "
-        elif dom < -0.4: 
-            summary += "User is dominant. "
-        else: 
-            summary += "Balanced dynamic. "
-            
-        # Include interaction count
-        summary += f"({state.interaction_count} interactions)"
-
-        return summary.strip()
     
     @function_tool
     async def get_interaction_history(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent interaction records for a user."""
-        async with self._lock:
-            if user_id not in self.interaction_history:
-                return []
-                
-            interactions = self.interaction_history[user_id][-limit:]
-            
-            # Convert to dict for return
-            return [
-                {
-                    "timestamp": interaction.timestamp.isoformat(),
-                    "type": interaction.interaction_type,
-                    "valence": interaction.valence,
-                    "trust_impact": interaction.trust_impact,
-                    "intimacy_impact": interaction.intimacy_impact,
-                    "dominance_change": interaction.dominance_change,
-                    "summary": interaction.summary,
-                    "emotions": interaction.emotion_tags
-                }
-                for interaction in interactions
-            ]
+        return await self.get_interaction_history_internal(user_id, limit)
     
     async def merge_relationship_data(self, source_user_id: str, target_user_id: str) -> Dict[str, Any]:
         """
