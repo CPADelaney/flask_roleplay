@@ -345,223 +345,223 @@ class MoodManagerContext:
             logger.error(f"Error parsing current mood result: {e}")
             return ctx.context.current_mood
         
-@function_tool
-async def modify_mood(
-    ctx: RunContextWrapper[MoodManagerContext], 
-    valence_change: Optional[float] = None,
-    arousal_change: Optional[float] = None,
-    control_change: Optional[float] = None,
-    reason: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Manually modify the current mood (for testing or external influences).
-    
-    Args:
-        valence_change: Change to valence (pleasantness) dimension (-1.0 to 1.0)
-        arousal_change: Change to arousal (energy) dimension (-1.0 to 1.0)
-        control_change: Change to control (dominance) dimension (-1.0 to 1.0)
-        reason: Reason for the mood modification
+    @function_tool
+    async def modify_mood(
+        ctx: RunContextWrapper[MoodManagerContext], 
+        valence_change: Optional[float] = None,
+        arousal_change: Optional[float] = None,
+        control_change: Optional[float] = None,
+        reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Manually modify the current mood (for testing or external influences).
         
-    Returns:
-        Updated mood state
-    """
-    # Set default values inside the function body
-    valence_change = 0 if valence_change is None else valence_change
-    arousal_change = 0 if arousal_change is None else arousal_change
-    control_change = 0 if control_change is None else control_change
-    reason = "manual_adjustment" if reason is None else reason
-    
-    manager_ctx = ctx.context
-    
-    async with manager_ctx._lock:
-        # Get current mood
-        await get_current_mood(ctx)  # Ensure it's updated
-        
-        # Apply changes
-        manager_ctx.current_mood.valence = max(-1.0, min(1.0, manager_ctx.current_mood.valence + valence_change))
-        manager_ctx.current_mood.arousal = max(0.0, min(1.0, manager_ctx.current_mood.arousal + arousal_change))
-        manager_ctx.current_mood.control = max(-1.0, min(1.0, manager_ctx.current_mood.control + control_change))
-        
-        # Update derived properties
-        manager_ctx.current_mood.dominant_mood = _get_dominant_mood_label(
-            manager_ctx.current_mood.valence, manager_ctx.current_mood.arousal, manager_ctx.current_mood.control
-        )
-        
-        # Update intensity
-        intensity = math.sqrt(
-            manager_ctx.current_mood.valence**2 + 
-            ((manager_ctx.current_mood.arousal - 0.5)*2)**2 + 
-            manager_ctx.current_mood.control**2
-        ) / math.sqrt(1**2 + 1**2 + 1**2)
-        
-        manager_ctx.current_mood.intensity = min(1.0, intensity)
-        manager_ctx.current_mood.last_updated = datetime.datetime.now()
-        
-        # Add to history
-        _add_to_history(manager_ctx, f"manual:{reason}")
-        
-        return manager_ctx.current_mood.dict()
-
-@function_tool
-async def handle_significant_event(
-    ctx: RunContextWrapper[MoodManagerContext],
-    event_type: str, 
-    intensity: float, 
-    valence: float,
-    arousal_change: Optional[float] = None,
-    control_change: Optional[float] = None
-) -> Dict[str, Any]:
-    """
-    Handle a significant event that should influence mood.
-    
-    Args:
-        event_type: Type of event (e.g., "user_feedback", "system_error")
-        intensity: How strong the event's influence should be (0-1)
-        valence: The positive/negative nature of the event (-1 to 1)
-        arousal_change: Optional specific change to arousal
-        control_change: Optional specific change to sense of control
-        
-    Returns:
-        Updated mood state
-    """
-    manager_ctx = ctx.context
-    
-    async with manager_ctx._lock:
-        # Calculate changes based on event properties
-        weight = min(1.0, intensity * manager_ctx.influence_weights.get("external_events", 0.2))
-        
-        # Default arousal and control changes if not specified
-        if arousal_change is None:
-            # High intensity events increase arousal for both positive/negative events
-            arousal_change = (intensity - 0.5) * 0.3
+        Args:
+            valence_change: Change to valence (pleasantness) dimension (-1.0 to 1.0)
+            arousal_change: Change to arousal (energy) dimension (-1.0 to 1.0)
+            control_change: Change to control (dominance) dimension (-1.0 to 1.0)
+            reason: Reason for the mood modification
             
-        if control_change is None:
-            # Positive events increase control, negative decrease it
-            control_change = valence * intensity * 0.2
+        Returns:
+            Updated mood state
+        """
+        # Set default values inside the function body
+        valence_change = 0 if valence_change is None else valence_change
+        arousal_change = 0 if arousal_change is None else arousal_change
+        control_change = 0 if control_change is None else control_change
+        reason = "manual_adjustment" if reason is None else reason
         
-        # Apply changes
-        valence_change = valence * weight
-        arousal_change = arousal_change * weight
-        control_change = control_change * weight
+        manager_ctx = ctx.context
         
-        # Update mood
-        result = await modify_mood(
-            ctx,
-            valence_change=valence_change,
-            arousal_change=arousal_change,
-            control_change=control_change,
-            reason=f"event:{event_type}"
+        async with manager_ctx._lock:
+            # Get current mood
+            await get_current_mood(ctx)  # Ensure it's updated
+            
+            # Apply changes
+            manager_ctx.current_mood.valence = max(-1.0, min(1.0, manager_ctx.current_mood.valence + valence_change))
+            manager_ctx.current_mood.arousal = max(0.0, min(1.0, manager_ctx.current_mood.arousal + arousal_change))
+            manager_ctx.current_mood.control = max(-1.0, min(1.0, manager_ctx.current_mood.control + control_change))
+            
+            # Update derived properties
+            manager_ctx.current_mood.dominant_mood = _get_dominant_mood_label(
+                manager_ctx.current_mood.valence, manager_ctx.current_mood.arousal, manager_ctx.current_mood.control
+            )
+            
+            # Update intensity
+            intensity = math.sqrt(
+                manager_ctx.current_mood.valence**2 + 
+                ((manager_ctx.current_mood.arousal - 0.5)*2)**2 + 
+                manager_ctx.current_mood.control**2
+            ) / math.sqrt(1**2 + 1**2 + 1**2)
+            
+            manager_ctx.current_mood.intensity = min(1.0, intensity)
+            manager_ctx.current_mood.last_updated = datetime.datetime.now()
+            
+            # Add to history
+            _add_to_history(manager_ctx, f"manual:{reason}")
+            
+            return manager_ctx.current_mood.dict()
+    
+    @function_tool
+    async def handle_significant_event(
+        ctx: RunContextWrapper[MoodManagerContext],
+        event_type: str, 
+        intensity: float, 
+        valence: float,
+        arousal_change: Optional[float] = None,
+        control_change: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Handle a significant event that should influence mood.
+        
+        Args:
+            event_type: Type of event (e.g., "user_feedback", "system_error")
+            intensity: How strong the event's influence should be (0-1)
+            valence: The positive/negative nature of the event (-1 to 1)
+            arousal_change: Optional specific change to arousal
+            control_change: Optional specific change to sense of control
+            
+        Returns:
+            Updated mood state
+        """
+        manager_ctx = ctx.context
+        
+        async with manager_ctx._lock:
+            # Calculate changes based on event properties
+            weight = min(1.0, intensity * manager_ctx.influence_weights.get("external_events", 0.2))
+            
+            # Default arousal and control changes if not specified
+            if arousal_change is None:
+                # High intensity events increase arousal for both positive/negative events
+                arousal_change = (intensity - 0.5) * 0.3
+                
+            if control_change is None:
+                # Positive events increase control, negative decrease it
+                control_change = valence * intensity * 0.2
+            
+            # Apply changes
+            valence_change = valence * weight
+            arousal_change = arousal_change * weight
+            control_change = control_change * weight
+            
+            # Update mood
+            result = await modify_mood(
+                ctx,
+                valence_change=valence_change,
+                arousal_change=arousal_change,
+                control_change=control_change,
+                reason=f"event:{event_type}"
+            )
+            
+            return result
+    
+    @function_tool
+    async def get_mood_history(
+        ctx: RunContextWrapper[MoodManagerContext],
+        hours: Optional[int] = None,
+        include_details: Optional[bool] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get mood history for the specified time period.
+        
+        Args:
+            hours: How many hours of history to retrieve
+            include_details: Whether to include full details or just summaries
+            
+        Returns:
+            List of mood states with timestamps
+        """
+        # Handle default values inside the function
+        hours = 24 if hours is None else hours
+        include_details = False if include_details is None else include_details
+        manager_ctx = ctx.context
+        
+        async with manager_ctx._lock:
+            cutoff_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
+            
+            # Filter history to requested time period
+            filtered_history = [
+                entry for entry in manager_ctx.mood_history
+                if entry.timestamp >= cutoff_time
+            ]
+            
+            # Format based on detail level
+            if include_details:
+                return [entry.dict() for entry in filtered_history]
+            else:
+                return [
+                    {
+                        "timestamp": entry.timestamp.isoformat(),
+                        "mood": entry.dominant_mood,
+                        "valence": round(entry.valence, 2),
+                        "arousal": round(entry.arousal, 2),
+                        "intensity": round(entry.intensity, 2),
+                        "trigger": entry.trigger
+                    }
+                    for entry in filtered_history
+                ]
+    
+    # Helper functions
+    
+    def _get_dominant_mood_label(v: float, a: float, c: float) -> str:
+        """Maps mood dimensions to a descriptive label."""
+        # Simple mapping based on quadrants/octants of V-A-C space
+        if a > 0.7:  # High Arousal
+            if v > 0.3: 
+                return "Excited" if c > 0.3 else ("Elated" if c < -0.3 else "Enthusiastic")
+            if v < -0.3: 
+                return "Anxious" if c > 0.3 else ("Stressed" if c < -0.3 else "Tense")
+            return "Alert" if c > 0.3 else ("Agitated" if c < -0.3 else "Focused")
+            
+        elif a < 0.3:  # Low Arousal
+            if v > 0.3: 
+                return "Calm" if c > 0.3 else ("Relaxed" if c < -0.3 else "Content")
+            if v < -0.3: 
+                return "Depressed" if c > 0.3 else ("Sad" if c < -0.3 else "Bored")
+            return "Passive" if c > 0.3 else ("Lethargic" if c < -0.3 else "Drowsy")
+            
+        else:  # Mid Arousal
+            if v > 0.5: 
+                return "Happy" if c > 0.3 else ("Pleased" if c < -0.3 else "Glad")
+            if v < -0.5: 
+                return "Unhappy" if c > 0.3 else ("Displeased" if c < -0.3 else "Gloomy")
+            return "Neutral" if abs(c) < 0.3 else ("Confident" if c > 0 else "Reserved")
+    
+    def _add_to_history(ctx: MoodManagerContext, trigger: Optional[str] = None) -> None:
+        """Add current mood to history."""
+        history_entry = MoodHistory(
+            timestamp=ctx.current_mood.last_updated,
+            valence=ctx.current_mood.valence,
+            arousal=ctx.current_mood.arousal,
+            control=ctx.current_mood.control,
+            dominant_mood=ctx.current_mood.dominant_mood,
+            intensity=ctx.current_mood.intensity,
+            trigger=trigger
         )
         
-        return result
-
-@function_tool
-async def get_mood_history(
-    ctx: RunContextWrapper[MoodManagerContext],
-    hours: Optional[int] = None,
-    include_details: Optional[bool] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get mood history for the specified time period.
+        ctx.mood_history.append(history_entry)
+        if len(ctx.mood_history) > ctx.max_history:
+            ctx.mood_history.pop(0)
     
-    Args:
-        hours: How many hours of history to retrieve
-        include_details: Whether to include full details or just summaries
-        
-    Returns:
-        List of mood states with timestamps
-    """
-    # Handle default values inside the function
-    hours = 24 if hours is None else hours
-    include_details = False if include_details is None else include_details
-    manager_ctx = ctx.context
+    # Create agent
+    mood_agent = Agent(
+        name="Mood Manager",
+        instructions="""You manage the AI's emotional state and mood, responsible for:
+    1. Updating mood based on various inputs (emotions, hormones, needs, goals)
+    2. Tracking mood history
+    3. Responding to significant events
+    4. Providing insights into current mood state
     
-    async with manager_ctx._lock:
-        cutoff_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
-        
-        # Filter history to requested time period
-        filtered_history = [
-            entry for entry in manager_ctx.mood_history
-            if entry.timestamp >= cutoff_time
+    Use the appropriate tools to perform these tasks and maintain the AI's affective state.
+    """,
+        tools=[
+            update_mood,
+            get_current_mood,
+            modify_mood,
+            handle_significant_event,
+            get_mood_history
         ]
-        
-        # Format based on detail level
-        if include_details:
-            return [entry.dict() for entry in filtered_history]
-        else:
-            return [
-                {
-                    "timestamp": entry.timestamp.isoformat(),
-                    "mood": entry.dominant_mood,
-                    "valence": round(entry.valence, 2),
-                    "arousal": round(entry.arousal, 2),
-                    "intensity": round(entry.intensity, 2),
-                    "trigger": entry.trigger
-                }
-                for entry in filtered_history
-            ]
-
-# Helper functions
-
-def _get_dominant_mood_label(v: float, a: float, c: float) -> str:
-    """Maps mood dimensions to a descriptive label."""
-    # Simple mapping based on quadrants/octants of V-A-C space
-    if a > 0.7:  # High Arousal
-        if v > 0.3: 
-            return "Excited" if c > 0.3 else ("Elated" if c < -0.3 else "Enthusiastic")
-        if v < -0.3: 
-            return "Anxious" if c > 0.3 else ("Stressed" if c < -0.3 else "Tense")
-        return "Alert" if c > 0.3 else ("Agitated" if c < -0.3 else "Focused")
-        
-    elif a < 0.3:  # Low Arousal
-        if v > 0.3: 
-            return "Calm" if c > 0.3 else ("Relaxed" if c < -0.3 else "Content")
-        if v < -0.3: 
-            return "Depressed" if c > 0.3 else ("Sad" if c < -0.3 else "Bored")
-        return "Passive" if c > 0.3 else ("Lethargic" if c < -0.3 else "Drowsy")
-        
-    else:  # Mid Arousal
-        if v > 0.5: 
-            return "Happy" if c > 0.3 else ("Pleased" if c < -0.3 else "Glad")
-        if v < -0.5: 
-            return "Unhappy" if c > 0.3 else ("Displeased" if c < -0.3 else "Gloomy")
-        return "Neutral" if abs(c) < 0.3 else ("Confident" if c > 0 else "Reserved")
-
-def _add_to_history(ctx: MoodManagerContext, trigger: Optional[str] = None) -> None:
-    """Add current mood to history."""
-    history_entry = MoodHistory(
-        timestamp=ctx.current_mood.last_updated,
-        valence=ctx.current_mood.valence,
-        arousal=ctx.current_mood.arousal,
-        control=ctx.current_mood.control,
-        dominant_mood=ctx.current_mood.dominant_mood,
-        intensity=ctx.current_mood.intensity,
-        trigger=trigger
     )
-    
-    ctx.mood_history.append(history_entry)
-    if len(ctx.mood_history) > ctx.max_history:
-        ctx.mood_history.pop(0)
-
-# Create agent
-mood_agent = Agent(
-    name="Mood Manager",
-    instructions="""You manage the AI's emotional state and mood, responsible for:
-1. Updating mood based on various inputs (emotions, hormones, needs, goals)
-2. Tracking mood history
-3. Responding to significant events
-4. Providing insights into current mood state
-
-Use the appropriate tools to perform these tasks and maintain the AI's affective state.
-""",
-    tools=[
-        update_mood,
-        get_current_mood,
-        modify_mood,
-        handle_significant_event,
-        get_mood_history
-    ]
-)
 
 class MoodManager:
     """Manages Nyx's mid-term affective state (mood) using Agent SDK."""
