@@ -1,0 +1,1 @@
+It looks like the specific lint errors and the relevant code snippets didn’t come through. Could you please paste the lint output and the surrounding code context for each issue? Once I have those, I can propose precise unified‐diff patches to address them.
