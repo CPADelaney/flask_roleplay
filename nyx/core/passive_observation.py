@@ -190,10 +190,14 @@ async def categorize_time_elapsed_obs(seconds: float) -> str:
 
 @function_tool
 async def generate_observation_from_action(
-    action: Dict[str, Any], 
-    context: Dict[str, Any]
+    action: Optional[Dict[str, Any]] = None, 
+    context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Generate an observation based on an action that was taken"""
+    # Set defaults inside the function
+    action = {} if action is None else action
+    context = {} if context is None else context
+    
     # Get action details
     action_name = action.get("name", "unknown action")
     action_source = action.get("source", "unknown")
@@ -250,11 +254,12 @@ async def generate_observation_from_action(
 @function_tool
 async def generate_observation_from_source(
     source: Optional[str] = None,
-    context:  Optional[Dict[str, Any]] = None,  # Add default empty dict
-    template_options: Optional[List[str]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    template_options: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Generate an observation based on a specific source"""
-    # Default templates by source if none provided
+    # Set defaults inside the function
+    context = {} if context is None else context
     default_templates = {
         "environment": [
             "I notice {observation} in our environment.",
@@ -431,11 +436,16 @@ async def generate_observation_from_source(
 
 @function_tool
 async def evaluate_observation_relevance(
-    observation_text: str,
-    current_context: Dict[str, Any],
-    source: str
+    observation_text: Optional[str] = None,
+    current_context: Optional[Dict[str, Any]] = None,
+    source: Optional[str] = None
 ) -> Dict[str, Any]:
     """Evaluate how relevant an observation is to the current context"""
+    # Set defaults inside the function
+    observation_text = "" if observation_text is None else observation_text
+    current_context = {} if current_context is None else current_context
+    source = "unknown" if source is None else source
+    
     # Base relevance score based on source
     base_relevance = {
         "emotion": 0.7,
@@ -566,10 +576,14 @@ async def filter_observations(
 
 @function_tool
 async def check_observation_patterns(
-    recent_observations: List[Dict[str, Any]],
-    current_context: Dict[str, Any]
+    recent_observations: Optional[List[Dict[str, Any]]] = None,
+    current_context: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
     """Check for patterns across recent observations"""
+    # Default empty list/dict if None
+    recent_observations = [] if recent_observations is None else recent_observations
+    current_context = {} if current_context is None else current_context
+    
     # Need minimum observations to detect patterns
     if len(recent_observations) < 3:
         return None
@@ -864,7 +878,7 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         except Exception as e:
             logger.error(f"Error in passive observation background process: {str(e)}")
     
-    async def generate_observation_from_action(self, action: Dict[str, Any]) -> Optional[Observation]:
+    async def process_observation_from_action(self, action: Dict[str, Any]) -> Optional[Observation]:
         """Generate an observation in response to an executed action"""
         # Check if we should generate an observation for this action
         if self._action_obs_count_this_session >= self.config["max_action_observations_per_session"]:
