@@ -314,12 +314,12 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
         return manager_ctx.current_mood.dict()
 
 @function_tool
-async def get_current_mood(self) -> MoodState:
+async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> MoodState:
     """Returns the current mood state, updating if needed."""
     result = await Runner.run(
-        self.agent,
+        ctx.context.agent,
         "Get the current mood state.",
-        context=self.context
+        context=ctx.context
     )
     
     try:
@@ -333,16 +333,16 @@ async def get_current_mood(self) -> MoodState:
                 logger.info("Successfully parsed string result as JSON dictionary")
             except json.JSONDecodeError:
                 logger.warning(f"Could not parse string result as JSON: {mood_data[:100]}...")
-                return self.context.current_mood
+                return ctx.context.current_mood
                 
         if isinstance(mood_data, dict):
             return MoodState(**mood_data)
         else:
             logger.warning(f"Unexpected get_current_mood result format: {type(result.final_output)}")
-            return self.context.current_mood
+            return ctx.context.current_mood
     except Exception as e:
         logger.error(f"Error parsing current mood result: {e}")
-        return self.context.current_mood
+        return ctx.context.current_mood
         
 @function_tool
 async def modify_mood(
