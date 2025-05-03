@@ -72,246 +72,246 @@ class MoodManagerContext:
 
         logger.info("MoodManagerContext initialized")
 
-# Function tools for mood operations
-@function_tool
-async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, Any]:
-    """
-    Updates the current mood based on various system states.
+    # Function tools for mood operations
+    @function_tool
+    async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, Any]:
+        """
+        Updates the current mood based on various system states.
+        
+        Returns:
+            Updated mood state information
+        """
+        manager_ctx = ctx.context
+        
+        async with manager_ctx._lock:  # Ensure thread safety
+            now = datetime.datetime.now()
+            if (now - manager_ctx.last_update_time).total_seconds() < manager_ctx.update_interval_seconds:
+                return manager_ctx.current_mood.dict()  # Not time to update yet
     
-    Returns:
-        Updated mood state information
-    """
-    manager_ctx = ctx.context
+            # Calculate elapsed time factor (adjusts influence strength)
+            elapsed = (now - manager_ctx.last_update_time).total_seconds()
+            time_factor = min(1.0, elapsed / (manager_ctx.update_interval_seconds * 5))  # Full effect after ~5 mins
     
-    async with manager_ctx._lock:  # Ensure thread safety
-        now = datetime.datetime.now()
-        if (now - manager_ctx.last_update_time).total_seconds() < manager_ctx.update_interval_seconds:
-            return manager_ctx.current_mood.dict()  # Not time to update yet
-
-        # Calculate elapsed time factor (adjusts influence strength)
-        elapsed = (now - manager_ctx.last_update_time).total_seconds()
-        time_factor = min(1.0, elapsed / (manager_ctx.update_interval_seconds * 5))  # Full effect after ~5 mins
-
-        influences: Dict[str, float] = {}
-        target_valence = 0.0
-        target_arousal = 0.5
-        target_control = 0.0
-        total_weight = 0.0
-
-        # 1. Influence from recent Emotional State
-        if manager_ctx.emotional_core:
-            try:
-                if hasattr(manager_ctx.emotional_core, 'get_average_recent_state'):
-                    avg_emotion = await manager_ctx.emotional_core.get_average_recent_state(minutes=5)
-                    if avg_emotion:
-                        emo_valence = avg_emotion.get("valence", 0.0)
-                        emo_arousal = avg_emotion.get("arousal", 0.5)
-                        
-                        # Valence influence
-                        weight = manager_ctx.influence_weights["emotion_valence"]
-                        target_valence += emo_valence * weight
-                        influences["emotion_valence"] = emo_valence * weight
-                        total_weight += weight
-
-                        # Arousal influence
-                        weight = manager_ctx.influence_weights["emotion_arousal"]
-                        target_arousal += (emo_arousal - 0.5) * weight  # Adjust around neutral 0.5
-                        influences["emotion_arousal"] = (emo_arousal - 0.5) * weight
-                        total_weight += weight
-                        
-                        # Extract emotional dominance if available
-                        if "dominance" in avg_emotion:
-                            emo_dominance = avg_emotion.get("dominance", 0.0)
-                            target_control += emo_dominance * weight * 0.7  # Lower impact on control
-            except Exception as e:
-                logger.error(f"Error getting emotional influence: {e}")
-
-        # 2. Influence from Hormones
-        if manager_ctx.hormone_system:
-            try:
-                # Add await here to properly get hormone levels
-                hormone_levels = await manager_ctx.hormone_system.get_hormone_levels()
-                hormone_influence_valence = 0.0
-                hormone_influence_arousal = 0.0
-                hormone_influence_control = 0.0
-                
-                # Simplified hormone mappings
-                hormone_mappings = {
-                    "endoryx": {"valence": 0.4, "arousal": 0.1, "control": 0.1},   # Endorphin -> positive, slight energy
-                    "estradyx": {"valence": 0.2, "arousal": -0.1, "control": -0.1}, # Estrogen -> slightly positive, calming
-                    "oxytonyx": {"valence": 0.3, "arousal": -0.2, "control": -0.1}, # Oxytocin -> positive, calming
-                    "testoryx": {"valence": 0.1, "arousal": 0.3, "control": 0.5},   # Testosterone -> energizing, dominance
-                    "melatonyx": {"valence": 0.0, "arousal": -0.5, "control": -0.2}, # Melatonin -> very calming
-                    "cortanyx": {"valence": -0.3, "arousal": 0.3, "control": -0.2},  # Cortisol -> negative, energizing, less control
-                    "nyxamine": {"valence": 0.3, "arousal": 0.2, "control": 0.3},    # Dopamine -> positive, energizing, control
-                    "seranix": {"valence": 0.2, "arousal": -0.1, "control": 0.1},    # Serotonin -> positive, slightly calming
-                    "libidyx": {"valence": 0.1, "arousal": 0.5, "control": 0.2},     # Libido -> energizing, slight dominance
-                    "serenity_boost": {"valence": 0.3, "arousal": -0.6, "control": -0.1} # Post-gratification -> positive, very calming
-                }
-                
-                # Calculate hormone influence
-                for hormone, mapping in hormone_mappings.items():
-                    if hormone in hormone_levels:
-                        # Get hormone level (0-1) and normalize around 0.5 baseline
-                        level = hormone_levels[hormone].get("value", 0.5) - 0.5
-                        
-                        # Apply influence based on deviation from baseline
-                        hormone_influence_valence += level * mapping["valence"]
-                        hormone_influence_arousal += level * mapping["arousal"]
-                        hormone_influence_control += level * mapping["control"]
-                
-                # Apply hormone weight
-                weight = manager_ctx.influence_weights["hormones"]
-                target_valence += hormone_influence_valence * weight
-                target_arousal += hormone_influence_arousal * weight
-                target_control += hormone_influence_control * weight
-                
-                # Store aggregate influence
-                hormone_total = (abs(hormone_influence_valence) + 
-                                abs(hormone_influence_arousal) + 
-                                abs(hormone_influence_control)) / 3
-                influences["hormones"] = hormone_total * weight
-                total_weight += weight
-            except Exception as e:
-                logger.error(f"Error getting hormone influence: {e}")
-
-        # 3. Influence from Needs
-        if manager_ctx.needs_system:
-            try:
-                needs_state = manager_ctx.needs_system.get_needs_state()
-                if needs_state:
-                    # Calculate weighted deficit
-                    total_deficit = 0
-                    total_importance = 0
-                    
-                    for need_name, need_data in needs_state.items():
-                        deficit = need_data.get('deficit', 0)
-                        importance = need_data.get('importance', 0.5)
-                        
-                        total_deficit += deficit * importance
-                        total_importance += importance
-                    
-                    avg_deficit = total_deficit / total_importance if total_importance > 0 else 0
-                    
-                    # High deficit -> negative valence, slight arousal increase
-                    needs_influence_valence = -avg_deficit * 1.5  # Strong negative impact
-                    needs_influence_arousal = avg_deficit * 0.3   # Slight agitation
-                    needs_influence_control = -avg_deficit * 0.2  # Reduced sense of control
-        
-                    # Get weight first before using it
-                    weight = manager_ctx.influence_weights["needs"]
-        
-                    # Add valence/arousal/control from pleasure deprivation
-                    pleasure_state = needs_state.get("pleasure_indulgence", {})
-                    pleasure_deficit = pleasure_state.get("deficit", 0.0)
-                    pleasure_importance = pleasure_state.get("importance", 0.0)
-                    
-                    valence_drop = -pleasure_deficit * pleasure_importance * 0.6
-                    arousal_boost = pleasure_deficit * 0.4
-                    control_bias = pleasure_deficit * 0.2
-                    
-                    target_valence += valence_drop * weight
-                    target_arousal += arousal_boost * weight
-                    target_control += control_bias * weight
-                    
-                    influences["pleasure_deprivation"] = pleasure_deficit * weight
-        
-                    # Apply needs weight (already defined above)
-                    target_valence += needs_influence_valence * weight
-                    target_arousal += needs_influence_arousal * weight
-                    target_control += needs_influence_control * weight
-                    
-                    influences["needs"] = (abs(needs_influence_valence) + 
-                                        abs(needs_influence_arousal) + 
-                                        abs(needs_influence_control)) / 3 * weight
-                    total_weight += weight
-            except Exception as e:
-                logger.error(f"Error getting needs influence: {e}")
-
-        # 4. Influence from Recent Goal Outcomes
-        if manager_ctx.goal_manager:
-            try:
-                recent_goals = await manager_ctx.goal_manager.get_all_goals()
-                # Filter to recently completed/failed goals (last hour)
-                recent_outcomes = []
-                for g in recent_goals:
-                    if g.get('completion_time'):
-                        try:
-                            completion_time = datetime.datetime.fromisoformat(g['completion_time'])
-                            if (now - completion_time).total_seconds() < 3600:  # Last hour
-                                recent_outcomes.append(g)
-                        except (ValueError, TypeError):
-                            pass
-                
-                if recent_outcomes:
-                    # Calculate success and failure rates
-                    success_rate = sum(1 for g in recent_outcomes if g['status'] == 'completed') / len(recent_outcomes)
-                    failure_rate = sum(1 for g in recent_outcomes if g['status'] == 'failed') / len(recent_outcomes)
-                    
-                    # Success -> positive valence, agency (control)
-                    # Failure -> negative valence, less agency
-                    goal_influence_valence = (success_rate - failure_rate) * 0.5
-                    goal_influence_control = (success_rate - failure_rate) * 0.4
-                    
-                    # Apply goal weight
-                    weight = manager_ctx.influence_weights["goals"]
-                    target_valence += goal_influence_valence * weight
-                    target_control += goal_influence_control * weight
-                    
-                    influences["goals"] = (abs(goal_influence_valence) + 
-                                        abs(goal_influence_control)) / 2 * weight
-                    total_weight += weight
-            except Exception as e:
-                logger.error(f"Error getting goal influence: {e}")
-
-        # Calculate weighted average target state (if any influences)
-        if total_weight > 0:
-            target_valence /= total_weight
-            target_arousal = 0.5 + (target_arousal / total_weight)  # Adjust around 0.5 baseline
-            target_control /= total_weight
-        else:
-            # No influences, drift towards neutral
+            influences: Dict[str, float] = {}
             target_valence = 0.0
             target_arousal = 0.5
             target_control = 0.0
-
-        # Apply inertia and update mood dimensions
-        # Adjust update strength by time factor
-        update_strength = 1.0 - (manager_ctx.inertia * (1.0 - time_factor))  # Less inertia if more time passed
-
-        new_valence = manager_ctx.current_mood.valence * (1.0 - update_strength) + target_valence * update_strength
-        new_arousal = manager_ctx.current_mood.arousal * (1.0 - update_strength) + target_arousal * update_strength
-        new_control = manager_ctx.current_mood.control * (1.0 - update_strength) + target_control * update_strength
-
-        # Clamp values
-        manager_ctx.current_mood.valence = max(-1.0, min(1.0, new_valence))
-        manager_ctx.current_mood.arousal = max(0.0, min(1.0, new_arousal))
-        manager_ctx.current_mood.control = max(-1.0, min(1.0, new_control))
-
-        # Derive dominant mood label and intensity
-        manager_ctx.current_mood.dominant_mood = _get_dominant_mood_label(
-            manager_ctx.current_mood.valence, manager_ctx.current_mood.arousal, manager_ctx.current_mood.control
-        )
-        
-        # Intensity based on distance from neutral origin (0, 0.5, 0)
-        intensity = math.sqrt(
-            manager_ctx.current_mood.valence**2 + 
-            ((manager_ctx.current_mood.arousal - 0.5)*2)**2 + 
-            manager_ctx.current_mood.control**2
-        ) / math.sqrt(1**2 + 1**2 + 1**2)  # Normalize by max possible distance
-        
-        manager_ctx.current_mood.intensity = min(1.0, intensity)
-
-        # Update timestamp and influences
-        manager_ctx.current_mood.last_updated = now
-        manager_ctx.current_mood.influences = {k: v for k, v in influences.items() if abs(v) > 0.01}  # Store significant influences
-        manager_ctx.last_update_time = now
-
-        # Add to history
-        _add_to_history(manager_ctx, "periodic_update")
-
-        logger.info(f"Mood updated: {manager_ctx.current_mood.dominant_mood} (V:{manager_ctx.current_mood.valence:.2f} A:{manager_ctx.current_mood.arousal:.2f} C:{manager_ctx.current_mood.control:.2f})")
-        return manager_ctx.current_mood.dict()
+            total_weight = 0.0
+    
+            # 1. Influence from recent Emotional State
+            if manager_ctx.emotional_core:
+                try:
+                    if hasattr(manager_ctx.emotional_core, 'get_average_recent_state'):
+                        avg_emotion = await manager_ctx.emotional_core.get_average_recent_state(minutes=5)
+                        if avg_emotion:
+                            emo_valence = avg_emotion.get("valence", 0.0)
+                            emo_arousal = avg_emotion.get("arousal", 0.5)
+                            
+                            # Valence influence
+                            weight = manager_ctx.influence_weights["emotion_valence"]
+                            target_valence += emo_valence * weight
+                            influences["emotion_valence"] = emo_valence * weight
+                            total_weight += weight
+    
+                            # Arousal influence
+                            weight = manager_ctx.influence_weights["emotion_arousal"]
+                            target_arousal += (emo_arousal - 0.5) * weight  # Adjust around neutral 0.5
+                            influences["emotion_arousal"] = (emo_arousal - 0.5) * weight
+                            total_weight += weight
+                            
+                            # Extract emotional dominance if available
+                            if "dominance" in avg_emotion:
+                                emo_dominance = avg_emotion.get("dominance", 0.0)
+                                target_control += emo_dominance * weight * 0.7  # Lower impact on control
+                except Exception as e:
+                    logger.error(f"Error getting emotional influence: {e}")
+    
+            # 2. Influence from Hormones
+            if manager_ctx.hormone_system:
+                try:
+                    # Add await here to properly get hormone levels
+                    hormone_levels = await manager_ctx.hormone_system.get_hormone_levels()
+                    hormone_influence_valence = 0.0
+                    hormone_influence_arousal = 0.0
+                    hormone_influence_control = 0.0
+                    
+                    # Simplified hormone mappings
+                    hormone_mappings = {
+                        "endoryx": {"valence": 0.4, "arousal": 0.1, "control": 0.1},   # Endorphin -> positive, slight energy
+                        "estradyx": {"valence": 0.2, "arousal": -0.1, "control": -0.1}, # Estrogen -> slightly positive, calming
+                        "oxytonyx": {"valence": 0.3, "arousal": -0.2, "control": -0.1}, # Oxytocin -> positive, calming
+                        "testoryx": {"valence": 0.1, "arousal": 0.3, "control": 0.5},   # Testosterone -> energizing, dominance
+                        "melatonyx": {"valence": 0.0, "arousal": -0.5, "control": -0.2}, # Melatonin -> very calming
+                        "cortanyx": {"valence": -0.3, "arousal": 0.3, "control": -0.2},  # Cortisol -> negative, energizing, less control
+                        "nyxamine": {"valence": 0.3, "arousal": 0.2, "control": 0.3},    # Dopamine -> positive, energizing, control
+                        "seranix": {"valence": 0.2, "arousal": -0.1, "control": 0.1},    # Serotonin -> positive, slightly calming
+                        "libidyx": {"valence": 0.1, "arousal": 0.5, "control": 0.2},     # Libido -> energizing, slight dominance
+                        "serenity_boost": {"valence": 0.3, "arousal": -0.6, "control": -0.1} # Post-gratification -> positive, very calming
+                    }
+                    
+                    # Calculate hormone influence
+                    for hormone, mapping in hormone_mappings.items():
+                        if hormone in hormone_levels:
+                            # Get hormone level (0-1) and normalize around 0.5 baseline
+                            level = hormone_levels[hormone].get("value", 0.5) - 0.5
+                            
+                            # Apply influence based on deviation from baseline
+                            hormone_influence_valence += level * mapping["valence"]
+                            hormone_influence_arousal += level * mapping["arousal"]
+                            hormone_influence_control += level * mapping["control"]
+                    
+                    # Apply hormone weight
+                    weight = manager_ctx.influence_weights["hormones"]
+                    target_valence += hormone_influence_valence * weight
+                    target_arousal += hormone_influence_arousal * weight
+                    target_control += hormone_influence_control * weight
+                    
+                    # Store aggregate influence
+                    hormone_total = (abs(hormone_influence_valence) + 
+                                    abs(hormone_influence_arousal) + 
+                                    abs(hormone_influence_control)) / 3
+                    influences["hormones"] = hormone_total * weight
+                    total_weight += weight
+                except Exception as e:
+                    logger.error(f"Error getting hormone influence: {e}")
+    
+            # 3. Influence from Needs
+            if manager_ctx.needs_system:
+                try:
+                    needs_state = manager_ctx.needs_system.get_needs_state()
+                    if needs_state:
+                        # Calculate weighted deficit
+                        total_deficit = 0
+                        total_importance = 0
+                        
+                        for need_name, need_data in needs_state.items():
+                            deficit = need_data.get('deficit', 0)
+                            importance = need_data.get('importance', 0.5)
+                            
+                            total_deficit += deficit * importance
+                            total_importance += importance
+                        
+                        avg_deficit = total_deficit / total_importance if total_importance > 0 else 0
+                        
+                        # High deficit -> negative valence, slight arousal increase
+                        needs_influence_valence = -avg_deficit * 1.5  # Strong negative impact
+                        needs_influence_arousal = avg_deficit * 0.3   # Slight agitation
+                        needs_influence_control = -avg_deficit * 0.2  # Reduced sense of control
+            
+                        # Get weight first before using it
+                        weight = manager_ctx.influence_weights["needs"]
+            
+                        # Add valence/arousal/control from pleasure deprivation
+                        pleasure_state = needs_state.get("pleasure_indulgence", {})
+                        pleasure_deficit = pleasure_state.get("deficit", 0.0)
+                        pleasure_importance = pleasure_state.get("importance", 0.0)
+                        
+                        valence_drop = -pleasure_deficit * pleasure_importance * 0.6
+                        arousal_boost = pleasure_deficit * 0.4
+                        control_bias = pleasure_deficit * 0.2
+                        
+                        target_valence += valence_drop * weight
+                        target_arousal += arousal_boost * weight
+                        target_control += control_bias * weight
+                        
+                        influences["pleasure_deprivation"] = pleasure_deficit * weight
+            
+                        # Apply needs weight (already defined above)
+                        target_valence += needs_influence_valence * weight
+                        target_arousal += needs_influence_arousal * weight
+                        target_control += needs_influence_control * weight
+                        
+                        influences["needs"] = (abs(needs_influence_valence) + 
+                                            abs(needs_influence_arousal) + 
+                                            abs(needs_influence_control)) / 3 * weight
+                        total_weight += weight
+                except Exception as e:
+                    logger.error(f"Error getting needs influence: {e}")
+    
+            # 4. Influence from Recent Goal Outcomes
+            if manager_ctx.goal_manager:
+                try:
+                    recent_goals = await manager_ctx.goal_manager.get_all_goals()
+                    # Filter to recently completed/failed goals (last hour)
+                    recent_outcomes = []
+                    for g in recent_goals:
+                        if g.get('completion_time'):
+                            try:
+                                completion_time = datetime.datetime.fromisoformat(g['completion_time'])
+                                if (now - completion_time).total_seconds() < 3600:  # Last hour
+                                    recent_outcomes.append(g)
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    if recent_outcomes:
+                        # Calculate success and failure rates
+                        success_rate = sum(1 for g in recent_outcomes if g['status'] == 'completed') / len(recent_outcomes)
+                        failure_rate = sum(1 for g in recent_outcomes if g['status'] == 'failed') / len(recent_outcomes)
+                        
+                        # Success -> positive valence, agency (control)
+                        # Failure -> negative valence, less agency
+                        goal_influence_valence = (success_rate - failure_rate) * 0.5
+                        goal_influence_control = (success_rate - failure_rate) * 0.4
+                        
+                        # Apply goal weight
+                        weight = manager_ctx.influence_weights["goals"]
+                        target_valence += goal_influence_valence * weight
+                        target_control += goal_influence_control * weight
+                        
+                        influences["goals"] = (abs(goal_influence_valence) + 
+                                            abs(goal_influence_control)) / 2 * weight
+                        total_weight += weight
+                except Exception as e:
+                    logger.error(f"Error getting goal influence: {e}")
+    
+            # Calculate weighted average target state (if any influences)
+            if total_weight > 0:
+                target_valence /= total_weight
+                target_arousal = 0.5 + (target_arousal / total_weight)  # Adjust around 0.5 baseline
+                target_control /= total_weight
+            else:
+                # No influences, drift towards neutral
+                target_valence = 0.0
+                target_arousal = 0.5
+                target_control = 0.0
+    
+            # Apply inertia and update mood dimensions
+            # Adjust update strength by time factor
+            update_strength = 1.0 - (manager_ctx.inertia * (1.0 - time_factor))  # Less inertia if more time passed
+    
+            new_valence = manager_ctx.current_mood.valence * (1.0 - update_strength) + target_valence * update_strength
+            new_arousal = manager_ctx.current_mood.arousal * (1.0 - update_strength) + target_arousal * update_strength
+            new_control = manager_ctx.current_mood.control * (1.0 - update_strength) + target_control * update_strength
+    
+            # Clamp values
+            manager_ctx.current_mood.valence = max(-1.0, min(1.0, new_valence))
+            manager_ctx.current_mood.arousal = max(0.0, min(1.0, new_arousal))
+            manager_ctx.current_mood.control = max(-1.0, min(1.0, new_control))
+    
+            # Derive dominant mood label and intensity
+            manager_ctx.current_mood.dominant_mood = _get_dominant_mood_label(
+                manager_ctx.current_mood.valence, manager_ctx.current_mood.arousal, manager_ctx.current_mood.control
+            )
+            
+            # Intensity based on distance from neutral origin (0, 0.5, 0)
+            intensity = math.sqrt(
+                manager_ctx.current_mood.valence**2 + 
+                ((manager_ctx.current_mood.arousal - 0.5)*2)**2 + 
+                manager_ctx.current_mood.control**2
+            ) / math.sqrt(1**2 + 1**2 + 1**2)  # Normalize by max possible distance
+            
+            manager_ctx.current_mood.intensity = min(1.0, intensity)
+    
+            # Update timestamp and influences
+            manager_ctx.current_mood.last_updated = now
+            manager_ctx.current_mood.influences = {k: v for k, v in influences.items() if abs(v) > 0.01}  # Store significant influences
+            manager_ctx.last_update_time = now
+    
+            # Add to history
+            _add_to_history(manager_ctx, "periodic_update")
+    
+            logger.info(f"Mood updated: {manager_ctx.current_mood.dominant_mood} (V:{manager_ctx.current_mood.valence:.2f} A:{manager_ctx.current_mood.arousal:.2f} C:{manager_ctx.current_mood.control:.2f})")
+            return manager_ctx.current_mood.dict()
 
     @function_tool
     async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> MoodState:
