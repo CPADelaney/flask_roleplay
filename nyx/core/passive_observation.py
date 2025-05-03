@@ -826,28 +826,14 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         
         logger.info("PassiveObservationSystem initialized with action integration")
     
-    def _create_agent_with_instructions(self, name, instructions, tools_functions, output_type):
+    def _create_agent_with_instructions(self, name, instructions, tools, output_type):
         """Helper method to create an agent with given instructions"""
-        # Make sure we're passing functions, not FunctionTool objects
-        tools = []
-        for tool in tools_functions:
-            if callable(tool):  # It's a function
-                tools.append(tool)
-            elif hasattr(tool, "name"):  # It's already a FunctionTool
-                # For tools that are already FunctionTool objects, we need to recreate them
-                # or you could implement a way to extract just the function
-                # This is a placeholder - you'd need proper implementation
-                logger.warning(f"Tool {tool.name} was already a FunctionTool, needs special handling")
-                continue
-            else:
-                logger.warning(f"Unknown tool type: {type(tool)}")
-                continue
-                
         return Agent(
             name=name,
             instructions=instructions,
             model="gpt-4o",
-            tools=tools
+            tools=tools,
+            output_type=output_type
         )
     
     async def start(self):
@@ -1253,9 +1239,20 @@ Generate detailed evaluation notes that explain your reasoning process.""",
             "user_id": filter_criteria.user_id
         }
         
-        # Apply filter using the tool
+        # Apply filter using a dedicated agent with the filter_observations tool
         with trace(workflow_name="filter_observations"):
-            filtered_dict = await filter_observations(observations_dict, filter_dict)
+            filter_agent = Agent(
+                name="Filter Agent",
+                tools=[filter_observations]
+            )
+            result = await Runner.run(
+                filter_agent,
+                json.dumps({
+                    "observations": observations_dict,
+                    "filter_criteria": filter_dict
+                })
+            )
+            filtered_dict = result.final_output
         
         # Convert back to observations and return limited number
         result = []
