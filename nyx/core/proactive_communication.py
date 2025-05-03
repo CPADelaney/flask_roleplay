@@ -1221,7 +1221,7 @@ and qualitative insights about communication quality and effectiveness.""",
         # Add relationship data if available
         if self.relationship_manager:
             try:
-                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                relationship = await self.relationship_manager.get_relationship_state_internal(user_id)
                 context["relationship"] = relationship
             except Exception as e:
                 logger.error(f"Error getting relationship data: {str(e)}")
@@ -1311,7 +1311,7 @@ and qualitative insights about communication quality and effectiveness.""",
                 last_contact = None
                 if self.relationship_manager:
                     try:
-                        relationship = await self.relationship_manager.get_relationship_state(intent.user_id)
+                        relationship = await self.relationship_manager.get_relationship_state_internal(intent.user_id)
                         if relationship and hasattr(relationship, "metadata"):
                             metadata = relationship.metadata or {}
                             last_contact = metadata.get("last_contact")
@@ -1448,12 +1448,12 @@ and qualitative insights about communication quality and effectiveness.""",
         
         try:
             # Get all known users
-            all_users = await self.relationship_manager.get_all_relationship_ids()
+            all_users = await self.relationship_manager.get_all_relationship_ids_internal()
             
             # For each user, gather relevant data
             for user_id in all_users:
                 # Get relationship data
-                relationship = await self.relationship_manager.get_relationship_state(user_id)
+                relationship = await self.relationship_manager.get_relationship_state_internal(user_id)
                 
                 # Skip if relationship is too new or not developed enough
                 relationship_level = getattr(relationship, "intimacy", 0) or getattr(relationship, "trust", 0)
@@ -1543,7 +1543,7 @@ and qualitative insights about communication quality and effectiveness.""",
                 # Get relationship data
                 relationship_data = {}
                 if self.relationship_manager:
-                    relationship = await self.relationship_manager.get_relationship_state(user_id)
+                    relationship = await self.relationship_manager.get_relationship_state_internal(user_id)
                     if relationship:
                         # Convert to dict if needed
                         if hasattr(relationship, "model_dump"):
