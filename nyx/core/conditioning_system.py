@@ -1586,7 +1586,7 @@ class ConditioningSystem:
                     ctx.context.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
                     
                     # Call the update_neurochemical tool via the neurochemical_tools instance
-                    emotional_test = await self.context.emotional_core.neurochemical_tools.update_neurochemical(
+                    emotional_test = await self.context.emotional_core.neurochemical_tools.update_neurochemical_logic(
                         ctx,
                         chemical=chemical,
                         value=test_intensity,
