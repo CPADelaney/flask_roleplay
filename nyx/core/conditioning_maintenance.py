@@ -693,24 +693,35 @@ async def _get_association_details(
     }
 
 @function_tool
-async def _apply_extinction_to_association(
+async def _apply_extinction_to_association_logic(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_key: Optional[str] = None, # Make Optional
-    association_type: Optional[str] = None # Make Optional
+    association_key: Optional[str] = None,
+    association_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Apply extinction to a specific association
+    Apply extinction to a specific association (Internal logic function)
     
     Args:
-        association_key: Key of the association
-        association_type: Type of association (classical or operant)
+        association_key: Key of the association (REQUIRED)
+        association_type: Type of association ('classical' or 'operant') (REQUIRED)
         
     Returns:
         Result of extinction
     """
-    if association_key is None or association_type is None:
-        logger.error("Tool _apply_extinction_to_association missing required arguments.")
-        return {"success": False, "error": "Missing required arguments."}
+    # Enhanced error checking with detailed feedback
+    missing_args = []
+    if association_key is None:
+        missing_args.append("association_key")
+    if association_type is None:
+        missing_args.append("association_type")
+    
+    if missing_args:
+        error_msg = f"Tool _apply_extinction_to_association missing required arguments: {', '.join(missing_args)}"
+        logger.error(error_msg)
+        return {
+            "success": False,
+            "error": f"Missing required arguments: {', '.join(missing_args)}. Please provide all required parameters."
+        }
         
     try:
         result = await ctx.context.conditioning_system.apply_extinction(association_key, association_type)
@@ -722,30 +733,50 @@ async def _apply_extinction_to_association(
             "error": str(e)
         }
 
+# Tool wrapper with explicit description
+_apply_extinction_to_association_tool = function_tool(
+    _apply_extinction_to_association_logic,
+    name_override="_apply_extinction_to_association",
+    description_override="Apply extinction to a specific association. REQUIRED PARAMETERS: association_key (string), association_type ('classical' or 'operant')"
+)
+
 @function_tool
-async def _adjust_association_decay_rate(
+async def _adjust_association_decay_rate_logic(
     ctx: RunContextWrapper[MaintenanceContext],
-    association_key: Optional[str] = None, # Make Optional
-    association_type: Optional[str] = None, # Make Optional
-    new_decay_rate: Optional[float] = None # Make Optional
+    association_key: Optional[str] = None,
+    association_type: Optional[str] = None,
+    new_decay_rate: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    Adjust the decay rate of an association
+    Adjust the decay rate of an association (Internal logic function)
     
     Args:
-        association_key: Key of the association
-        association_type: Type of association (classical or operant)
-        new_decay_rate: New decay rate (0.0-1.0)
+        association_key: Key of the association (REQUIRED)
+        association_type: Type of association ('classical' or 'operant') (REQUIRED)
+        new_decay_rate: New decay rate (0.0-1.0) (REQUIRED)
         
     Returns:
         Result of adjustment
     """
-    if association_key is None or association_type is None or new_decay_rate is None:
-         logger.error("Tool _adjust_association_decay_rate missing required arguments.")
-         return {"success": False, "error": "Missing required arguments."}
+    # Enhanced error checking with detailed feedback
+    missing_args = []
+    if association_key is None:
+        missing_args.append("association_key")
+    if association_type is None:
+        missing_args.append("association_type")
+    if new_decay_rate is None:
+        missing_args.append("new_decay_rate")
+    
+    if missing_args:
+        error_msg = f"Tool _adjust_association_decay_rate missing required arguments: {', '.join(missing_args)}"
+        logger.error(error_msg)
+        return {
+            "success": False,
+            "error": f"Missing required arguments: {', '.join(missing_args)}. Please provide all required parameters."
+        }
         
     # Get the appropriate association dictionary
-    associations = ctx.context.conditioning_system.classical_associations if association_type == "classical" else ctx.context.conditioning_system.operant_associations
+    associations = ctx.context.classical_associations if association_type == "classical" else ctx.context.operant_associations
     
     if association_key not in associations:
         return {
@@ -767,6 +798,14 @@ async def _adjust_association_decay_rate(
         "old_decay_rate": old_decay_rate,
         "new_decay_rate": association.decay_rate
     }
+
+# Step 2: Create the tool wrapper with explicit description
+_adjust_association_decay_rate_tool = function_tool(
+    _adjust_association_decay_rate_logic,
+    name_override="_adjust_association_decay_rate",
+    description_override="Adjust the decay rate of an association. REQUIRED PARAMETERS: association_key (string), association_type ('classical' or 'operant'), new_decay_rate (float 0.0-1.0)"
+)
+
 
 @function_tool
 async def _identify_extinction_candidates(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
@@ -1430,13 +1469,23 @@ class ConditioningMaintenanceSystem:
             3. Manage decay rates based on importance
             4. Prune redundant or contradictory associations
             
+            CRITICAL TOOL USAGE REQUIREMENTS:
+            - When using _apply_extinction_to_association, you MUST ALWAYS provide both 'association_key' and 'association_type'
+            - When using _adjust_association_decay_rate, you MUST ALWAYS provide 'association_key', 'association_type', and 'new_decay_rate'
+            - For 'association_type', only use 'classical' or 'operant' as values
+            - Ensure decay rates are between 0.0 and 1.0
+            
+            Always first identify candidate associations using _identify_extinction_candidates before applying extinction
+            or adjusting decay rates to ensure you have valid association keys.
+            
             Balance maintaining important learned associations with removing
             outdated or unused ones. Consider the significance and recency
             of reinforcement when determining extinction.
             """,
             tools=[
-                _apply_extinction_to_association,
-                _adjust_association_decay_rate,
+                # Use the wrapped tool objects instead of direct function references
+                _apply_extinction_to_association_tool,
+                _adjust_association_decay_rate_tool,
                 _identify_extinction_candidates
             ],
             model_settings=ModelSettings(temperature=0.3)
