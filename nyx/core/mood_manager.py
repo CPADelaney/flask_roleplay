@@ -313,36 +313,37 @@ async def update_mood(ctx: RunContextWrapper[MoodManagerContext]) -> Dict[str, A
         logger.info(f"Mood updated: {manager_ctx.current_mood.dominant_mood} (V:{manager_ctx.current_mood.valence:.2f} A:{manager_ctx.current_mood.arousal:.2f} C:{manager_ctx.current_mood.control:.2f})")
         return manager_ctx.current_mood.dict()
 
-@function_tool
-async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> MoodState:
-    """Returns the current mood state, updating if needed."""
-    result = await Runner.run(
-        ctx.context.agent,
-        "Get the current mood state.",
-        context=ctx.context
-    )
-    
-    try:
-        mood_data = result.final_output
-        # Handle string result by attempting to parse it as JSON
-        if isinstance(mood_data, str):
-            import json
-            try:
-                # Try to parse the string as JSON
-                mood_data = json.loads(mood_data)
-                logger.info("Successfully parsed string result as JSON dictionary")
-            except json.JSONDecodeError:
-                logger.warning(f"Could not parse string result as JSON: {mood_data[:100]}...")
+    @function_tool
+    async def get_current_mood(ctx: RunContextWrapper[MoodManagerContext]) -> MoodState:
+        """Returns the current mood state, updating if needed."""
+        result = await Runner.run(
+            ctx.context.agent,
+            "Get the current mood state.",
+            context=ctx.context
+        )
+        
+        try:
+            mood_data = result.final_output
+            # Handle string result by attempting to parse it as JSON
+            if isinstance(mood_data, str):
+                import json
+                try:
+                    # Try to parse the string as JSON
+                    mood_data = json.loads(mood_data)
+                    logger.info("Successfully parsed string result as JSON dictionary")
+                except json.JSONDecodeError:
+                    logger.warning(f"Could not parse string result as JSON: {mood_data[:100]}...")
+                    # If parsing fails, just return the current mood state from context
+                    return ctx.context.current_mood
+                    
+            if isinstance(mood_data, dict):
+                return MoodState(**mood_data)
+            else:
+                logger.warning(f"Unexpected get_current_mood result format: {type(result.final_output)}")
                 return ctx.context.current_mood
-                
-        if isinstance(mood_data, dict):
-            return MoodState(**mood_data)
-        else:
-            logger.warning(f"Unexpected get_current_mood result format: {type(result.final_output)}")
+        except Exception as e:
+            logger.error(f"Error parsing current mood result: {e}")
             return ctx.context.current_mood
-    except Exception as e:
-        logger.error(f"Error parsing current mood result: {e}")
-        return ctx.context.current_mood
         
 @function_tool
 async def modify_mood(
