@@ -65,7 +65,10 @@ def handle_errors(logger_message: str = "An error occurred",
                 
                 # Execute the function with tracing
                 with function_span(func.__name__, input=str(args)[:100] if args else "{}"):
-                    result = await func(*args, **kwargs)
+                    result = func(*args, **kwargs)
+                    # Ensure result is awaitable
+                    result = ensure_awaitable(result)
+                    result = await result
                 
                 # Track execution time
                 duration = (datetime.datetime.now() - start_time).total_seconds()
@@ -849,3 +852,21 @@ class EmotionalToolUtils:
             trace_include_sensitive_data=True,
             trace_metadata=metadata
         )
+        
+def ensure_awaitable(value):
+    """
+    Ensures a value is awaitable, converting non-awaitable results to coroutines.
+    
+    Args:
+        value: Any value that might or might not be awaitable
+        
+    Returns:
+        Coroutine that will resolve to the value
+    """
+    if inspect.isawaitable(value):
+        return value
+    
+    async def wrapped_value():
+        return value
+    
+    return wrapped_value()
