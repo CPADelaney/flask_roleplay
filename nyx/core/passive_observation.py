@@ -151,8 +151,10 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    context_elements: Dict[str, Any] = Field(default_factory=dict, description="Key context elements used")
-    suggested_lifetime_seconds: int = Field(3600, description="Suggested lifetime in seconds")
+    # Remove default_factory here
+    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")
+    # Remove default value here
+    suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
 
 class ObservationEvaluationOutput(BaseModel):
@@ -826,12 +828,26 @@ Generate detailed evaluation notes that explain your reasoning process.""",
     
     def _create_agent_with_instructions(self, name, instructions, tools_functions, output_type):
         """Helper method to create an agent with given instructions"""
+        # Make sure we're passing functions, not FunctionTool objects
+        tools = []
+        for tool in tools_functions:
+            if callable(tool):  # It's a function
+                tools.append(tool)
+            elif hasattr(tool, "name"):  # It's already a FunctionTool
+                # For tools that are already FunctionTool objects, we need to recreate them
+                # or you could implement a way to extract just the function
+                # This is a placeholder - you'd need proper implementation
+                logger.warning(f"Tool {tool.name} was already a FunctionTool, needs special handling")
+                continue
+            else:
+                logger.warning(f"Unknown tool type: {type(tool)}")
+                continue
+                
         return Agent(
             name=name,
             instructions=instructions,
             model="gpt-4o",
-            tools=tools_functions,  # Pass the functions directly
-            output_type=output_type
+            tools=tools
         )
     
     async def start(self):
