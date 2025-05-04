@@ -1078,19 +1078,9 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         # Mood state
         if self.mood_manager:
             try:
-                if hasattr(self.mood_manager, "get_current_mood"):
-                    if callable(self.mood_manager.get_current_mood):
-                        # If it's a regular method, call it directly
-                        mood = await self.mood_manager.get_current_mood()
-                    else:
-                        # If it's a function tool, use Runner.run
-                        mood_agent = Agent(
-                            name="Mood Agent",
-                            tools=[self.mood_manager.get_current_mood]
-                        )
-                        result = await Runner.run(mood_agent, json.dumps({}))
-                        mood = result.final_output
-                        
+                # Use the run_* methods directly which are safe to call
+                if hasattr(self.mood_manager, "run_get_current_mood"):
+                    mood = await self.mood_manager.run_get_current_mood()
                     if mood:
                         context.emotional_state["mood"] = {
                             "dominant_mood": mood.dominant_mood,
