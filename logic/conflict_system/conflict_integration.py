@@ -384,9 +384,87 @@ class ConflictSystemIntegration:
         action_type="generate_conflict",
         action_description="Generate a new conflict with stakeholders"
     )
-    async def generate_conflict(self, conflict_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_conflict(
+        self, 
+        conflict_data_or_type: Union[Dict[str, Any], str, None] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a new conflict with stakeholders and resolution paths.
+        
+        Args:
+            conflict_data_or_type: Either a conflict type string (minor, standard, major, catastrophic)
+                                   or a complete conflict data dictionary
+            
+        Returns:
+            The generated conflict details
+        """
         await self.initialize()
         try:
+            # Handle string (conflict_type) or None input
+            if conflict_data_or_type is None or isinstance(conflict_data_or_type, str):
+                conflict_type = conflict_data_or_type
+                
+                # Create context for using conflict tools
+                ctx = RunContextWrapper({"user_id": self.user_id, "conversation_id": self.conversation_id})
+                
+                # Get current day for conflict creation
+                from logic.conflict_system.conflict_tools import get_current_day, get_available_npcs, generate_conflict_details
+                current_day = await get_current_day(ctx)
+                
+                # Get active conflicts to determine appropriate type if not specified
+                active_conflicts = await self.get_active_conflicts()
+                
+                # If there are already too many active conflicts (3+), make this a minor one
+                if len(active_conflicts) >= 3 and not conflict_type:
+                    conflict_type = "minor"
+                
+                # If there are no conflicts at all and no type specified, make this a standard one
+                if len(active_conflicts) == 0 and not conflict_type:
+                    conflict_type = "standard"
+                
+                # If still no type specified, choose randomly with weighted probabilities
+                if not conflict_type:
+                    weights = {
+                        "minor": 0.4,
+                        "standard": 0.4,
+                        "major": 0.15,
+                        "catastrophic": 0.05
+                    }
+                    
+                    import random
+                    conflict_type = random.choices(
+                        list(weights.keys()),
+                        weights=list(weights.values()),
+                        k=1
+                    )[0]
+                
+                # Get available NPCs to use as potential stakeholders
+                npcs = await get_available_npcs(ctx)
+                
+                if len(npcs) < 3:
+                    return {"success": False, "message": "Not enough NPCs available to create a complex conflict"}
+                
+                # Determine how many stakeholders to involve
+                stakeholder_count = {
+                    "minor": min(3, len(npcs)),
+                    "standard": min(4, len(npcs)),
+                    "major": min(5, len(npcs)),
+                    "catastrophic": min(6, len(npcs))
+                }.get(conflict_type, min(4, len(npcs)))
+                
+                # Select NPCs to involve as stakeholders
+                stakeholder_npcs = random.sample(npcs, stakeholder_count)
+                
+                # Generate conflict details using AI
+                conflict_data = await generate_conflict_details(ctx, conflict_type, stakeholder_npcs, current_day)
+            else:
+                # Use the provided conflict_data dictionary
+                conflict_data = conflict_data_or_type
+            
+            # Ensure conflict_data is valid before continuing
+            if not conflict_data or not isinstance(conflict_data, dict):
+                raise ValueError(f"Invalid conflict data: {conflict_data}")
+                
             # Get updated story context
             story_context = await self._get_story_context()
             
@@ -396,7 +474,7 @@ class ConflictSystemIntegration:
                 "active_npcs": story_context.get("active_npcs"),
                 "lore_context": story_context.get("lore_context")
             })
-
+    
             conflict_context = ConflictContext(self.user_id, self.conversation_id)
             generation_result = await Runner.run(
                 self.agents["conflict_generation_agent"],
@@ -404,7 +482,7 @@ class ConflictSystemIntegration:
                 context=conflict_context,
             )
             result = getattr(generation_result, 'final_output', generation_result)
-
+    
             # Stakeholders
             stakeholder_data = {
                 "conflict_id": result.get("conflict_id", getattr(result, 'conflict_id', None)),
@@ -417,7 +495,7 @@ class ConflictSystemIntegration:
                 self.agents["stakeholder_agent"],
                 json.dumps(stakeholder_data), context=conflict_context
             )
-
+    
             # Lore event update
             await self.lore_system.handle_narrative_event(
                 self.run_ctx,
@@ -439,10 +517,10 @@ class ConflictSystemIntegration:
                         "conflict_name": result.get("conflict_name", ""),
                         "conflict_type": result.get("conflict_type", ""),
                         "phase": "brewing",
-                        "location": conflict_data.get("location", "Unknown")
+                        "location": enhanced_data.get("location", "Unknown")
                     }
                 )
-
+    
             return {
                 "success": True,
                 "conflict_id": result.get("conflict_id"),
