@@ -92,7 +92,7 @@ class MoodManager:
         """,
             tools=[
                 self.update_mood,
-                self.get_current_mood,
+                self.d,
                 self.modify_mood,
                 self.handle_significant_event,
                 self.get_mood_history
@@ -381,7 +381,7 @@ class MoodManager:
             return self.current_mood.dict()
 
     @function_tool
-    async def get_current_mood(self) -> MoodState:
+    async def get_current_mood(self) -> Dict[str, Any]:  # Change return type from MoodState to Dict
         """Returns the current mood state, updating if needed."""
         now = datetime.datetime.now()
         
@@ -389,7 +389,7 @@ class MoodManager:
         if (now - self.last_update_time).total_seconds() > self.update_interval_seconds:
             await self.update_mood()
             
-        return self.current_mood
+        return self.current_mood.dict()  # Return dict instead of object
         
     @function_tool
     async def modify_mood(
