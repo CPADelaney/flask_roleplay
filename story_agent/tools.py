@@ -18,6 +18,8 @@ from agents import function_tool, RunContextWrapper
 # from story_agent.story_director_agent import StoryDirectorContext # Use this if possible
 from logic.conflict_system.conflict_tools import add_conflict_to_narrative
 
+from context.context_config import get_config
+
 from db.connection import get_db_connection_context
 from logic.narrative_progression import (
     get_current_narrative_stage,
