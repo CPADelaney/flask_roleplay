@@ -92,7 +92,7 @@ class MoodManager:
         """,
             tools=[
                 self.update_mood,
-                self.d,
+                self.get_current_mood,
                 self.modify_mood,
                 self.handle_significant_event,
                 self.get_mood_history
