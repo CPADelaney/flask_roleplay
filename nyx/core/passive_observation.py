@@ -151,10 +151,10 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    # Remove default_factory here
-    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")
-    # Remove default value here
-    suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")
+    # Change to use default_factory
+    context_elements: Dict[str, Any] = Field(default_factory=dict, description="Key context elements used")
+    # Add default value
+    suggested_lifetime_seconds: int = Field(3600, description="Suggested lifetime in seconds")
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
 
 class ObservationEvaluationOutput(BaseModel):
@@ -1078,15 +1078,27 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         # Mood state
         if self.mood_manager:
             try:
-                mood = await self.mood_manager.get_current_mood()
-                if mood:
-                    context.emotional_state["mood"] = {
-                        "dominant_mood": mood.dominant_mood,
-                        "valence": mood.valence,
-                        "arousal": mood.arousal,
-                        "control": mood.control,
-                        "intensity": mood.intensity
-                    }
+                if hasattr(self.mood_manager, "get_current_mood"):
+                    if callable(self.mood_manager.get_current_mood):
+                        # If it's a regular method, call it directly
+                        mood = await self.mood_manager.get_current_mood()
+                    else:
+                        # If it's a function tool, use Runner.run
+                        mood_agent = Agent(
+                            name="Mood Agent",
+                            tools=[self.mood_manager.get_current_mood]
+                        )
+                        result = await Runner.run(mood_agent, json.dumps({}))
+                        mood = result.final_output
+                        
+                    if mood:
+                        context.emotional_state["mood"] = {
+                            "dominant_mood": mood.dominant_mood,
+                            "valence": mood.valence,
+                            "arousal": mood.arousal,
+                            "control": mood.control,
+                            "intensity": mood.intensity
+                        }
             except Exception as e:
                 logger.error(f"Error getting mood state: {str(e)}")
         
