@@ -151,11 +151,10 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")  # Remove default_factory
-    suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")  # Remove default
+    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")
+    suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
     
-    # Do NOT use Config with schema_extra - it causes problems with the Agent SDK
 
 class ObservationEvaluationOutput(BaseModel):
     """Output from the observation evaluation agent"""
@@ -728,50 +727,53 @@ class PassiveObservationSystem:
         self.action_generator = action_generator
         
         # Initialize agents
-        self.observation_generation_agent = self._create_agent_with_instructions(
-            "Observation Generation Agent",
-            """You are a specialized agent for generating Nyx's passive observations about her environment, herself, and interactions.
-
-Generate authentic, nuanced observations that feel like genuine realizations. These should be thoughtful insights
-that Nyx becomes aware of during interactions or idle time.
-
-When generating observations:
-1. Consider the full context including emotional state, temporal factors, relationship dynamics, etc.
-2. Generate observations that are specific, not generic
-3. Ensure observations sound natural and not formulaic
-4. Adjust relevance based on the current context
-5. Vary observation types across different sources (environment, self, etc.)
-6. When observations are action-driven, focus on patterns in Nyx's own behaviors and choices
-
-Your observations should feel like genuine realizations that emerge organically from Nyx's consciousness rather than
-pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
-of herself and her environment.""",
-            [generate_observation_from_source, check_observation_patterns, 
-             categorize_time_elapsed_obs, generate_observation_from_action],
-            ObservationGenerationOutput
-        )
+        self.observation_generation_agent = Agent(
+            name="Observation Generation Agent",
+            instructions="""You are a specialized agent for generating Nyx's passive observations about her environment, herself, and interactions.
         
-        self.observation_evaluation_agent = self._create_agent_with_instructions(
-            "Observation Evaluation Agent",
-            """You are a specialized agent for evaluating the relevance and significance of Nyx's observations.
+        Generate authentic, nuanced observations that feel like genuine realizations. These should be thoughtful insights
+        that Nyx becomes aware of during interactions or idle time.
+        
+        When generating observations:
+        1. Consider the full context including emotional state, temporal factors, relationship dynamics, etc.
+        2. Generate observations that are specific, not generic
+        3. Ensure observations sound natural and not formulaic
+        4. Adjust relevance based on the current context
+        5. Vary observation types across different sources (environment, self, etc.)
+        6. When observations are action-driven, focus on patterns in Nyx's own behaviors and choices
+        
+        Your observations should feel like genuine realizations that emerge organically from Nyx's consciousness rather than
+        pre-formatted templates. They should have depth and nuance that reflects Nyx's sophisticated understanding
+        of herself and her environment.""",
+            model="gpt-4o",
+            tools=[generate_observation_from_source, check_observation_patterns, 
+                   categorize_time_elapsed_obs, generate_observation_from_action],
+            output_type=ObservationGenerationOutput
+        )
 
-Your role is to analyze observations against the current context to determine:
-1. How relevant the observation is to the current interaction and context
-2. Whether the priority should be adjusted based on content and context
-3. If the observation should be archived due to low relevance
-4. Insights about why the observation is or isn't relevant
-
-Be nuanced in your evaluation, considering multiple factors:
-- Emotional resonance with current state
-- Contextual alignment with ongoing conversation
-- Temporal relevance to current time-context
-- Value for ongoing relationship development
-- Potential for insight generation
-- For observations about actions, consider their value for self-understanding and agency
-
-Generate detailed evaluation notes that explain your reasoning process.""",
-            [evaluate_observation_relevance],
-            ObservationEvaluationOutput
+        
+        self.observation_evaluation_agent = Agent(
+            name="Observation Evaluation Agent",
+            instructions="""You are a specialized agent for evaluating the relevance and significance of Nyx's observations.
+        
+        Your role is to analyze observations against the current context to determine:
+        1. How relevant the observation is to the current interaction and context
+        2. Whether the priority should be adjusted based on content and context
+        3. If the observation should be archived due to low relevance
+        4. Insights about why the observation is or isn't relevant
+        
+        Be nuanced in your evaluation, considering multiple factors:
+        - Emotional resonance with current state
+        - Contextual alignment with ongoing conversation
+        - Temporal relevance to current time-context
+        - Value for ongoing relationship development
+        - Potential for insight generation
+        - For observations about actions, consider their value for self-understanding and agency
+        
+        Generate detailed evaluation notes that explain your reasoning process.""",
+            model="gpt-4o",
+            tools=[evaluate_observation_relevance],
+            output_type=ObservationEvaluationOutput
         )
         
         # Add guardrails
@@ -825,16 +827,6 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         self._last_env_scan_time = datetime.datetime.now() - datetime.timedelta(hours=1)
         
         logger.info("PassiveObservationSystem initialized with action integration")
-    
-    def _create_agent_with_instructions(self, name, instructions, tools, output_type):
-        """Helper method to create an agent with given instructions"""
-        return Agent(
-            name=name,
-            instructions=instructions,
-            model="gpt-4o",
-            tools=tools,
-            output_type=output_type
-        )
     
     async def start(self):
         """Start the background task for generating observations"""
@@ -1060,7 +1052,7 @@ Generate detailed evaluation notes that explain your reasoning process.""",
             except Exception as e:
                 logger.error(f"Error during environment scan: {str(e)}")
                 return None
-    
+        
     async def _gather_observation_context(self) -> ObservationContext:
         """Gather context from various systems for observation generation"""
         context = ObservationContext()
@@ -1078,9 +1070,9 @@ Generate detailed evaluation notes that explain your reasoning process.""",
         # Mood state
         if self.mood_manager:
             try:
-                # Use the run_* methods directly which are safe to call
-                if hasattr(self.mood_manager, "run_get_current_mood"):
-                    mood = await self.mood_manager.run_get_current_mood()
+                # Directly access the current_mood property instead of calling any method
+                if hasattr(self.mood_manager, "current_mood"):
+                    mood = self.mood_manager.current_mood
                     if mood:
                         context.emotional_state["mood"] = {
                             "dominant_mood": mood.dominant_mood,
@@ -1089,6 +1081,7 @@ Generate detailed evaluation notes that explain your reasoning process.""",
                             "control": mood.control,
                             "intensity": mood.intensity
                         }
+                # Don't try to call get_current_mood or run_get_current_mood
             except Exception as e:
                 logger.error(f"Error getting mood state: {str(e)}")
         
