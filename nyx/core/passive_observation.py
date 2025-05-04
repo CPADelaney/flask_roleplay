@@ -151,11 +151,11 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    # Change to use default_factory
-    context_elements: Dict[str, Any] = Field(default_factory=dict, description="Key context elements used")
-    # Add default value
-    suggested_lifetime_seconds: int = Field(3600, description="Suggested lifetime in seconds")
+    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")  # Remove default_factory
+    suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")  # Remove default
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
+    
+    # Do NOT use Config with schema_extra - it causes problems with the Agent SDK
 
 class ObservationEvaluationOutput(BaseModel):
     """Output from the observation evaluation agent"""
