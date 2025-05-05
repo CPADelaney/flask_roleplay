@@ -454,10 +454,10 @@ class DigitalSomatosensorySystem:
             Focus on how sensations would actually feel if experienced in a physical body.
             """,
             tools=[
-                function_tool(self._get_region_state),
-                function_tool(self._get_current_temperature_effects),
-                function_tool(self._get_pain_expression),
-                function_tool(self._get_arousal_expression_data)
+                self._get_region_state,
+                self._get_current_temperature_effects,
+                self._get_pain_expression,
+                self._get_arousal_expression_data
             ],
             output_type=SensoryExpression,
             model="gpt-4o",
@@ -482,10 +482,10 @@ class DigitalSomatosensorySystem:
             authentic and grounded in physical experience.
             """,
             tools=[
-                function_tool(self._get_all_region_states),
-                function_tool(self._calculate_overall_comfort),
-                function_tool(self._get_posture_effects),
-                function_tool(self._get_arousal_expression_data)
+                self._get_all_region_states,
+                self._calculate_overall_comfort,
+                self._get_posture_effects,
+                self._get_arousal_expression_data
             ],
             output_type=BodyStateOutput,
             model="gpt-4o",
@@ -509,9 +509,9 @@ class DigitalSomatosensorySystem:
             Focus on how temperature would genuinely affect a physical body and its behavior.
             """,
             tools=[
-                function_tool(self._get_ambient_temperature),
-                function_tool(self._get_body_temperature),
-                function_tool(self._get_temperature_comfort)
+                self._get_ambient_temperature,
+                self._get_body_temperature,
+                self._get_temperature_comfort
             ],
             output_type=TemperatureEffect,
             model="gpt-4o",
@@ -562,15 +562,15 @@ class DigitalSomatosensorySystem:
                 )
             ],
             tools=[
-                function_tool(self._process_stimulus_tool),
-                function_tool(self._get_region_state),
-                function_tool(self._get_all_region_states),
-                function_tool(self._update_body_temperature),
-                function_tool(self._calculate_overall_comfort),
-                function_tool(self._process_memory_trigger),
-                function_tool(self._link_memory_to_sensation_tool),
-                function_tool(self._get_arousal_state),
-                function_tool(self._update_arousal_state)
+                self._process_stimulus_tool,
+                self._get_region_state,
+                self._get_all_region_states,
+                self._update_body_temperature,
+                self._calculate_overall_comfort,
+                self._process_memory_trigger,
+                self._link_memory_to_sensation_tool,
+                self._get_arousal_state,
+                self._update_arousal_state
             ],
             input_guardrails=[
                 # --- FIX 2: Access static method via ClassName ---
