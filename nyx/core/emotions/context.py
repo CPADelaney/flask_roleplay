@@ -45,6 +45,10 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
                                                   description="Current state of each agent")
     sdk_metadata: Dict[str, Any] = Field(default_factory=dict,
                                        description="SDK-specific metadata")
+
+    def __init__(self):
+        self._circular_history = defaultdict(list)
+        self.cycle_count = 0
     
     class Config:
         """Pydantic configuration"""
@@ -349,27 +353,23 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
         if len(self.interaction_history) > 20:
             self.interaction_history.pop(0)
     
-    def _add_to_circular_buffer(self, buffer_name: str, item: Any) -> None:
-        """
-        Add item to a named circular buffer
+    def _add_to_circular_buffer(self, name, value):
+        """Adds a value to the named circular buffer"""
+        if not hasattr(self, "_circular_history"):
+            self._circular_history = defaultdict(list)
         
-        Args:
-            buffer_name: Name of the buffer
-            item: Item to add
-        """
-        self._circular_history[buffer_name].append(item)
+        # Add the value to the buffer
+        self._circular_history[name].append(value)
+        
+        # Limit buffer size (keep last 100 entries)
+        if len(self._circular_history[name]) > 100:
+            self._circular_history[name] = self._circular_history[name][-100:]
     
-    def get_circular_buffer(self, buffer_name: str) -> List[Any]:
-        """
-        Get contents of a named circular buffer as a list
-        
-        Args:
-            buffer_name: Name of the buffer
-            
-        Returns:
-            List of items in the buffer
-        """
-        return list(self._circular_history[buffer_name])
+    def get_circular_buffer(self, name):
+        """Gets the named circular buffer"""
+        if not hasattr(self, "_circular_history"):
+            self._circular_history = defaultdict(list)
+        return self._circular_history.get(name, [])
     
     def get_agent_usage(self) -> Dict[str, int]:
         """
