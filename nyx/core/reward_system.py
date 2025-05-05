@@ -584,10 +584,12 @@ class RewardSignalProcessor:
         
         return depravity_score
         
-
-
     async def trigger_post_gratification_response(self, ctx, intensity: float = 1.0, gratification_type: str = "general"):
         """Trigger post-gratification, potentially varying effects based on type."""
+        # Create context if needed
+        if ctx is None and self.emotional_core:
+            ctx = RunContextWrapper(context=self.emotional_core.context)
+            
         serenity_change = intensity * 0.8
         testoryx_reduction = -0.6
         nyxamine_reduction = -0.5
@@ -719,6 +721,25 @@ class RewardSignalProcessor:
             )
             self.current_dopamine = result["new_dopamine"]
             return result["dopamine_change"]
+
+    async def update_neurochemical(self, chemical: str, value: float, source: str = "system"):
+        """Wrapper to handle updating neurochemicals in the emotional system"""
+        if self.emotional_core is None:
+            logger.warning(f"No emotional core available for updating neurochemical {chemical}")
+            return
+        
+        try:
+            # Try direct method call
+            if hasattr(self.emotional_core, 'update_neurochemical'):
+                await self.emotional_core.update_neurochemical(chemical, value, source)
+            # Try via neurochemical_tools
+            elif hasattr(self.emotional_core, 'neurochemical_tools') and hasattr(self.emotional_core.neurochemical_tools, 'update_neurochemical'):
+                ctx = RunContextWrapper(context=self.emotional_core.context)
+                await self.emotional_core.neurochemical_tools.update_neurochemical(ctx, chemical, value, source)
+            else:
+                logger.warning(f"No method available to update neurochemical {chemical}")
+        except Exception as e:
+            logger.error(f"Error updating neurochemical {chemical}: {e}")
     
     async def _apply_reward_effects(self, reward: RewardSignal) -> Dict[str, Any]:
         """Apply effects of reward signal to other systems"""
@@ -760,15 +781,15 @@ class RewardSignalProcessor:
                 if is_hard_dominance_reward and hard_dominance_reward_value > 0:
                     # VERY STRONG Nyxamine boost for hard success
                     nyx_change = hard_dominance_reward_value * 0.9  # Near max boost
-                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    await self.update_neurochemical("nyxamine", nyx_change)
                     
                     # Strong Seranix boost for satisfaction
                     ser_change = hard_dominance_reward_value * 0.5
-                    await self.emotional_core.update_neurochemical("seranix", ser_change)
+                    await self.update_neurochemical("seranix", ser_change)
                     
                     # Minimal Oxynixin unless context specifies bonding aspect
                     oxy_change = hard_dominance_reward_value * 0.05
-                    await self.emotional_core.update_neurochemical("oxynixin", oxy_change)
+                    await self.update_neurochemical("oxynixin", oxy_change)
                     
                     effects["emotional"] = True
                     logger.debug(f"Applied MAX emotional effect for hard dominance reward: +{nyx_change:.2f} Nyxamine")
@@ -777,11 +798,11 @@ class RewardSignalProcessor:
                 elif is_dominance_reward and dominance_reward_value > 0:
                     # Strong Nyxamine boost
                     nyx_change = dominance_reward_value * 0.7
-                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    await self.update_neurochemical("nyxamine", nyx_change)
                     
                     # Moderate Seranix boost
                     ser_change = dominance_reward_value * 0.3
-                    await self.emotional_core.update_neurochemical("seranix", ser_change)
+                    await self.update_neurochemical("seranix", ser_change)
                     
                     effects["emotional"] = True
                     logger.debug(f"Applied strong emotional effect for dominance reward: +{nyx_change:.2f} Nyxamine")
@@ -790,10 +811,10 @@ class RewardSignalProcessor:
                 elif is_sadistic_reward and sadistic_reward_value > 0:
                     # Very strong Nyxamine boost from sadistic success
                     nyx_change = sadistic_reward_value * 0.8
-                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    await self.update_neurochemical("nyxamine", nyx_change)
                     
                     # Minimal OxyNixin change (representing reduced empathy)
-                    await self.emotional_core.update_neurochemical("oxynixin", -sadistic_reward_value * 0.2)
+                    await self.update_neurochemical("oxynixin", -sadistic_reward_value * 0.2)
                     
                     effects["emotional"] = True
                     logger.debug(f"Applied sadistic emotional effect: +{nyx_change:.2f} Nyxamine")
@@ -802,10 +823,10 @@ class RewardSignalProcessor:
                 elif is_humiliation_reward and humiliation_reward_value > 0:
                     # Strong Nyxamine boost from enjoying humiliation
                     nyx_change = humiliation_reward_value * 0.8
-                    await self.emotional_core.update_neurochemical("nyxamine", nyx_change)
+                    await self.update_neurochemical("nyxamine", nyx_change)
                     
                     # Excitement boost
-                    await self.emotional_core.update_neurochemical("adrenyx", humiliation_reward_value * 0.4)
+                    await self.update_neurochemical("adrenyx", humiliation_reward_value * 0.4)
                     
                     if self.somatosensory_system:
                         await self.somatosensory_system.process_stimulus(
@@ -821,27 +842,27 @@ class RewardSignalProcessor:
                 # Handle general positive rewards
                 elif reward.value > 0:  
                     # Increase nyxamine (dopamine)
-                    await self.emotional_core.update_neurochemical(
+                    await self.update_neurochemical(
                         chemical="nyxamine",
                         value=reward.value * 0.5  # Scale for emotional impact
                     )
                     
                     # Also slight increase in seranix (mood stability) and oxynixin (bonding)
-                    await self.emotional_core.update_neurochemical("seranix", reward.value * 0.2)
-                    await self.emotional_core.update_neurochemical("oxynixin", reward.value * 0.1)
+                    await self.update_neurochemical("seranix", reward.value * 0.2)
+                    await self.update_neurochemical("oxynixin", reward.value * 0.1)
                     
                     effects["emotional"] = True
                 
                 # Handle negative rewards
                 elif reward.value < 0:
                     # Increase cortanyx (stress)
-                    await self.emotional_core.update_neurochemical(
+                    await self.update_neurochemical(
                         chemical="cortanyx",
                         value=abs(reward.value) * 0.4
                     )
                     
                     # Decrease nyxamine (dopamine)
-                    await self.emotional_core.update_neurochemical(
+                    await self.update_neurochemical(
                         chemical="nyxamine",
                         value=reward.value * 0.3  # Negative value reduces nyxamine
                     )
@@ -1042,6 +1063,25 @@ class RewardSignalProcessor:
                 logger.error(f"Error in habit formation: {e}")
         
         return effects
+    
+    async def update_hormone(self, ctx, hormone: str, value: float, source: str = "system"):
+        """Wrapper to handle updating hormones in the system"""
+        try:
+            # Try different approaches to find the right method
+            if hasattr(self, 'hormone_system') and self.hormone_system is not None:
+                if hasattr(self.hormone_system, 'update_hormone'):
+                    await self.hormone_system.update_hormone(ctx, hormone, value, source)
+                else:
+                    logger.warning(f"HormoneSystem has no update_hormone method")
+            elif hasattr(self.emotional_core, 'hormone_system') and self.emotional_core.hormone_system is not None:
+                if hasattr(self.emotional_core.hormone_system, 'update_hormone'):
+                    await self.emotional_core.hormone_system.update_hormone(ctx, hormone, value, source)
+                else:
+                    logger.warning(f"EmotionalCore.hormone_system has no update_hormone method")
+            else:
+                logger.warning(f"No hormone system available for updating hormone {hormone}")
+        except Exception as e:
+            logger.error(f"Error updating hormone {hormone}: {e}")
     
     async def _trigger_learning(self, reward: RewardSignal) -> Dict[str, Any]:
         """Trigger learning processes based on significant reward"""
