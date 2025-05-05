@@ -1511,7 +1511,7 @@ class ConditioningSystem:
             "classical_result": classical_result,
             "identity_updated": identity_result is not None
         }
-
+                                    
     async def create_emotion_trigger(self,
                                    trigger: str,
                                    emotion: str,
@@ -1590,19 +1590,16 @@ class ConditioningSystem:
                     # --- Corrected Neurochemical Tool Call (as it was already mostly correct) ---
 
                     # a) Get the EmotionalContext instance used by the core
+                    # a) Get the EmotionalContext instance used by the core
                     emo_context_data = self.context.emotional_core.context
                     if not isinstance(emo_context_data, EmotionalContext):
-                        # Log or raise a more specific error if needed
-                        logger.error("Emotional Core context is not of type EmotionalContext. Cannot perform test activation.")
-                        raise TypeError(
+                         raise TypeError(
                             "Emotional Core context is not of type EmotionalContext. "
                             "Cannot perform test activation."
                         )
 
-                    # b) Verify the NeurochemicalTools instance is set in the context
-                    #    (This step might be redundant if EmotionalCore guarantees it, but good for robustness)
+                    # b) Verify/Set NeurochemicalTools instance in the context
                     if not emo_context_data.get_value("neurochemical_tools_instance"):
-                         # Ensure the tools instance is available if it's supposed to be
                         if hasattr(self.context.emotional_core, 'neurochemical_tools'):
                              logger.warning("neurochemical_tools_instance was not set in EmotionalContext. Setting it now.")
                              emo_context_data.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
@@ -1613,18 +1610,28 @@ class ConditioningSystem:
                                 "Cannot call neurochemical tools."
                             )
 
-
-                    # c) Create the RunContextWrapper needed by the tool
+                    # c) Create the RunContextWrapper needed by the tool's logic method
                     tool_ctx = RunContextWrapper(context=emo_context_data)
 
-                    # d) Call the STATIC method from NeurochemicalTools class directly
-                    logger.debug(f"Attempting test activation: {chemical}, value={test_intensity}")
-                    result_dict = await NeurochemicalTools.update_neurochemical(
-                        ctx=tool_ctx, # Pass the correctly prepared wrapper
+                    # --- FIX: Call the underlying LOGIC method directly ---
+                    # NOTE: This assumes 'NeurochemicalTools' has a separate logic method,
+                    #       e.g., '_update_neurochemical_logic', and that the public
+                    #       'update_neurochemical' method (the FunctionTool) calls it.
+                    #       If NeurochemicalTools doesn't follow this pattern, it needs refactoring.
+                    logger.debug(f"Attempting test activation via logic method: {chemical}, value={test_intensity}")
+                    if not hasattr(NeurochemicalTools, '_update_neurochemical_logic'):
+                         # Log error or raise if the assumed logic method doesn't exist
+                         logger.error("NeurochemicalTools does not have the expected '_update_neurochemical_logic' method for direct calls.")
+                         raise AttributeError("Missing required logic method in NeurochemicalTools for direct call.")
+
+                    # Call the assumed logic method (which should be callable)
+                    result_dict = await NeurochemicalTools._update_neurochemical_logic(
+                        ctx=tool_ctx,
                         chemical=chemical,
                         value=test_intensity,
                         source="emotion_trigger_test" # Specific source for clarity
                     )
+                    # --- END FIX ---
 
                     # e) Check the result from the tool call
                     emotional_test_successful = result_dict.get("success", False)
@@ -1633,6 +1640,9 @@ class ConditioningSystem:
                     else:
                         logger.warning(f"Test activation for {chemical} reported failure: {result_dict}")
 
+            except AttributeError as ae: # Catch if the logic method is missing
+                 logger.error(f"AttributeError during test emotion activation: {ae}", exc_info=True)
+                 emotional_test_successful = False
             except Exception as e:
                 logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
                 emotional_test_successful = False # Ensure it's false on error
