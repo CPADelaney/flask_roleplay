@@ -1851,7 +1851,7 @@ class DigitalSomatosensorySystem:
         # Call helper via instance
         return system_instance.get_arousal_expression_modifier(partner_id)
 
-@staticmethod # Add decorator
+    @staticmethod # Add decorator
     @function_tool
     async def _process_stimulus_tool(
             ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
