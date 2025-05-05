@@ -427,7 +427,7 @@ class DigitalSomatosensorySystem:
                 Return validation results and reasoning. Use the available tool to get valid regions.
                 """,
                 # --- FIX 1: Pass the already decorated static method directly ---
-                tools=[DigitalSomatosensorySystem._get_valid_body_regions],
+                tools=[self._get_valid_body_regions],
                 # ---------------------------------------------------------------
                 output_type=StimulusValidationOutput,
                 model="gpt-4o",
