@@ -1596,6 +1596,8 @@ class ConditioningSystem:
                             "neurochemical_tools_instance not set in EmotionalContext. "
                             "Cannot call neurochemical tools."
                         )
+                        
+                    emo_context_data.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
 
                     # c) Create the RunContextWrapper needed by the tool
                     tool_ctx = RunContextWrapper(context=emo_context_data)
