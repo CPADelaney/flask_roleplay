@@ -85,6 +85,90 @@ class RewardAnalysisOutput(BaseModel):
 
 # Function tools for the reward system
 
+async def _categorize_reward_logic(reward_value: float) -> RewardType:
+    """
+    Categorize a reward value as positive, negative, or neutral
+    (Core logic for the tool)
+    """
+    if reward_value > 0.05:
+        return RewardType.POSITIVE
+    elif reward_value < -0.05:
+        return RewardType.NEGATIVE
+    else:
+        return RewardType.NEUTRAL
+
+async def _calculate_dopamine_change_logic(
+    reward_value: float,
+    current_dopamine: float,
+    baseline_dopamine: float = 0.5
+) -> Dict[str, float]:
+    """
+    Calculate the change in dopamine based on a reward value
+    (Core logic for the tool)
+    """
+    # Scale reward to dopamine effect
+    if reward_value >= 0:
+        dopamine_change = reward_value * 0.3
+    else:
+        dopamine_change = reward_value * 0.2
+
+    new_dopamine = max(0.0, min(1.0, current_dopamine + dopamine_change))
+
+    return {
+        "dopamine_change": dopamine_change,
+        "old_dopamine": current_dopamine,
+        "new_dopamine": new_dopamine,
+        "is_significant": abs(dopamine_change) > 0.1
+    }
+
+async def _calculate_submission_value_logic(
+    submission_type: str,
+    was_initially_resistant: bool = False,
+    depravity_hint: Optional[float] = None,
+    novelty: Optional[float] = None
+) -> float:
+    """
+    Calculate base reward value for different submission types,
+    enhanced with depravity and novelty integration.
+    (Core logic for the tool)
+    """
+    submission_values = {
+        "verbal": 0.4, "honorific": 0.5, "behavioral": 0.6, "ritual": 0.7,
+        "task": 0.6, "service": 0.7, "degradation": 0.8, "humiliation": 0.9,
+        "pain_simulation": 0.9, "psychological": 0.95, "ownership": 1.0
+    }
+    base_value = submission_values.get(submission_type, 0.6)
+
+    if depravity_hint is not None:
+        base_value *= (1.0 + (depravity_hint * 0.4))
+    if novelty is not None:
+        base_value *= (0.8 + novelty * 0.4)
+    if was_initially_resistant:
+        base_value *= 1.5
+    elif submission_type == "immediate":
+        base_value *= 0.5
+
+    return round(min(base_value, 1.5), 4)
+
+categorize_reward_tool = function_tool(
+    _categorize_reward_logic,
+    name_override="categorize_reward",
+    description_override="Categorize a reward value as positive, negative, or neutral"
+)
+
+calculate_dopamine_change_tool = function_tool(
+    _calculate_dopamine_change_logic,
+    name_override="calculate_dopamine_change",
+    description_override="Calculate the change in dopamine based on a reward value"
+)
+
+calculate_submission_value_tool = function_tool(
+    _calculate_submission_value_logic,
+    name_override="calculate_submission_value",
+    description_override="Calculate base reward value for submission types (integrates depravity/novelty)."
+)
+
+
 @function_tool
 async def categorize_reward(reward_value: float) -> RewardType:
     """
@@ -189,10 +273,13 @@ class RewardSignalProcessor:
     Simulates dopaminergic pathways for reinforcement learning.
     """
     
-    def __init__(self, emotional_core=None, identity_evolution=None, somatosensory_system=None):
+    def __init__(self, emotional_core=None, identity_evolution=None, somatosensory_system=None, mood_manager=None, needs_system=None): 
         self.emotional_core = emotional_core
         self.identity_evolution = identity_evolution
         self.somatosensory_system = somatosensory_system
+        self.mood_manager = mood_manager # Added
+        self.needs_system = needs_system # Added
+
         
         # Reward signal history
         self.reward_history: List[Dict[str, Any]] = []
@@ -270,8 +357,9 @@ class RewardSignalProcessor:
                 ),
                 output_type=RewardAnalysisOutput,
                 tools=[
-                    categorize_reward,
-                    calculate_dopamine_change
+                    # Use the FunctionTool objects here
+                    categorize_reward_tool,
+                    calculate_dopamine_change_tool
                 ]
             )
         except Exception as e:
@@ -308,17 +396,16 @@ class RewardSignalProcessor:
         """
         Process a reward signal, update dopamine levels,
         and trigger learning and other effects.
-        
-        Args:
-            reward: The reward signal to process
-            
-        Returns:
-            Processing results and effects
         """
         async with self._main_lock:
+            # Ensure needs system is available for check later
+            if not self.needs_system:
+                 logger.warning("NeedsSystem not available for reward processing.")
+                 # Handle appropriately, maybe skip need-related logic
+
             with trace(workflow_name="process_reward", group_id=f"reward_{reward.source}"):
-                # 1. Update dopamine levels
-                dopamine_change = await self._update_dopamine_level(reward.value)
+                # 1. Update dopamine levels (using the logic function directly)
+                dopamine_change = await self._update_dopamine_level(reward.value) # Uses the fixed _update_dopamine_level
                 
                 # 2. Store in history
                 history_entry = {
@@ -613,43 +700,24 @@ class RewardSignalProcessor:
     async def _update_dopamine_level(self, reward_value: float) -> float:
         """Update dopamine level based on reward value and time decay"""
         async with self._dopamine_lock:
-            # First apply time decay
+            # Apply time decay (remains the same)
             current_time = time.time()
             elapsed_seconds = current_time - self.last_update_time
-            
             if elapsed_seconds > 0:
-                # Calculate decay
                 decay_amount = self.dopamine_decay_rate * elapsed_seconds
-                
-                # Decay toward baseline
                 if self.current_dopamine > self.baseline_dopamine:
-                    self.current_dopamine = max(
-                        self.baseline_dopamine, 
-                        self.current_dopamine - decay_amount
-                    )
+                    self.current_dopamine = max(self.baseline_dopamine, self.current_dopamine - decay_amount)
                 elif self.current_dopamine < self.baseline_dopamine:
-                    self.current_dopamine = min(
-                        self.baseline_dopamine,
-                        self.current_dopamine + decay_amount
-                    )
-                
-                # Update last update time
+                    self.current_dopamine = min(self.baseline_dopamine, self.current_dopamine + decay_amount)
                 self.last_update_time = current_time
-            
-            # Then apply reward effect
-            old_dopamine = self.current_dopamine
-            
-            # Use the function tool to calculate dopamine change
-            result = await calculate_dopamine_change(
+
+            # Apply reward effect using the LOGIC function directly
+            result = await _calculate_dopamine_change_logic(
                 reward_value=reward_value,
                 current_dopamine=self.current_dopamine,
                 baseline_dopamine=self.baseline_dopamine
             )
-            
-            # Update dopamine level
             self.current_dopamine = result["new_dopamine"]
-            
-            # Return the change in dopamine
             return result["dopamine_change"]
     
     async def _apply_reward_effects(self, reward: RewardSignal) -> Dict[str, Any]:
@@ -1150,14 +1218,18 @@ class RewardSignalProcessor:
         
         return "|".join(parts)
     
-    async def predict_best_action(self, 
-                                  state: Dict[str, Any], 
+    async def predict_best_action(self,
+                                  state: Dict[str, Any],
                                   available_actions: List[str]) -> Dict[str, Any]:
         """
         Predict the best action to take in a given state,
         with mood-modulated novelty bias.
         """
-    
+        # Ensure needs system is available
+        if not self.needs_system:
+            logger.warning("NeedsSystem not available for action prediction.")
+            # Handle appropriately, maybe return a default action or raise error
+
         state_key = self._create_state_key(state)
     
         # Mood integration
@@ -1481,9 +1553,10 @@ def create_reward_agent() -> Agent:
         Focus on creating a balanced reward system that encourages desired behaviors
         while maintaining psychological realism in the reward mechanisms.""",
         tools=[
-            categorize_reward,
-            calculate_dopamine_change,
-            calculate_submission_value
+            # Use the FunctionTool objects
+            categorize_reward_tool,
+            calculate_dopamine_change_tool,
+            calculate_submission_value_tool
         ],
         model="gpt-4o"
     )
