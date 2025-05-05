@@ -1529,7 +1529,18 @@ class ConditioningSystem:
         Returns:
             Results of creating the emotion trigger
         """
-        context = context or {}
+        context_obj = ctx.context if isinstance(ctx, RunContextWrapper) else ctx
+    
+        # Retrieve the neurochemical tools instance using get_value
+        neurochemical_tools_instance = context_obj.get_value("neurochemical_tools_instance")
+    
+        if not neurochemical_tools_instance:
+            logger.error("neurochemical_tools_instance not found in EmotionalContext during create_emotion_trigger call.")
+            # The original error raising logic was here, keep it as a final check
+            raise ValueError(
+                "neurochemical_tools_instance not set in EmotionalContext. "
+                "Cannot call neurochemical tools."
+            )
 
         # Determine valence based on emotion
         if "valence" not in context:
