@@ -1569,13 +1569,23 @@ class ConditioningMaintenanceSystem:
     
     # Public API methods
     
-    async def start_maintenance_scheduler(self):
-        """Start the periodic maintenance scheduler"""
+    async def start_maintenance_scheduler(self, run_immediately=False):
+        """
+        Start the periodic maintenance scheduler
+        
+        Args:
+            run_immediately: Whether to run maintenance immediately before scheduling
+        """
         if self.context.maintenance_task is not None:
             logger.warning("Maintenance scheduler already running")
             return
         
-        self.context.maintenance_task = asyncio.create_task(self._maintenance_loop())
+        # Optionally run maintenance once immediately
+        if run_immediately:
+            await self.run_maintenance()
+        
+        # Set up the periodic task without immediate execution
+        self.context.maintenance_task = asyncio.create_task(self._maintenance_scheduler())
         logger.info("Maintenance scheduler started")
     
     async def stop_maintenance_scheduler(self):
@@ -1592,22 +1602,22 @@ class ConditioningMaintenanceSystem:
         self.context.maintenance_task = None
         logger.info("Maintenance scheduler stopped")
     
-    async def _maintenance_loop(self):
-        """Internal maintenance loop"""
+    async def _maintenance_scheduler(self):
+        """Scheduler that triggers maintenance at specified intervals"""
         try:
             while True:
-                # Run maintenance
-                try:
-                    await self.run_maintenance()
-                except Exception as e:
-                    logger.error(f"Error in maintenance run: {e}")
-                
-                # Sleep until next maintenance
+                # Sleep FIRST before running maintenance
                 sleep_seconds = self.context.maintenance_interval_hours * 3600
                 logger.info(f"Next maintenance scheduled in {self.context.maintenance_interval_hours} hours")
                 await asyncio.sleep(sleep_seconds)
+                
+                # Run maintenance AFTER sleep
+                try:
+                    await self.run_maintenance()
+                except Exception as e:
+                    logger.error(f"Error in scheduled maintenance run: {e}", exc_info=True)
         except asyncio.CancelledError:
-            logger.info("Maintenance loop cancelled")
+            logger.info("Maintenance scheduler cancelled")
             raise
     
     async def run_maintenance(self) -> Dict[str, Any]:
