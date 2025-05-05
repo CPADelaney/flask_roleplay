@@ -1630,25 +1630,25 @@ class ConditioningSystem:
                         logger.error("No NeurochemicalTools instance in context")
                         raise ValueError("Missing NeurochemicalTools instance")
                     
-                    # Call the public method
-                    result_dict = await neurochemical_tools_instance.update_neurochemical(
-                        ctx,
-                        chemical=chemical,
-                        value=test_intensity,
-                        source="emotion_trigger_test"
-                    )
-                    # --- END FIX ---
-
-                    # e) Check the result from the tool call
-                    emotional_test_successful = result_dict.get("success", False)
-                    if emotional_test_successful:
-                        logger.info(f"Successfully performed test activation for {chemical}.")
-                    else:
-                        logger.warning(f"Test activation for {chemical} reported failure: {result_dict}")
-
-            except AttributeError as ae: # Catch if the logic method is missing
-                 logger.error(f"AttributeError during test emotion activation: {ae}", exc_info=True)
-                 emotional_test_successful = False
+                    try:
+                        # Call the public update_neurochemical method as intended
+                        result_dict = await NeurochemicalTools.update_neurochemical(
+                            ctx,
+                            chemical=chemical, 
+                            value=test_intensity,
+                            source="emotion_trigger_test"
+                        )
+                        
+                        # Check the result from the tool call
+                        emotional_test_successful = result_dict.get("success", False)
+                        if emotional_test_successful:
+                            logger.info(f"Successfully performed test activation for {chemical}.")
+                        else:
+                            logger.warning(f"Test activation for {chemical} reported failure: {result_dict}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
+                        emotional_test_successful = False
             except Exception as e:
                 logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
                 emotional_test_successful = False # Ensure it's false on error
