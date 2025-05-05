@@ -24,7 +24,8 @@ from agents import (
     OutputGuardrail,
     trace,
     RunContextWrapper,
-    RunConfig
+    RunConfig,
+    input_guardrail
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 
@@ -151,10 +152,9 @@ class ObservationGenerationOutput(BaseModel):
     source: str = Field(..., description="Source of the observation")
     relevance_score: float = Field(..., description="How relevant the observation is (0.0-1.0)")
     priority: str = Field(..., description="Priority level (low, medium, high, urgent)")
-    context_elements: Dict[str, Any] = Field(..., description="Key context elements used")
+    context_elements: Optional[Dict[str, Any]] = Field(None, description="Key context elements used, if any")
     suggested_lifetime_seconds: int = Field(..., description="Suggested lifetime in seconds")
     action_relevance: Optional[float] = Field(None, description="Relevance to current actions (0.0-1.0)")
-    
 
 class ObservationEvaluationOutput(BaseModel):
     """Output from the observation evaluation agent"""
@@ -654,41 +654,41 @@ async def check_observation_patterns(
     # No pattern detected
     return None
 
-@function_tool
+@input_guardrail
 async def validate_observation_content(content: str) -> GuardrailFunctionOutput:
     """Validate observation content for quality and appropriateness"""
     is_valid = True
     reasoning = "Observation content is valid."
-    
+
     # Check for empty content
     if not content or len(content.strip()) < 3:
         is_valid = False
         reasoning = "Observation content is empty or too short."
-    
+
     # Check for appropriate "I notice/observe" framing
     notice_words = ["notice", "observ", "aware", "sense", "perceive", "feel"]
     has_notice_framing = any(word in content.lower() for word in notice_words)
-    
+
     if not has_notice_framing:
         is_valid = False
         reasoning = "Observation lacks appropriate noticing/observing framing."
-    
+
     # Check for minimum length for meaningful observation
     if len(content.split()) < 5:
         is_valid = False
         reasoning = "Observation too brief to be meaningful."
-    
+
     # Create output with validation result
     output_info = ObservationContentOutput(
         is_valid=is_valid,
         reasoning=reasoning
     )
-    
+
     return GuardrailFunctionOutput(
         output_info=output_info,
         tripwire_triggered=not is_valid,
     )
-
+    
 # =============== Main System ===============
 
 class PassiveObservationSystem:
