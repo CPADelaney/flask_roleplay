@@ -655,7 +655,11 @@ async def check_observation_patterns(
     return None
 
 @input_guardrail
-async def validate_observation_content(content: str) -> GuardrailFunctionOutput:
+async def validate_observation_content(
+    ctx: RunContextWrapper[Any], # Add ctx
+    agent: Agent,               # Add agent
+    input_data: str | list[TResponseInputItem] # Change 'content' to 'input_data' and add type hint
+) -> GuardrailFunctionOutput:
     """Validate observation content for quality and appropriateness"""
     is_valid = True
     reasoning = "Observation content is valid."
