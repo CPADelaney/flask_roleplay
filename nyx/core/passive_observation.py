@@ -658,42 +658,78 @@ async def check_observation_patterns(
 
 @input_guardrail
 async def validate_observation_content(
-    ctx: RunContextWrapper[Any], # Add ctx
-    agent: Agent,               # Add agent
-    input_data: str | list[TResponseInputItem] # Change 'content' to 'input_data' and add type hint
+    ctx: RunContextWrapper[Any],
+    agent: Agent,
+    input_data: str | list[TResponseInputItem]
 ) -> GuardrailFunctionOutput:
-    """Validate observation content for quality and appropriateness"""
+    """
+    Validate the INPUT data being sent to the observation generation agent.
+
+    For string inputs, we:
+      1. Ensure it’s valid JSON with a required 'source' field.
+      2. Check that the raw text is non-empty, has “I notice/observe” framing,
+         and is at least 5 words long.
+
+    For list inputs, we flag as invalid by default (customize as needed).
+    """
     is_valid = True
-    reasoning = "Observation content is valid."
+    reasoning = "Input check passed."
+    content_to_validate: str
 
-    # Check for empty content
-    if not content or len(content.strip()) < 3:
+    # 1) STRUCTURAL CHECKS (JSON) for string input
+    if isinstance(input_data, str):
+        content_to_validate = input_data
+
+        try:
+            parsed = json.loads(content_to_validate)
+            if not isinstance(parsed, dict):
+                is_valid = False
+                reasoning = "Input JSON is not an object."
+            elif not parsed.get("source"):
+                is_valid = False
+                reasoning = "Input JSON missing required 'source' field."
+        except json.JSONDecodeError:
+            is_valid = False
+            reasoning = "Input is not valid JSON."
+
+    # 2) LIST INPUTS
+    elif isinstance(input_data, list):
         is_valid = False
-        reasoning = "Observation content is empty or too short."
+        reasoning = "List input format received; no list‐based validation implemented."
 
-    # Check for appropriate "I notice/observe" framing
-    notice_words = ["notice", "observ", "aware", "sense", "perceive", "feel"]
-    has_notice_framing = any(word in content.lower() for word in notice_words)
-
-    if not has_notice_framing:
+    # 3) UNKNOWN TYPE
+    else:
         is_valid = False
-        reasoning = "Observation lacks appropriate noticing/observing framing."
+        reasoning = "Unexpected input type for validation."
 
-    # Check for minimum length for meaningful observation
-    if len(content.split()) < 5:
-        is_valid = False
-        reasoning = "Observation too brief to be meaningful."
+    # 4) CONTENT‐QUALITY CHECKS (only if still structurally valid)
+    if is_valid:
+        # a) non-empty and length ≥3 chars
+        if not content_to_validate.strip() or len(content_to_validate.strip()) < 3:
+            is_valid = False
+            reasoning = "Observation content is empty or too short."
 
-    # Create output with validation result
+        # b) “I notice/observe” framing
+        elif not any(w in content_to_validate.lower() for w in
+                     ["notice", "observ", "aware", "sense", "perceive", "feel"]):
+            is_valid = False
+            reasoning = "Observation lacks appropriate noticing/observing framing."
+
+        # c) at least 5 words
+        elif len(content_to_validate.split()) < 5:
+            is_valid = False
+            reasoning = "Observation too brief to be meaningful."
+
+    # 5) BUILD GUARDRAIL OUTPUT
     output_info = ObservationContentOutput(
         is_valid=is_valid,
         reasoning=reasoning
     )
-
     return GuardrailFunctionOutput(
         output_info=output_info,
-        tripwire_triggered=not is_valid,
+        tripwire_triggered=not is_valid
     )
+
     
 # =============== Main System ===============
 
