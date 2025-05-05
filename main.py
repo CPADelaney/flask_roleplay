@@ -908,6 +908,17 @@ def create_quart_app():
         return jsonify(status), 200
 
 
-    # --- Return the configured app ---
+    try:
+        import wsgi
+        wsgi.server_should_exit = True
+        # Make a request to the server to trigger handle_request() one more time
+        try:
+            import urllib.request
+            urllib.request.urlopen('http://localhost:8080/shutdown').close()
+        except:
+            pass  # Ignore errors here
+    except:
+        pass  # In case wsgi is not available
+    
     return app
 
