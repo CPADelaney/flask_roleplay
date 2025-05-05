@@ -11,6 +11,8 @@ import asyncio
 
 from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, FunctionTool # Added FunctionTool import
 from nyx.core.reward_system import RewardSignal
+from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
+from nyx.core.emotions.context import EmotionalContext
 
 logger = logging.getLogger(__name__)
 
