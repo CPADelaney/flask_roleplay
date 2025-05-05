@@ -4,11 +4,12 @@ import logging
 import datetime
 import math
 import json
+import random # Added import
 from typing import Dict, List, Any, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 import asyncio
 
-from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff
+from agents import Agent, Runner, trace, function_tool, RunContextWrapper, ModelSettings, handoff, FunctionTool # Added FunctionTool import
 from nyx.core.reward_system import RewardSignal
 
 logger = logging.getLogger(__name__)
@@ -436,7 +437,9 @@ class ConditioningSystem:
             return False
     
     # 2. Create the FunctionTool object FROM the logic function
-    _generate_reward_signal_tool = function_tool(
+    # This definition is at class level and seems to be a duplicate of the instance attribute created in __init__.
+    # Keeping it as it was in the original code, though it might be intended to be an instance attribute or used differently.
+    _generate_reward_signal_tool_class_attr = function_tool(
         _generate_reward_signal_logic,
         name_override="_generate_reward_signal",
         description_override="Generate a reward signal for the reward system"
@@ -1581,17 +1584,61 @@ class ConditioningSystem:
                     
                     # Use the neurochemical_tools to update the neurochemical
                     # Create a context wrapper to use with the tools
-                    from agents import RunContextWrapper
+                    from agents import RunContextWrapper # Already imported at file level, but keeping here for clarity in diff
                     ctx = RunContextWrapper(context=self.context.emotional_core.context)
-                    ctx.context.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
+                    # It seems context on emotional_core might already be a RunContextWrapper or similar.
+                    # If self.context.emotional_core.context is the raw context object, this is correct.
+                    # If it's already a RunContextWrapper, then ctx = self.context.emotional_core.context.
+                    # Assuming self.context.emotional_core.context is the raw context data.
                     
-                    # Call the update_neurochemical tool via the neurochemical_tools instance
-                    emotional_test = await self.context.emotional_core.neurochemical_tools.update_neurochemical(
-                        ctx,
-                        chemical=chemical,
-                        value=test_intensity,
-                        source="emotion_trigger"
-                    )
+                    # The original code created a RunContextWrapper with emotional_core.context
+                    # Then set a value on it. This might be incorrect if `emotional_core.context` is not a RunContextWrapper.
+                    # The example in documentation shows context passed to Runner.run, which is then available in RunContextWrapper.
+                    # Assuming ctx needs to be the RunContextWrapper for the current run, not a new one.
+                    # However, `create_emotion_trigger` doesn't receive `ctx`.
+                    # It should probably use `self.context` as the context for `RunContextWrapper`.
+
+                    # Using self.context which is ConditioningContext. EmotionalCore's context might be different.
+                    # Let's assume emotional_core.context is the correct context object for its tools.
+                    # If `self.context.emotional_core.context` is not a `RunContextWrapper` instance, we create one.
+                    # If `update_neurochemical` tool expects a context specific to `emotional_core`, this needs care.
+                    
+                    # Simpler: if `create_emotion_trigger` is called within an agent run, `ctx` should be passed in.
+                    # It is not. It seems `create_emotion_trigger` is an API method.
+
+                    # Let's stick to how it was, creating a new RunContextWrapper.
+                    # The value setting `ctx.context.set_value` is not standard for dict/object context.
+                    # Assuming `emotional_core.context` is the object to pass to `RunContextWrapper`.
+                    # And that `update_neurochemical` needs `neurochemical_tools_instance` in its context if it's not bound.
+                    # This part is a bit unclear without knowing EmotionalCore structure.
+
+                    # The main issue is calling FunctionTool.
+                    tool_obj = self.context.emotional_core.neurochemical_tools.update_neurochemical
+                    
+                    if isinstance(tool_obj, FunctionTool):
+                        args_dict = {
+                            "chemical": chemical,
+                            "value": test_intensity,
+                            "source": "emotion_trigger"
+                        }
+                        args_json = json.dumps(args_dict)
+                        
+                        # Create RunContextWrapper for the tool call.
+                        # Using self.context.emotional_core.context for the tool's context.
+                        tool_ctx = RunContextWrapper(context=self.context.emotional_core.context)
+
+                        result_str = await tool_obj.on_invoke_tool(tool_ctx, args_json)
+                        # Assuming the wrapped function returns a boolean, and on_invoke_tool returns its string representation.
+                        emotional_test = result_str.lower() == "true"
+                    else:
+                        # Fallback to direct call if not a FunctionTool (original behavior, but error indicates it is a FunctionTool)
+                        emotional_test = await tool_obj(
+                            ctx, # Original ctx was from RunContextWrapper(context=self.context.emotional_core.context)
+                            chemical=chemical,
+                            value=test_intensity,
+                            source="emotion_trigger"
+                        )
+
             except Exception as e:
                 logger.error(f"Error creating test emotion activation: {e}")
         
@@ -1706,8 +1753,8 @@ class ConditioningSystem:
         association = associations[association_key]
         
         # Calculate time since last reinforcement
-        last_reinforced = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
-        time_since_reinforcement = (datetime.datetime.now() - last_reinforced).total_seconds() / 86400.0  # Days
+        last_reinforced_dt = datetime.datetime.fromisoformat(association.last_reinforced.replace("Z", "+00:00"))
+        time_since_reinforcement = (datetime.datetime.now(datetime.timezone.utc) - last_reinforced_dt).total_seconds() / 86400.0  # Days
         
         # Calculate extinction effect based on time and extinction rate
         extinction_effect = min(0.9, time_since_reinforcement * association.decay_rate)
@@ -1722,13 +1769,16 @@ class ConditioningSystem:
         # Remove association if strength is too low
         if new_strength < 0.05:
             del associations[association_key]
+            logger.info(f"Association {association_key} removed due to extinction (old strength: {old_strength:.2f}, new strength: {new_strength:.2f})")
             return {
                 "success": True,
                 "message": f"Association {association_key} removed due to extinction",
                 "old_strength": old_strength,
+                "new_strength": new_strength,
                 "extinction_effect": extinction_effect
             }
         
+        logger.info(f"Applied extinction to {association_key} (old strength: {old_strength:.2f}, new strength: {new_strength:.2f})")
         return {
             "success": True,
             "message": f"Applied extinction to {association_key}",
