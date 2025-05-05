@@ -778,9 +778,9 @@ class PassiveObservationSystem:
         
         # Add guardrails
         self.observation_generation_agent.input_guardrails = [
-            InputGuardrail(guardrail_function=validate_observation_content)
+            validate_observation_content  # Pass the decorated function directly
         ]
-        
+                     
         # Storage for observations
         self.active_observations: List[Observation] = []
         self.archived_observations: List[Observation] = []
