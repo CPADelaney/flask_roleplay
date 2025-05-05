@@ -586,10 +586,10 @@ class RewardSignalProcessor:
         
         return depravity_score
         
-    async def trigger_post_gratification_response(self, ctx, intensity: float = 1.0, gratification_type: str = "general"):
+    async def trigger_post_gratification_response(self, ctx=None, intensity: float = 1.0, gratification_type: str = "general"):
         """Trigger post-gratification, potentially varying effects based on type."""
         # Create context if needed
-        if ctx is None and self.emotional_core:
+        if ctx is None and hasattr(self.emotional_core, 'context'):
             ctx = RunContextWrapper(context=self.emotional_core.context)
             
         serenity_change = intensity * 0.8
@@ -606,9 +606,9 @@ class RewardSignalProcessor:
             
         await self.update_hormone(ctx, "serenity_boost", serenity_change, source=f"{gratification_type}_gratification")
         await self.update_hormone(ctx, "testoryx", testoryx_reduction, source=f"{gratification_type}_refractory")
-        await self.update_hormone(ctx, "nyxamine", nyxamine_reduction, source=f"{gratification_type}_refractory")
-        await self.update_hormone(ctx, "seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
-        await self.update_hormone(ctx, "oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
+        await self.update_neurochemical("nyxamine", nyxamine_reduction, source=f"{gratification_type}_refractory")
+        await self.update_neurochemical("seranix", seranix_boost, source=f"{gratification_type}_satisfaction")
+        await self.update_neurochemical("oxynixin", oxynixin_boost, source=f"{gratification_type}_aftermath")
 
     async def process_conditioning_reward(self, conditioning_result: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -731,17 +731,54 @@ class RewardSignalProcessor:
             return
         
         try:
-            # Try direct method call
-            if hasattr(self.emotional_core, 'update_neurochemical'):
-                await self.emotional_core.update_neurochemical(chemical, value, source)
-            # Try via neurochemical_tools
-            elif hasattr(self.emotional_core, 'neurochemical_tools') and hasattr(self.emotional_core.neurochemical_tools, 'update_neurochemical'):
+            # First, try using direct access to the neurochemicals dictionary
+            if hasattr(self.emotional_core, 'neurochemicals') and chemical in self.emotional_core.neurochemicals:
+                # Get old value
+                old_value = self.emotional_core.neurochemicals[chemical]["value"]
+                # Calculate new value with bounds checking
+                new_value = max(0.0, min(1.0, old_value + value))
+                # Update the value
+                self.emotional_core.neurochemicals[chemical]["value"] = new_value
+                logger.debug(f"Updated {chemical} directly: {old_value:.2f} → {new_value:.2f}")
+                
+                # Record in context if available
+                if hasattr(self.emotional_core, 'context') and hasattr(self.emotional_core.context, '_add_to_circular_buffer'):
+                    self.emotional_core.context._add_to_circular_buffer("chemical_updates", {
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "chemical": chemical,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source
+                    })
+                
+                return {
+                    "success": True,
+                    "chemical": chemical,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": value
+                }
+                
+            # Try to find an implementation method
+            elif hasattr(self.emotional_core, '_update_neurochemical_impl'):
                 ctx = RunContextWrapper(context=self.emotional_core.context)
-                await self.emotional_core.neurochemical_tools.update_neurochemical(ctx, chemical, value, source)
+                return await self.emotional_core._update_neurochemical_impl(ctx, chemical, value, source)
+            
+            # Check for neurochemical_tools._update_neurochemical_impl method
+            elif (hasattr(self.emotional_core, 'neurochemical_tools') and 
+                  hasattr(self.emotional_core.neurochemical_tools, '_update_neurochemical_impl')):
+                ctx = RunContextWrapper(context=self.emotional_core.context)
+                ctx.context.set_value("neurochemical_tools_instance", self.emotional_core.neurochemical_tools)
+                return await self.emotional_core.neurochemical_tools._update_neurochemical_impl(ctx, chemical, value, source)
+                
             else:
                 logger.warning(f"No method available to update neurochemical {chemical}")
+                return {"success": False, "message": "No update method available"}
+                
         except Exception as e:
             logger.error(f"Error updating neurochemical {chemical}: {e}")
+            return {"success": False, "error": str(e)}
     
     async def _apply_reward_effects(self, reward: RewardSignal) -> Dict[str, Any]:
         """Apply effects of reward signal to other systems"""
@@ -1069,22 +1106,68 @@ class RewardSignalProcessor:
     async def update_hormone(self, ctx, hormone: str, value: float, source: str = "system"):
         """Wrapper to handle updating hormones in the system"""
         try:
-            # Try different approaches to find the right method
+            # Create context if needed
+            if ctx is None and hasattr(self.emotional_core, 'context'):
+                ctx = RunContextWrapper(context=self.emotional_core.context)
+            
+            # Try direct access to hormones dictionary if available
+            hormone_system = None
             if hasattr(self, 'hormone_system') and self.hormone_system is not None:
-                if hasattr(self.hormone_system, 'update_hormone'):
-                    await self.hormone_system.update_hormone(ctx, hormone, value, source)
-                else:
-                    logger.warning(f"HormoneSystem has no update_hormone method")
+                hormone_system = self.hormone_system
             elif hasattr(self.emotional_core, 'hormone_system') and self.emotional_core.hormone_system is not None:
-                if hasattr(self.emotional_core.hormone_system, 'update_hormone'):
-                    await self.emotional_core.hormone_system.update_hormone(ctx, hormone, value, source)
-                else:
-                    logger.warning(f"EmotionalCore.hormone_system has no update_hormone method")
+                hormone_system = self.emotional_core.hormone_system
+                
+            if hormone_system and hasattr(hormone_system, 'hormones') and hormone in hormone_system.hormones:
+                # Get pre-update value
+                old_value = hormone_system.hormones[hormone]["value"]
+                
+                # Calculate new value with bounds checking
+                new_value = max(0.0, min(1.0, old_value + value))
+                hormone_system.hormones[hormone]["value"] = new_value
+                
+                # Update last_update timestamp
+                hormone_system.hormones[hormone]["last_update"] = datetime.datetime.now().isoformat()
+                
+                # Record significant changes
+                if abs(new_value - old_value) > 0.05:
+                    hormone_system.hormones[hormone]["evolution_history"].append({
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source
+                    })
+                    
+                    # Limit history size
+                    if len(hormone_system.hormones[hormone]["evolution_history"]) > 50:
+                        hormone_system.hormones[hormone]["evolution_history"] = hormone_system.hormones[hormone]["evolution_history"][-50:]
+                
+                # Add to context buffer if available
+                if ctx and hasattr(ctx.context, "_add_to_circular_buffer"):
+                    ctx.context._add_to_circular_buffer("hormone_updates", {
+                        "hormone": hormone,
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "change": value,
+                        "source": source,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    })
+                
+                logger.debug(f"Updated hormone {hormone} directly: {old_value:.2f} → {new_value:.2f}")
+                return True
+                
+            # Try to find _update_hormone_impl method
+            elif hormone_system and hasattr(hormone_system, '_update_hormone_impl'):
+                return await hormone_system._update_hormone_impl(ctx, hormone, value, source)
+                
             else:
                 logger.warning(f"No hormone system available for updating hormone {hormone}")
+                return False
+                
         except Exception as e:
             logger.error(f"Error updating hormone {hormone}: {e}")
-    
+            return False
+        
     async def _trigger_learning(self, reward: RewardSignal) -> Dict[str, Any]:
         """Trigger learning processes based on significant reward"""
         learning_results = {
