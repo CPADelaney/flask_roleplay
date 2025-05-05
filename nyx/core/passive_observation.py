@@ -672,6 +672,7 @@ async def validate_observation_content(
 
     For list inputs, we flag as invalid by default (customize as needed).
     """
+    logger.debug(f"[validate_observation_content] incoming input_data: {input_data!r}")
     is_valid = True
     reasoning = "Input check passed."
     content_to_validate: str
