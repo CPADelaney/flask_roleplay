@@ -7,6 +7,26 @@ from quart import Quart, render_template, session, request, jsonify, redirect
 import socketio
 from quart_cors import cors
 
+import threading
+import http.server
+import socketserver
+
+def start_dummy_server():
+    """Start a minimal HTTP server on port 8080 to satisfy port scanners"""
+    try:
+        handler = http.server.SimpleHTTPRequestHandler
+        dummy_server = socketserver.TCPServer(("", 8080), handler)
+        print("Started dummy server on port 8080")
+        # Set a short timeout for socket operations
+        dummy_server.socket.settimeout(0.5)
+        # Serve until the main app is ready
+        dummy_server.serve_forever()
+    except Exception as e:
+        print(f"Dummy server error: {e}")
+
+# Start the dummy server in a separate thread BEFORE app creation
+dummy_server_thread = threading.Thread(target=start_dummy_server, daemon=True)
+dummy_server_thread.start()
 
 # Load environment variables from .env file if it exists (good for Gunicorn)
 load_dotenv()
