@@ -514,6 +514,26 @@ class EmotionalCore:
             )
         ]
 
+    async def update_neurochemical(self, chemical: str, value: float, source: str = "system") -> Dict[str, Any]:
+        """
+        Wrapper method to update a neurochemical via neurochemical_tools
+        
+        Args:
+            chemical: The neurochemical to update
+            value: The delta value to apply
+            source: Source of the update
+            
+        Returns:
+            Update result dictionary
+        """
+        # Create a context wrapper if needed
+        ctx = RunContextWrapper(context=self.context)
+        
+        # Call the appropriate method on neurochemical_tools
+        return await self.neurochemical_tools.update_neurochemical(
+            ctx, chemical, value, source
+        )
+
     def _configure_enhanced_handoffs(self):
         """
         Configure enhanced handoffs with improved descriptions and input filters
