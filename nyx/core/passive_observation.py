@@ -28,6 +28,8 @@ from agents import (
     input_guardrail
 )
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
+from agents.items import TResponseInputItem  # <--- ADD THIS LINE
+
 
 logger = logging.getLogger(__name__)
 
