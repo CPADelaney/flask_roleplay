@@ -402,7 +402,7 @@ class RewardSignalProcessor:
             if not self.needs_system:
                  logger.warning("NeedsSystem not available for reward processing.")
                  # Handle appropriately, maybe skip need-related logic
-
+    
             with trace(workflow_name="process_reward", group_id=f"reward_{reward.source}"):
                 # 1. Update dopamine levels (using the logic function directly)
                 dopamine_change = await self._update_dopamine_level(reward.value) # Uses the fixed _update_dopamine_level
@@ -439,7 +439,7 @@ class RewardSignalProcessor:
                 
                 # 5. Apply effects to other systems
                 effects = await self._apply_reward_effects(reward)
-
+    
                 # 🩸 Estimate depravity
                 depravity_score = self._estimate_depravity_level(reward)
                 
@@ -463,7 +463,7 @@ class RewardSignalProcessor:
                 learning_updates = {}
                 if abs(reward.value) >= self.significant_reward_threshold:
                     learning_updates = await self._trigger_learning(reward)
-
+    
                 action_name = reward.context.get("action")
                 if action_name:
                     old_decay = self.novelty_decay[action_name]
@@ -475,9 +475,11 @@ class RewardSignalProcessor:
                 if recent_avg <= previous_avg:
                     for action in self.novelty_decay:
                         self.novelty_decay[action] *= 0.95  # shrink novelty faster
-
-                await self.needs_system.decrease_need("pleasure_indulgence", 0.3, reason="denied_gratification")
-
+    
+                # Safely decrease need only if needs_system is available
+                if self.needs_system:
+                    await self.needs_system.decrease_need("pleasure_indulgence", 0.3, reason="denied_gratification")
+    
                 # 7. Return processing results
                 return {
                     "dopamine_change": dopamine_change,
