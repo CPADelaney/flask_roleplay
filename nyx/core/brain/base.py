@@ -400,7 +400,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 conditioning_system=self.conditioning_system,
                 reward_system=self.reward_system
             )
-            await self.conditioning_maintenance.start_maintenance_scheduler()
+            await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
             logger.debug("Conditioning maintenance system initialized")
             
             # Initialize input processor after other conditioning systems
