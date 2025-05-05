@@ -436,15 +436,6 @@ class ConditioningSystem:
             logger.error(f"Error generating reward signal: {e}")
             return False
     
-    # 2. Create the FunctionTool object FROM the logic function
-    # This definition is at class level and seems to be a duplicate of the instance attribute created in __init__.
-    # Keeping it as it was in the original code, though it might be intended to be an instance attribute or used differently.
-    _generate_reward_signal_tool_class_attr = function_tool(
-        _generate_reward_signal_logic,
-        name_override="_generate_reward_signal",
-        description_override="Generate a reward signal for the reward system"
-    )
-
 
     @staticmethod
     @function_tool
