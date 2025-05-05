@@ -1851,7 +1851,7 @@ class DigitalSomatosensorySystem:
         # Call helper via instance
         return system_instance.get_arousal_expression_modifier(partner_id)
 
-    @staticmethod # Add decorator
+@staticmethod # Add decorator
     @function_tool
     async def _process_stimulus_tool(
             ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
@@ -1866,7 +1866,7 @@ class DigitalSomatosensorySystem:
         if not system_instance:
             return {"error": "System instance not found in context"}
         with custom_span(
-            name="process_stimulus", 
+            name="process_stimulus",
             data={
                 "stimulus_type": stimulus_type,
                 "body_region": body_region,
@@ -1998,13 +1998,18 @@ class DigitalSomatosensorySystem:
                 system_instance.body_state["tension"] = max(0.0, system_instance.body_state["tension"] - (intensity * 0.1))
             
             # Update reward system if available
-            if system_instance.reward_system:
+            if system_instance.reward_system: # <<< Use system_instance
                 reward_value = 0.0
                 if stimulus_type == "pleasure" and intensity >= 0.5:
-                    reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
+                    # Ensure region is accessed correctly
+                    region = system_instance.body_regions.get(body_region)
+                    if region:
+                         reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
+                    else: # Handle case where region might not be found (though checked earlier)
+                        logger.warning(f"Region {body_region} not found during reward calculation in _process_stimulus_tool")
                 elif stimulus_type == "pain" and intensity >= system_instance.pain_model["threshold"]:
                     reward_value = -min(1.0, (intensity / max(0.1, system_instance.pain_model["tolerance"])) * 0.6)
-                
+
                 if abs(reward_value) > 0.1:
                     reward_signal = RewardSignal(
                         value=reward_value,
@@ -2012,34 +2017,53 @@ class DigitalSomatosensorySystem:
                         context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
                         timestamp=datetime.datetime.now().isoformat()
                     )
-                    
+
                     # Add reward signal to result for tracking
                     result["reward_value"] = reward_value
-                    
+
                     # Process reward signal asynchronously
-                    asyncio.create_task(self.reward_system.process_reward_signal(reward_signal))
-            
+                    # --- CHANGE HERE ---
+                    asyncio.create_task(system_instance.reward_system.process_reward_signal(reward_signal))
+                    # --- END CHANGE ---
+
             # Update emotional core if available
-            if self.emotional_core:
+            if system_instance.emotional_core: # <<< Use system_instance
                 emotional_impact = {}
-                
-                if stimulus_type == "pleasure" and region.pleasure > 0.5:
+                region = system_instance.body_regions.get(body_region) # Get region again if needed
+
+                if region and stimulus_type == "pleasure" and region.pleasure > 0.5:
                     scaled_intensity = (region.pleasure - 0.4) * 1.5
-                    self.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
-                    self.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
-                    emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
-                    
-                elif stimulus_type == "pain" and region.pain > system_instance.pain_model["threshold"]:
+                    # --- CHANGE HERE ---
+                    # Need to ensure update_neurochemical exists and handles this call signature
+                    # Assuming it does:
+                    try:
+                        await system_instance.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
+                        await system_instance.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
+                        emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
+                    except AttributeError as ae:
+                        logger.error(f"Emotional core missing expected 'update_neurochemical' method: {ae}")
+                    except Exception as ee:
+                        logger.error(f"Error calling emotional core update_neurochemical: {ee}")
+                    # --- END CHANGE ---
+
+                elif region and stimulus_type == "pain" and region.pain > system_instance.pain_model["threshold"]:
                     effective_pain = region.pain / max(0.1, system_instance.pain_model["tolerance"])
-                    system_instance.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
-                    system_instance.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
-                    system_instance.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
-                    emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
-                
+                    # --- CHANGE HERE ---
+                    try:
+                        await system_instance.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
+                        await system_instance.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
+                        await system_instance.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
+                        emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
+                    except AttributeError as ae:
+                        logger.error(f"Emotional core missing expected 'update_neurochemical' method: {ae}")
+                    except Exception as ee:
+                        logger.error(f"Error calling emotional core update_neurochemical: {ee}")
+                    # --- END CHANGE ---
+
                 if emotional_impact:
-                    result["emotional_impact"] = emotional_impact
-            
-            return result
+                    result["emotional_impact"] = emotional_impact # Add this assignment if it wasn't there
+
+            return result # Ensure result is returned
     
     # =============== Guardrail Functions ===============
     
