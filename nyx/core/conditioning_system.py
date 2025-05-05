@@ -1516,32 +1516,35 @@ class ConditioningSystem:
                                    intensity: float = 0.5,
                                    context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Create a trigger for an emotional response
-        
+        Create a trigger for an emotional response, with an optional test activation.
+
         Args:
             trigger: The stimulus that will trigger the emotion
             emotion: The emotion to be triggered
             intensity: The intensity of the emotion (0.0-1.0)
             context: Additional contextual information
-            
+
         Returns:
             Results of creating the emotion trigger
         """
         context = context or {}
-        
+
         # Determine valence based on emotion
         if "valence" not in context:
-            if emotion.lower() in ["joy", "satisfaction", "amusement", "contentment"]:
+            emotion_lower = emotion.lower()
+            if emotion_lower in ["joy", "satisfaction", "amusement", "contentment", "trust"]:
                 valence = 0.7  # Positive emotions
-            elif emotion.lower() in ["frustration", "anger", "sadness", "fear"]:
+            elif emotion_lower in ["frustration", "anger", "sadness", "fear"]:
                 valence = -0.7  # Negative emotions
             else:
                 valence = 0.0  # Neutral emotions
+            context["valence"] = valence # Store calculated valence back in context
         else:
             valence = context["valence"]
-        
-        # Use classical conditioning to associate trigger with emotion
-        result = await self.process_classical_conditioning(
+
+        # 1. Use classical conditioning to associate trigger with emotion
+        # This part remains the same
+        association_result = await self.process_classical_conditioning(
             unconditioned_stimulus="emotional_stimulus",
             conditioned_stimulus=trigger,
             response=f"emotion_{emotion}",
@@ -1552,9 +1555,9 @@ class ConditioningSystem:
                 "context_keys": context.get("context_keys", [])
             }
         )
-        
-        # If emotional core is available, create a test activation
-        emotional_test = None
+
+        # 2. If emotional core is available, create a test activation
+        emotional_test_successful = False # Default to False
         if self.context.emotional_core:
             try:
                 # Map emotion to neurochemicals
@@ -1565,81 +1568,64 @@ class ConditioningSystem:
                     "fear": "adrenyx",
                     "anger": "cortanyx",
                     "sadness": "cortanyx"
+                    # Add other mappings as needed
                 }
-                
-                # Update appropriate neurochemical if emotion is mapped
+
                 emotion_lower = emotion.lower()
                 if emotion_lower in chemical_map:
                     chemical = chemical_map[emotion_lower]
                     test_intensity = intensity * 0.1  # Very mild test activation
-                    
-                    # Use the neurochemical_tools to update the neurochemical
-                    # Create a context wrapper to use with the tools
-                    from agents import RunContextWrapper # Already imported at file level, but keeping here for clarity in diff
-                    ctx = RunContextWrapper(context=self.context.emotional_core.context)
-                    # It seems context on emotional_core might already be a RunContextWrapper or similar.
-                    # If self.context.emotional_core.context is the raw context object, this is correct.
-                    # If it's already a RunContextWrapper, then ctx = self.context.emotional_core.context.
-                    # Assuming self.context.emotional_core.context is the raw context data.
-                    
-                    # The original code created a RunContextWrapper with emotional_core.context
-                    # Then set a value on it. This might be incorrect if `emotional_core.context` is not a RunContextWrapper.
-                    # The example in documentation shows context passed to Runner.run, which is then available in RunContextWrapper.
-                    # Assuming ctx needs to be the RunContextWrapper for the current run, not a new one.
-                    # However, `create_emotion_trigger` doesn't receive `ctx`.
-                    # It should probably use `self.context` as the context for `RunContextWrapper`.
 
-                    # Using self.context which is ConditioningContext. EmotionalCore's context might be different.
-                    # Let's assume emotional_core.context is the correct context object for its tools.
-                    # If `self.context.emotional_core.context` is not a `RunContextWrapper` instance, we create one.
-                    # If `update_neurochemical` tool expects a context specific to `emotional_core`, this needs care.
-                    
-                    # Simpler: if `create_emotion_trigger` is called within an agent run, `ctx` should be passed in.
-                    # It is not. It seems `create_emotion_trigger` is an API method.
+                    # --- Corrected Neurochemical Tool Call ---
 
-                    # Let's stick to how it was, creating a new RunContextWrapper.
-                    # The value setting `ctx.context.set_value` is not standard for dict/object context.
-                    # Assuming `emotional_core.context` is the object to pass to `RunContextWrapper`.
-                    # And that `update_neurochemical` needs `neurochemical_tools_instance` in its context if it's not bound.
-                    # This part is a bit unclear without knowing EmotionalCore structure.
-
-                    # The main issue is calling FunctionTool.
-                    tool_obj = self.context.emotional_core.neurochemical_tools.update_neurochemical
-                    
-                    if isinstance(tool_obj, FunctionTool):
-                        args_dict = {
-                            "chemical": chemical,
-                            "value": test_intensity,
-                            "source": "emotion_trigger"
-                        }
-                        args_json = json.dumps(args_dict)
-                        
-                        # Create RunContextWrapper for the tool call.
-                        # Using self.context.emotional_core.context for the tool's context.
-                        tool_ctx = RunContextWrapper(context=self.context.emotional_core.context)
-
-                        result_str = await tool_obj.on_invoke_tool(tool_ctx, args_json)
-                        # Assuming the wrapped function returns a boolean, and on_invoke_tool returns its string representation.
-                        emotional_test = result_str.lower() == "true"
-                    else:
-                        # Fallback to direct call if not a FunctionTool (original behavior, but error indicates it is a FunctionTool)
-                        emotional_test = await tool_obj(
-                            ctx, # Original ctx was from RunContextWrapper(context=self.context.emotional_core.context)
-                            chemical=chemical,
-                            value=test_intensity,
-                            source="emotion_trigger"
+                    # a) Get the EmotionalContext instance used by the core
+                    #    (ASSUMPTION: it's stored in emotional_core.context)
+                    emo_context_data = self.context.emotional_core.context
+                    if not isinstance(emo_context_data, EmotionalContext):
+                        raise TypeError(
+                            "Emotional Core context is not of type EmotionalContext. "
+                            "Cannot perform test activation."
                         )
 
+                    # b) Verify the NeurochemicalTools instance is set in the context
+                    #    (This MUST be done during EmotionalCore initialization)
+                    if not emo_context_data.get_value("neurochemical_tools_instance"):
+                        raise ValueError(
+                            "neurochemical_tools_instance not set in EmotionalContext. "
+                            "Cannot call neurochemical tools."
+                        )
+
+                    # c) Create the RunContextWrapper needed by the tool
+                    tool_ctx = RunContextWrapper(context=emo_context_data)
+
+                    # d) Call the STATIC method from NeurochemicalTools class directly
+                    logger.debug(f"Attempting test activation: {chemical}, value={test_intensity}")
+                    result_dict = await NeurochemicalTools.update_neurochemical(
+                        ctx=tool_ctx,
+                        chemical=chemical,
+                        value=test_intensity,
+                        source="emotion_trigger_test" # Specific source for clarity
+                    )
+
+                    # e) Check the result from the tool call
+                    emotional_test_successful = result_dict.get("success", False)
+                    if emotional_test_successful:
+                        logger.info(f"Successfully performed test activation for {chemical}.")
+                    else:
+                        logger.warning(f"Test activation for {chemical} reported failure: {result_dict}")
+
             except Exception as e:
-                logger.error(f"Error creating test emotion activation: {e}")
-        
+                logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
+                emotional_test_successful = False # Ensure it's false on error
+
+        # 3. Return results
         return {
-            "success": True,
+            "success": True, # Overall success of creating the trigger association
             "trigger": trigger,
             "emotion": emotion,
             "intensity": intensity,
-            "association_result": result,
-            "emotional_test": emotional_test is not None
+            "association_result": association_result, # Result from classical conditioning
+            "emotional_test_successful": emotional_test_successful # Did the optional test update work?
         }
     
     async def trigger_conditioned_response(self, 
