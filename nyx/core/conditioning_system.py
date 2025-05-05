@@ -1625,11 +1625,17 @@ class ConditioningSystem:
                          raise AttributeError("Missing required logic method in NeurochemicalTools for direct call.")
 
                     # Call the assumed logic method (which should be callable)
-                    result_dict = await NeurochemicalTools._update_neurochemical_logic(
-                        ctx=tool_ctx,
+                    neurochemical_tools_instance = ctx.context.get_value("neurochemical_tools_instance")
+                    if not neurochemical_tools_instance:
+                        logger.error("No NeurochemicalTools instance in context")
+                        raise ValueError("Missing NeurochemicalTools instance")
+                    
+                    # Call the public method
+                    result_dict = await neurochemical_tools_instance.update_neurochemical(
+                        ctx,
                         chemical=chemical,
                         value=test_intensity,
-                        source="emotion_trigger_test" # Specific source for clarity
+                        source="emotion_trigger_test"
                     )
                     # --- END FIX ---
 
