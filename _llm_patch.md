@@ -1,0 +1,1 @@
+Could you please provide the specific lint errors and the relevant code snippets (context) where they occur? Once I have those details I can draft minimal unified-diff patches to address them.
