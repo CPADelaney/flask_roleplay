@@ -32,13 +32,16 @@ class EmotionalContext(BaseModel):
     sdk_metadata: Dict[str, Any] = Field(default_factory=dict,
                                        description="SDK-specific metadata")
     
-    # These need to be properly initialized through Pydantic's system
-    _circular_history: Dict[str, List[Any]] = Field(default_factory=lambda: defaultdict(list), exclude=True)
-    
+    # --- Private attribute type hint (NOT a Pydantic Field) ---
+    # Declare the type hint for the private attribute here for clarity
+    # It will be initialized in model_post_init
+    _circular_history: Dict[str, List[Any]]
+
+    # --- Pydantic Config ---
     class Config:
         """Pydantic configuration"""
         arbitrary_types_allowed = True
-        extra = "allow"
+        extra = "allow" # Or "ignore" if you don't want extra fields saved
     
     def model_post_init(self, __context) -> None:
         """
@@ -48,6 +51,20 @@ class EmotionalContext(BaseModel):
         super().model_post_init(__context)
         # Initialize the circular history properly
         self._circular_history = defaultdict(list)
+
+    # --- Serialization/Deserialization ---
+    def to_json(self) -> str:
+        """
+        Serialize context to JSON for persistence
+
+        Returns:
+            JSON string representation of the context
+        """
+        # Pydantic's model_dump handles exclusion better now.
+        # Note: _circular_history is NOT a field, so it won't be included by default.
+        # temp_data IS a field here, so needs explicit exclusion if desired.
+        serializable_data = self.model_dump(exclude={"temp_data"}) # Or exclude={'temp_data',} if using set syntax
+        return json.dumps(serializable_data, default=str) # Add default=str for things like datetime
     
     # Serialization/deserialization support with enhanced validation
     def to_json(self) -> str:
@@ -65,15 +82,17 @@ class EmotionalContext(BaseModel):
     def from_json(cls, json_str: str) -> 'EmotionalContext':
         """
         Create context from JSON serialized data
-        
+
         Args:
             json_str: JSON string representation of context
-            
+
         Returns:
             Reconstructed context object
         """
         data = json.loads(json_str)
-        return cls(**data)
+        # Pydantic v2 uses model_validate
+        return cls.model_validate(data)
+
     
     # Add helper methods directly to the context with improved implementations
     def record_emotion(self, emotion: str, intensity: float) -> None:
@@ -349,20 +368,22 @@ class EmotionalContext(BaseModel):
     
     def _add_to_circular_buffer(self, name, value):
         """Adds a value to the named circular buffer"""
+        # No need for hasattr check IF model_post_init ALWAYS runs and initializes it.
+        # The check is safe defensive programming, though.
         if not hasattr(self, "_circular_history") or self._circular_history is None:
-            self._circular_history = defaultdict(list)
-        
-        # Add the value to the buffer
+             # This case should ideally not happen if model_post_init runs correctly
+             self._circular_history = defaultdict(list)
+
         self._circular_history[name].append(value)
-        
-        # Limit buffer size (keep last 100 entries)
+
         if len(self._circular_history[name]) > 100:
             self._circular_history[name] = self._circular_history[name][-100:]
-    
+
     def get_circular_buffer(self, name):
         """Gets the named circular buffer"""
+        # Same consideration as above regarding hasattr check
         if not hasattr(self, "_circular_history") or self._circular_history is None:
-            self._circular_history = defaultdict(list)
+             self._circular_history = defaultdict(list)
         return self._circular_history.get(name, [])
     
     def get_agent_usage(self) -> Dict[str, int]:
