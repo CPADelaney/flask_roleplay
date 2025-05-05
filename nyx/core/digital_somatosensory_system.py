@@ -688,8 +688,7 @@ class DigitalSomatosensorySystem:
                     hooks=self.hooks,
                     run_config=RunConfig(
                         workflow_name="SensoryInfluence",
-                        trace_id=None,
-                        trace={"message_length": len(message_text)} # Use trace
+                        trace_id=None
                     )
                 )
 
@@ -2101,7 +2100,7 @@ class DigitalSomatosensorySystem:
                     run_config=RunConfig(
                         workflow_name="StimulusValidation",
                         trace_id=None, # Auto-generate
-                        trace={"input_keys": list(validation_input.keys())} # Trace what keys were sent
+
                     )
                 )
 
@@ -2647,11 +2646,6 @@ class DigitalSomatosensorySystem:
                 run_config=RunConfig(
                     workflow_name="BodyExperience",
                     trace_id=None,  # Auto-generate
-                    trace={
-                        "action": body_experience.get("action", "unknown"),
-                        "stimulus_type": body_experience.get("stimulus_type"),
-                        "body_region": body_experience.get("body_region")
-                    }
                 )
             )
             
@@ -3114,7 +3108,6 @@ class DigitalSomatosensorySystem:
                     context=context_obj, # Pass context object
                     run_config=RunConfig(
                         workflow_name="PeriodicUpdateAnalysis",
-                        trace={"duration": duration} # Use trace
                     )
                 )
                 output = result.final_output
@@ -3367,7 +3360,6 @@ class PhysicalHarmGuardrail:
                     },
                     run_config=RunConfig(
                         workflow_name="HarmfulIntentDetection",
-                        trace={"type": "safety_guardrail", "in_roleplay": self.is_in_roleplay_mode()}
                     )
                 )
 
