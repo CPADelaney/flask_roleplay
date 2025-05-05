@@ -392,7 +392,6 @@ class DigitalSomatosensorySystem:
 
     
     @staticmethod # Add decorator
-    @function_tool
     async def _get_valid_body_regions(ctx: RunContextWrapper[SomatosensorySystemContext]) -> List[str]: # ctx first, no self
         """Get a list of valid body regions."""
         system_instance = ctx.context.system_instance # Get instance from context
@@ -425,7 +424,7 @@ class DigitalSomatosensorySystem:
     
                 Return validation results and reasoning. Use the available tool to get valid regions.
                 """,
-                tools=[self._get_valid_body_regions],
+                tools=[function_tool(self._get_valid_body_regions)],
                 output_type=StimulusValidationOutput,
                 model="gpt-4o",
                 model_settings=ModelSettings(temperature=0.1)
