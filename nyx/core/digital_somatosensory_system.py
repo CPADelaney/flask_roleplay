@@ -392,6 +392,7 @@ class DigitalSomatosensorySystem:
 
     
     @staticmethod # Add decorator
+    @function_tool # Add decorator
     async def _get_valid_body_regions(ctx: RunContextWrapper[SomatosensorySystemContext]) -> List[str]: # ctx first, no self
         """Get a list of valid body regions."""
         system_instance = ctx.context.system_instance # Get instance from context
@@ -399,6 +400,7 @@ class DigitalSomatosensorySystem:
              logger.error("_get_valid_body_regions called without valid system instance in context.")
              return []
         return list(system_instance.body_regions.keys()) # Use system_instance
+
         
     def _create_stimulus_validator(self):
             """Create the stimulus validation agent."""
@@ -424,12 +426,14 @@ class DigitalSomatosensorySystem:
     
                 Return validation results and reasoning. Use the available tool to get valid regions.
                 """,
-                tools=[function_tool(DigitalSomatosensorySystem._get_valid_body_regions)],
+                # --- FIX 1: Pass the already decorated static method directly ---
+                tools=[DigitalSomatosensorySystem._get_valid_body_regions],
+                # ---------------------------------------------------------------
                 output_type=StimulusValidationOutput,
                 model="gpt-4o",
                 model_settings=ModelSettings(temperature=0.1)
             )
-            logger.info(">>> Successfully created validation_agent (or crashed before this)") # Add this too
+            # logger.info(">>> Successfully created validation_agent (or crashed before this)") # Keep if needed
             return validation_agent
     
     def _create_expression_agent(self) -> Agent:
@@ -569,7 +573,9 @@ class DigitalSomatosensorySystem:
                 function_tool(self._update_arousal_state)
             ],
             input_guardrails=[
-                InputGuardrail(guardrail_function=self._validate_input)
+                # --- FIX 2: Access static method via ClassName ---
+                InputGuardrail(guardrail_function=DigitalSomatosensorySystem._validate_input)
+                # -------------------------------------------------
             ],
             model="gpt-4o",
             model_settings=ModelSettings(temperature=0.2),
