@@ -1,10 +1,5 @@
 # nyx/core/emotions/context.py
-
-"""
-Enhanced context management for the Nyx emotional system.
-Provides improved typing, helper methods, and serialization support
-with better OpenAI Agents SDK integration.
-"""
+# Fix for Pydantic compatibility issue
 
 import datetime
 import json
@@ -12,13 +7,11 @@ from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional, TypeVar, Generic, Set, Deque, Union
 
 from pydantic import BaseModel, Field, model_validator, validator
-from agents import RunContextWrapper, Agent
 
 # Create a TypeVar for the EmotionalContext to be used in type hints
 TEmotionalContext = TypeVar('TEmotionalContext', bound='EmotionalContext')
-TAgent = TypeVar('TAgent', bound=Agent)
 
-class EmotionalContext(BaseModel, Generic[TAgent]):
+class EmotionalContext(BaseModel):
     """
     Enhanced context for emotional processing between agent runs with improved
     SDK integration, serialization support, and runtime optimizations.
@@ -29,31 +22,32 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
                                                     description="Recent interaction data")
     temp_data: Dict[str, Any] = Field(default_factory=dict, exclude=True, 
                                     description="Temporary runtime data that won't be serialized")
-    # Using a more efficient circular buffer for history tracking
-    circular_history: Dict[str, Deque] = Field(default_factory=lambda: defaultdict(lambda: deque(maxlen=20)), 
-                                              exclude=True, description="Circular buffers for various history types")
-    
-    # Enhanced fields for improved SDK integration
     active_agent: Optional[str] = Field(default=None, description="Currently active agent name")
     agent_metadata: Dict[str, Dict[str, Any]] = Field(default_factory=dict, 
                                                     description="Metadata for each agent")
     trace_metadata: Dict[str, Any] = Field(default_factory=dict, 
                                         description="Metadata for tracing")
-    
-    # New fields for better SDK integration
     agent_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict, 
                                                   description="Current state of each agent")
     sdk_metadata: Dict[str, Any] = Field(default_factory=dict,
                                        description="SDK-specific metadata")
-
-    def __init__(self):
-        self._circular_history = defaultdict(list)
-        self.cycle_count = 0
+    
+    # These need to be properly initialized through Pydantic's system
+    _circular_history: Dict[str, List[Any]] = Field(default_factory=lambda: defaultdict(list), exclude=True)
     
     class Config:
         """Pydantic configuration"""
         arbitrary_types_allowed = True
         extra = "allow"
+    
+    def model_post_init(self, __context) -> None:
+        """
+        Initialize private attributes after Pydantic initialization
+        This is the proper way to initialize non-field attributes in Pydantic v2
+        """
+        super().model_post_init(__context)
+        # Initialize the circular history properly
+        self._circular_history = defaultdict(list)
     
     # Serialization/deserialization support with enhanced validation
     def to_json(self) -> str:
@@ -64,7 +58,7 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             JSON string representation of the context
         """
         # Exclude temp_data and other non-serializable fields
-        serializable_data = self.dict(exclude={"temp_data", "_circular_history"})
+        serializable_data = self.model_dump(exclude={"temp_data", "_circular_history"})
         return json.dumps(serializable_data)
     
     @classmethod
@@ -355,7 +349,7 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
     
     def _add_to_circular_buffer(self, name, value):
         """Adds a value to the named circular buffer"""
-        if not hasattr(self, "_circular_history"):
+        if not hasattr(self, "_circular_history") or self._circular_history is None:
             self._circular_history = defaultdict(list)
         
         # Add the value to the buffer
@@ -367,7 +361,7 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
     
     def get_circular_buffer(self, name):
         """Gets the named circular buffer"""
-        if not hasattr(self, "_circular_history"):
+        if not hasattr(self, "_circular_history") or self._circular_history is None:
             self._circular_history = defaultdict(list)
         return self._circular_history.get(name, [])
     
@@ -592,15 +586,6 @@ class EmotionalContext(BaseModel, Generic[TAgent]):
             # Include neurochemical data if available
             if "cached_neurochemical_state" in self.temp_data:
                 context_data["chemicals"] = self.temp_data["cached_neurochemical_state"]
-            # Include emotion rule index if available
-            if "emotion_rule_index" in self.temp_data:
-                context_data["rule_index"] = self.temp_data["emotion_rule_index"]
-            
-        elif agent_type == "emotion_derivation":
-            # Include neurochemical data if available
-            if "cached_neurochemical_state" in self.temp_data:
-                context_data["chemicals"] = self.temp_data["cached_neurochemical_state"]
-                
             # Include emotion rule index if available
             if "emotion_rule_index" in self.temp_data:
                 context_data["rule_index"] = self.temp_data["emotion_rule_index"]
