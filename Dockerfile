@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     default-libmysqlclient-dev \
     libpq-dev \
+    git \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
