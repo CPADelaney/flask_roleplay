@@ -353,14 +353,20 @@ class EmotionalCore:
         # Create shared context for agents
         self.context = EmotionalContext()
         
-        # Initialize agent hooks with neurochemicals reference
+        # Initialize agent hooks (if they depend only on self.neurochemicals, this is fine here)
         self.agent_hooks = EmotionalAgentHooks(self.neurochemicals)
         
-        # Initialize specialized tool objects
-        self.neurochemical_tools = NeurochemicalTools(self)
+        # CORRECTED ORDER of tool initialization:
+        # EmotionTools is needed by NeurochemicalTools, so initialize it first.
         self.emotion_tools = EmotionTools(self)
-        self.reflection_tools = ReflectionTools(self)
-        self.learning_tools = LearningTools(self)
+        
+        # Now NeurochemicalTools can be initialized and can correctly find
+        # self.emotion_tools and its methods on the EmotionalCore instance.
+        self.neurochemical_tools = NeurochemicalTools(self)
+        
+        # Other tools
+        self.reflection_tools = ReflectionTools(self) # Assuming ReflectionTools(self) is correct
+        self.learning_tools = LearningTools(self)     # Assuming LearningTools(self) is correct
         
         # Initialize the base model for agent creation
         self.base_model = model
@@ -368,7 +374,7 @@ class EmotionalCore:
         # Dictionary to store agents
         self.agents = {}
         
-        # Initialize all agents
+        # Initialize all agents (this will now happen *after* all tool instances are created on self)
         self._initialize_agents()
         
         # Performance metrics
