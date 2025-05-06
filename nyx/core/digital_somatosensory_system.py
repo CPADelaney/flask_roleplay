@@ -79,7 +79,8 @@ class StimulusProcessingResult(BaseModel):
     body_region: str = Field(..., description="Body region affected")
     intensity: float = Field(..., description="Intensity of stimulus")
     new_value: float = Field(..., description="New sensation value")
-    effects: Dict[str, Any] = Field(default_factory=dict, description="Effects of the stimulus")
+    # Changed: Made 'effects' Optional. default_factory will still ensure it's a dict if not provided.
+    effects: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Effects of the stimulus")
     expression: Optional[str] = Field(None, description="Generated expression if applicable")
     body_state_impact: Optional[Dict[str, Any]] = Field(None, description="Impact on overall body state")
 
