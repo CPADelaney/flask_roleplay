@@ -8,6 +8,7 @@ import asyncpg
 import datetime
 from celery_config import celery_app
 from functools import wraps
+import time # Import time for potential delays
 
 # Import your helper functions and task logic
 from npcs.new_npc_creation import NPCCreationHandler
@@ -17,7 +18,9 @@ from npcs.npc_learning_adaptation import NPCLearningManager
 from memory.memory_nyx_integration import run_maintenance_through_nyx
 from db.connection import get_db_connection_context
 
+# --- Core NyxBrain and Checkpointing ---
 from nyx.core.brain.base import NyxBrain
+from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +29,49 @@ DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
     logger.error("DB_DSN environment variable not set for Celery tasks!")
 
+# --- Application Readiness Flag ---
+# This is a simple in-memory flag. For production, you might use Redis,
+# a database flag, or an external health check endpoint.
+_APP_INITIALIZED = False
+_LAST_INIT_CHECK_TIME = 0
+_INIT_CHECK_INTERVAL = 30 # Check every 30 seconds
+
+def set_app_initialized():
+    """Call this from main.py AFTER successful NyxBrain initialization."""
+    global _APP_INITIALIZED
+    _APP_INITIALIZED = True
+    logger.info("Application initialization status set to True for Celery tasks.")
+
+async def is_app_initialized():
+    """Checks if the application is initialized (with caching)."""
+    global _APP_INITIALIZED, _LAST_INIT_CHECK_TIME
+    now = time.time()
+
+    # If already marked as initialized, return True
+    if _APP_INITIALIZED:
+        return True
+
+    # Check if enough time has passed since the last check or if never checked
+    if now - _LAST_INIT_CHECK_TIME < _INIT_CHECK_INTERVAL:
+        return False # Return cached False value
+
+    _LAST_INIT_CHECK_TIME = now # Update last check time
+
+    return False
+
+
 # Helper decorator to run async functions in Celery tasks
 def async_task(func):
-    """Decorator to run async functions in synchronous Celery tasks."""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        return asyncio.run(func(*args, **kwargs))
+        # Ensure an event loop exists or create one
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(func(*args, **kwargs))
+        # Note: Consider loop cleanup policies if creating many loops.
     return wrapper
 
 @celery_app.task
@@ -537,76 +577,134 @@ def nyx_memory_maintenance_task():
         logger.exception("Critical error in nyx_memory_maintenance_task")
         return {"status": "error", "error": str(e)}
 
+# --- Utility Functions ---
 async def find_split_brain_nyxes():
-    """
-    Find all nyx_id's with >1 recent checkpoints (i.e., split-brain state).
-    """
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30)
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(minutes=30) # Check last 30 mins
     async with get_db_connection_context() as conn:
         rows = await conn.fetch("""
-            SELECT nyx_id, count(*)
+            SELECT nyx_id, COUNT(DISTINCT instance_id) as instance_count
             FROM nyx_brain_checkpoints
-            WHERE checkpoint_time > $1
+            WHERE checkpoint_time > $1 AND nyx_id = $2
             GROUP BY nyx_id
-            HAVING count(distinct instance_id) > 1
-        """, cutoff)
+            HAVING COUNT(DISTINCT instance_id) > 1
+        """, cutoff, os.getenv("NYX_ID", "nyx_v1")) # Filter by current NYX_ID
     return [row["nyx_id"] for row in rows]
 
-async def perform_sweep_and_merge():
-    """
-    For each split-brain Nyx, call the merge/restore logic.
-    """
-    split_nyxes = await find_split_brain_nyxes()
-    if not split_nyxes:
-        logger.info("No splits found.")
-        return
+async def perform_sweep_and_merge_for_id(nyx_id: str):
+    """Performs merge for a specific nyx_id."""
+    logger.info(f"Attempting merge for potentially split Nyx: {nyx_id}")
+    try:
+        # Get the potentially multiple instances/states via get_instance logic or load checkpoints directly
+        # For simplicity, we get the 'main' instance and trigger its restore/merge logic
+        # Assuming user_id/conv_id 0/0 is used for the global Nyx ID instance tracking
+        brain = await NyxBrain.get_instance(0, 0, nyx_id=nyx_id)
 
-    logger.info(f"Found split-brain Nyxes: {split_nyxes}")
-    for nyx_id in split_nyxes:
-        try:
-            brain = await NyxBrain.get_instance(0, 0, nyx_id=nyx_id)
-            await brain.restore_entity_from_distributed_checkpoints()
-            logger.info(f"Successfully merged split-brain Nyx: {nyx_id}")
-        except Exception as e:
-            logger.error(f"Failed to merge {nyx_id}: {e}", exc_info=True)
+        # Check if brain is initialized before attempting restore
+        if not brain.initialized:
+             logger.warning(f"Skipping merge for {nyx_id}: Corresponding brain instance is not initialized.")
+             return False
 
+        success = await brain.restore_entity_from_distributed_checkpoints()
+        if success:
+            logger.info(f"Successfully processed/merged state for Nyx: {nyx_id}")
+            return True
+        else:
+            logger.warning(f"State restoration/merge process indicated no action or failure for Nyx: {nyx_id}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to merge {nyx_id}: {e}", exc_info=True)
+        return False
+
+# --- Modified Sweep Task ---
 @celery_app.task
-def sweep_and_merge_nyx_split_brains():
+@async_task # Use decorator for the async logic
+async def sweep_and_merge_nyx_split_brains():
     """
     Celery task for periodically merging split-brain Nyx instances.
+    Checks if the main application is initialized before running.
     """
-    logger.info("Starting split-brain Nyx sweep-and-merge task")
+    logger.info("Checking application readiness for split-brain sweep...")
+    if not await is_app_initialized():
+        logger.info("Application not initialized yet. Skipping split-brain sweep task.")
+        return {"status": "skipped", "reason": "App not initialized"}
+
+    logger.info("Application initialized. Starting split-brain Nyx sweep-and-merge task.")
+    merged_count = 0
+    failed_count = 0
     try:
-        asyncio.run(perform_sweep_and_merge())
-        logger.info("Sweep-and-merge task completed successfully.")
-        return {"status": "success"}
+        split_nyxes = await find_split_brain_nyxes()
+        if not split_nyxes:
+            logger.info("No split-brain Nyx instances found requiring merge.")
+        else:
+            logger.info(f"Found potentially split Nyx IDs: {split_nyxes}")
+            for nyx_id in split_nyxes:
+                success = await perform_sweep_and_merge_for_id(nyx_id)
+                if success: merged_count += 1
+                else: failed_count += 1
+                await asyncio.sleep(1) # Small delay between merges
+
+        logger.info(f"Sweep-and-merge task completed. Merged: {merged_count}, Failed/Skipped: {failed_count}.")
+        return {"status": "success", "merged": merged_count, "failed_or_skipped": failed_count}
     except Exception as e:
-        logger.exception("Sweep-and-merge task failed")
+        logger.exception("Sweep-and-merge task failed critically.")
         return {"status": "error", "error": str(e)}
 
+# --- NEW LLM Checkpointing Task ---
 @celery_app.task
-def memory_embedding_consolidation_task():
+@async_task # Use decorator for the async logic
+async def run_llm_periodic_checkpoint_task(user_id: int, conversation_id: int):
     """
-    Celery task to consolidate memory embeddings.
+    Celery task for periodically running the LLM-driven checkpointing.
     """
-    logger.info("Starting memory embedding consolidation task")
-    
-    async def consolidate_embeddings():
-        try:
-            from memory.memory_integration import consolidate_memory_embeddings
-            
-            result = await consolidate_memory_embeddings()
-            logger.info(f"Memory embedding consolidation completed: {result}")
-            return result
-        except Exception as e:
-            logger.exception("Memory embedding consolidation failed")
-            return {"status": "error", "error": str(e)}
-    
+    nyx_id = os.getenv("NYX_ID", "nyx_v1") # Or determine based on user/conv if needed
+    logger.info(f"Starting LLM periodic checkpoint task for NyxBrain {user_id}-{conversation_id} (NyxID: {nyx_id})...")
+
+    if not await is_app_initialized():
+        logger.info(f"Application not initialized yet. Skipping LLM checkpoint for {user_id}-{conversation_id}.")
+        return {"status": "skipped", "reason": "App not initialized"}
+
     try:
-        return asyncio.run(consolidate_embeddings())
+        # Get the specific brain instance
+        # Use nyx_id if you have a global instance per NYX_ID, otherwise use user/conv
+        brain_instance = await NyxBrain.get_instance(user_id, conversation_id, nyx_id=nyx_id if user_id == 0 and conversation_id == 0 else None)
+
+        if not brain_instance or not brain_instance.initialized:
+            logger.warning(f"Could not get initialized NyxBrain instance for {user_id}-{conversation_id}. Skipping checkpoint.")
+            return {"status": "skipped", "reason": "Brain instance not ready"}
+
+        # 1. Gather current state
+        logger.debug(f"Gathering state for {user_id}-{conversation_id}...")
+        current_state = await brain_instance.gather_checkpoint_state(event="periodic_llm_scheduled")
+
+        # 2. Get plan from agent
+        logger.debug(f"Requesting checkpoint plan for {user_id}-{conversation_id}...")
+        planner_agent = CheckpointingPlannerAgent() # Create agent instance
+        # Pass brain_instance as context if planner's tools need it, else None
+        checkpoint_plan = await planner_agent.recommend_checkpoint(current_state, brain_instance_for_context=brain_instance)
+
+        # 3. Save based on plan
+        if checkpoint_plan and checkpoint_plan.get("to_save"):
+            logger.debug(f"Saving planned checkpoint for {user_id}-{conversation_id}...")
+            # Extract data correctly from the plan structure
+            data_to_save = checkpoint_plan["to_save"] # This is {"field": {"value": ..., "why_saved": ...}}
+            justifications = {k: v.get("why_saved", "N/A") for k, v in data_to_save.items()}
+            skipped = checkpoint_plan.get("skip_fields", [])
+
+            await brain_instance.save_planned_checkpoint( # Call method on brain instance
+                event="periodic", # Base event type
+                data_to_save=data_to_save, # Pass the structured dict
+                justifications=justifications,
+                skipped=skipped
+            )
+            logger.info(f"LLM periodic checkpoint saved for {user_id}-{conversation_id}.")
+            return {"status": "success", "saved_fields": len(data_to_save), "skipped_fields": len(skipped)}
+        else:
+            logger.info(f"Checkpoint planner recommended skipping save for {user_id}-{conversation_id}.")
+            return {"status": "success", "saved_fields": 0, "skipped_fields": checkpoint_plan.get("skip_fields", ["No plan generated"])}
+
     except Exception as e:
-        logger.exception("Memory embedding consolidation task failed")
+        logger.exception(f"Error during LLM periodic checkpoint task for {user_id}-{conversation_id}")
         return {"status": "error", "error": str(e)}
 
-# Assign celery_app to 'app' if needed for discovery
+# Ensure celery_app is correctly configured if needed elsewhere
 app = celery_app
