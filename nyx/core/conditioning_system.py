@@ -1512,11 +1512,11 @@ class ConditioningSystem:
             "identity_updated": identity_result is not None
         }
                                     
-    async def create_emotion_trigger(self,
+async def create_emotion_trigger(self,
                                    trigger: str,
                                    emotion: str,
                                    intensity: float = 0.5,
-                                   context: Dict[str, Any] = None) -> Dict[str, Any]:
+                                   context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]: # Made context Optional
         """
         Create a trigger for an emotional response, with an optional test activation.
 
@@ -1530,137 +1530,108 @@ class ConditioningSystem:
             Results of creating the emotion trigger
         """
         # Ensure context is a dictionary if None was passed
-        if context is None:
-            context = {}
+        context = context if context is not None else {} # More Pythonic check for None
 
-        # --- REMOVED FAULTY LINES ---
+        # --- FAULTY LINES REMOVED ---
         # context_obj = ctx.context if isinstance(ctx, RunContextWrapper) else ctx # REMOVED: ctx is not defined here
         # neurochemical_tools_instance = context_obj.get_value("neurochemical_tools_instance") # REMOVED: This check happens later correctly
 
-        # --- KEPT LOGIC ---
         # Determine valence based on emotion if not provided in the input context dict
+        # (Valence calculation logic remains the same)
         if "valence" not in context:
             emotion_lower = emotion.lower()
-            if emotion_lower in ["joy", "satisfaction", "amusement", "contentment", "trust"]:
-                valence = 0.7  # Positive emotions
-            elif emotion_lower in ["frustration", "anger", "sadness", "fear"]:
-                valence = -0.7  # Negative emotions
-            else:
-                valence = 0.0  # Neutral emotions
-            context["valence"] = valence # Store calculated valence back in context dict for consistency
+            if emotion_lower in ["joy", "satisfaction", "amusement", "contentment", "trust"]: valence = 0.7
+            elif emotion_lower in ["frustration", "anger", "sadness", "fear"]: valence = -0.7
+            else: valence = 0.0
+            context["valence"] = valence
         else:
             valence = context["valence"]
 
-        # 1. Use classical conditioning to associate trigger with emotion
-        # Pass the necessary parts from the 'context' dict to the sub-call
+        # 1. Use classical conditioning (Logic remains the same)
         association_result = await self.process_classical_conditioning(
-            unconditioned_stimulus="emotional_stimulus",
+            unconditioned_stimulus="emotional_stimulus", # This seems fine
             conditioned_stimulus=trigger,
             response=f"emotion_{emotion}",
             intensity=intensity,
-            context={ # Create the context dict expected by process_classical_conditioning
+            context={ # Pass relevant parts from the input context dict
                 "emotion": emotion,
                 "valence": valence,
-                "context_keys": context.get("context_keys", []) # Pass through context keys if provided
-                # Add any other relevant fields from the input 'context' dict if needed
+                "context_keys": context.get("context_keys", [])
             }
         )
 
         # 2. If emotional core is available, create a test activation
-        emotional_test_successful = False # Default to False
+        emotional_test_successful = False
         # Check if emotional_core exists within the ConditioningContext
         if self.context.emotional_core:
             try:
-                # Map emotion to neurochemicals
+                # Map emotion to neurochemicals (Mapping logic remains the same)
                 chemical_map = {
-                    "joy": "nyxamine",
-                    "contentment": "seranix",
-                    "trust": "oxynixin",
-                    "fear": "adrenyx",
-                    "anger": "cortanyx",
-                    "sadness": "cortanyx"
-                    # Add other mappings as needed
+                    "joy": "nyxamine", "contentment": "seranix", "trust": "oxynixin",
+                    "fear": "adrenyx", "anger": "cortanyx", "sadness": "cortanyx"
                 }
-
                 emotion_lower = emotion.lower()
+
                 if emotion_lower in chemical_map:
                     chemical = chemical_map[emotion_lower]
-                    test_intensity = intensity * 0.1  # Very mild test activation
+                    test_intensity = intensity * 0.1 # Mild test activation
 
-                    # --- Corrected Neurochemical Tool Call (as it was already mostly correct) ---
-
-                    # a) Get the EmotionalContext instance used by the core
+                    # --- Corrected Neurochemical Tool Call Setup ---
                     # a) Get the EmotionalContext instance used by the core
                     emo_context_data = self.context.emotional_core.context
                     if not isinstance(emo_context_data, EmotionalContext):
-                         raise TypeError(
-                            "Emotional Core context is not of type EmotionalContext. "
-                            "Cannot perform test activation."
-                        )
+                         logger.error("Emotional Core context is not of type EmotionalContext. Cannot perform test activation.")
+                         raise TypeError("Emotional Core context is not of type EmotionalContext.")
 
-                    # b) Verify/Set NeurochemicalTools instance in the context
+                    # b) Get NeurochemicalTools instance (assuming it's stored on the core)
+                    #    or handle if it needs to be retrieved differently.
+                    neurochemical_tools_instance = getattr(self.context.emotional_core, 'neurochemical_tools', None)
+                    if not neurochemical_tools_instance or not isinstance(neurochemical_tools_instance, NeurochemicalTools):
+                        logger.error("NeurochemicalTools instance not found on EmotionalCore or is wrong type.")
+                        raise ValueError("Missing or invalid NeurochemicalTools instance on EmotionalCore.")
+
+                    # Ensure the instance is stored in the context if needed by the tool logic
                     if not emo_context_data.get_value("neurochemical_tools_instance"):
-                        if hasattr(self.context.emotional_core, 'neurochemical_tools'):
-                             logger.warning("neurochemical_tools_instance was not set in EmotionalContext. Setting it now.")
-                             emo_context_data.set_value("neurochemical_tools_instance", self.context.emotional_core.neurochemical_tools)
-                        else:
-                             logger.error("neurochemical_tools_instance not set in EmotionalContext and not found on EmotionalCore. Cannot call neurochemical tools.")
-                             raise ValueError(
-                                "neurochemical_tools_instance not set in EmotionalContext. "
-                                "Cannot call neurochemical tools."
-                            )
+                         logger.warning("neurochemical_tools_instance was not set in EmotionalContext. Setting it now.")
+                         emo_context_data.set_value("neurochemical_tools_instance", neurochemical_tools_instance)
 
-                    # c) Create the RunContextWrapper needed by the tool's logic method
+                    # c) Create the RunContextWrapper needed by the tool
                     tool_ctx = RunContextWrapper(context=emo_context_data)
+                    # --- End Tool Call Setup ---
 
-                    # --- FIX: Call the underlying LOGIC method directly ---
-                    # NOTE: This assumes 'NeurochemicalTools' has a separate logic method,
-                    #       e.g., '_update_neurochemical_logic', and that the public
-                    #       'update_neurochemical' method (the FunctionTool) calls it.
-                    #       If NeurochemicalTools doesn't follow this pattern, it needs refactoring.
-                    logger.debug(f"Attempting test activation via logic method: {chemical}, value={test_intensity}")
-                    if not hasattr(NeurochemicalTools, '_update_neurochemical_impl'):
-                         # Log error or raise if the assumed logic method doesn't exist
-                         logger.error("NeurochemicalTools does not have the expected '_update_neurochemical_impl' method for direct calls.")
-                         raise AttributeError("Missing required logic method in NeurochemicalTools for direct call.")
+                    logger.debug(f"Attempting test activation via tool call: {chemical}, value={test_intensity}")
 
-                    # Call the assumed logic method (which should be callable)
-                    neurochemical_tools_instance = ctx.context.get_value("neurochemical_tools_instance")
-                    if not neurochemical_tools_instance:
-                        logger.error("No NeurochemicalTools instance in context")
-                        raise ValueError("Missing NeurochemicalTools instance")
-                    
-                    try:
-                        # Call the public update_neurochemical method as intended
-                        result_dict = await NeurochemicalTools.update_neurochemical(
-                            ctx,
-                            chemical=chemical, 
-                            value=test_intensity,
-                            source="emotion_trigger_test"
-                        )
-                        
-                        # Check the result from the tool call
-                        emotional_test_successful = result_dict.get("success", False)
-                        if emotional_test_successful:
-                            logger.info(f"Successfully performed test activation for {chemical}.")
-                        else:
-                            logger.warning(f"Test activation for {chemical} reported failure: {result_dict}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
-                        emotional_test_successful = False
+                    # --- CHANGED: Call the static tool method directly ---
+                    # The NeurochemicalTools.update_neurochemical should be decorated with @function_tool
+                    # and designed to work with the RunContextWrapper (tool_ctx).
+                    update_result = await NeurochemicalTools.update_neurochemical(
+                        tool_ctx, # Pass the wrapper with the correct EmotionalContext
+                        chemical=chemical,
+                        value=test_intensity,
+                        source="emotion_trigger_test"
+                    )
+
+                    # Check the result dict returned by the tool
+                    if isinstance(update_result, dict) and update_result.get("success"):
+                        emotional_test_successful = True
+                        logger.info(f"Successfully performed test activation for {chemical}.")
+                    else:
+                        logger.warning(f"Test activation tool call for {chemical} failed or returned unexpected result: {update_result}")
+                        emotional_test_successful = False # Ensure false on failure
+
             except Exception as e:
+                # This is where the original NameError would have been caught if not removed earlier
                 logger.error(f"Error creating test emotion activation: {e}", exc_info=True)
-                emotional_test_successful = False # Ensure it's false on error
+                emotional_test_successful = False # Ensure false on any error during test
 
-        # 3. Return results
+        # 3. Return results (Logic remains the same)
         return {
-            "success": True, # Overall success of creating the trigger association
+            "success": True, # Indicates the trigger *association* was likely created/updated
             "trigger": trigger,
             "emotion": emotion,
             "intensity": intensity,
-            "association_result": association_result, # Result from classical conditioning
-            "emotional_test_successful": emotional_test_successful # Did the optional test update work?
+            "association_result": association_result,
+            "emotional_test_successful": emotional_test_successful # Status of the optional test
         }
     
     async def trigger_conditioned_response(self, 
