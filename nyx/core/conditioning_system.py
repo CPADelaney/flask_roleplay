@@ -1619,9 +1619,9 @@ class ConditioningSystem:
                     #       'update_neurochemical' method (the FunctionTool) calls it.
                     #       If NeurochemicalTools doesn't follow this pattern, it needs refactoring.
                     logger.debug(f"Attempting test activation via logic method: {chemical}, value={test_intensity}")
-                    if not hasattr(NeurochemicalTools, '_update_neurochemical_logic'):
+                    if not hasattr(NeurochemicalTools, '_update_neurochemical_impl'):
                          # Log error or raise if the assumed logic method doesn't exist
-                         logger.error("NeurochemicalTools does not have the expected '_update_neurochemical_logic' method for direct calls.")
+                         logger.error("NeurochemicalTools does not have the expected '_update_neurochemical_impl' method for direct calls.")
                          raise AttributeError("Missing required logic method in NeurochemicalTools for direct call.")
 
                     # Call the assumed logic method (which should be callable)
