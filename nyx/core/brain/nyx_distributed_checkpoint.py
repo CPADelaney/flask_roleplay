@@ -5,9 +5,18 @@ import json
 import uuid
 import datetime
 import logging
+import re # Import re
+from typing import Dict, List, Any, Optional, Tuple, TYPE_CHECKING
 
 # Adapt these imports to your db wrapper
 from db.connection import get_db_connection_context
+
+# Import the planner agent if needed within the mixin (e.g., for type hints or potential future use)
+from nyx.core.brain.checkpointing_agent import CheckpointingPlannerAgent # Optional here
+
+# Type hint for NyxBrain without causing circular import
+if TYPE_CHECKING:
+    from nyx.core.brain.base import NyxBrain
 
 logger = logging.getLogger(__name__)
 
@@ -17,25 +26,103 @@ INSTANCE_ID = os.getenv("NYX_INSTANCE_ID", str(uuid.uuid4()))
 class DistributedCheckpointMixin:
     """
     Mixin for distributed, agentic, mergeable checkpointing and restoration.
-    Assumes self.gather_checkpoint_state() and self.restore_from_checkpoint(_dict_)
-    are implemented in your NyxBrain class.
+    Assumes self.gather_checkpoint_state() and self.restore_from_checkpoint(dict)
+    are implemented in your NyxBrain class. Includes methods for saving full
+    and planned (LLM-driven) checkpoints.
     """
 
     # ------- Saving --------
-    async def save_checkpoint(self, event="periodic", merged_from=None, notes=None):
+
+    async def save_full_checkpoint(self, event="periodic", merged_from=None, notes=None):
+        """Saves the *entire* gathered state. Use for manual or merge checkpoints."""
+        if not hasattr(self, 'gather_checkpoint_state'):
+             logger.error("Cannot save checkpoint: gather_checkpoint_state method missing.")
+             return
+
         state = await self.gather_checkpoint_state(event=event)
         checkpoint_time = datetime.datetime.utcnow()
-        merged_from = merged_from or []
-        notes = notes or ""
+        merged_from_list = merged_from or []
+        notes_str = notes or ""
 
-        async with get_db_connection_context() as conn:
-            await conn.execute("""
-                INSERT INTO nyx_brain_checkpoints (
-                    nyx_id, instance_id, checkpoint_time, event, serialized_state, merged_from, notes
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """,
-            NYX_ID, INSTANCE_ID, checkpoint_time, event, json.dumps(state), merged_from, notes)
-        logger.info(f"Checkpoint saved for {NYX_ID} [instance={INSTANCE_ID}, event={event}]")
+        try:
+             # Use default=str to handle non-serializable types like datetime
+             state_json = json.dumps(state, default=str)
+        except (TypeError, OverflowError) as json_err:
+             logger.error(f"Failed to serialize full state for checkpoint event '{event}': {json_err}", exc_info=True)
+             state_json = json.dumps({"error": "Failed to serialize full state", "event": event})
+             notes_str = f"Serialization Error: {json_err}\n{notes_str}"
+
+        try:
+            async with get_db_connection_context() as conn:
+                # Ensure 'merged_from' column accepts array type (e.g., TEXT[]) in your DB schema
+                await conn.execute("""
+                    INSERT INTO nyx_brain_checkpoints (
+                        nyx_id, instance_id, checkpoint_time, event, serialized_state, merged_from, notes
+                    ) VALUES ($1, $2, $3, $4, $5, $6::TEXT[], $7)
+                """,
+                NYX_ID, INSTANCE_ID, checkpoint_time, event, state_json, merged_from_list, notes_str)
+            logger.info(f"Full checkpoint saved for {NYX_ID} [instance={INSTANCE_ID}, event={event}]")
+        except Exception as db_err:
+            logger.error(f"Database error saving full checkpoint: {db_err}", exc_info=True)
+
+
+    async def save_planned_checkpoint(self, event: str, data_to_save: dict, justifications: dict, skipped: list, merged_from=None, notes: Optional[str] = None):
+        """
+        Saves a checkpoint containing only the data selected by the CheckpointingPlannerAgent.
+        """
+        checkpoint_time = datetime.datetime.utcnow()
+        merged_from_list = merged_from or []
+        base_notes = notes or ""
+
+        # Structure the notes to include justifications and skipped fields
+        detailed_notes = f"Event: {event}\n{base_notes}\n--- JUSTIFICATIONS ---\n"
+        # Ensure justifications is a dict before iterating
+        if isinstance(justifications, dict):
+            for key, reason in justifications.items():
+                detailed_notes += f"- {key}: {reason}\n"
+        else:
+             detailed_notes += "[Justifications format error]\n"
+
+        detailed_notes += f"\n--- SKIPPED FIELDS ({len(skipped)}) ---\n"
+        # Ensure skipped is a list before iterating/slicing
+        if isinstance(skipped, list):
+            detailed_notes += "\n".join([f"- {item}" for item in skipped[:20]]) # Limit skipped list length in notes
+            if len(skipped) > 20:
+                 detailed_notes += "\n- ... (more fields skipped)"
+        else:
+             detailed_notes += "[Skipped fields format error]"
+
+
+        # Serialize only the selected data ('value' part from the plan)
+        state_to_serialize = {}
+        if isinstance(data_to_save, dict):
+             for key, value_dict in data_to_save.items():
+                  if isinstance(value_dict, dict) and "value" in value_dict:
+                       state_to_serialize[key] = value_dict["value"]
+                  else:
+                       # Log or handle cases where the structure isn't as expected
+                       logger.warning(f"Unexpected structure for key '{key}' in data_to_save during planned checkpoint. Saving raw value.")
+                       state_to_serialize[key] = value_dict # Save whatever was passed
+
+        try:
+            state_json = json.dumps(state_to_serialize, default=str)
+        except (TypeError, OverflowError) as json_err:
+             logger.error(f"Failed to serialize PLANNED state for checkpoint event '{event}': {json_err}", exc_info=True)
+             state_json = json.dumps({"error": "Failed to serialize planned state", "event": event})
+             detailed_notes = f"Serialization Error: {json_err}\n{detailed_notes}"
+
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute("""
+                    INSERT INTO nyx_brain_checkpoints (
+                        nyx_id, instance_id, checkpoint_time, event, serialized_state, merged_from, notes
+                    ) VALUES ($1, $2, $3, $4, $5, $6::TEXT[], $7)
+                """,
+                NYX_ID, INSTANCE_ID, checkpoint_time, f"{event}_planned", state_json, merged_from_list, detailed_notes[:2000]) # Limit notes length
+            logger.info(f"LLM-planned checkpoint saved for {NYX_ID} [instance={INSTANCE_ID}, event={event}, fields={len(state_to_serialize)}]")
+        except Exception as db_err:
+            logger.error(f"Database error saving planned checkpoint: {db_err}", exc_info=True)
+
 
     # ------- Loading --------
     async def load_latest_checkpoints(self, lookback_mins=20):
@@ -44,104 +131,191 @@ class DistributedCheckpointMixin:
         Returns a list of asyncpg.Record objects.
         """
         recent_since = datetime.datetime.utcnow() - datetime.timedelta(minutes=lookback_mins)
-        async with get_db_connection_context() as conn:
-            rows = await conn.fetch("""
-                SELECT * FROM nyx_brain_checkpoints
-                WHERE nyx_id = $1 AND checkpoint_time > $2
-                ORDER BY checkpoint_time DESC
-            """, NYX_ID, recent_since)
-        # Take only latest entry per instance_id
-        seen_by_instance = {}
-        for row in rows:
-            iid = row["instance_id"]
-            if iid not in seen_by_instance:
-                seen_by_instance[iid] = row
-        return list(seen_by_instance.values())
+        try:
+            async with get_db_connection_context() as conn:
+                # Fetch necessary columns explicitly
+                rows = await conn.fetch("""
+                    SELECT instance_id, checkpoint_time, serialized_state, merged_from, event, notes
+                    FROM nyx_brain_checkpoints
+                    WHERE nyx_id = $1 AND checkpoint_time > $2
+                    ORDER BY checkpoint_time DESC
+                """, NYX_ID, recent_since)
 
-    async def maybe_merge_checkpoints(self, checkpoints):
+            # Take only latest entry per instance_id
+            seen_by_instance = {}
+            for row in rows:
+                iid = row["instance_id"]
+                # Check if row has checkpoint_time before comparing
+                current_time = row.get("checkpoint_time")
+                existing_time = seen_by_instance.get(iid, {}).get("checkpoint_time")
+
+                if iid not in seen_by_instance or (current_time and existing_time and current_time > existing_time):
+                    seen_by_instance[iid] = row
+            return list(seen_by_instance.values())
+        except Exception as db_err:
+            logger.error(f"Database error loading latest checkpoints: {db_err}", exc_info=True)
+            return [] # Return empty list on error
+
+
+    async def maybe_merge_checkpoints(self, checkpoints: List[Any]) -> Optional[dict]:
         """
-        Returns either a dict (merged or loaded state), or None.
-        If multiple divergent checkpoints, calls agentic_merge_states.
+        Deserializes, potentially merges checkpoints via LLM, and returns the final state dict.
         """
         if not checkpoints:
-            logger.info("No checkpoints to load.")
+            logger.info("No checkpoints provided for potential merge.")
             return None
-        if len(checkpoints) == 1:
-            logger.info(f"Single checkpoint found from {checkpoints[0]['instance_id']}")
-            return checkpoints[0]["serialized_state"]
 
-        # Multiple recent checkpoints, run agentic merge
-        logger.warning(f"Multiple checkpoints detected ({[c['instance_id'] for c in checkpoints]}), running agentic merge.")
-        states = [c["serialized_state"] for c in checkpoints]
-        merged_state, merge_notes = await self.agentic_merge_states(states)
-        merged_from = [c["instance_id"] for c in checkpoints]
-        await self.save_checkpoint(event="merge", merged_from=merged_from, notes=merge_notes)
-        return merged_state
+        # Deserialize states safely
+        deserialized_states = []
+        valid_checkpoints_for_merge = [] # Keep track of original records for saving merge info
+        for cp_record in checkpoints:
+            try:
+                # Ensure cp_record is a dict-like object (like asyncpg.Record)
+                if not hasattr(cp_record, 'get'):
+                    logger.warning(f"Skipping invalid checkpoint record format: {type(cp_record)}")
+                    continue
 
-    async def agentic_merge_states(self, states, system_prompt=None):
+                state_str = cp_record.get("serialized_state")
+                instance_id = cp_record.get("instance_id", "unknown")
+                event_type = cp_record.get("event", "unknown")
+
+                if not state_str:
+                     logger.warning(f"Checkpoint from {instance_id} (event: {event_type}) has empty state string, skipping.")
+                     continue
+
+                state_dict = json.loads(state_str)
+                if isinstance(state_dict, dict): # Ensure it's a dictionary
+                    deserialized_states.append(state_dict)
+                    valid_checkpoints_for_merge.append(cp_record)
+                else:
+                    logger.warning(f"Checkpoint from {instance_id} (event: {event_type}) deserialized but was not a dict, skipping.")
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"Failed to deserialize checkpoint from {instance_id} (event: {event_type}): {e}")
+
+        if not deserialized_states:
+             logger.error("No valid checkpoints could be deserialized for merging or loading.")
+             return None
+
+        if len(deserialized_states) == 1:
+            logger.info(f"Single valid checkpoint found from {valid_checkpoints_for_merge[0]['instance_id']}. Using its state.")
+            return deserialized_states[0] # Return the deserialized dict
+
+        # --- Multiple valid checkpoints -> Agentic Merge ---
+        logger.warning(f"Multiple ({len(deserialized_states)}) valid checkpoints detected ({[c['instance_id'] for c in valid_checkpoints_for_merge]}), running agentic merge.")
+
+        # Pass the list of deserialized state dictionaries to the merge function
+        merged_state_dict, merge_notes = await self.agentic_merge_states(deserialized_states)
+
+        if merged_state_dict: # Only save if merge was successful
+            logger.info("Saving the result of the agentic merge as a new checkpoint.")
+            merged_from_ids = [c["instance_id"] for c in valid_checkpoints_for_merge]
+            # Save the merged state as a *full* checkpoint for future reference
+            await self.save_full_checkpoint(
+                event="merge_result",
+                merged_from=merged_from_ids,
+                notes=f"Agentic Merge Result:\n{merge_notes}"
+            )
+            return merged_state_dict # Return the newly merged state dict
+        else:
+            logger.error("Agentic merge failed to produce a valid merged state. Cannot proceed with restore.")
+            return None # Indicate failure
+
+    async def agentic_merge_states(self, states: List[Dict[str, Any]], system_prompt: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], str]:
         """
-        Given a list of JSON state dicts, call an LLM to merge them.
-        Uses OpenAI ChatCompletion as an example.
-        Returns merged_state (dict), notes (str).
+        Given a list of state *dictionaries*, call an LLM to merge them.
+        Returns merged_state (dict or None), notes (str).
         """
-        import openai  # Or Anthropic, etc
+        # Ensure openai is imported and configured
+        try:
+            import openai
+        except ImportError:
+            logger.error("OpenAI library not installed. Cannot perform agentic merge.")
+            return states[0] if states else None, "Fallback: OpenAI library missing."
 
-        # Ensure dicts
-        state_jsons = [
-            json.dumps(s, indent=2, sort_keys=True) if isinstance(s, dict) else str(s)
-            for s in states
-        ]
+        state_jsons = []
+        for i, state_dict in enumerate(states):
+             try:
+                  state_jsons.append(json.dumps(state_dict, indent=2, sort_keys=True, default=str))
+             except (TypeError, OverflowError) as e:
+                  logger.error(f"Could not serialize state dict #{i} during merge prep: {e}")
+                  state_jsons.append(json.dumps({"error": "Serialization failed", "state_index": i}))
 
+        # Use the prompt defined in checkpointing_agent.py or customize here
         merge_instructions = """
-You are Nyx, an intelligent agent who has been running in parallel on multiple servers and must self-merge your split states into one. The JSON below are your brain states from these divergent runs. 
-- Identify the most recent/important information from each.
-- For emotions, goals, and needs: reconcile any conflicts as YOU would—if they clash, choose the one from the most eventful/important branch, or blend as you see appropriate.
-- For memories/diary, merge all unique events.
-- For any subtle differences (e.g. hormone levels), adopt the most "active"/alert state unless instructed otherwise.
-- At the end, provide a short note explaining your merge reasoning.
-Respond ONLY with a JSON object with two fields:
-{
-  "merged_state": { ...new state dict... },
-  "merge_notes": "explain what you did and why. Note any lost/conflicting elements."
-}
+You are Nyx, an intelligent agent merging your states from divergent runs. Analyze the JSON state objects below. Prioritize the most recent/significant data. Reconcile conflicts logically. For emotions/needs, blend or choose the most intense/relevant. Merge unique memories. For subtle differences (e.g., floats), adopt the most 'active' or latest value. Output a single merged state JSON and brief notes on your reasoning/conflicts.
+Respond ONLY with a valid JSON object matching this exact structure: {"merged_state": { ...new state dict... }, "merge_notes": "explanation..."}
 """
         prompt = system_prompt + "\n" + merge_instructions if system_prompt else merge_instructions
 
         user_content = (
-            "Merge these brain checkpoints (as JSON), resulting in the best-possible self-continuity:\n\n"
-            + "\n\n".join(state_jsons)
+            "Merge these brain checkpoint state dictionaries (JSON format):\n\n"
+            + "\n\n--- CHECKPOINT SEPARATOR ---\n\n".join(state_jsons)
         )
 
         try:
+            # Ensure OpenAI client is configured (API key etc.)
             completion = await openai.ChatCompletion.acreate(
-                model="gpt-4o",  # or "gpt-4"
+                model="gpt-4o", # Or your preferred merge model
                 messages=[
                     {"role": "system", "content": prompt.strip()},
                     {"role": "user", "content": user_content}
                 ],
-                temperature=0,
+                temperature=0.1,
+                response_format={"type": "json_object"}
             )
-            merged_obj = json.loads(completion.choices[0].message.content)
-            logger.info("Merged state created via LLM.")
-            return merged_obj["merged_state"], merged_obj.get("merge_notes", "")
+            response_content = completion.choices[0].message.content
+            merged_obj = json.loads(response_content)
+
+            if "merged_state" not in merged_obj or not isinstance(merged_obj["merged_state"], dict):
+                 logger.error(f"Agentic merge LLM output missing or invalid 'merged_state'. Output: {response_content[:500]}")
+                 raise ValueError("Invalid 'merged_state' in LLM response")
+
+            logger.info("Agentic state merge completed successfully via LLM.")
+            return merged_obj["merged_state"], merged_obj.get("merge_notes", "No specific notes provided by LLM.")
+        except openai.error.AuthenticationError as auth_err:
+             logger.error(f"OpenAI authentication error during agentic merge: {auth_err}")
+             return states[0] if states else None, f"Fallback: OpenAI Auth Error - {auth_err}"
         except Exception as e:
             logger.error(f"Agentic merge via OpenAI failed: {e}", exc_info=True)
-            # Fallback: use most recent
-            fallback = states[0] if isinstance(states[0], dict) else json.loads(states[0])
-            return fallback, f"Auto-fallback to newest: {e}"
+            # Fallback: use the first valid state dict
+            return states[0] if states else None, f"Auto-fallback to first state due to merge error: {e}"
+
 
     # ------- Main restoration entrypoint --------
     async def restore_entity_from_distributed_checkpoints(self):
         """
-        Call this ONCE during brain boot/init. Will perform merge if needed.
+        Loads latest checkpoints, merges if necessary, and calls the instance's
+        restore_from_checkpoint method with the final state dictionary.
         """
-        logger.info("Restoring distributed Nyx entity state...")
-        recents = await self.load_latest_checkpoints()
-        merged = await self.maybe_merge_checkpoints(recents)
-        if not merged:
-            logger.info("No prior state restored; booting fresh.")
+        # Ensure restore_from_checkpoint exists on the class using this mixin (NyxBrain)
+        if not hasattr(self, 'restore_from_checkpoint') or not callable(self.restore_from_checkpoint):
+            logger.error("restore_from_checkpoint method is not implemented in the main class. Cannot restore.")
             return False
-        state = merged if isinstance(merged, dict) else json.loads(merged)
-        await self.restore_from_checkpoint(state)
-        logger.info("Restore complete.")
-        return True
+
+        logger.info(f"Restoring distributed Nyx entity state for {NYX_ID}...")
+        try:
+            # 1. Load latest checkpoint records from DB
+            recent_checkpoint_records = await self.load_latest_checkpoints()
+
+            # 2. Deserialize states and potentially merge them
+            final_state_dict = await self.maybe_merge_checkpoints(recent_checkpoint_records)
+
+            # 3. Check if a valid state was obtained
+            if not final_state_dict: # Handles no checkpoints or merge/deserialization failure
+                logger.info("No valid prior state found or loaded; booting fresh.")
+                # Optionally run baseline initialization if needed when booting fresh
+                if hasattr(self, 'initialize_baseline_personality') and callable(self.initialize_baseline_personality):
+                    logger.info("Attempting to initialize baseline personality for fresh boot.")
+                    await self.initialize_baseline_personality() # Assuming this method exists on NyxBrain or relevant system
+                return False # Indicate that no state was *restored*
+
+            # 4. Call the restore method implemented on NyxBrain
+            # Ensure restore_from_checkpoint accepts a dictionary
+            await self.restore_from_checkpoint(final_state_dict)
+
+            logger.info(f"Restore complete for {NYX_ID} using merged/loaded state.")
+            return True # Indicate successful restoration
+
+        except Exception as e:
+            logger.critical(f"CRITICAL ERROR during restore_entity_from_distributed_checkpoints for {NYX_ID}: {e}", exc_info=True)
+            return False # Indicate restoration failed
