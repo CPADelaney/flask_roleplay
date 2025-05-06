@@ -1,0 +1,1 @@
+I don’t see any lint warnings or code snippets—could you please paste the reported issues (and relevant code) so I can propose precise diffs?
