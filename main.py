@@ -292,19 +292,20 @@ async def initialize_systems(app):
         print(">>> NyxBrain MRO:", NyxBrain.__mro__)
 
         try:
-            system_user_id = 0
+            system_user_id = 0 # Or appropriate system-level IDs
             system_conversation_id = 0
-            
-            # Check if get_instance method exists before trying to use it
+        
             if hasattr(NyxBrain, "get_instance"):
+                # get_instance now handles initialization if a new instance is created
                 app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-                await app.nyx_brain.initialize()
-                logger.info("Global NyxBrain instance initialized.")
-            
-                # RESTORE ONLY FROM THE DISTRIBUTED CHECKPOINT LOGIC:
-                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-                    
-                asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))          
+                # REMOVE the explicit call to app.nyx_brain.initialize() here, as get_instance handles it.
+                # await app.nyx_brain.initialize() # <--- REMOVE THIS LINE
+        
+                logger.info("Global NyxBrain instance obtained/initialized.")
+        
+                if app.nyx_brain: # Ensure instance was successfully obtained
+                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+                    asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))       
                 
                 # Register processors (ensure handlers are async)
                 from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
