@@ -1836,14 +1836,16 @@ class DigitalSomatosensorySystem:
     @staticmethod
     @function_tool
     async def _update_arousal_state(
-        ctx: RunContextWrapper[SomatosensorySystemContext],
+        ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
         physical_arousal: Optional[float] = None,
         cognitive_arousal: Optional[float] = None,
-        reset: bool, # Default removed
-        trigger_orgasm: bool # Default removed
+        # --- FIX: Make these Optional with None default ---
+        reset: Optional[bool] = None,
+        trigger_orgasm: Optional[bool] = None
+        # --------------------------------------------------
     ) -> Dict[str, Any]:
         """Update the arousal state"""
-        system_instance = ctx.context.system_instance
+        system_instance = ctx.context.system_instance # Get instance
         if not system_instance: return {"error": "System instance missing"}
 
         old_state = {
@@ -1851,38 +1853,43 @@ class DigitalSomatosensorySystem:
             "physical_arousal": system_instance.arousal_state.physical_arousal,
             "cognitive_arousal": system_instance.arousal_state.cognitive_arousal
         }
-        
-        # The model must now explicitly pass True or False for reset and trigger_orgasm
-        if reset: # Check the provided boolean
+
+        # --- FIX: Check if the optional bools are explicitly True ---
+        # Handle reset case (check if reset is True, default is handled as False if None)
+        if reset is True:
             system_instance.arousal_state.physical_arousal = 0.0
             system_instance.arousal_state.cognitive_arousal = 0.0
             system_instance.arousal_state.arousal_level = 0.0
             system_instance.arousal_state.last_update = datetime.datetime.now()
-            
+
             return {
                 "operation": "reset",
                 "old_state": old_state,
                 "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
-        
-        if trigger_orgasm: # Check the provided boolean
-            system_instance.process_orgasm()
+
+        # Handle orgasm case (check if trigger_orgasm is True)
+        if trigger_orgasm is True:
+            system_instance.process_orgasm() # Call helper via instance
             return {
                 "operation": "orgasm",
                 "old_state": old_state,
                 "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
-        
+        # --- END FIX ---
+
+        # --- Remaining logic stays the same ---
         if physical_arousal is not None:
-            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
+            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal)) # Use system_instance
         if cognitive_arousal is not None:
-             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
-        
-        system_instance.update_global_arousal()
+             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal)) # Use system_instance
+
+        system_instance.update_global_arousal() # Call helper via instance
 
         return {
             "operation": "update",
             "old_state": old_state,
+             # Call the STATIC tool, passing the context wrapper
             "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx),
             "components_updated": {
                 "physical_arousal": physical_arousal is not None,
