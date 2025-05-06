@@ -232,6 +232,7 @@ async def initialize_systems(app):
     """Initialize systems required for the application AFTER app creation."""
     logger.info("Starting asynchronous system initializations...")
     from nyx.core.brain.base import NyxBrain
+    from tasks import set_app_initialized
     from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint    
     try:
         # --- Database Schema/Seed ---
@@ -391,9 +392,14 @@ async def initialize_systems(app):
         print('get_instance:', getattr(nyx_base, "get_instance", None))
     
 
+        logger.info("All asynchronous system initializations completed.")
+        set_app_initialized() # <<< --- CALL THIS HERE ---
+
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
-        raise # Prevent app from starting if critical systems fail
+        # Optionally reset the flag if initialization fails critically
+        global _APP_INITIALIZED; _APP_INITIALIZED = False
+        raise
 
 ###############################################################################
 # quart APP CREATION
