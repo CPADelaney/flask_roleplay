@@ -145,36 +145,74 @@ class SomatosensorySystemHooks:
     """Lifecycle hooks for the somatosensory system"""
     
     async def on_agent_start(self, context, agent):
-        """Called before the agent is invoked"""
-        logger.debug(f"Starting agent: {agent.name}")
-        with custom_span(
-            name="somatosensory_agent_start",
-            data={"agent_name": agent.name, "context_data": str(context.context)}
-        ) as span:
-            # Update operation tracking
-            if hasattr(context.context, "operation_start_time") and context.context.operation_start_time is None:
-                context.context.operation_start_time = datetime.datetime.now()
+            """Called before the agent is invoked"""
+            logger.debug(f"Hook on_agent_start for {agent.name} - Entering")
+            try:
+                logger.debug(f"Attempting to enter custom_span for {agent.name}")
+                with custom_span(
+                    name="somatosensory_agent_start",
+                    data={"agent_name": agent.name, "context_data": str(context.context)}
+                ) as span:
+                    logger.debug(f"Successfully entered custom_span for {agent.name}")
+                    # Update operation tracking - This logic runs ONLY if entering the span succeeds
+                    if hasattr(context.context, "operation_start_time") and context.context.operation_start_time is None:
+                        context.context.operation_start_time = datetime.datetime.now()
+                    logger.debug(f"Successfully exited custom_span context for {agent.name}") # Log exit from 'with'
+    
+            # Correct indentation for except block
+            except Exception as e_span:
+                logger.error(f"ERROR during custom_span execution for {agent.name}: {e_span}", exc_info=True)
+                if hasattr(context.context, "operation_start_time") and context.context.operation_start_time is None:
+                    logger.warning(f"Setting operation_start_time for {agent.name} despite custom_span error.")
+                    context.context.operation_start_time = datetime.datetime.now()
+
+            logger.debug(f"Hook on_agent_start for {agent.name} - Exiting")    
     
     async def on_agent_end(self, context, agent, output):
         """Called when the agent produces a final output"""
-        logger.debug(f"Agent {agent.name} finished with output type: {type(output).__name__}")
-        with custom_span(
-            name="somatosensory_agent_end",
-            data={"agent_name": agent.name, "output_type": type(output).__name__}
-        ) as span:
-            # Calculate execution time if we have start time
+        hook_name = "on_agent_end"
+        logger.debug(f"Hook {hook_name} for {agent.name} - Entering")
+        try:
+            logger.debug(f"Attempting to enter custom_span in {hook_name} for {agent.name}")
+            with custom_span(
+                name="somatosensory_agent_end",
+                data={"agent_name": agent.name, "output_type": type(output).__name__}
+            ) as span:
+                logger.debug(f"Successfully entered custom_span in {hook_name} for {agent.name}")
+                # Calculate execution time if we have start time
+                if hasattr(context.context, "operation_start_time") and context.context.operation_start_time:
+                    execution_time = (datetime.datetime.now() - context.context.operation_start_time).total_seconds()
+                    logger.debug(f"Agent execution time: {execution_time:.2f}s")
+                logger.debug(f"Successfully exited custom_span context in {hook_name} for {agent.name}")
+
+        except Exception as e_span:
+            logger.error(f"ERROR during custom_span execution in {hook_name} for {agent.name}: {e_span}", exc_info=True)
+            # Fallback logic if span fails
             if hasattr(context.context, "operation_start_time") and context.context.operation_start_time:
+                logger.warning(f"Calculating execution time for {agent.name} in {hook_name} despite custom_span error.")
                 execution_time = (datetime.datetime.now() - context.context.operation_start_time).total_seconds()
-                logger.debug(f"Agent execution time: {execution_time:.2f}s")
+                logger.debug(f"Agent execution time (fallback): {execution_time:.2f}s")
+        logger.debug(f"Hook {hook_name} for {agent.name} - Exiting")
     
     async def on_handoff(self, context, from_agent, to_agent):
         """Called when a handoff occurs"""
-        logger.debug(f"Handoff from {from_agent.name} to {to_agent.name}")
-        with custom_span(
-            name="somatosensory_handoff",
-            data={"from_agent": from_agent.name, "to_agent": to_agent.name}
-        ) as span:
-            pass  # Additional logic can be added here
+        hook_name = "on_handoff"
+        logger.debug(f"Hook {hook_name} from {from_agent.name} to {to_agent.name} - Entering")
+        try:
+            logger.debug(f"Attempting to enter custom_span in {hook_name} from {from_agent.name} to {to_agent.name}")
+            with custom_span(
+                name="somatosensory_handoff",
+                data={"from_agent": from_agent.name, "to_agent": to_agent.name}
+            ) as span:
+                logger.debug(f"Successfully entered custom_span in {hook_name} from {from_agent.name} to {to_agent.name}")
+                # Additional logic can be added here if needed
+                pass
+                logger.debug(f"Successfully exited custom_span context in {hook_name} from {from_agent.name} to {to_agent.name}")
+        
+        except Exception as e_span:
+            logger.error(f"ERROR during custom_span execution in {hook_name} from {from_agent.name} to {to_agent.name}: {e_span}", exc_info=True)
+            # No critical fallback logic here, just logging the error.
+        logger.debug(f"Hook {hook_name} from {from_agent.name} to {to_agent.name} - Exiting")
 
     async def on_tool_start(self, context, agent, tool):
         """Called before a tool is invoked"""
@@ -1643,7 +1681,11 @@ class DigitalSomatosensorySystem:
     
     @staticmethod # Add decorator
     @function_tool
-    async def _update_body_temperature(ctx: RunContextWrapper[SomatosensorySystemContext], ambient_temperature: float, duration: float = 60.0) -> Dict[str, Any]: # ctx first, no self
+    async def _update_body_temperature(
+        ctx: RunContextWrapper[SomatosensorySystemContext],
+        ambient_temperature: float,
+        duration: float # Default removed
+    ) -> Dict[str, Any]:
         """Update body temperature based on ambient temperature"""
         system_instance = ctx.context.system_instance # Get instance
         if not system_instance: return {"error": "System instance missing"}
@@ -1791,17 +1833,17 @@ class DigitalSomatosensorySystem:
             "time_since_update": (now - system_instance.arousal_state.last_update).total_seconds() if system_instance.arousal_state.last_update else None
         }
     
-    @staticmethod # Add decorator
+    @staticmethod
     @function_tool
     async def _update_arousal_state(
-        ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
+        ctx: RunContextWrapper[SomatosensorySystemContext],
         physical_arousal: Optional[float] = None,
         cognitive_arousal: Optional[float] = None,
-        reset: bool = False,
-        trigger_orgasm: bool = False
+        reset: bool, # Default removed
+        trigger_orgasm: bool # Default removed
     ) -> Dict[str, Any]:
         """Update the arousal state"""
-        system_instance = ctx.context.system_instance # Get instance
+        system_instance = ctx.context.system_instance
         if not system_instance: return {"error": "System instance missing"}
 
         old_state = {
@@ -1810,8 +1852,8 @@ class DigitalSomatosensorySystem:
             "cognitive_arousal": system_instance.arousal_state.cognitive_arousal
         }
         
-        # Handle reset case
-        if reset:
+        # The model must now explicitly pass True or False for reset and trigger_orgasm
+        if reset: # Check the provided boolean
             system_instance.arousal_state.physical_arousal = 0.0
             system_instance.arousal_state.cognitive_arousal = 0.0
             system_instance.arousal_state.arousal_level = 0.0
@@ -1820,30 +1862,27 @@ class DigitalSomatosensorySystem:
             return {
                 "operation": "reset",
                 "old_state": old_state,
-                 # Call the STATIC tool, passing the context wrapper
                 "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
         
-        if trigger_orgasm:
-            system_instance.process_orgasm() # Call helper via instance
+        if trigger_orgasm: # Check the provided boolean
+            system_instance.process_orgasm()
             return {
                 "operation": "orgasm",
                 "old_state": old_state,
-                 # Call the STATIC tool, passing the context wrapper
                 "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
             }
         
         if physical_arousal is not None:
-            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal)) # Use system_instance
+            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
         if cognitive_arousal is not None:
-             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal)) # Use system_instance
+             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
         
-        system_instance.update_global_arousal() # Call helper via instance
+        system_instance.update_global_arousal()
 
         return {
             "operation": "update",
             "old_state": old_state,
-             # Call the STATIC tool, passing the context wrapper
             "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx),
             "components_updated": {
                 "physical_arousal": physical_arousal is not None,
