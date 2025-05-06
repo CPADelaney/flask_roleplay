@@ -344,54 +344,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.dev_log_storage = get_dev_log_storage()
             await self.dev_log_storage.initialize()
             
-            # Import integration components
-            from nyx.core.integration.event_bus import get_event_bus
-            from nyx.core.integration.system_context import get_system_context
-            from nyx.core.integration.integrated_tracer import get_tracer
-            from nyx.core.integration.integration_manager import create_integration_manager
-            
-            # Try to import relationship manager - check different possible locations
-            try:
-                # Option 1: Direct import
-                from nyx.core.relationship_manager import RelationshipManager
-                has_relationship_manager = True
-            except ImportError:
-                try:
-                    # Option 2: Part of another module
-                    from nyx.core.social.relationship_manager import RelationshipManager
-                    has_relationship_manager = True
-                except ImportError:
-                    # Fallback with warning
-                    logger.warning("RelationshipManager module not found. Relationship features will be limited.")
-                    RelationshipManager = None
-                    has_relationship_manager = False
-                    
-        if self.initialized:
-            logger.info(f"NyxBrain {self.user_id}-{self.conversation_id} ALREADY INITIALIZED. Skipping.")
-            return
-        if self._initializing_flag:
-            logger.warning(f"NyxBrain {self.user_id}-{self.conversation_id} ALREADY INITIALIZING. Skipping re-entrant call.")
-            return
-
-        self._initializing_flag = True
-        logger.critical(f"NyxBrain.initialize() ENTERED for {self.user_id}-{self.conversation_id}. Current self.initialized: {self.initialized}")
-
-        try:
-            # --- Step 0: Dynamic Imports ---
-            logger.debug(f"NyxBrain Init Step 0: Dynamic imports for {self.user_id}-{self.conversation_id}")
-            # (Your extensive list of dynamic imports - ensure all classes used below are imported)
-
-            # --- Step 1: Foundational Integration & Dev Log ---
-            logger.debug(f"NyxBrain Init Step 1: Integration foundation for {self.user_id}-{self.conversation_id}")
-            self.dev_log_storage = get_dev_log_storage()
-            await self.dev_log_storage.initialize()
-            self.event_bus = get_event_bus()
-            self.system_context = get_system_context()
-            self.integrated_tracer = get_tracer()
-            if self.system_context: self.system_context.conversation_id = self.conversation_id
-
             has_relationship_manager = False
-            RelationshipManager = None # Default to None
+            RelationshipManager = None
             try:
                 from nyx.core.relationship_manager import RelationshipManager
                 has_relationship_manager = True
@@ -406,17 +360,15 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.checkpoint_planner = CheckpointingPlannerAgent()
             self.context_config = { "focus_limit": 4, "background_limit": 3, "zoom_in_limit": 2, "high_fidelity_threshold": 0.7, "med_fidelity_threshold": 0.5, "low_fidelity_threshold": 0.3, "max_context_tokens": 3500 }
 
-            # --- Step 3: Core Systems - Tier 1 (Minimal external NyxBrain deps in __init__) ---
+            # --- Step 3: Core Systems - Tier 1 ---
             logger.debug(f"NyxBrain Init Step 3: Core Systems - Tier 1 for {self.user_id}-{self.conversation_id}")
             self.hormone_system = HormoneSystem()
             self.emotional_core = EmotionalCore()
             self.emotional_core.set_hormone_system(self.hormone_system)
-
             self.memory_core = MemoryCoreAgents(self.user_id, self.conversation_id)
             await self.memory_core.initialize()
             self.memory_orchestrator = MemoryOrchestrator(self.user_id, self.conversation_id)
             await self.memory_orchestrator.initialize()
-
             self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
             self.knowledge_core = KnowledgeCoreAgents()
             await self.knowledge_core.initialize()
@@ -434,7 +386,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.procedural_memory_manager = ProceduralMemoryManager()
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(procedural_memory_manager=self.procedural_memory_manager)
 
-            # --- Step 4: Core Systems - Tier 2 (Interdependencies: Reward, DSS, Conditioning) ---
+            # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.reward_system = RewardSignalProcessor(
                 emotional_core=self.emotional_core, identity_evolution=self.identity_evolution, somatosensory_system=None
@@ -452,7 +404,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 reward_system=self.reward_system, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, somatosensory_system=self.digital_somatosensory_system
             )
-            from nyx.core.conditioning_maintenance import ConditioningMaintenanceSystem
             self.conditioning_maintenance = ConditioningMaintenanceSystem(conditioning_system=self.conditioning_system, reward_system=self.reward_system)
             await self.conditioning_maintenance.start_maintenance_scheduler(run_immediately=False)
             self.conditioned_input_processor = BlendedInputProcessor(
@@ -470,10 +421,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
             self.goal_manager = GoalManager(brain_reference=self)
             self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
-
             if has_relationship_manager and RelationshipManager:
                 self.relationship_manager = RelationshipManager(memory_orchestrator=self.memory_orchestrator, emotional_core=self.emotional_core)
-
             self.multimodal_integrator = MultimodalIntegrator(reasoning_core=self.reasoning_core, attentional_controller=self.attentional_controller)
             self.mood_manager = MoodManager(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
@@ -500,7 +449,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.sadistic_response_system = SadisticResponseSystem(theory_of_mind=self.theory_of_mind, protocol_enforcement=self.protocol_enforcement, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
             self.femdom_coordinator = FemdomCoordinator(brain=self)
             await self.femdom_coordinator.initialize()
-            self.dominance_system = self.femdom_coordinator # Assign after init
+            self.dominance_system = self.femdom_coordinator
             femdom_components_for_manager = {
                 "protocol_enforcement": self.protocol_enforcement, "body_service": self.body_service_system,
                 "psychological_dominance": self.psychological_dominance, "reward_system": self.reward_system,
@@ -530,7 +479,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 self.capability_assessor = CapabilityAssessmentSystem(
                     creative_content_system=self.creative_system.storage, capability_model_path=str(model_path)
                 )
-                if hasattr(self, "_start_creative_review_task"): self._start_creative_review_task()
+                if hasattr(self, "_start_creative_review_task") and callable(self._start_creative_review_task): # Check callable
+                    self._start_creative_review_task()
                 logger.info(f"Creative system initialized. Content store base: {getattr(self.content_store, 'base_directory', 'N/A')}")
             else:
                 logger.warning("Creative system or its sub-components (storage/content_system) not fully available after integration.")
@@ -538,12 +488,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
             # --- Step 7: Agentic Action Generator and systems depending on it ---
             logger.debug(f"NyxBrain Init Step 7: Agentic Action Generator & Dependent Systems for {self.user_id}-{self.conversation_id}")
-            # MetaCore needs to be initialized before being passed to AAG
             self.meta_core = MetaCore()
             meta_core_deps = {
                 "memory": self.memory_core, "emotion": self.emotional_core, "reasoning": self.reasoning_core,
-                "reflection": None,  # Will be set after ReflectionEngine is created
-                "adaptation": self.dynamic_adaptation, "feedback": self.internal_feedback,
+                "reflection": None, "adaptation": self.dynamic_adaptation, "feedback": self.internal_feedback,
                 "identity": self.identity_evolution, "experience": self.experience_interface,
                 "hormone": self.hormone_system, "time": self.temporal_perception,
                 "procedural": self.agent_enhanced_memory, "needs": self.needs_system,
@@ -552,7 +500,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             }
             await self.meta_core.initialize(meta_core_deps)
 
-            # AgenticActionGenerator
             self.agentic_action_generator = AgenticActionGenerator(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
                 experience_interface=self.experience_interface, imagination_simulator=self.imagination_simulator,
@@ -560,33 +507,23 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 identity_evolution=self.identity_evolution, knowledge_core=self.knowledge_core,
                 input_processor=self.conditioned_input_processor, internal_feedback=self.internal_feedback,
                 attentional_controller=self.attentional_controller, reasoning_core=self.reasoning_core,
-                reflection_engine=None, # Pass None initially
-                mood_manager=self.mood_manager, needs_system=self.needs_system,
-                mode_integration=None, # Pass None initially
-                multimodal_integrator=self.multimodal_integrator,
-                # Pass other initialized systems AAG needs
-                reward_system=self.reward_system,
-                prediction_engine=None, # self.prediction_engine (Initialize if exists)
-                theory_of_mind=self.theory_of_mind,
-                relationship_manager=self.relationship_manager,
-                temporal_perception=self.temporal_perception,
-                autobiographical_narrative=None, # self.autobiographical_narrative
-                body_image=None, # self.body_image
+                reflection_engine=None, mood_manager=self.mood_manager, needs_system=self.needs_system,
+                mode_integration=None, multimodal_integrator=self.multimodal_integrator,
+                reward_system=self.reward_system, theory_of_mind=self.theory_of_mind,
+                relationship_manager=self.relationship_manager, temporal_perception=self.temporal_perception,
+                passive_observation_system=None, proactive_communication_engine=None,
+                creative_system=self.creative_system, creative_memory=self.creative_memory,
+                capability_assessor=self.capability_assessor, system_context=self.system_context,
+                procedural_memory_manager=self.procedural_memory_manager,
+                prediction_engine=getattr(self, 'prediction_engine', None), # Add other optional systems if AAG uses them
+                autobiographical_narrative=getattr(self, 'autobiographical_narrative', None),
+                body_image=getattr(self, 'body_image', None),
                 conditioning_system=self.conditioning_system,
-                # conditioning_maintenance=self.conditioning_maintenance, # Unlikely AAG needs this directly
-                passive_observation_system=None, # Will be set
-                proactive_communication_engine=None, # Will be set
-                creative_system=self.creative_system,
-                creative_memory=self.creative_memory,
-                capability_assessor=self.capability_assessor,
-                issue_tracker=None, # self.issue_tracker
-                system_context=self.system_context, # The global one
-                relationship_reflection=None, # self.relationship_reflection
-                procedural_memory_manager=self.procedural_memory_manager
+                issue_tracker=getattr(self, 'issue_tracker', None),
+                relationship_reflection=getattr(self, 'relationship_reflection', None)
             )
             logger.debug("AgenticActionGenerator instance created.")
 
-            # Systems that need AgenticActionGenerator
             self.passive_observation_system = PassiveObservationSystem(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, relationship_manager=self.relationship_manager,
@@ -596,41 +533,35 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             )
             await self.passive_observation_system.start()
 
-            # ReflectionEngine needs PassiveObservationSystem and ProactiveCommunicationEngine (which needs AAG)
-            # Initialize ProactiveCommunicationEngine (pass None for reflection_engine initially)
             self.proactive_communication_engine = ProactiveCommunicationEngine(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, relationship_manager=self.relationship_manager,
                 temporal_perception=self.temporal_perception, reasoning_core=self.reasoning_core,
-                reflection_engine=None, # Initialized with None
-                mood_manager=self.mood_manager, needs_system=self.needs_system,
+                reflection_engine=None, mood_manager=self.mood_manager, needs_system=self.needs_system,
                 identity_evolution=self.identity_evolution
             )
             await self.proactive_communication_engine.start()
 
-            # Now initialize ReflectionEngine with its dependencies
             self.reflection_engine = ReflectionEngine(
                 memory_core_ref=self.memory_core, emotional_core=self.emotional_core,
                 passive_observation_system=self.passive_observation_system,
                 proactive_communication_engine=self.proactive_communication_engine
             )
-            # Complete circular dependencies
             self.agentic_action_generator.reflection_engine = self.reflection_engine
-            self.agentic_action_generator.passive_observation_system = self.passive_observation_system # If AAG needs it
-            self.agentic_action_generator.proactive_communication_engine = self.proactive_communication_engine # If AAG needs it
-
+            self.agentic_action_generator.passive_observation_system = self.passive_observation_system
+            self.agentic_action_generator.proactive_communication_engine = self.proactive_communication_engine
             if self.proactive_communication_engine: self.proactive_communication_engine.reflection_engine = self.reflection_engine
-            if self.meta_core and hasattr(self.meta_core, 'context_data') and self.meta_core.context_data:
-                 self.meta_core.context_data['reflection'] = self.reflection_engine # Update MetaCore context
+            if self.meta_core and hasattr(self.meta_core, 'context_data') and isinstance(self.meta_core.context_data, dict): # Ensure context_data is dict
+                 self.meta_core.context_data['reflection'] = self.reflection_engine
 
             self.thoughts_manager = InternalThoughtsManager(
                 passive_observation_system=self.passive_observation_system, reflection_engine=self.reflection_engine,
                 imagination_simulator=self.imagination_simulator, theory_of_mind=self.theory_of_mind,
-                relationship_reflection=self.relationship_manager, # Assuming RM can act as reflection source
+                relationship_reflection=self.relationship_manager,
                 proactive_communication=self.proactive_communication_engine,
                 emotional_core=self.emotional_core, memory_core=self.memory_core
             )
-            logger.debug("AgenticActionGenerator and its dependent systems (PassiveObs, ProactiveComm, Reflection, Thoughts) initialized.")
+            logger.debug("AgenticActionGenerator dependent systems initialized.")
 
 
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
@@ -654,22 +585,22 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 if hasattr(self.reflexive_system, "initialize"): await self.reflexive_system.initialize()
             except ImportError: logger.info("Reflexive system module not found.")
 
-            self.brain_agent = self._create_brain_agent() # Main orchestration agent
+            self.brain_agent = self._create_brain_agent()
 
             self.integration_manager = create_integration_manager(self)
             await self.integration_manager.initialize()
-            self.sync_daemon = NyxSyncDaemon() # Assuming no complex deps for __init__
+            self.sync_daemon = NyxSyncDaemon()
             self.agent_evaluator = AgentEvaluator()
             self.parallel_executor = ParallelToolExecutor(max_concurrent=5)
             self.thinking_tools = {
                 "should_use_extended_thinking": function_tool(should_use_extended_thinking),
-                "think_before_responding": function_tool(generate_reasoned_response), # Use generate_reasoned_response as the thinking step
+                "think_before_responding": function_tool(generate_reasoned_response),
                 "generate_reasoned_response": function_tool(generate_reasoned_response)
             }
 
             await self._register_processing_modules()
             await self.integrate_procedural_memory_with_actions()
-            if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions"):
+            if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions): # Check callable
                  self._register_creative_actions()
 
             await self._build_internal_module_registry()
