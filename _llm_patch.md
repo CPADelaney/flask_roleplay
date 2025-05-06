@@ -1,0 +1,1 @@
+I’m ready to draft minimal unified-diff patches—but I’ll need the specific lint errors and the code snippets they refer to. Could you please share the reported issues and the relevant code fragments?
