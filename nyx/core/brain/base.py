@@ -384,7 +384,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
             await self.temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
             self.procedural_memory_manager = ProceduralMemoryManager()
-            self.agent_enhanced_memory = AgentEnhancedMemoryManager(procedural_memory_manager=self.procedural_memory_manager)
+            self.agent_enhanced_memory = AgentEnhancedMemoryManager(memory_manager=self.procedural_memory_manager)
+
 
             # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
