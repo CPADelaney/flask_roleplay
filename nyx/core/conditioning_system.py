@@ -1896,6 +1896,7 @@ class ConditioningSystem:
             conditioning_system: The conditioning system instance
             personality_profile: Optional personality profile configuration
         """
+        logger.critical(f"ConditioningSystem.initialize_baseline_personality CALLED for CS instance ID: {id(conditioning_system)}")
         # Use default personality profile if none provided
         if personality_profile is None:
             personality_profile = {
