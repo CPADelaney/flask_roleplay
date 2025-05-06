@@ -382,7 +382,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
             self.cross_user_manager = CrossUserExperienceManager(memory_core=self.memory_core, experience_interface=self.experience_interface)
             self.temporal_perception = TemporalPerceptionSystem(self.user_id, self.conversation_id)
-            await self.temporal_perception.initialize(brain_reference=self, initial_context=None)
+            await self.temporal_perception.initialize(brain_context=self, first_interaction_timestamp=None)
             self.procedural_memory_manager = ProceduralMemoryManager()
             self.agent_enhanced_memory = AgentEnhancedMemoryManager(procedural_memory_manager=self.procedural_memory_manager)
 
