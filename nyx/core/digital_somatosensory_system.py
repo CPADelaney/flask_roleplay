@@ -1706,10 +1706,13 @@ class DigitalSomatosensorySystem:
         memory_id: str,
         sensation_type: str,
         body_region: str,
-        intensity: float = 0.5,
-        trigger_text: Optional[str] = None
+        # --- FIX: Remove default value from signature ---
+        intensity: float,
+        # ---------------------------------------------
+        trigger_text: Optional[str] = None # This one is fine (Optional with None default)
     ) -> Dict[str, Any]:
         """Link a memory to a physical sensation"""
+        # --- Existing implementation continues below ---
         system_instance = ctx.context.system_instance # Get instance
         if not system_instance: return {"error": "System instance missing", "success": False}
 
@@ -1864,10 +1867,18 @@ class DigitalSomatosensorySystem:
             stimulus_type: str,
             body_region: str,
             intensity: float,
-            cause: str = "",
-            duration: float = 1.0,
+            # --- FIX: Remove default values from signature ---
+            cause: str,
+            duration: float,
+            # ----------------------------------------------
             ) -> Dict[str, Any]:
         """Process a sensory stimulus on a body region (internal tool function)"""
+        # The actual default values (like "" for cause and 1.0 for duration)
+        # will be handled if the model *doesn't* provide them, although
+        # given the types are not Optional, it should be required to provide them.
+        # No internal change is strictly needed here unless you expect None.
+    
+        # --- Existing implementation continues below ---
         system_instance = ctx.context.system_instance # Get instance
         if not system_instance:
             return {"error": "System instance not found in context"}
