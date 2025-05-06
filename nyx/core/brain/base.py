@@ -448,18 +448,30 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.orgasm_control_system = OrgasmControlSystem(reward_system=self.reward_system, memory_core=self.memory_core, relationship_manager=self.relationship_manager, somatosensory_system=self.digital_somatosensory_system)
             self.dominance_persona_manager = DominancePersonaManager(relationship_manager=self.relationship_manager, reward_system=self.reward_system, memory_core=self.memory_core, emotional_core=self.emotional_core)
             self.sadistic_response_system = SadisticResponseSystem(theory_of_mind=self.theory_of_mind, protocol_enforcement=self.protocol_enforcement, reward_system=self.reward_system, relationship_manager=self.relationship_manager, memory_core=self.memory_core)
-            self.femdom_coordinator = FemdomCoordinator(brain=self)
+            self.femdom_coordinator = FemdomCoordinator(self)
             await self.femdom_coordinator.initialize()
-            self.dominance_system = self.femdom_coordinator
+            self.dominance_system = self.femdom_coordinator # Assign after init
             femdom_components_for_manager = {
-                "protocol_enforcement": self.protocol_enforcement, "body_service": self.body_service_system,
-                "psychological_dominance": self.psychological_dominance, "reward_system": self.reward_system,
-                "memory_core": self.memory_core, "relationship_manager": self.relationship_manager,
-                "theory_of_mind": self.theory_of_mind, "orgasm_control_system": self.orgasm_control_system,
-                "dominance_persona_manager": self.dominance_persona_manager, "sadistic_response_system": self.sadistic_response_system
+                "protocol_enforcement": self.protocol_enforcement,
+                "body_service": self.body_service_system,
+                "psychological_dominance": self.psychological_dominance,
+                "reward_system": self.reward_system,
+                "memory_core": self.memory_core,
+                "relationship_manager": self.relationship_manager,
+                "theory_of_mind": self.theory_of_mind,
+                "orgasm_control_system": self.orgasm_control_system,
+                "dominance_persona_manager": self.dominance_persona_manager,
+                "sadistic_response_system": self.sadistic_response_system
+                # Add any other components it actually manages
             }
-            self.femdom_integration_manager = FemdomIntegrationManager(brain=self, components=femdom_components_for_manager)
+            # --- CORRECTED CALL ---
+            self.femdom_integration_manager = FemdomIntegrationManager(
+                self,  # Pass NyxBrain instance as the first positional argument (for 'nyx_brain')
+                components=femdom_components_for_manager
+            )
+            # --- END CORRECTION ---
             await self.femdom_integration_manager.initialize()
+            logger.debug("Femdom integration manager initialized")
 
             self.novelty_engine = NoveltyEngine(imagination_simulator=self.imagination_simulator, memory_core=self.memory_core)
             await self.novelty_engine.initialize()
