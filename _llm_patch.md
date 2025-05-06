@@ -1,0 +1,1 @@
+It looks like the lint issues and context snippets didn’t come through. Could you please paste the list of linter errors/warnings and the relevant code snippets? That way I can propose minimal, high-impact patches in unified diff format.
