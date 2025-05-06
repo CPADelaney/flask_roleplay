@@ -233,7 +233,7 @@ async def initialize_systems(app):
     logger.info("Starting asynchronous system initializations...")
     from nyx.core.brain.base import NyxBrain
     from tasks import set_app_initialized
-    from nyx.core.brain.checkpointing_agent import llm_periodic_checkpoint    
+
     try:
         # --- Database Schema/Seed ---
         # !! IMPORTANT !!: Schema creation/migration and seeding should ideally
@@ -306,7 +306,7 @@ async def initialize_systems(app):
         
                 if app.nyx_brain: # Ensure instance was successfully obtained
                     await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-                    asyncio.create_task(llm_periodic_checkpoint(app.nyx_brain))       
+    
                 
                 # Register processors (ensure handlers are async)
                 from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
