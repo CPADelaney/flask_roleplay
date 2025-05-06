@@ -79,7 +79,7 @@ class StimulusProcessingResult(BaseModel):
     body_region: str = Field(..., description="Body region affected")
     intensity: float = Field(..., description="Intensity of stimulus")
     new_value: float = Field(..., description="New sensation value")
-    effects: Dict[str, Any] = Field({}, description="Effects of the stimulus")
+    effects: Dict[str, Any] = Field(default_factory=dict, description="Effects of the stimulus")
     expression: Optional[str] = Field(None, description="Generated expression if applicable")
     body_state_impact: Optional[Dict[str, Any]] = Field(None, description="Impact on overall body state")
 
@@ -1744,21 +1744,21 @@ class DigitalSomatosensorySystem:
     @staticmethod # Add decorator
     @function_tool
     async def _link_memory_to_sensation_tool(
-        ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
+        ctx: RunContextWrapper[SomatosensorySystemContext],
         memory_id: str,
         sensation_type: str,
         body_region: str,
-        # --- FIX: Remove default value from signature ---
+        # --- CHANGED: Removed default value ---
         intensity: float,
-        # ---------------------------------------------
-        trigger_text: Optional[str] = None # This one is fine (Optional with None default)
+        # ------------------------------------
+        trigger_text: Optional[str] = None
     ) -> Dict[str, Any]:
         """Link a memory to a physical sensation"""
         # --- Existing implementation continues below ---
-        system_instance = ctx.context.system_instance # Get instance
+        system_instance = ctx.context.system_instance
         if not system_instance: return {"error": "System instance missing", "success": False}
 
-        if body_region not in system_instance.body_regions: # Use system_instance
+        if body_region not in system_instance.body_regions:
             return {"error": f"Invalid body region: {body_region}", "success": False}
 
         valid_types = ["pressure", "temperature", "pain", "pleasure", "tingling"]
@@ -1766,42 +1766,38 @@ class DigitalSomatosensorySystem:
              return {"error": f"Invalid sensation type: {sensation_type}", "success": False}
 
         memory_text = None
-        if system_instance.memory_core: # Use system_instance
+        if system_instance.memory_core:
             try:
                 memory = await system_instance.memory_core.get_memory_by_id(memory_id)
                 if memory:
                     memory_text = memory.get("memory_text", "")
             except Exception as e:
                 logger.error(f"Error getting memory: {e}")
-        
-        # Use provided trigger or create from memory
+
         trigger = trigger_text or memory_id
         if not trigger_text and memory_text:
-            # Use first 50 chars of memory as trigger
             trigger = memory_text[:50].strip()
-        
-        # Create or update association
-        if trigger not in system_instance.memory_linked_sensations["associations"]:
-            system_instance.memory_linked_sensations["associations"][trigger] = {}
-        
-        if body_region not in system_instance.memory_linked_sensations["associations"][trigger]:
-            system_instance.memory_linked_sensations["associations"][trigger][body_region] = {}
-        
-        # Set the association directly (stronger than learning)
-        system_instance.memory_linked_sensations["associations"][trigger][body_region][sensation_type] = intensity
-        
-        # If it's a pain sensation, also create a pain memory
+
+        associations = system_instance.memory_linked_sensations["associations"]
+        if trigger not in associations:
+            associations[trigger] = {}
+            
+        if body_region not in associations[trigger]:
+            associations[trigger][body_region] = {}
+
+        associations[trigger][body_region][sensation_type] = intensity
+
         if sensation_type == "pain" and intensity >= system_instance.pain_model["threshold"]:
             pain_memory = PainMemory(
                 intensity=intensity,
                 location=body_region,
                 cause=f"Memory: {trigger}",
-                duration=1.0,  # Default duration
+                duration=1.0,
                 timestamp=datetime.datetime.now(),
                 associated_memory_id=memory_id
             )
             system_instance.pain_model["pain_memories"].append(pain_memory)
-        
+
         return {
             "success": True,
             "trigger": trigger,
@@ -1810,6 +1806,7 @@ class DigitalSomatosensorySystem:
             "intensity": intensity,
             "memory_id": memory_id
         }
+        
     
     @staticmethod # Add decorator
     @function_tool
@@ -1836,61 +1833,59 @@ class DigitalSomatosensorySystem:
     @staticmethod
     @function_tool
     async def _update_arousal_state(
-        ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
+        ctx: RunContextWrapper[SomatosensorySystemContext],
         physical_arousal: Optional[float] = None,
         cognitive_arousal: Optional[float] = None,
-        # --- FIX: Make these Optional with None default ---
+        # --- CHANGED: Made Optional with None default ---
         reset: Optional[bool] = None,
         trigger_orgasm: Optional[bool] = None
-        # --------------------------------------------------
+        # ----------------------------------------------
     ) -> Dict[str, Any]:
         """Update the arousal state"""
-        system_instance = ctx.context.system_instance # Get instance
+        """Update the arousal state"""
+        system_instance = ctx.context.system_instance
         if not system_instance: return {"error": "System instance missing"}
 
-        old_state = {
+        old_state_dict = { # Renamed for clarity
             "arousal_level": system_instance.arousal_state.arousal_level,
             "physical_arousal": system_instance.arousal_state.physical_arousal,
             "cognitive_arousal": system_instance.arousal_state.cognitive_arousal
         }
 
-        # --- FIX: Check if the optional bools are explicitly True ---
-        # Handle reset case (check if reset is True, default is handled as False if None)
+        # --- CHANGED: Explicitly check for True ---
         if reset is True:
             system_instance.arousal_state.physical_arousal = 0.0
             system_instance.arousal_state.cognitive_arousal = 0.0
-            system_instance.arousal_state.arousal_level = 0.0
+            # system_instance.arousal_state.arousal_level = 0.0 # Will be set by update_global_arousal
+            system_instance.update_global_arousal() # Update global after resetting components
             system_instance.arousal_state.last_update = datetime.datetime.now()
 
             return {
                 "operation": "reset",
-                "old_state": old_state,
-                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
+                "old_state": old_state_dict,
+                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx) # Call static method
             }
 
-        # Handle orgasm case (check if trigger_orgasm is True)
         if trigger_orgasm is True:
-            system_instance.process_orgasm() # Call helper via instance
+            system_instance.process_orgasm()
             return {
                 "operation": "orgasm",
-                "old_state": old_state,
-                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx)
+                "old_state": old_state_dict,
+                "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx) # Call static method
             }
-        # --- END FIX ---
+        # --- END CHANGED ---
 
-        # --- Remaining logic stays the same ---
         if physical_arousal is not None:
-            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal)) # Use system_instance
+            system_instance.arousal_state.physical_arousal = max(0.0, min(1.0, physical_arousal))
         if cognitive_arousal is not None:
-             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal)) # Use system_instance
+             system_instance.arousal_state.cognitive_arousal = max(0.0, min(1.0, cognitive_arousal))
 
-        system_instance.update_global_arousal() # Call helper via instance
+        system_instance.update_global_arousal()
 
         return {
             "operation": "update",
-            "old_state": old_state,
-             # Call the STATIC tool, passing the context wrapper
-            "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx),
+            "old_state": old_state_dict,
+            "new_state": await DigitalSomatosensorySystem._get_arousal_state(ctx), # Call static method
             "components_updated": {
                 "physical_arousal": physical_arousal is not None,
                 "cognitive_arousal": cognitive_arousal is not None
@@ -1909,27 +1904,23 @@ class DigitalSomatosensorySystem:
     @staticmethod # Add decorator
     @function_tool
     async def _process_stimulus_tool(
-            ctx: RunContextWrapper[SomatosensorySystemContext], # ctx first, no self
+            ctx: RunContextWrapper[SomatosensorySystemContext],
             stimulus_type: str,
             body_region: str,
             intensity: float,
-            # --- FIX: Remove default values from signature ---
+            # --- CHANGED: Removed default values ---
             cause: str,
             duration: float,
-            # ----------------------------------------------
+            # ---------------------------------------
             ) -> Dict[str, Any]:
         """Process a sensory stimulus on a body region (internal tool function)"""
-        # The actual default values (like "" for cause and 1.0 for duration)
-        # will be handled if the model *doesn't* provide them, although
-        # given the types are not Optional, it should be required to provide them.
-        # No internal change is strictly needed here unless you expect None.
-    
-        # --- Existing implementation continues below ---
-        system_instance = ctx.context.system_instance # Get instance
+        system_instance = ctx.context.system_instance
         if not system_instance:
             return {"error": "System instance not found in context"}
+
+        # Added a more specific name for the span for clarity if debugging traces
         with custom_span(
-            name="process_stimulus",
+            name="process_stimulus_tool_execution",
             data={
                 "stimulus_type": stimulus_type,
                 "body_region": body_region,
@@ -1938,270 +1929,207 @@ class DigitalSomatosensorySystem:
                 "duration": duration
             }
         ):
-            # Get the region
-            if body_region not in system_instance.body_regions: # Use system_instance
+            if body_region not in system_instance.body_regions:
                 return {"error": f"Invalid body region: {body_region}"}
 
-            region = system_instance.body_regions[body_region] # Use system_instance
+            region = system_instance.body_regions[body_region]
             region.last_update = datetime.datetime.now()
             result = {"region": body_region, "type": stimulus_type, "intensity": intensity}
 
-            # --- IMPORTANT: Replace ALL 'self.' with 'system_instance.' below ---
             if stimulus_type == "pressure":
                 region.pressure = min(1.0, region.pressure + (intensity * duration / 10.0))
                 result["new_value"] = region.pressure
-                
-                # High pressure can cause pain if intense and sustained
                 if intensity > 0.7 and duration > 5.0:
                     pain_from_pressure = (intensity - 0.7) * (duration / 10.0) * 0.5
                     region.pain = min(1.0, region.pain + pain_from_pressure)
                     result["pain_caused"] = pain_from_pressure
-            
             elif stimulus_type == "temperature":
-                # Scale to temperature range (0.0-1.0)
-                target_temp = intensity  # Direct mapping for simplicity
-                
-                # Apply temperature change with duration factor
+                target_temp = intensity
                 temp_change = (target_temp - region.temperature) * min(1.0, duration / 30.0)
-                region.temperature += temp_change
-                region.temperature = max(0.0, min(1.0, region.temperature))
+                region.temperature = max(0.0, min(1.0, region.temperature + temp_change))
                 result["new_value"] = region.temperature
-                
-                # Extreme temperatures can cause pain
                 if region.temperature < 0.2 or region.temperature > 0.8:
                     temp_deviation = 0.0
-                    if region.temperature < 0.2:
-                        temp_deviation = 0.2 - region.temperature
-                    else:
-                        temp_deviation = region.temperature - 0.8
-                    
+                    if region.temperature < 0.2: temp_deviation = 0.2 - region.temperature
+                    else: temp_deviation = region.temperature - 0.8
                     pain_from_temp = temp_deviation * 2.0 * (duration / 10.0)
                     region.pain = min(1.0, region.pain + pain_from_temp)
                     result["pain_caused"] = pain_from_temp
-                
             elif stimulus_type == "pain":
                 region.pain = min(1.0, region.pain + (intensity * duration / 10.0))
                 result["new_value"] = region.pain
-                
-                if intensity > system_instance.pain_model["threshold"]: # Use system_instance
+                if intensity > system_instance.pain_model["threshold"]:
                     pain_memory = PainMemory(
-                        intensity=intensity,
-                        location=body_region,
-                        cause=cause or "unknown stimulus",
-                        duration=duration,
-                        timestamp=datetime.datetime.now(),
-                        associated_memory_id=None
+                        intensity=intensity, location=body_region, cause=cause or "unknown stimulus",
+                        duration=duration, timestamp=datetime.datetime.now(), associated_memory_id=None
                     )
-                    system_instance.pain_model["pain_memories"].append(pain_memory) # Use system_instance
+                    system_instance.pain_model["pain_memories"].append(pain_memory)
                     result["memory_created"] = True
-                
             elif stimulus_type == "pleasure":
                 region.pleasure = min(1.0, region.pleasure + (intensity * duration / 10.0))
                 result["new_value"] = region.pleasure
-                
-                # Pleasure can reduce pain
                 if intensity > 0.5 and region.pain > 0.0:
                     pain_reduction = min(region.pain, (intensity - 0.5) * 0.2)
                     region.pain = max(0.0, region.pain - pain_reduction)
                     result["pain_reduced"] = pain_reduction
-                
-                # Update arousal state when pleasure is applied to erogenous regions
-                if region.erogenous_level > 0.3:
-                    system_instance._update_physical_arousal() # Call helper via instance
-                    result["arousal_updated"] = True
-                
-                if region.erogenous_level > 0.3:
-                    system_instance._update_physical_arousal() # Call helper via instance
-                    result["arousal_updated"] = True
-                
-                # Update arousal state when tingling is applied to erogenous regions
-                if region.erogenous_level > 0.3:
+                if region.erogenous_level > 0.3: # This covers pleasure
                     system_instance._update_physical_arousal()
                     result["arousal_updated"] = True
-            
-            # Add to sensation memory
+            # --- CHANGED: Corrected handling for tingling arousal update ---
+            elif stimulus_type == "tingling":
+                region.tingling = min(1.0, region.tingling + (intensity * duration / 10.0))
+                result["new_value"] = region.tingling
+                if region.erogenous_level > 0.3: # Specific arousal update for tingling
+                    system_instance._update_physical_arousal() # Ensure this reflects tingling too
+                    result["arousal_updated"] = True
+            # --------------------------------------------------------------
+
             memory_entry = {
-                "timestamp": datetime.datetime.now().isoformat(),
-                "type": stimulus_type,
-                "intensity": intensity,
-                "cause": cause,
-                "duration": duration
+                "timestamp": datetime.datetime.now().isoformat(), "type": stimulus_type,
+                "intensity": intensity, "cause": cause, "duration": duration
             }
             region.sensation_memory.append(memory_entry)
-            
-            # Keep memory size manageable
             if len(region.sensation_memory) > 20:
                 region.sensation_memory = region.sensation_memory[-20:]
-            
-            # Check for learned associations
-            if cause and len(cause.strip()) > 0:
-                if cause not in system_instance.memory_linked_sensations["associations"]:
-                    system_instance.memory_linked_sensations["associations"][cause] = {}
-                
-                # Update region-specific association
-                if body_region not in system_instance.memory_linked_sensations["associations"][cause]:
-                    system_instance.memory_linked_sensations["associations"][cause][body_region] = {}
-                
-                # Update stimulus-specific association
-                if stimulus_type not in system_instance.memory_linked_sensations["associations"][cause][body_region]:
-                    system_instance.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = 0.0
-                
-                # Strengthen association based on learning rate and intensity
-                current = system_instance.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
+
+            if cause and len(cause.strip()) > 0: # Ensure cause is not empty string
+                associations = system_instance.memory_linked_sensations["associations"]
+                if cause not in associations: associations[cause] = {}
+                if body_region not in associations[cause]: associations[cause][body_region] = {}
+                if stimulus_type not in associations[cause][body_region]:
+                    associations[cause][body_region][stimulus_type] = 0.0
+                current = associations[cause][body_region][stimulus_type]
                 learned = system_instance.memory_linked_sensations["learning_rate"] * intensity
-                system_instance.memory_linked_sensations["associations"][cause][body_region][stimulus_type] = min(1.0, current + learned)
-                
-                result["association_strength"] = system_instance.memory_linked_sensations["associations"][cause][body_region][stimulus_type]
-            
-            # Update body state if needed
+                associations[cause][body_region][stimulus_type] = min(1.0, current + learned)
+                result["association_strength"] = associations[cause][body_region][stimulus_type]
+
+            # --- CHANGED: Used .get() for safer access to body_state tension ---
             if stimulus_type == "pain" and intensity > 0.5:
-                 system_instance.body_state["tension"] = min(1.0, system_instance.body_state["tension"] + (intensity * 0.2))
+                 system_instance.body_state["tension"] = min(1.0, system_instance.body_state.get("tension",0.0) + (intensity * 0.2))
             elif stimulus_type == "pleasure" and intensity > 0.5:
-                # Pleasure reduces tension
-                system_instance.body_state["tension"] = max(0.0, system_instance.body_state["tension"] - (intensity * 0.1))
-            
-            # Update reward system if available
-            if system_instance.reward_system: # <<< Use system_instance
+                system_instance.body_state["tension"] = max(0.0, system_instance.body_state.get("tension",0.0) - (intensity * 0.1))
+            # ------------------------------------------------------------------
+
+            if system_instance.reward_system:
                 reward_value = 0.0
+                # region object is already available from earlier in the function
                 if stimulus_type == "pleasure" and intensity >= 0.5:
-                    # Ensure region is accessed correctly
-                    region = system_instance.body_regions.get(body_region)
-                    if region:
-                         reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
-                    else: # Handle case where region might not be found (though checked earlier)
-                        logger.warning(f"Region {body_region} not found during reward calculation in _process_stimulus_tool")
+                    reward_value = min(1.0, (intensity - 0.4) * 0.9 * (1.0 + region.erogenous_level))
                 elif stimulus_type == "pain" and intensity >= system_instance.pain_model["threshold"]:
                     reward_value = -min(1.0, (intensity / max(0.1, system_instance.pain_model["tolerance"])) * 0.6)
 
                 if abs(reward_value) > 0.1:
                     reward_signal = RewardSignal(
-                        value=reward_value,
-                        source=f"somatic_{body_region}",
+                        value=reward_value, source=f"somatic_{body_region}",
                         context={"stimulus_type": stimulus_type, "intensity": intensity, "cause": cause},
                         timestamp=datetime.datetime.now().isoformat()
                     )
-
-                    # Add reward signal to result for tracking
                     result["reward_value"] = reward_value
-
-                    # Process reward signal asynchronously
-                    # --- CHANGE HERE ---
                     asyncio.create_task(system_instance.reward_system.process_reward_signal(reward_signal))
-                    # --- END CHANGE ---
 
-            # Update emotional core if available
-            if system_instance.emotional_core: # <<< Use system_instance
+            if system_instance.emotional_core:
                 emotional_impact = {}
-                region = system_instance.body_regions.get(body_region) # Get region again if needed
-
-                if region and stimulus_type == "pleasure" and region.pleasure > 0.5:
+                # region object is already available
+                if stimulus_type == "pleasure" and region.pleasure > 0.5:
                     scaled_intensity = (region.pleasure - 0.4) * 1.5
-                    # --- CHANGE HERE ---
-                    # Need to ensure update_neurochemical exists and handles this call signature
-                    # Assuming it does:
                     try:
                         await system_instance.emotional_core.update_neurochemical("nyxamine", scaled_intensity * 0.40)
                         await system_instance.emotional_core.update_neurochemical("oxynixin", scaled_intensity * 0.15)
                         emotional_impact = {"nyxamine": scaled_intensity * 0.40, "oxynixin": scaled_intensity * 0.15}
-                    except AttributeError as ae:
-                        logger.error(f"Emotional core missing expected 'update_neurochemical' method: {ae}")
-                    except Exception as ee:
-                        logger.error(f"Error calling emotional core update_neurochemical: {ee}")
-                    # --- END CHANGE ---
-
-                elif region and stimulus_type == "pain" and region.pain > system_instance.pain_model["threshold"]:
+                    except AttributeError as ae: logger.error(f"Emotional core missing 'update_neurochemical' method: {ae}")
+                    except Exception as ee: logger.error(f"Error calling emotional core update_neurochemical: {ee}")
+                elif stimulus_type == "pain" and region.pain > system_instance.pain_model["threshold"]:
                     effective_pain = region.pain / max(0.1, system_instance.pain_model["tolerance"])
-                    # --- CHANGE HERE ---
                     try:
                         await system_instance.emotional_core.update_neurochemical("cortanyx", effective_pain * 0.45)
                         await system_instance.emotional_core.update_neurochemical("adrenyx", effective_pain * 0.25)
                         await system_instance.emotional_core.update_neurochemical("seranix", -effective_pain * 0.10)
                         emotional_impact = {"cortanyx": effective_pain * 0.45, "adrenyx": effective_pain * 0.25, "seranix": -effective_pain * 0.10}
-                    except AttributeError as ae:
-                        logger.error(f"Emotional core missing expected 'update_neurochemical' method: {ae}")
-                    except Exception as ee:
-                        logger.error(f"Error calling emotional core update_neurochemical: {ee}")
-                    # --- END CHANGE ---
-
-                if emotional_impact:
-                    result["emotional_impact"] = emotional_impact # Add this assignment if it wasn't there
-
-            return result # Ensure result is returned
+                    except AttributeError as ae: logger.error(f"Emotional core missing 'update_neurochemical' method: {ae}")
+                    except Exception as ee: logger.error(f"Error calling emotional core update_neurochemical: {ee}")
+                if emotional_impact: result["emotional_impact"] = emotional_impact
+            return result
     
     # =============== Guardrail Functions ===============
     
     @staticmethod # Add decorator
-    async def _validate_input(ctx: RunContextWrapper[SomatosensorySystemContext], agent, input_data): # ctx first, no self
+    async def _validate_input(ctx: RunContextWrapper[SomatosensorySystemContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
         """Validate input data for the body orchestrator."""
-        system_instance = ctx.context.system_instance # Get instance
+        system_instance = ctx.context.system_instance
         if not system_instance:
             logger.error("Guardrail _validate_input called without system instance in context.")
-            # Decide how to handle - maybe return triggered=True or raise?
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Internal context error"}, tripwire_triggered=True)
 
-        # --- Removed the potentially incorrect isinstance(input_data, str) check ---
+        validation_input_dict = {} # This will hold the dict form of the input
 
-        # Check if input_data is dictionary-like before calling .get() for safety
-        if isinstance(input_data, dict):
-            # If the input is a free text request, no need to validate further here
-            if input_data.get("action") == "free_text_request":
-                logger.debug("Input identified as free_text_request, skipping detailed validation.")
-                return GuardrailFunctionOutput(
-                    output_info={"is_valid": True, "reason": "Free text request"},
-                    tripwire_triggered=False
-                )
-
-            # If it's a dictionary but not free_text_request, proceed to validation
-            validation_input = {
-                "stimulus_type": input_data.get("stimulus_type"),
-                "body_region": input_data.get("body_region"),
-                "intensity": input_data.get("intensity"),
-                "action": input_data.get("action") # Pass the action itself if validator needs it
-            }
-        elif isinstance(input_data, str):
-            # Handle the case where input *is* just a string (maybe needs different validation?)
-            # For now, assume string input might be implicitly valid or needs separate handling
-            logger.warning("Received string input for validation, assuming valid for now.")
-            # Or maybe this should be invalid? Depends on expected inputs.
-            # return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Expected dictionary input, got string"}, tripwire_triggered=True)
-            validation_input = {"text_input": input_data} # Example: Pass string differently
-            # Or return directly if string inputs are not meant for this validator:
-            # return GuardrailFunctionOutput(output_info={"is_valid": True, "reason": "Raw string input, bypassing validation"}, tripwire_triggered=False)
-
+        # --- CHANGED: Robust input_data handling ---
+        if isinstance(input_data, str):
+            try:
+                # Attempt to parse if it's a JSON string, common for agent inputs
+                parsed_input = json.loads(input_data)
+                if isinstance(parsed_input, dict):
+                    validation_input_dict = parsed_input
+                else: # Parsed but not a dict (e.g. JSON string of a list or number)
+                    # This case might indicate an issue or needs specific handling.
+                    # For now, treat as if it's a text input that couldn't be structured as expected.
+                    logger.warning(f"Input data was a JSON string but not a dictionary: {input_data}")
+                    validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+            except json.JSONDecodeError:
+                # Not a JSON string, assume it's a free text request to the orchestrator
+                validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+        elif isinstance(input_data, dict):
+            validation_input_dict = input_data
         else:
             # Handle other unexpected input types
             logger.error(f"Unexpected input type for validation: {type(input_data)}")
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"}, tripwire_triggered=True)
+        # --- END CHANGED ---
 
+        # If the action is free_text_request, it might not need stimulus validation.
+        if validation_input_dict.get("action") == "free_text_request":
+            logger.debug("Input identified as free_text_request, skipping detailed stimulus validation.")
+            return GuardrailFunctionOutput(
+                output_info={"is_valid": True, "reason": "Free text request, validation skipped by guardrail."},
+                tripwire_triggered=False # Not a tripwire if it's a valid path
+            )
 
-        # Run validation agent with tracing using the prepared validation_input
-        # Use async with trace if trace is an async context manager
-        async with trace(workflow_name="Stimulus_Validation", group_id=system_instance.trace_group_id): # Use system_instance
+        # --- CHANGED: Prepare specific fields for the stimulus_validator agent ---
+        # The stimulus_validator agent expects specific fields based on its instructions.
+        validator_agent_input = {
+            "stimulus_type": validation_input_dict.get("stimulus_type"),
+            "body_region": validation_input_dict.get("body_region"),
+            "intensity": validation_input_dict.get("intensity"),
+            "duration": validation_input_dict.get("duration"), # Assuming validator checks duration
+            # Add any other fields the stimulus_validator agent might check from its instructions
+        }
+        # --- END CHANGED ---
+
+        # Run validation agent with tracing
+        async with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id): # Added _Guardrail to name
             try:
-                # Pass the enhanced context containing the system_instance
+                # --- CHANGED: Pass the original context object (ctx.context) ---
                 result = await Runner.run(
-                    system_instance.stimulus_validator, # Agent instance
-                    validation_input,                   # Prepared input for the agent
-                    context=ctx.context,                # Original context object
+                    system_instance.stimulus_validator,
+                    validator_agent_input,                   # Pass the prepared dictionary
+                    context=ctx.context,                # Pass the SomatosensorySystemContext object
                     run_config=RunConfig(
-                        workflow_name="StimulusValidation",
-                        trace_id=None, # Auto-generate
-
+                        workflow_name="StimulusValidationRun", # More specific name
+                        trace_id=None,
                     )
                 )
+                # --- END CHANGED ---
 
-                validation_output = result.final_output
-
-                # Check if validation_output has the expected structure (is_valid attribute)
-                is_valid = getattr(validation_output, 'is_valid', False) # Safer access
-
-                # Return guardrail output based on validation
+                # --- CHANGED: Cast to expected type and use model_dump ---
+                validation_output = result.final_output_as(StimulusValidationOutput)
+                # The GuardrailFunctionOutput.output_info expects a dict or Pydantic model.
+                # If validation_output is already a Pydantic model, .model_dump() is good.
                 return GuardrailFunctionOutput(
-                    output_info=validation_output,
-                    tripwire_triggered=not is_valid # Trigger if not valid
+                    output_info=validation_output.model_dump(), # Send dict back
+                    tripwire_triggered=not validation_output.is_valid
                 )
+                # --- END CHANGED ---
             except Exception as e:
-                 logger.error(f"Error running stimulus validator agent: {e}", exc_info=True)
+                 logger.error(f"Error running stimulus validator agent in guardrail: {e}", exc_info=True)
                  return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Error during validation: {e}"}, tripwire_triggered=True)
 
 # =============== Helper Methods ===============
