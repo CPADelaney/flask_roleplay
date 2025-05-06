@@ -1542,40 +1542,32 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
     async def get_instance(cls, user_id: int, conversation_id: int, nyx_id=None) -> 'NyxBrain':
         """
         Get or create a singleton instance for the specified user and conversation.
-        
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            nyx_id: Optional Nyx ID
-            
-        Returns:
-            Brain instance
+        The instance will be initialized if newly created.
         """
-        # Use a key for the specific user/conversation or nyx_id if provided
         key = f"brain_{nyx_id}" if nyx_id else f"brain_{user_id}_{conversation_id}"
-        
-        # Check if instance exists in a global registry
+
         if not hasattr(cls, '_instances'):
             cls._instances = {}
-            
-        if key not in cls._instances:
+
+        instance = cls._instances.get(key) # Use .get()
+
+        if not instance: # If instance does not exist, create and initialize
+            logger.info(f"Creating new NyxBrain instance for key: {key}")
             instance = cls(user_id, conversation_id)
-            await instance.initialize()
+            await instance.initialize() # Initialize a NEW instance here
             cls._instances[key] = instance
-            
-            # Register in cross-conversation registry by user
+
             if not hasattr(cls, '_user_instances'):
                 cls._user_instances = {}
-                
             if user_id not in cls._user_instances:
                 cls._user_instances[user_id] = []
-                
             cls._user_instances[user_id].append(instance)
-            
-            # Store reference to registry
             instance.instance_registry = cls._user_instances
-        
-        return cls._instances[key]
+        elif not instance.initialized: # If instance exists but somehow not initialized
+            logger.warning(f"NyxBrain instance for key {key} found but was not initialized. Initializing now.")
+            await instance.initialize() # Initialize if found uninitialized
+
+        return instance
         
     async def trace_operation(self, source_module: str, operation: str, **kwargs):
         """
