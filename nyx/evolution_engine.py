@@ -1,5 +1,6 @@
 # nyx/evolution_engine.py
 
+"""
 Nyx's Evolution Engine:
 Autonomously links her missing capabilities with external API-sourced feature suggestions,
 proposes integration plans, and feeds accepted ones to her module creation engine.
