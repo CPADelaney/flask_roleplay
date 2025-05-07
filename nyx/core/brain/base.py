@@ -24,7 +24,7 @@ from nyx.core.brain.processing.manager import ProcessingManager
 from nyx.core.brain.nyx_distributed_checkpoint import DistributedCheckpointMixin
 from nyx.core.brain.nyx_event_log import EventLogMixin
 
-from nyx.core.agentic_action_generator import ActionContext
+from nyx.core.agentic_action_generator import ActionContext, EnhancedAgenticActionGenerator
 
 # Import new components
 from nyx.core.novelty_engine import NoveltyEngine
@@ -151,6 +151,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         self.novelty_engine = None
         self.recognition_memory = None
         self.creative_memory = None
+        self.agentic_action_generator = None
         self.module_optimizer = None
         self.system_health_checker = None
         self.agent_capabilities_initialized = False # Specific to agent SDK integration
