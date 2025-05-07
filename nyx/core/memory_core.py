@@ -1395,8 +1395,8 @@ async def create_abstraction_from_memories(
 @function_tool
 async def create_semantic_memory(
     ctx: RunContextWrapper[MemoryCoreContext],
-    source_memory_ids: List[str], 
-    abstraction_type: str = "pattern"
+    source_memory_ids: List[str],
+    abstraction_type: Optional[str] = None # CHANGED: Made Optional, default to None
 ) -> Optional[str]:
     """
     Create a semantic memory (abstraction) from source memories
@@ -1408,53 +1408,101 @@ async def create_semantic_memory(
     Returns:
         Memory ID of created semantic memory or None
     """
-    memory_core = ctx.context
+    memory_core = ctx.context # Get the MemoryCoreContext instance
+
+    # Apply default if abstraction_type is None
+    actual_abstraction_type = abstraction_type if abstraction_type is not None else "pattern"
     
     # Get the source memories
     source_memories = []
     for memory_id in source_memory_ids:
-        memory = await get_memory(ctx, memory_id)
-        if memory:
-            source_memories.append(memory)
+        # Assuming get_memory is a tool that expects ctx, or a method on memory_core
+        # If get_memory is a tool, pass ctx. If it's a method of MemoryCoreContext, use memory_core.
+        # Based on its definition, get_memory is a @function_tool, so it expects ctx.
+        memory_dict = await get_memory(ctx, memory_id=memory_id)
+        if memory_dict:
+            # Convert dict back to Memory model if needed by _generate_abstraction,
+            # or ensure _generate_abstraction can work with dicts.
+            # For simplicity, let's assume _generate_abstraction can handle dicts with 'memory_text'.
+            source_memories.append(memory_dict) 
     
     if len(source_memories) < memory_core.abstraction_threshold:
+        logger.warning(f"Not enough source memories ({len(source_memories)}) to create semantic memory for type '{actual_abstraction_type}'. Threshold: {memory_core.abstraction_threshold}")
         return None
     
     # Generate the abstraction text
-    abstraction_text = await _generate_abstraction(ctx, source_memories, abstraction_type)
+    # _generate_abstraction expects ctx and List[Dict[str,Any]]
+    abstraction_text = await _generate_abstraction(ctx, source_memories, actual_abstraction_type)
     
     if not abstraction_text:
+        logger.warning(f"Failed to generate abstraction text for semantic memory type '{actual_abstraction_type}'.")
         return None
     
-    # Create the semantic memory
-    memory_id = await add_memory(
-        ctx,
-        memory_text=abstraction_text,
-        memory_type="semantic",
-        memory_scope="personal",
-        significance=max(m.get("significance", 5) for m in source_memories),
-        tags=["semantic", "abstraction", abstraction_type],
-        metadata={
-            "timestamp": datetime.datetime.now().isoformat(),
-            "source_memory_ids": source_memory_ids,
-            "fidelity": 0.8  # Semantic memories have slightly reduced fidelity
-        }
+    # Determine significance for the new semantic memory
+    # Example: average significance of source memories, or max, or a fixed value
+    avg_significance = 7 # Default or calculate
+    if source_memories:
+        significances = [mem.get('significance', 5) for mem in source_memories]
+        if significances:
+            avg_significance = max(5, min(10, int(sum(significances) / len(significances)) +1))
+
+
+    # Create the semantic memory using the add_memory tool/function
+    # add_memory expects ctx and params: MemoryCreateParams
+    created_memory_id = await add_memory(
+        ctx, # Pass the RunContextWrapper
+        params=MemoryCreateParams( # Use the Pydantic model for parameters
+            memory_text=abstraction_text,
+            memory_type="semantic",
+            memory_scope="personal", # Or "game" / "global" depending on desired scope
+            significance=avg_significance,
+            tags=["semantic", "abstraction", actual_abstraction_type],
+            metadata={ # Pass as a dict, add_memory will construct MemoryMetadata
+                "timestamp": datetime.datetime.now().isoformat(),
+                "source_memory_ids": source_memory_ids,
+                "fidelity": 0.8
+            },
+            memory_level='abstraction' # Explicitly set level
+        )
     )
     
-    # Update source memories
-    for memory in source_memories:
-        metadata = memory.get("metadata", {})
-        if "semantic_abstractions" not in metadata:
-            metadata["semantic_abstractions"] = []
-        
-        metadata["semantic_abstractions"].append(memory_id)
-        
-        await update_memory(
-            ctx,
-            memory["id"], {"metadata": metadata}
-        )
+    if not created_memory_id:
+        logger.error(f"Failed to add semantic memory of type '{actual_abstraction_type}' to memory core.")
+        return None
     
-    return memory_id
+    # Update source memories to link them to this new semantic/abstraction memory
+    for memory_detail in source_memories:
+        memory_id_to_update = memory_detail.get("id")
+        if not memory_id_to_update:
+            continue
+
+        # Fetch the full memory object again to ensure we have the latest metadata structure
+        # get_memory returns a dict, so we access metadata from it.
+        current_memory_dict = await get_memory(ctx, memory_id=memory_id_to_update)
+        if not current_memory_dict:
+            continue
+        
+        current_metadata_dict = current_memory_dict.get("metadata", {})
+        # Ensure 'semantic_abstractions' list exists in metadata
+        if "semantic_abstractions" not in current_metadata_dict:
+            current_metadata_dict["semantic_abstractions"] = []
+        
+        # Add the new semantic memory ID if not already present
+        if created_memory_id not in current_metadata_dict["semantic_abstractions"]:
+            current_metadata_dict["semantic_abstractions"].append(created_memory_id)
+        
+            # Update the source memory with the modified metadata
+            # update_memory expects ctx and params: MemoryUpdateParams
+            await update_memory(
+                ctx, # Pass the RunContextWrapper
+                params=MemoryUpdateParams(
+                    memory_id=memory_id_to_update,
+                    updates={"metadata": current_metadata_dict} # Pass updates as a dict
+                )
+            )
+    
+    logger.info(f"Created semantic memory {created_memory_id} of type '{actual_abstraction_type}' from {len(source_memories)} sources.")
+    return created_memory_id
 
 @function_tool
 async def apply_memory_decay(
