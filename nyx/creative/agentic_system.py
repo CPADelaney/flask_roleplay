@@ -72,9 +72,9 @@ def _embed(texts: List[str]) -> np.ndarray:  # (n, 1536)
 class GitChangeTracker:
     def __init__(self, repo_root: str = ".", base_ref: Optional[str] = None) -> None:
         self.root = Path(repo_root).resolve()
-        self.base_ref_for_diff = base_ref # Will be used if it *is* a git repo
-        # Check for the .git directory to determine if it's a git repo
+        self.base_ref_for_diff = base_ref
         self.is_git_repo = (self.root / ".git").is_dir()
+        self.initial_run_done = False # To track if the first run with list_all_tracked has occurred
 
         if not self.is_git_repo:
             logger.warning(
@@ -84,10 +84,11 @@ class GitChangeTracker:
             )
         else:
             logger.info(f"GitChangeTracker initialized for git repo at '{self.root}'. Base for diff: {self.base_ref_for_diff}")
-            # Optionally, try to get current commit if needed for complex diff logic later
-            # self.current_commit_at_init = self._get_current_commit_hash()
+            if not self.base_ref_for_diff: # If no specific base_ref, maybe set to current HEAD for future diffs
+                # self.base_ref_for_diff = self._get_current_commit_hash() # Or handle this explicitly
+                logger.info("No explicit base_ref provided. Will list all tracked files on first appropriate call, or diff against HEAD if base_ref is updated.")
 
-    def _get_current_commit_hash(self) -> Optional[str]: # Keep this helper
+    def _get_current_commit_hash(self) -> Optional[str]:
         if not self.is_git_repo:
             return None
         try:
@@ -98,39 +99,76 @@ class GitChangeTracker:
             logger.warning(f"Could not get current git commit hash for repo at '{self.root}'.")
             return None
 
-    def changed_files(self, exts: Optional[List[str]] = None, first_run_behavior: str = "list_all_tracked") -> List[Path]:
+    def changed_files(self, exts: Optional[List[str]] = None, first_run_behavior: str = "diff_from_base_or_head") -> List[Path]:
+        """
+        Determines changed files in the Git repository.
+
+        Args:
+            exts: Optional list of file extensions to filter by.
+            first_run_behavior: Determines behavior on the first effective run or if no base_ref.
+                "list_all_tracked": Lists all tracked files matching extensions.
+                "diff_from_base_or_head": Tries to diff against base_ref_for_diff or HEAD.
+                                          Falls back to list_all_tracked if diff is not possible/meaningful.
+        Returns:
+            A list of Path objects for changed files.
+        """
         if not self.is_git_repo:
             logger.info("GitChangeTracker: Not a git repository. Returning no files based on git changes.")
-            return [] # CRITICAL: If not a git repo, return empty list.    
+            return []
 
-    def changed_files(self, exts: Optional[List[str]] = None) -> List[Path]:
-        exts = exts or [
-            ".py",
-            ".js",
-            ".ts",
-            ".java",
-            ".go",
-            ".sql",
-            ".md",
-            ".txt",
+        effective_exts = exts or [
+            ".py", ".js", ".ts", ".java", ".go", ".sql", ".md", ".txt",
         ]
-        try:
-            cmd = ['git', 'ls-files'] + [f'--'] + [f'*{ext}' for ext in exts] # Default to listing relevant files
-            if self.base_ref_for_diff: # If you have a specific commit to diff against
-                current_head = self._get_current_commit_hash()
-                if current_head and self.base_ref_for_diff != current_head:
-                    cmd = ['git', 'diff', '--name-only', self.base_ref_for_diff, 'HEAD']
-                elif not current_head: # Couldn't get current head, fall back
-                    logger.warning("Could not get current HEAD for diff, falling back to ls-files.")
+        
+        cmd: List[str] = []
+        use_diff = False
 
+        current_head = self._get_current_commit_hash()
+
+        if self.base_ref_for_diff and current_head and self.base_ref_for_diff != current_head:
+            # A base_ref is set and it's different from current HEAD, so we can diff
+            logger.info(f"Performing diff between {self.base_ref_for_diff} and HEAD ({current_head}).")
+            cmd = ['git', 'diff', '--name-only', self.base_ref_for_diff, current_head, '--']
+            cmd.extend([f'*{ext}' for ext in effective_exts]) # Add extension filters to diff
+            use_diff = True
+        elif first_run_behavior == "list_all_tracked" and not self.initial_run_done:
+            logger.info("First run behavior: Listing all tracked files.")
+            cmd = ['git', 'ls-files', '--'] + [f'*{ext}' for ext in effective_exts]
+            self.initial_run_done = True # Mark that the first run (list all) has occurred
+        elif first_run_behavior == "diff_from_base_or_head" and current_head and self.base_ref_for_diff == current_head:
+            logger.info(f"Base ref '{self.base_ref_for_diff}' is same as current HEAD. No changes to diff. Returning empty.")
+            return [] # Or potentially list untracked/modified files here if desired
+        else: # Fallback or subsequent runs without a changing base_ref
+            if current_head and self.base_ref_for_diff:
+                logger.info(f"Defaulting to diff against provided base_ref '{self.base_ref_for_diff}' and HEAD.")
+                cmd = ['git', 'diff', '--name-only', self.base_ref_for_diff, current_head, '--']
+                cmd.extend([f'*{ext}' for ext in effective_exts])
+                use_diff = True
+            elif current_head: # No base_ref_for_diff, try diffing staged against HEAD (or list modified/untracked)
+                               # For simplicity, let's list all tracked files as a fallback if no clear diff strategy
+                logger.info("No specific base_ref or different HEAD for diff. Listing all tracked files as fallback.")
+                cmd = ['git', 'ls-files', '--'] + [f'*{ext}' for ext in effective_exts]
+            else: # Cannot get current_head
+                logger.warning("Could not determine current HEAD. Listing all tracked files as a fallback.")
+                cmd = ['git', 'ls-files', '--'] + [f'*{ext}' for ext in effective_exts]
+
+        try:
             logger.debug(f"GitChangeTracker running command: {' '.join(cmd)} in {self.root}")
             output = subprocess.check_output(cmd, cwd=self.root, text=True, stderr=subprocess.PIPE)
-            git_files = [self.root / p.strip() for p in output.splitlines() if p.strip()]
-            files_to_return = [p for p in git_files if p.suffix in exts and p.is_file()]
+            
+            git_files_relative_paths = [p.strip() for p in output.splitlines() if p.strip()]
+            
+            # Convert relative paths from git output to absolute paths
+            # Note: 'git diff --name-only' outputs paths relative to repo root.
+            # 'git ls-files' also outputs paths relative to repo root by default.
+            files_to_return = [self.root / p for p in git_files_relative_paths if (self.root / p).is_file() and (self.root / p).suffix in effective_exts]
 
-            # Update base_ref for next time (optional, if you want incremental diffs within a session)
-            # new_head = self._get_current_commit_hash()
-            # if new_head: self.base_ref_for_diff = new_head
+            # If a diff was successfully performed, update base_ref_for_diff to the current_head
+            # for the next incremental diff. This makes subsequent calls find changes *since this point*.
+            if use_diff and current_head:
+                logger.info(f"Updating base_ref_for_diff to current HEAD: {current_head}")
+                self.base_ref_for_diff = current_head
+                self.initial_run_done = True # A diff implies we've moved past the initial state
 
             return files_to_return
         except subprocess.CalledProcessError as exc:
