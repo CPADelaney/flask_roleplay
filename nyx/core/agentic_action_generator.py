@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple, Set, Callable
 from collections import defaultdict
 from pydantic import BaseModel, Field
 from enum import Enum
+from functools import partial 
 
 from nyx.core.context import NyxSystemContext
 
