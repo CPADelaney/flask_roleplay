@@ -99,17 +99,16 @@ class Memory(BaseModel):
 class MemoryQuery(BaseModel):
     """Input model for retrieving memories."""
     query: str
-    memory_types: List[str] = Field(default_factory=lambda: ["observation", "reflection", "abstraction", "experience", "summary", "semantic"])
-    scopes: List[str] = Field(default_factory=lambda: ["game", "user", "global"])
-    limit: int = 10 # Adjusted default limit
-    min_significance: int = 3
-    include_archived: bool = False
+    memory_types: Optional[List[str]] = None # Agent provides or Python defaults
+    scopes: Optional[List[str]] = None       # Agent provides or Python defaults
+    limit: Optional[int] = None              # Agent provides or Python defaults
+    min_significance: Optional[int] = None   # Agent provides or Python defaults
+    include_archived: Optional[bool] = None  # Agent provides or Python defaults
     entities: Optional[List[str]] = None
     emotional_state: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
-    # --- NEW PARAMS ---
-    retrieval_level: Literal['detail', 'summary', 'abstraction', 'auto'] = 'auto'
-    min_fidelity: Optional[float] = 0.0 # Default allows all fidelities initially
+    retrieval_level: Optional[Literal['detail', 'summary', 'abstraction', 'auto']] = None # Optional
+    min_fidelity: Optional[float] = None # Optional
 
 class MemoryCreateParams(BaseModel):
     """Input model for creating memories."""
@@ -721,90 +720,97 @@ async def add_memory(
 @function_tool
 async def retrieve_memories(
     ctx: RunContextWrapper[MemoryCoreContext],
+    # Parameters are now directly in the function signature, matching MemoryQueryFixed implicitly
     query: str,
     memory_types: Optional[List[str]] = None,
+    scopes: Optional[List[str]] = None, # Added scopes to match MemoryQueryFixed
     limit: Optional[int] = None,
     min_significance: Optional[int] = None,
     include_archived: Optional[bool] = None,
     entities: Optional[List[str]] = None,
     emotional_state: Optional[Dict[str, Any]] = None,
     tags: Optional[List[str]] = None,
-    retrieval_level: Optional[str] = None,  # Changed from str="auto" to Optional[str]=None
+    retrieval_level: Optional[Literal['detail', 'summary', 'abstraction', 'auto']] = None,
     min_fidelity: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve memories based on query and filters, supporting hierarchical levels.
     Restored full boost logic. Returns raw memory dicts.
     """
-    params = MemoryQuery(
-        query=query,
-        memory_types=memory_types or ["observation", "reflection", "abstraction", "experience", "summary", "semantic"],
-        limit=limit or 10,  # Default value applied in code, not in schema
-        min_significance=min_significance or 3,
-        include_archived=include_archived or False,
-        entities=entities,
-        emotional_state=emotional_state,
-        tags=tags,
-        retrieval_level=retrieval_level,
-        min_fidelity=min_fidelity or 0.0
-    )
+    actual_memory_types = memory_types if memory_types is not None else ["observation", "reflection", "abstraction", "experience", "summary", "semantic"]
+    actual_scopes = scopes if scopes is not None else ["game", "user", "global"]
+    actual_limit = limit if limit is not None else 10
+    actual_min_significance = min_significance if min_significance is not None else 3
+    actual_include_archived = include_archived if include_archived is not None else False
+    actual_retrieval_level = retrieval_level if retrieval_level is not None else 'auto'
+    actual_min_fidelity = min_fidelity if min_fidelity is not None else 0.0
+    
+    class InternalParams: pass # Simple namespace
+    params = InternalParams()
+    params.query = query
+    params.memory_types = actual_memory_types
+    params.scopes = actual_scopes
+    params.limit = actual_limit
+    params.min_significance = actual_min_significance
+    params.include_archived = actual_include_archived
+    params.entities = entities # Already Optional
+    params.emotional_state = emotional_state # Already Optional
+    params.tags = tags # Already Optional
+    params.retrieval_level = actual_retrieval_level
+    params.min_fidelity = actual_min_fidelity
 
-    with custom_span("retrieve_memories", {
-        "query": params.query, "level": params.retrieval_level, "limit": params.limit, "fidelity": params.min_fidelity
+    with custom_span("retrieve_memories", { # Stringify for tracing
+        "query": str(params.query), "level": str(params.retrieval_level),
+        "limit": str(params.limit), "fidelity": str(params.min_fidelity)
     }):
 
         memory_core = ctx.context
         if not memory_core.initialized: memory_core.initialize()
 
-        # Cache key generation (ensure stability)
-        param_items = sorted([(k, v) for k, v in params.model_dump().items() if v is not None])
-        cache_key_str = "&".join([f"{k}={json.dumps(v, sort_keys=True)}" for k, v in param_items])
+        param_items = sorted([
+            ("query", params.query), ("memory_types", params.memory_types), ("scopes", params.scopes),
+            ("limit", params.limit), ("min_significance", params.min_significance),
+            ("include_archived", params.include_archived), ("entities", params.entities),
+            ("emotional_state", params.emotional_state), ("tags", params.tags),
+            ("retrieval_level", params.retrieval_level), ("min_fidelity", params.min_fidelity)
+        ])
+        cache_key_str = "&".join([f"{k}={json.dumps(v, sort_keys=True)}" for k, v in param_items if v is not None])
         cache_key = f"retrieve:{hash(cache_key_str)}"
+
 
         if cache_key in memory_core.query_cache:
              cache_time, cached_ids = memory_core.query_cache[cache_key]
              if (datetime.datetime.now() - cache_time).total_seconds() < memory_core.cache_ttl:
-                 results_models = [memory_core.memories[mid] for mid in cached_ids if mid in memory_core.memories]
-                 # Apply reconsolidation on cache hit if desired
-                 results_models = await _apply_reconsolidation_to_results(ctx, results_models)
-                 # Convert Pydantic models back to dicts for return
+                 results_models_raw = [memory_core.memories.get(mid) for mid in cached_ids] # Use .get()
+                 results_models = [mem for mem in results_models_raw if mem is not None] # Filter out None
+                 # results_models = await _apply_reconsolidation_to_results(ctx, results_models) # reconsolidation can be optional here
                  results = [mem.model_dump() for mem in results_models]
-                 # Add relevance back (or recalculate if needed, though cache implies stable relevance)
                  for i, mem_id in enumerate(cached_ids):
-                      if i < len(results): # Ensure index exists
-                           # Note: Relevance isn't stored in cache, might need recalculation or approximation
-                           results[i]['relevance'] = 0.8 # Placeholder relevance for cached items
+                      if i < len(results): results[i]['relevance'] = 0.8 # Placeholder
                  logger.debug(f"Cache hit for retrieve_memories: {params.query}")
                  return results
 
         query_embedding = await _generate_embedding(ctx, params.query)
-
-        # 1. Initial Filtering (Optimized Set Operations)
         candidate_ids = set(memory_core.memories.keys())
         candidate_ids &= set().union(*(memory_core.type_index.get(mt, set()) for mt in params.memory_types))
         candidate_ids &= set().union(*(memory_core.scope_index.get(s, set()) for s in params.scopes))
         candidate_ids &= set().union(*(memory_core.significance_index.get(i, set()) for i in range(params.min_significance, 11)))
         if params.tags:
-            tag_matches = set(candidate_ids) # Start with current candidates
-            for i, tag in enumerate(params.tags):
+            tag_matches = set(candidate_ids); _first_tag = True
+            for tag in params.tags:
                 ids_for_tag = memory_core.tag_index.get(tag, set())
-                if i == 0: tag_matches = ids_for_tag
+                if _first_tag: tag_matches = ids_for_tag; _first_tag = False
                 else: tag_matches &= ids_for_tag
             candidate_ids &= tag_matches
         if params.entities:
-            # Option 1: Memory must match ANY entity (Union)
-            # entity_matches = set().union(*(memory_core.entity_index.get(e, set()) for e in params.entities))
-            # Option 2: Memory must match ALL entities (Intersection)
-            entity_matches = set(candidate_ids) # Start with current
-            for i, entity in enumerate(params.entities):
+            entity_matches = set(candidate_ids); _first_entity = True
+            for entity in params.entities:
                 ids_for_entity = memory_core.entity_index.get(entity, set())
-                if i == 0: entity_matches = ids_for_entity
+                if _first_entity: entity_matches = ids_for_entity; _first_entity = False
                 else: entity_matches &= ids_for_entity
             candidate_ids &= entity_matches
-
         if not params.include_archived: candidate_ids -= memory_core.archived_memories
 
-        # 3. Level and Fidelity Filtering
         final_candidate_ids = set()
         for mem_id in candidate_ids:
             memory = memory_core.memories.get(mem_id)
@@ -813,62 +819,48 @@ async def retrieve_memories(
             passes_fidelity = memory.metadata.fidelity >= params.min_fidelity
             if passes_level and passes_fidelity: final_candidate_ids.add(mem_id)
 
-        # 4. Relevance Scoring & Sorting
         scored_candidates = []
         for memory_id in final_candidate_ids:
             embedding = memory_core.memory_embeddings.get(memory_id)
             if not embedding: continue
             relevance = _cosine_similarity(query_embedding, embedding)
             memory = memory_core.memories[memory_id]
-
-            # --- Boosts (Restored Logic) ---
             entity_boost = 0.0
             if params.entities and memory.metadata.entities:
                  common_entities = set(params.entities) & set(memory.metadata.entities)
-                 entity_boost = min(0.2, len(common_entities) * 0.05) # Cap boost
-
+                 entity_boost = min(0.2, len(common_entities) * 0.05)
             emotional_boost = _calculate_emotional_relevance(memory.metadata.emotional_context, params.emotional_state or {})
-
             schema_boost = min(0.1, len(memory.metadata.schemas) * 0.05) if memory.metadata.schemas else 0.0
-
             dt_timestamp = datetime.datetime.fromisoformat(memory.metadata.timestamp.replace("Z", "+00:00"))
             days_old = max(0, (datetime.datetime.now() - dt_timestamp).days)
-            temporal_boost = max(0.0, 0.15 * math.exp(-0.1 * days_old)) # Exponential decay boost for recency
-
+            temporal_boost = max(0.0, 0.15 * math.exp(-0.1 * days_old))
             level_boost = 0.0
             if params.retrieval_level == 'auto' and memory.metadata.memory_level == 'detail': level_boost = 0.1
-            elif params.retrieval_level == 'detail' and memory.metadata.memory_level == 'detail': level_boost = 0.15 # Stronger boost if detail explicitly requested
+            elif params.retrieval_level == 'detail' and memory.metadata.memory_level == 'detail': level_boost = 0.15
             elif params.retrieval_level == 'summary' and memory.metadata.memory_level == 'summary': level_boost = 0.1
             elif params.retrieval_level == 'abstraction' and memory.metadata.memory_level == 'abstraction': level_boost = 0.1
-
-            # --- Final Score ---
-            fidelity_factor = 0.7 + (0.3 * memory.metadata.fidelity) # Weighted fidelity influence
+            fidelity_factor = 0.7 + (0.3 * memory.metadata.fidelity)
             final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + schema_boost + temporal_boost + level_boost) * fidelity_factor)
-
             scored_candidates.append((memory_id, final_relevance))
 
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
-
-        # 5. Limit and Prepare Results
         top_memory_ids = [mid for mid, _ in scored_candidates[:params.limit]]
-        results_models = [memory_core.memories[mid] for mid in top_memory_ids]
 
-        # 6. Apply Reconsolidation (Moved outside core retrieval logic, apply if needed by caller)
-        # results_models = await _apply_reconsolidation_to_results(ctx, results_models)
+        results_models_raw = [memory_core.memories.get(mid) for mid in top_memory_ids]
+        results_models = [mem for mem in results_models_raw if mem is not None]
 
-        # 7. Prepare results as dicts and add relevance
+
         results = []
         for i, mem_id in enumerate(top_memory_ids):
-            relevance_score = scored_candidates[i][1]
-            mem_dict = results_models[i].model_dump()
-            mem_dict["relevance"] = relevance_score
-            results.append(mem_dict)
-            await _update_memory_recall(ctx, mem_id)
+             if i < len(results_models): # Check if model exists for this id
+                 relevance_score = scored_candidates[i][1]
+                 mem_dict = results_models[i].model_dump()
+                 mem_dict["relevance"] = relevance_score
+                 results.append(mem_dict)
+                 await _update_memory_recall(ctx, mem_id)
 
-        # 8. Cache results (IDs only)
         memory_core.query_cache[cache_key] = (datetime.datetime.now(), top_memory_ids)
         logger.debug(f"Retrieved {len(results)} memories for query: {params.query}")
-
         return results
 
 @function_tool
