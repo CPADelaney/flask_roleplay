@@ -514,7 +514,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             }
             await self.meta_core.initialize(meta_core_deps)
 
-            self.agentic_action_generator = AgenticActionGenerator(
+            self.agentic_action_generator = EnhancedAgenticActionGenerator(
                 emotional_core=self.emotional_core, hormone_system=self.hormone_system,
                 experience_interface=self.experience_interface, imagination_simulator=self.imagination_simulator,
                 meta_core=self.meta_core, memory_core=self.memory_core, goal_system=self.goal_manager,
