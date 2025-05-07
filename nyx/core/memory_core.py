@@ -1309,24 +1309,27 @@ async def create_reflection_from_memories(
 @function_tool
 async def create_abstraction_from_memories(
     ctx: RunContextWrapper[MemoryCoreContext],
-    memory_ids: List[str], 
-    pattern_type: str = "behavior"
+    memory_ids: List[str],
+    pattern_type: Optional[str] = None # CHANGED: Made Optional, default to None
 ) -> Dict[str, Any]:
     """
     Create a higher-level abstraction from specific memories
-    
+
     Args:
         memory_ids: IDs of memories to abstract from
         pattern_type: Type of pattern to identify
-        
+    
     Returns:
         Abstraction result dictionary
     """
-    with custom_span("create_abstraction", {"pattern_type": pattern_type, "num_memories": len(memory_ids)}):
+    # Apply default if pattern_type is None
+    actual_pattern_type = pattern_type if pattern_type is not None else "behavior"
+
+    with custom_span("create_abstraction", {"pattern_type": actual_pattern_type, "num_memories": len(memory_ids)}):
         # Retrieve the specified memories
         memories = []
         for memory_id in memory_ids:
-            memory = await get_memory(ctx, memory_id)
+            memory = await get_memory(ctx, memory_id) # This function already handles its own context
             if memory:
                 memories.append(memory)
         
@@ -1334,24 +1337,24 @@ async def create_abstraction_from_memories(
             return {
                 "abstraction": "I couldn't find the specified memories to form an abstraction.",
                 "confidence": 0.1,
-                "pattern_type": pattern_type
+                "pattern_type": actual_pattern_type # Use actual_pattern_type
             }
         
         # Generate abstraction using agent
         abstraction_agent = Agent(
             name="Abstraction Generator",
             instructions=f"""You create high-level abstractions that identify patterns in memories.
-            Focus on identifying {pattern_type} patterns. Generate a clear abstraction that synthesizes
-            the common elements across these memories."""
+            Focus on identifying {actual_pattern_type} patterns. Generate a clear abstraction that synthesizes
+            the common elements across these memories.""" # Use actual_pattern_type
         )
         
         # Prepare memory texts for the agent
         memory_texts = [f"Memory {i+1}: {m['memory_text']}" for i, m in enumerate(memories)]
         memory_context = "\n\n".join(memory_texts)
         
-        prompt = f"Identify a {pattern_type} pattern in these memories and create an abstraction:\n\n{memory_context}"
+        prompt = f"Identify a {actual_pattern_type} pattern in these memories and create an abstraction:\n\n{memory_context}" # Use actual_pattern_type
         
-        result = await Runner.run(abstraction_agent, prompt)
+        result = await Runner.run(abstraction_agent, prompt, context=ctx.context) # Pass context to Runner
         abstraction_text = result.final_output
         
         # Calculate confidence based on number of memories and their similarity
@@ -1359,30 +1362,32 @@ async def create_abstraction_from_memories(
         
         # Simple pattern data
         pattern_data = {
-            "pattern_type": pattern_type,
+            "pattern_type": actual_pattern_type, # Use actual_pattern_type
             "confidence": min(0.9, confidence),
             "sample_size": len(memories)
         }
         
         # Store abstraction as a memory
-        abstraction_id = await add_memory(
-            ctx,
-            memory_text=abstraction_text,
-            memory_type="abstraction",
-            memory_scope="game",
-            significance=7,
-            tags=["abstraction", pattern_type],
-            metadata={
-                "pattern_data": pattern_data,
-                "source_memory_ids": memory_ids,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "fidelity": 0.75  # Abstractions have moderately reduced fidelity
-            }
+        abstraction_id = await add_memory( # This function handles its own context
+            ctx, # Pass the original context wrapper
+            params=MemoryCreateParams( # Use the Pydantic model for parameters
+                memory_text=abstraction_text,
+                memory_type="abstraction",
+                memory_scope="game",
+                significance=7,
+                tags=["abstraction", actual_pattern_type], # Use actual_pattern_type
+                metadata={
+                    "pattern_data": pattern_data,
+                    "source_memory_ids": memory_ids,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "fidelity": 0.75
+                }
+            )
         )
         
         return {
             "abstraction": abstraction_text,
-            "pattern_type": pattern_type,
+            "pattern_type": actual_pattern_type, # Use actual_pattern_type
             "confidence": pattern_data.get("confidence", 0.5),
             "abstraction_id": abstraction_id
         }
