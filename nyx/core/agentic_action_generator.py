@@ -230,7 +230,6 @@ class EnhancedAgenticActionGenerator:
                  experience_interface=None,
                  imagination_simulator=None,
                  meta_core=None,
-                 memory_core=None,
                  goal_system=None,
                  identity_evolution=None,
                  knowledge_core=None,
