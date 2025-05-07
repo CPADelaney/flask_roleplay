@@ -2094,18 +2094,18 @@ class DigitalSomatosensorySystem:
 
         # Run validation agent with tracing
         # CORRECTED LINE: Changed 'async with' to 'with'
-        with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id):
+        async with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id):
             try:
+                # THIS IS THE CALL TO Runner.run THAT'S FAILING INTERNALLY
                 result = await Runner.run(
-                    system_instance.stimulus_validator,
-                    validator_agent_input,
-                    context=ctx.context, 
+                    system_instance.stimulus_validator, # The agent to run
+                    validator_agent_input,              # The input to this agent
+                    context=ctx.context,                # The SomatosensorySystemContext object
                     run_config=RunConfig(
-                        workflow_name="StimulusValidationRun",
+                        workflow_name="StimulusValidationRun", 
                         trace_id=None,
                     )
                 )
-                
                 validation_output = result.final_output_as(StimulusValidationOutput)
                 return GuardrailFunctionOutput(
                     output_info=validation_output.model_dump(), 
