@@ -303,7 +303,7 @@ class EnhancedAgenticActionGenerator:
         self.relationship_manager = relationship_manager
         self.temporal_perception = temporal_perception
         self.reasoning_core = reasoning_core or ReasoningCore()
-        self.reflection_engine = reflection_engine or ReflectionEngine(emotional_core=emotional_core)
+        self.reflection_engine = reflection_engine or ReflectionEngine(emotional_core=emotional_core, memory_core=memory_core)
         self.mood_manager = mood_manager
         self.needs_system = needs_system
         self.mode_integration = mode_integration
