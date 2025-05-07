@@ -393,7 +393,11 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.needs_system = NeedsSystem(goal_manager=self.goal_manager)            
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.reward_system = RewardSignalProcessor(
-                emotional_core=self.emotional_core, identity_evolution=self.identity_evolution, somatosensory_system=None
+                emotional_core=self.emotional_core, 
+                identity_evolution=self.identity_evolution, 
+                somatosensory_system=self.digital_somatosensory_system,
+                mood_manager=self.mood_manager,
+                needs_system=self.needs_system  # Add this line
             )
             self.digital_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, emotional_core=self.emotional_core, reward_system=self.reward_system
