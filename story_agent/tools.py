@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from agents import function_tool, RunContextWrapper
 # ****** OPTIONAL: Import specific context if no circular dependency ******
 # from story_agent.story_director_agent import StoryDirectorContext # Use this if possible
-from logic.conflict_system.conflict_tools import add_conflict_to_narrative
+from logic.conflict_system.conflict_tools import _internal_add_conflict_to_narrative_logic
 
 from context.context_config import get_config
 
@@ -980,18 +980,30 @@ async def analyze_narrative_for_conflict(ctx: RunContextWrapper[ContextType], na
         Analysis results and possibly a new conflict
     """
     context = ctx.context
-    conflict_manager = context.conflict_manager
+    # conflict_manager = context.conflict_manager # Not directly used in this specific path anymore
 
     try:
-        result = await add_conflict_to_narrative(ctx, narrative_text)
-        if hasattr(context, 'add_narrative_memory') and result.get("conflict_generated", False):
-            conflict_info = result.get("conflict", {})
-            memory_content = f"Analysis detected conflict in narrative and generated new {conflict_info.get('conflict_type', 'unknown')} conflict: {conflict_info.get('conflict_name', 'Unnamed conflict')}"
+        # ****** MODIFIED CALL ******
+        # result = await add_conflict_to_narrative(ctx, narrative_text) # OLD - This was calling the FunctionTool object
+        result = await _internal_add_conflict_to_narrative_logic(ctx, narrative_text) # NEW - This calls the callable async function
+        
+        if hasattr(context, 'add_narrative_memory') and result.get("trigger_conflict", False): # Adjusted key based on refactored logic
+            conflict_info = { # Reconstruct a simple conflict_info if needed for memory
+                "conflict_type": result.get("conflict_type", "unknown"),
+                "conflict_name": result.get("conflict_name", "Unnamed conflict")
+            }
+            memory_content = (
+                f"Analysis detected conflict in narrative and generated new "
+                f"{conflict_info.get('conflict_type', 'unknown')} conflict: "
+                f"{conflict_info.get('conflict_name', 'Unnamed conflict')}"
+            )
             await context.add_narrative_memory(memory_content, "conflict_analysis", 0.6)
         return result
     except Exception as e:
         logger.error(f"Error analyzing narrative for conflict: {str(e)}", exc_info=True)
-        return {"analysis": {"conflict_intensity": 0, "matched_keywords": []}, "conflict_generated": False, "error": str(e)}
+        # Ensure the error return structure is consistent if needed
+        return {"analysis": {"conflict_intensity": 0, "matched_keywords": []}, "trigger_conflict": False, "error": str(e)}
+
 
 @function_tool
 @track_performance("set_player_involvement")
