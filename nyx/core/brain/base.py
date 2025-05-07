@@ -389,6 +389,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
 
             # --- Step 4: Core Systems - Tier 2 (Reward, DSS, Conditioning) ---
+            self.goal_manager = GoalManager(brain_reference=self)
+            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)            
             logger.debug(f"NyxBrain Init Step 4: Core Systems - Tier 2 (Interdependent) for {self.user_id}-{self.conversation_id}")
             self.reward_system = RewardSignalProcessor(
                 emotional_core=self.emotional_core, identity_evolution=self.identity_evolution, somatosensory_system=None
@@ -419,8 +421,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
             # --- Step 5: Higher-Level Cognitive & Interaction Systems (Part 1) ---
             logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
-            self.goal_manager = GoalManager(brain_reference=self)
-            self.needs_system = NeedsSystem(goal_manager=self.goal_manager)
             if has_relationship_manager and RelationshipManager:
                 self.relationship_manager = RelationshipManager(memory_orchestrator=self.memory_orchestrator, emotional_core=self.emotional_core)
             self.multimodal_integrator = MultimodalIntegrator(reasoning_core=self.reasoning_core, attentional_controller=self.attentional_controller)
