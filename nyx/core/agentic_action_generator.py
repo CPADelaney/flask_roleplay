@@ -2119,34 +2119,71 @@ class EnhancedAgenticActionGenerator:
                 "error_type": type(e).__name__
             }
     
+    async def initialize_actions(self):
+        """Asynchronously register actions, especially those depending on other systems."""
+        logger.info("Initializing actions for AgenticActionGenerator...")
+        if self.creative_system:
+            logger.debug("Registering creative system actions...")
+            actions_to_register = {
+                "incremental_analysis": getattr(self.creative_system, 'incremental_codebase_analysis', None),
+                "semantic_search": getattr(self.creative_system, 'semantic_search', None),
+                "prepare_prompt": getattr(self.creative_system, 'prepare_prompt', None),
+                # --- Use getattr to handle potential missing methods gracefully ---
+                "create_story": getattr(self.creative_system, 'create_story', None),
+                "create_poem": getattr(self.creative_system, 'create_poem', None),
+                "create_lyrics": getattr(self.creative_system, 'create_lyrics', None), # Added lyrics
+                "create_journal": getattr(self.creative_system, 'create_journal', None), # Added journal
+                "list_creations": getattr(self.creative_system, 'list_content', None), # Map to correct method
+                "retrieve_content": getattr(self.creative_system, 'retrieve_content', None), # Map to correct method
+            }
+            for name, handler in actions_to_register.items():
+                if handler and callable(handler):
+                     try:
+                          await self.register_action(name, handler)
+                     except Exception as e:
+                          logger.error(f"Failed to register action '{name}': {e}", exc_info=True)
+                # else: # Removed verbose logging for missing handlers, AttributeError will handle it
+                #     logger.warning(f"Handler for creative action '{name}' not found or not callable in creative_system.")
+
+        if self.capability_assessor:
+             logger.debug("Registering capability assessor actions...")
+             if hasattr(self, 'assess_capabilities') and callable(self.assess_capabilities):
+                 try:
+                      await self.register_action("assess_capabilities", self.assess_capabilities)
+                 except Exception as e:
+                     logger.error(f"Failed to register action 'assess_capabilities': {e}", exc_info=True)
+
+        # You might register other async actions here as well
+        logger.info("AgenticActionGenerator actions initialized.")
+
     async def register_action(self, action_name: str, handler: Callable) -> None:
-        """
-        Register a handler for a specific action
-        
-        Args:
-            action_name: Name of the action
-            handler: Function to handle the action execution
-        """
-        async with self._lock:  # Use the existing lock for thread safety
+        """ Register a handler for a specific action (Async version) """
+        # Make sure lock exists
+        if not hasattr(self, '_lock'):
+            self._lock = asyncio.Lock()
+
+        async with self._lock: # Use the existing lock for thread safety
             # Initialize the action handlers dictionary if it doesn't exist
             if not hasattr(self, "action_handlers"):
                 self.action_handlers = {}
-            
+
             # Check if the handler is callable
             if not callable(handler):
-                raise ValueError(f"Handler for action '{action_name}' must be callable")
-            
+                # Raise error immediately if handler isn't callable during registration
+                raise ValueError(f"Handler for action '{action_name}' is not callable (type: {type(handler)})")
+
             # Register the handler
             self.action_handlers[action_name] = handler
-            
-            # Add to available actions list for context
-            if hasattr(self, "available_actions") and action_name not in self.available_actions:
+
+            # Add to available actions list for context (assuming it exists)
+            if hasattr(self, "available_actions") and isinstance(self.available_actions, list) and action_name not in self.available_actions:
                 self.available_actions.append(action_name)
-            
+
             # Initialize success rates for the new action if not already present
-            if action_name not in self.action_success_rates:
-                self.action_success_rates[action_name] = {"successes": 0, "attempts": 0, "rate": 0.5}
-            
+            if hasattr(self, "action_success_rates") and isinstance(self.action_success_rates, defaultdict):
+                if action_name not in self.action_success_rates:
+                    self.action_success_rates[action_name] = {"successes": 0, "attempts": 0, "rate": 0.5}
+
             logger.info(f"Registered handler for action: {action_name}")
     
     async def generate_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
