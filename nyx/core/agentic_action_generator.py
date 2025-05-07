@@ -225,6 +225,7 @@ class EnhancedAgenticActionGenerator:
     
     def __init__(self, 
                  emotional_core=None, 
+                 memory_core=None, 
                  hormone_system=None, 
                  experience_interface=None,
                  imagination_simulator=None,
@@ -263,6 +264,10 @@ class EnhancedAgenticActionGenerator:
                  system_context=None,
                  relationship_reflection=None,
                  procedural_memory_manager=None, 
+                 config=None, # Added config as it was in the original snippet for context
+                 perception_system=None, # Added for context
+                 world_model=None, # Added for context
+                 task_planner=None): # Added for context                 
                  ):
                      
         """Initialize with references to required subsystems"""
