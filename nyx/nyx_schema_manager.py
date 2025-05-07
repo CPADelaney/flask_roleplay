@@ -235,7 +235,7 @@ class NyxSchemaManager:
             Generate a JSON response with these fields:
             1. "detected_needs": Array of detected data tracking needs (max 2-3)
             2. "proposed_schema": Object with tables and columns that should be created
-               (format: {{{{ "table_name": {{{{ "column_name": {{{{ "type": "TEXT", "nullable": true, "description": "..." }}}}} }}}}}}} )
+               (format: {{{{ "table_name": {{{{ "column_name": {{{{ "type": "TEXT", "nullable": true, "description": "..." }}}}} }}}}}}})
             3. "reasoning": Explanation of why these schema changes are needed
             
             Format as valid JSON.
