@@ -27,7 +27,7 @@ import logging
 import os
 import sqlite3
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from textwrap import indent
@@ -258,14 +258,27 @@ class ParallelCodeAnalyzer:
     def analyze(self, paths: List[Path]):
         py_files = [p for p in paths if p.suffix == ".py"]
         results: Dict[str, Dict[str, int]] = {}
-        with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
-            futs = {pool.submit(p.read_text, encoding="utf-8"): p for p in py_files}
-            for fut in as_completed(futs):
-                p = futs[fut]
+        if not py_files: # Add check for empty list
+            logger.info("CodeAnalyzer: No Python files to analyze.")
+            return results
+    
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:   # NEW
+            # Create a list of future-to-path mappings to handle potential errors per file
+            future_to_path = {}
+            for p in py_files:
                 try:
-                    results[str(p)] = _scan(fut.result())
+                    # Reading text should be safe here, but actual parsing is in _scan
+                    future_to_path[pool.submit(p.read_text, encoding="utf-8")] = p
+                except Exception as e:
+                    logger.error(f"Failed to submit read task for file {p}: {e}")
+    
+            for fut in as_completed(future_to_path):
+                p = future_to_path[fut]
+                try:
+                    file_content = fut.result() # Get content from future
+                    results[str(p)] = _scan(file_content) # Pass content to _scan
                 except Exception as exc:
-                    logger.error("AST failure %s: %s", p, exc)
+                    logger.error("AST scan/processing failure for file %s: %s", p, exc)
         return results
 
 # ---------------------------------------------------------------------------
