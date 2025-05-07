@@ -127,7 +127,7 @@ class MemoryCreateParams(BaseModel):
 class MemoryUpdateParams(BaseModel):
      """Input model for updating memories."""
      memory_id: str
-     updates: Dict[str, Any] # Fields to update, can include nested metadata changes
+     updates: Optional[Dict[str, Any]] = None # CHANGED: Made Optional, default to None
 
 class MemoryRetrieveResult(BaseModel):
     """Structured result for retrieval, including hierarchical info."""
@@ -954,7 +954,9 @@ async def update_memory(
     Restored more robust index update logic.
     """
     memory_id = params.memory_id
-    updates = params.updates
+    # Handle the case where updates might be None
+    updates_to_apply = params.updates if params.updates is not None else {}
+
     with custom_span("update_memory", {"memory_id": memory_id}):
         memory_core = ctx.context
         if not memory_core.initialized: memory_core.initialize()
@@ -966,29 +968,37 @@ async def update_memory(
         memory = memory_core.memories[memory_id]
         original_data = memory.model_copy(deep=True)
 
+        # If there are no updates to apply, we can potentially return early.
+        # However, the function also updates recall counts and does reconsolidation,
+        # so we might want to proceed even with empty updates if it's called
+        # as part of a recall flow. For now, let's assume an empty update dict means no changes.
+        if not updates_to_apply:
+            logger.debug(f"No updates provided for memory {memory_id}. Returning True (no changes made).")
+            # Note: Depending on desired behavior, you might still want to run reconsolidation logic
+            # or other recall-related side effects even if `updates_to_apply` is empty.
+            # For now, this means an empty update payload results in no effective change.
+            return True
+
+
         # --- Apply Updates ---
         try:
-            for key, value in updates.items():
+            # Use updates_to_apply which defaults to an empty dict if params.updates was None
+            for key, value in updates_to_apply.items():
                 if key == "metadata" and isinstance(value, dict):
-                    # Use Pydantic's update mechanism if available or manual merge
                     current_meta_dict = memory.metadata.model_dump()
-                    # Merge carefully, potentially handling nested dicts if needed
                     updated_meta_dict = {**current_meta_dict, **value}
-                    # Handle nested Pydantic models within metadata
                     if 'emotional_context' in updated_meta_dict and isinstance(updated_meta_dict['emotional_context'], dict):
-                         # Validate and create/update the nested model
                         try:
                             updated_meta_dict['emotional_context'] = EmotionalMemoryContext(**updated_meta_dict['emotional_context'])
                         except Exception as pydantic_error:
                              logger.error(f"Pydantic validation error updating emotional_context for {memory_id}: {pydantic_error}")
-                             # Decide how to handle - skip update, use original, etc.
-                             updated_meta_dict['emotional_context'] = original_data.metadata.emotional_context # Revert on error
-
+                             updated_meta_dict['emotional_context'] = original_data.metadata.emotional_context
                     memory.metadata = MemoryMetadata(**updated_meta_dict)
                 elif hasattr(memory, key):
                     setattr(memory, key, value)
         except Exception as e:
             logger.error(f"Error applying updates to memory {memory_id}: {e}", exc_info=True)
+            # Revert to original data on error during update application
             memory_core.memories[memory_id] = original_data
             return False
 
@@ -998,7 +1008,8 @@ async def update_memory(
             memory_core.memory_embeddings[memory_id] = memory.embedding
 
         # --- Update Indices (using comparison with original_data) ---
-        def update_index_set(index_dict, key, old_value, new_value):
+        # (This logic remains the same, as it compares the state of 'memory' object after updates)
+        def update_index_set(index_dict, key_attr_name, old_value, new_value): # Renamed 'key' to 'key_attr_name'
             if old_value in index_dict: index_dict[old_value].discard(memory_id)
             if new_value: index_dict[new_value].add(memory_id)
 
@@ -1028,7 +1039,6 @@ async def update_memory(
              if old_emotion: memory_core.emotional_index[old_emotion].discard(memory_id)
              if new_emotion: memory_core.emotional_index[new_emotion].add(memory_id)
 
-        # Schema index update (more complex if relevance changes)
         old_schema_ids = {s.get("schema_id") for s in original_data.metadata.schemas if s.get("schema_id")}
         new_schema_ids = {s.get("schema_id") for s in memory.metadata.schemas if s.get("schema_id")}
         for schema_id in old_schema_ids - new_schema_ids: memory_core.schema_index[schema_id].discard(memory_id)
@@ -1038,9 +1048,11 @@ async def update_memory(
         if memory.is_archived != original_data.is_archived:
             if memory.is_archived: memory_core.archived_memories.add(memory_id)
             else: memory_core.archived_memories.discard(memory_id)
+        # Corrected: Check original_data.is_consolidated
         if memory.is_consolidated != original_data.is_consolidated:
              if memory.is_consolidated: memory_core.consolidated_memories.add(memory_id)
              else: memory_core.consolidated_memories.discard(memory_id)
+
 
         # Update reverse summary links if structure changed
         old_sources = set(original_data.metadata.source_memory_ids or [])
