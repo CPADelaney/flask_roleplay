@@ -325,29 +325,13 @@ class EnhancedAgenticActionGenerator:
         self.issue_tracker = issue_tracker
 
         if self.creative_system:
-            # code‐analysis
-            self.register_action(
-                "incremental_analysis",
-                self.creative_system.incremental_codebase_analysis
-            )
-            # semantic search & prompt prep
-            self.register_action(
-                "semantic_search",
-                self.creative_system.semantic_search
-            )
-            self.register_action(
-                "prepare_prompt",
-                self.creative_system.prepare_prompt
-            )
-            # creative generation
-            self.register_action(
-                "create_story",
-                self.creative_system.create_story     # ← make sure this exists
-            )
-            self.register_action(
-                "create_poem",
-                self.creative_system.create_poem      # ← make sure this exists
-            )
+            try:
+                # Properly use asyncio to create a task for async initialization
+                asyncio.create_task(self.initialize_registered_actions())
+                logger.info("Started action registration task for creative system.")
+            except Exception as exc:
+                logger.error(f"Could not start creative action registration: {exc}", exc_info=True)
+        
         
         # Social tools
         self.computer_user = ComputerUseAgent(logger=logger)
@@ -483,42 +467,35 @@ class EnhancedAgenticActionGenerator:
     async def initialize_registered_actions(self):
         """Register actions, including wrappers for creative generation."""
         logger.info("Registering actions for AgenticActionGenerator...")
-
+    
         # --- Register Creative System Related Actions ---
         if self.creative_system:
             logger.debug("Registering creative system related actions...")
-
-            # --- Register WRAPPERS defined in *this* class for GENERATION+STORAGE ---
-            # These methods handle the LLM call AND storage via self.creative_system.storage
-            wrapper_action_map = {
-                "create_story": self.create_story, # Registers the method below
-                "create_poem": self.create_poem,   # Registers the method below
-                "create_lyrics": self.create_lyrics, # Registers the method below
-                "create_journal": self.create_journal, # Registers the method below
-                "list_creations": self.list_creations, # Registers the method below
-                "retrieve_content": self.retrieve_content, # Registers the method below
-            }
-            for name, handler in wrapper_action_map.items():
-                if hasattr(self, name) and callable(handler):
-                    await self.register_action(name, handler)
-                else:
-                    logger.warning(f"Wrapper handler method '{name}' not found/callable in {self.__class__.__name__}.")
-
-            # --- Register actions handled DIRECTLY by methods on creative_system ---
-            # These MUST exist on AgenticCreativitySystemV2
-            direct_creative_action_map = {
+    
+            # Register direct actions from creative_system (these DO exist)
+            direct_actions = {
                 "incremental_analysis": getattr(self.creative_system, 'incremental_codebase_analysis', None),
                 "semantic_search": getattr(self.creative_system, 'semantic_search', None),
-                "prepare_prompt": getattr(self.creative_system, 'prepare_prompt', None),
+                "prepare_prompt": getattr(self.creative_system, 'prepare_prompt', None)
             }
-            for name, handler in direct_creative_action_map.items():
+            
+            for name, handler in direct_actions.items():
                 if handler and callable(handler):
                     await self.register_action(name, handler)
-                else:
-                    if name in ["incremental_analysis", "semantic_search", "prepare_prompt"]:
-                         logger.warning(f"Direct handler method '{name}' not found/callable on creative_system.")
-        else:
-            logger.warning("Creative system not available, skipping creative action registration.")
+    
+            # Register wrapper methods from THIS class (not creative_system)
+            wrapper_actions = {
+                "create_story": self.create_story,
+                "create_poem": self.create_poem,
+                "create_lyrics": self.create_lyrics,
+                "create_journal": self.create_journal,
+                "list_creations": self.list_creations,
+                "retrieve_content": self.retrieve_content
+            }
+            
+            for name, handler in wrapper_actions.items():
+                if hasattr(self, name) and callable(handler):
+                    await self.register_action(name, handler)
 
     async def _generate_creative_content(self, content_type: str, title: str, prompt: str) -> str:
         """Helper to generate creative text using a generic LLM agent."""
