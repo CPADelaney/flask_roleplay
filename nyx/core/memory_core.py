@@ -113,16 +113,16 @@ class MemoryQuery(BaseModel):
 class MemoryCreateParams(BaseModel):
     """Input model for creating memories."""
     memory_text: str
-    memory_type: str = "observation"
-    memory_scope: str = "game"
-    significance: int = 5
-    tags: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict) # Base metadata passed in
+    memory_type: Optional[str] = None  # Changed from: str = "observation"
+    memory_scope: Optional[str] = None # Changed from: str = "game"
+    significance: Optional[int] = None   # Changed from: int = 5
+    tags: List[str] = Field(default_factory=list) # default_factory is fine
+    metadata: Dict[str, Any] = Field(default_factory=dict) # default_factory is fine
     # --- NEW PARAMS ---
-    memory_level: Literal['detail', 'summary', 'abstraction'] = 'detail'
+    memory_level: Optional[Literal['detail', 'summary', 'abstraction']] = None # Changed
     source_memory_ids: Optional[List[str]] = None
-    fidelity: float = 1.0
-    summary_of: Optional[str] = None # Optional description of what's summarized
+    fidelity: Optional[float] = None # Changed from: float = 1.0
+    summary_of: Optional[str] = None
 
 class MemoryUpdateParams(BaseModel):
      """Input model for updating memories."""
@@ -660,30 +660,39 @@ async def add_memory(
     Add a new memory to the system, including hierarchical details.
     Restored full indexing and pattern check call.
     """
-    with custom_span("add_memory", {"memory_type": params.memory_type, "memory_level": params.memory_level}):
+    with custom_span("add_memory", {"memory_type": params.memory_type or "observation", "memory_level": params.memory_level or "detail"}): # Adjusted for potential None
         memory_core = ctx.context
         if not memory_core.initialized: memory_core.initialize()
 
         memory_id = str(uuid.uuid4())
         timestamp = datetime.datetime.now().isoformat()
 
+        # Apply defaults if params are None
+        actual_memory_type = params.memory_type if params.memory_type is not None else "observation"
+        actual_memory_scope = params.memory_scope if params.memory_scope is not None else "game"
+        actual_significance = params.significance if params.significance is not None else 5
+        actual_memory_level = params.memory_level if params.memory_level is not None else 'detail'
+        actual_fidelity = params.fidelity if params.fidelity is not None else 1.0
+
+        metadata_input = params.metadata or {} # Ensure metadata is a dict
+
         metadata = MemoryMetadata(
             timestamp=timestamp,
-            fidelity=params.fidelity,
-            memory_level=params.memory_level,
+            fidelity=actual_fidelity,
+            memory_level=actual_memory_level,
             source_memory_ids=params.source_memory_ids,
             summary_of=params.summary_of,
-            original_form=params.memory_text, # Store original form on creation
-            **params.metadata
+            original_form=params.memory_text, 
+            **metadata_input # Use the prepared metadata_input
         )
-        if 'emotional_context' in params.metadata and isinstance(params.metadata['emotional_context'], dict):
-            metadata.emotional_context = EmotionalMemoryContext(**params.metadata['emotional_context'])
+        if 'emotional_context' in metadata_input and isinstance(metadata_input['emotional_context'], dict):
+            metadata.emotional_context = EmotionalMemoryContext(**metadata_input['emotional_context'])
 
         embedding = await _generate_embedding(ctx, params.memory_text)
 
         memory_data = Memory(
-            id=memory_id, memory_text=params.memory_text, memory_type=params.memory_type,
-            memory_scope=params.memory_scope, significance=params.significance,
+            id=memory_id, memory_text=params.memory_text, memory_type=actual_memory_type,
+            memory_scope=actual_memory_scope, significance=actual_significance,
             tags=params.tags or [], metadata=metadata, embedding=embedding,
             created_at=timestamp
         )
@@ -692,10 +701,10 @@ async def add_memory(
         memory_core.memory_embeddings[memory_id] = embedding
 
         # --- Update Indices ---
-        memory_core.type_index[params.memory_type].add(memory_id)
-        memory_core.scope_index[params.memory_scope].add(memory_id)
-        memory_core.level_index[params.memory_level].add(memory_id)
-        sig_level = min(10, max(1, int(params.significance)))
+        memory_core.type_index[actual_memory_type].add(memory_id)
+        memory_core.scope_index[actual_memory_scope].add(memory_id)
+        memory_core.level_index[actual_memory_level].add(memory_id)
+        sig_level = min(10, max(1, int(actual_significance)))
         memory_core.significance_index[sig_level].add(memory_id)
         for tag in params.tags or []: memory_core.tag_index[tag].add(memory_id)
         dt_timestamp = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -706,16 +715,17 @@ async def add_memory(
              memory_core.emotional_index[metadata.emotional_context.primary_emotion].add(memory_id)
         for schema_ref in metadata.schemas:
              if schema_id := schema_ref.get("schema_id"): memory_core.schema_index[schema_id].add(memory_id)
-        if params.memory_level in ['summary', 'abstraction'] and params.source_memory_ids:
+        if actual_memory_level in ['summary', 'abstraction'] and params.source_memory_ids:
             for source_id in params.source_memory_ids: memory_core.summary_links[source_id].append(memory_id)
 
         memory_core.query_cache = {}
         # --- Call _check_for_patterns (Restored) ---
-        if params.memory_type == "observation" and (params.tags or []):
+        if actual_memory_type == "observation" and (params.tags or []): # Use actual_memory_type
             asyncio.create_task(_check_for_patterns(ctx, params.tags))
 
-        logger.debug(f"Added {params.memory_level} memory {memory_id} of type {params.memory_type}")
+        logger.debug(f"Added {actual_memory_level} memory {memory_id} of type {actual_memory_type}")
         return memory_id
+
 
 @function_tool
 async def retrieve_memories(
