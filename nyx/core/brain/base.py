@@ -543,6 +543,9 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             )
             logger.debug("AgenticActionGenerator instance created.")
 
+            if self.agentic_action_generator and hasattr(self.agentic_action_generator, 'initialize_actions'):
+                 await self.agentic_action_generator.initialize_actions()
+
             self.passive_observation_system = PassiveObservationSystem(
                 action_generator=self.agentic_action_generator, emotional_core=self.emotional_core,
                 memory_core=self.memory_core, relationship_manager=self.relationship_manager,
@@ -581,6 +584,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 emotional_core=self.emotional_core, memory_core=self.memory_core
             )
             logger.debug("AgenticActionGenerator dependent systems initialized.")
+
+            
 
 
             # --- Step 8: Remaining Managers, Agents, and Final Integrations ---
