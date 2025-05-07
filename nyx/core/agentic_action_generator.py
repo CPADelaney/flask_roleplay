@@ -478,7 +478,315 @@ class EnhancedAgenticActionGenerator:
             asyncio.create_task(self.periodic_hobby_meta_loop(interval=self.hobby_meta_interval))
             logger.info("Started periodic hobby meta-loop task.")
         except Exception as exc:
-            logger.error(f"Could not start hobby meta-loop: {exc}", exc_info=True)       
+            logger.error(f"Could not start hobby meta-loop: {exc}", exc_info=True)    
+
+    async def initialize_registered_actions(self):
+        """Register actions, including wrappers for creative generation."""
+        logger.info("Registering actions for AgenticActionGenerator...")
+
+        # --- Register Creative System Related Actions ---
+        if self.creative_system:
+            logger.debug("Registering creative system related actions...")
+
+            # --- Register WRAPPERS defined in *this* class for GENERATION+STORAGE ---
+            # These methods handle the LLM call AND storage via self.creative_system.storage
+            wrapper_action_map = {
+                "create_story": self.create_story, # Registers the method below
+                "create_poem": self.create_poem,   # Registers the method below
+                "create_lyrics": self.create_lyrics, # Registers the method below
+                "create_journal": self.create_journal, # Registers the method below
+                "list_creations": self.list_creations, # Registers the method below
+                "retrieve_content": self.retrieve_content, # Registers the method below
+            }
+            for name, handler in wrapper_action_map.items():
+                if hasattr(self, name) and callable(handler):
+                    await self.register_action(name, handler)
+                else:
+                    logger.warning(f"Wrapper handler method '{name}' not found/callable in {self.__class__.__name__}.")
+
+            # --- Register actions handled DIRECTLY by methods on creative_system ---
+            # These MUST exist on AgenticCreativitySystemV2
+            direct_creative_action_map = {
+                "incremental_analysis": getattr(self.creative_system, 'incremental_codebase_analysis', None),
+                "semantic_search": getattr(self.creative_system, 'semantic_search', None),
+                "prepare_prompt": getattr(self.creative_system, 'prepare_prompt', None),
+            }
+            for name, handler in direct_creative_action_map.items():
+                if handler and callable(handler):
+                    await self.register_action(name, handler)
+                else:
+                    if name in ["incremental_analysis", "semantic_search", "prepare_prompt"]:
+                         logger.warning(f"Direct handler method '{name}' not found/callable on creative_system.")
+        else:
+            logger.warning("Creative system not available, skipping creative action registration.")
+
+    async def _generate_creative_content(self, content_type: str, title: str, prompt: str) -> str:
+        """Helper to generate creative text using a generic LLM agent."""
+        # Define a simple agent for generation (customize model/instructions as needed)
+        generation_agent = Agent(
+            name=f"{content_type.capitalize()} Generation Agent",
+            instructions=f"You are a creative writer specializing in {content_type}s. "
+                         f"Write a {content_type} based on the following title and prompt. "
+                         f"Title: {title}\nPrompt: {prompt}\n\n"
+                         f"Output only the generated {content_type}.",
+            model="gpt-4o-mini", # Or your preferred model
+            model_settings=ModelSettings(temperature=0.8, max_tokens=1000)
+        )
+        try:
+            # Use the Agent Runner to execute the generation
+            # Pass relevant context if the agent needs it (e.g., self.system_context)
+            runner_context = getattr(self, 'system_context', None)
+            result = await Runner.run(generation_agent, prompt, context=runner_context)
+            generated_text = result.final_output if hasattr(result, 'final_output') else str(result)
+            if not generated_text or len(generated_text) < 10:
+                raise ValueError("LLM returned empty or trivial content.")
+            logger.info(f"LLM generated {content_type} content for title: {title}")
+            return generated_text
+        except Exception as e:
+            logger.error(f"Error generating {content_type} content via LLM: {e}", exc_info=True)
+            # Return a placeholder or re-raise the exception
+            return f"[Error generating {content_type}: {e}]"
+
+
+    async def create_story(self, title: str, prompt: str = "", metadata: Optional[Dict[str,Any]] = None):
+        """Tool: Generate and store a story."""
+        logger.info(f"Action: Create story '{title}'")
+        if not self.creative_system or not hasattr(self.creative_system, 'storage') or not hasattr(self.creative_system.storage, 'store_content'):
+            return {"success": False, "error": "Creative system storage unavailable"}
+
+        # 1. Generate the story content using LLM
+        generated_content = await self._generate_creative_content("story", title, prompt)
+        if generated_content.startswith("[Error"):
+             return {"success": False, "error": generated_content}
+
+        # 2. Store the generated content
+        try:
+            mood = {}
+            if self.mood_manager and hasattr(self.mood_manager, 'get_current_mood'):
+                 current_mood = await self.mood_manager.get_current_mood()
+                 mood = current_mood.dict() if hasattr(current_mood, 'dict') else current_mood
+            final_metadata = metadata or {}
+            final_metadata.update({"mood": mood, "prompt": prompt}) # Store prompt in metadata
+
+            # Call the storage method with the *generated* content
+            storage_result = await self.creative_system.storage.store_content(
+                content_type="story", title=title, content=generated_content, metadata=final_metadata
+            )
+            storage_result["success"] = True # Add success flag if store_content doesn't return it
+            return storage_result
+        except Exception as e:
+            logger.error(f"Error storing generated story: {e}", exc_info=True)
+            return {"success": False, "error": f"Error storing story: {str(e)}"}
+
+    async def create_poem(self, title: str, prompt: str = "", metadata: Optional[Dict[str, Any]] = None):
+        """Tool: Generate and store a poem."""
+        logger.info(f"Action: Create poem '{title}'")
+        if not self.creative_system or not hasattr(self.creative_system, 'storage') or not hasattr(self.creative_system.storage, 'store_content'):
+            return {"success": False, "error": "Creative system storage unavailable"}
+
+        # 1. Generate content
+        generated_content = await self._generate_creative_content("poem", title, prompt)
+        if generated_content.startswith("[Error"):
+             return {"success": False, "error": generated_content}
+
+        # 2. Store content
+        try:
+            mood = {}
+            if self.mood_manager and hasattr(self.mood_manager, 'get_current_mood'):
+                 current_mood = await self.mood_manager.get_current_mood()
+                 mood = current_mood.dict() if hasattr(current_mood, 'dict') else current_mood
+            final_metadata = metadata or {}
+            final_metadata.update({"mood": mood, "prompt": prompt})
+
+            storage_result = await self.creative_system.storage.store_content(
+                content_type="poem", title=title, content=generated_content, metadata=final_metadata
+            )
+            storage_result["success"] = True
+            return storage_result
+        except Exception as e:
+            logger.error(f"Error storing generated poem: {e}", exc_info=True)
+            return {"success": False, "error": f"Error storing poem: {str(e)}"}
+
+    async def create_lyrics(self, title: str, prompt: str = "", metadata: Optional[Dict[str, Any]] = None):
+        """Tool: Generate and store lyrics."""
+        logger.info(f"Action: Create lyrics '{title}'")
+        if not self.creative_system or not hasattr(self.creative_system, 'storage') or not hasattr(self.creative_system.storage, 'store_content'):
+            return {"success": False, "error": "Creative system storage unavailable"}
+
+        # 1. Generate content
+        generated_content = await self._generate_creative_content("lyrics", title, prompt)
+        if generated_content.startswith("[Error"):
+             return {"success": False, "error": generated_content}
+
+        # 2. Store content
+        try:
+            mood = {}
+            if self.mood_manager and hasattr(self.mood_manager, 'get_current_mood'):
+                 current_mood = await self.mood_manager.get_current_mood()
+                 mood = current_mood.dict() if hasattr(current_mood, 'dict') else current_mood
+            final_metadata = metadata or {}
+            final_metadata.update({"mood": mood, "prompt": prompt})
+
+            storage_result = await self.creative_system.storage.store_content(
+                content_type="lyrics", title=title, content=generated_content, metadata=final_metadata
+            )
+            storage_result["success"] = True
+            return storage_result
+        except Exception as e:
+            logger.error(f"Error storing generated lyrics: {e}", exc_info=True)
+            return {"success": False, "error": f"Error storing lyrics: {str(e)}"}
+
+    async def create_journal(self, title: str, prompt: str = "", metadata: Optional[Dict[str, Any]] = None):
+        """Tool: Generate and store a journal entry."""
+        logger.info(f"Action: Create journal '{title}'")
+        if not self.creative_system or not hasattr(self.creative_system, 'storage') or not hasattr(self.creative_system.storage, 'store_content'):
+            return {"success": False, "error": "Creative system storage unavailable"}
+
+        # 1. Generate content
+        generated_content = await self._generate_creative_content("journal entry", title, prompt) # Use clearer type for prompt
+        if generated_content.startswith("[Error"):
+             return {"success": False, "error": generated_content}
+
+        # 2. Store content
+        try:
+            mood = {}
+            if self.mood_manager and hasattr(self.mood_manager, 'get_current_mood'):
+                 current_mood = await self.mood_manager.get_current_mood()
+                 mood = current_mood.dict() if hasattr(current_mood, 'dict') else current_mood
+            final_metadata = metadata or {}
+            final_metadata.update({"mood": mood, "prompt": prompt})
+
+            storage_result = await self.creative_system.storage.store_content(
+                content_type="journal", title=title, content=generated_content, metadata=final_metadata
+            )
+            storage_result["success"] = True
+            return storage_result
+        except Exception as e:
+            logger.error(f"Error storing generated journal entry: {e}", exc_info=True)
+            return {"success": False, "error": f"Error storing journal: {str(e)}"}
+
+
+    # --- Implementations for list_creations, retrieve_content, assess_capabilities ---
+    # (Keep the implementations from the previous response, as they correctly call
+    # self.creative_system.storage or self.capability_assessor)
+    async def list_creations(self, content_type: Optional[str] = None, limit: int = 20, offset: int = 0):
+         """Tool: List Nyx’s recent creative works"""
+         # ... (Implementation from previous response) ...
+         if not self.creative_system or not hasattr(self.creative_system, 'storage'):
+             logger.error("Creative system or storage not available for list_creations")
+             return {"success": False, "error": "Creative system storage unavailable"}
+         storage = self.creative_system.storage
+         # Assuming SQLiteContentSystem needs a list_content method, add fallback
+         list_handler = getattr(storage, 'list_content', None)
+         if list_handler and callable(list_handler):
+              try:
+                  return await list_handler(content_type, limit, offset)
+              except Exception as e:
+                  logger.error(f"Error calling storage.list_content: {e}", exc_info=True)
+                  return {"success": False, "error": str(e)}
+         elif isinstance(storage, SQLiteContentSystem): # Fallback for direct SQLite
+              try:
+                  cursor = storage.conn.cursor()
+                  query = "SELECT id, type, title, created_at FROM content"
+                  params: List[Any] = []
+                  if content_type:
+                      query += " WHERE type = ?"
+                      params.append(content_type)
+                  query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                  params.extend([limit, offset])
+                  cursor.execute(query, params)
+                  rows = cursor.fetchall()
+                  cols = [col[0] for col in cursor.description]
+                  return [dict(zip(cols, row)) for row in rows]
+              except Exception as e:
+                  logger.error(f"Error listing creations via SQLite fallback: {e}", exc_info=True)
+                  return {"success": False, "error": str(e)}
+         else:
+             logger.error("Cannot list creations: No handler and storage is not SQLite.")
+             return {"success": False, "error": "Cannot list creations"}
+
+    async def retrieve_content(self, content_id: str):
+        """Tool: Retrieve a piece of content by ID"""
+        if not self.creative_system or not hasattr(self.creative_system, 'storage'):
+            logger.error("Creative system or storage not available for retrieve_content")
+            return {"success": False, "error": "Creative system storage unavailable"}
+        storage = self.creative_system.storage
+        retrieve_handler = getattr(storage, 'retrieve_content', getattr(self.creative_system, 'retrieve_content', None))
+
+        if retrieve_handler and callable(retrieve_handler):
+            try:
+                return await retrieve_handler(content_id)
+            except Exception as e:
+                 logger.error(f"Error calling retrieve_content handler: {e}", exc_info=True)
+                 return {"success": False, "error": str(e)}
+        elif isinstance(storage, SQLiteContentSystem): # Fallback for direct SQLite
+            try:
+                cursor = storage.conn.cursor()
+                cursor.execute("SELECT id, type, title, filepath, created_at, metadata FROM content WHERE id = ?", (content_id,))
+                row = cursor.fetchone()
+                if row:
+                    cols = [col[0] for col in cursor.description]
+                    content_dict = dict(zip(cols, row))
+                    try: # Attempt to read file content
+                        filepath = Path(content_dict['filepath'])
+                        if filepath.is_file():
+                            content_dict['content'] = filepath.read_text(encoding='utf-8', errors='ignore')
+                        else: content_dict['content'] = "[File Not Found]"
+                    except Exception as read_err:
+                        content_dict['content'] = f"[Error reading file: {read_err}]"
+                    try: content_dict['metadata'] = json.loads(content_dict['metadata'])
+                    except (json.JSONDecodeError, TypeError): pass # Keep metadata as string if not valid JSON
+                    return content_dict
+                else: return None # Not found
+            except Exception as e:
+                logger.error(f"Error retrieving content via SQLite fallback: {e}", exc_info=True)
+                return {"success": False, "error": str(e)}
+        else:
+            logger.error("Cannot retrieve content: No retrieve_content handler found and storage is not SQLiteContentSystem.")
+            return {"success": False, "error": "Cannot retrieve content"}
+
+    async def assess_capabilities(self):
+        """Tool: Assess Nyx’s current creative capabilities."""
+        if not self.capability_assessor or not hasattr(self.capability_assessor, 'assess_all'):
+             logger.error("Capability assessor not available for assess_capabilities action")
+             return {"success": False, "error": "Capability assessor unavailable"}
+        try:
+             # Assuming assess_all returns the desired report dictionary
+             return await self.capability_assessor.assess_all()
+        except Exception as e:
+             logger.error(f"Error in assess_capabilities action handler: {e}", exc_info=True)
+             return {"success": False, "error": str(e)}
+
+    async def create_new_conversation(self, user_id: str, title: Optional[str] = None, initial_message: Optional[str] = None) -> Dict[str, Any]:
+        if not self.ui_conversation_manager:
+            return {"success": False, "error": "UI conversation manager not initialized"}
+        try:
+            return await self.ui_conversation_manager.create_new_conversation(
+                user_id=user_id, title=title, initial_message=initial_message)
+        except Exception as e:
+            logger.error(f"Error in create_new_conversation action handler: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    async def send_message(self, conversation_id: str, message_content: str) -> Dict[str, Any]:
+        if not self.ui_conversation_manager:
+            return {"success": False, "error": "UI conversation manager not initialized"}
+        try:
+            return await self.ui_conversation_manager.send_message(
+                conversation_id=conversation_id, message_content=message_content)
+        except Exception as e:
+            logger.error(f"Error in send_message action handler: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    async def search_conversations(self, query: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self.ui_conversation_manager:
+             logger.error("UI conversation manager not available for search_conversations")
+             return [{"success": False, "error": "UI conversation manager unavailable"}] # Return list with error dict
+        try:
+            return await self.ui_conversation_manager.search_conversation_history(
+                query=query, user_id=user_id)
+        except Exception as e:
+            logger.error(f"Error in search_conversations action handler: {e}", exc_info=True)
+            return [{"success": False, "error": str(e)}] # Return list with error dict
 
     def _initialize_agents(self):
         """Initialize the agent hierarchy"""
