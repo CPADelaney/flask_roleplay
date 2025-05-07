@@ -378,6 +378,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.reasoning_triage_agent = reasoning_triage_agent
             self.internal_feedback = InternalFeedbackSystem()
             self.dynamic_adaptation = DynamicAdaptationSystem()
+            self.reward_system = RewardSystemProcessor()
             self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
             self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
             self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
