@@ -113,15 +113,15 @@ class MemoryQuery(BaseModel):
 class MemoryCreateParams(BaseModel):
     """Input model for creating memories."""
     memory_text: str
-    memory_type: Optional[str] = None  # Changed from: str = "observation"
-    memory_scope: Optional[str] = None # Changed from: str = "game"
-    significance: Optional[int] = None   # Changed from: int = 5
-    tags: List[str] = Field(default_factory=list) # default_factory is fine
-    metadata: Dict[str, Any] = Field(default_factory=dict) # default_factory is fine
+    memory_type: Optional[str] = None
+    memory_scope: Optional[str] = None
+    significance: Optional[int] = None
+    tags: Optional[List[str]] = None  # CHANGED: Was Field(default_factory=list)
+    metadata: Optional[Dict[str, Any]] = None # CHANGED: Was Field(default_factory=dict)
     # --- NEW PARAMS ---
-    memory_level: Optional[Literal['detail', 'summary', 'abstraction']] = None # Changed
+    memory_level: Optional[Literal['detail', 'summary', 'abstraction']] = None
     source_memory_ids: Optional[List[str]] = None
-    fidelity: Optional[float] = None # Changed from: float = 1.0
+    fidelity: Optional[float] = None
     summary_of: Optional[str] = None
 
 class MemoryUpdateParams(BaseModel):
@@ -660,21 +660,21 @@ async def add_memory(
     Add a new memory to the system, including hierarchical details.
     Restored full indexing and pattern check call.
     """
-    with custom_span("add_memory", {"memory_type": params.memory_type or "observation", "memory_level": params.memory_level or "detail"}): # Adjusted for potential None
+    # Apply defaults if params are None (including for tags and metadata)
+    actual_memory_type = params.memory_type if params.memory_type is not None else "observation"
+    actual_memory_scope = params.memory_scope if params.memory_scope is not None else "game"
+    actual_significance = params.significance if params.significance is not None else 5
+    actual_memory_level = params.memory_level if params.memory_level is not None else 'detail'
+    actual_fidelity = params.fidelity if params.fidelity is not None else 1.0
+    actual_tags = params.tags if params.tags is not None else [] # CHANGED: Handle None for tags
+    actual_metadata_input = params.metadata if params.metadata is not None else {} # CHANGED: Handle None for metadata
+
+    with custom_span("add_memory", {"memory_type": actual_memory_type, "memory_level": actual_memory_level}):
         memory_core = ctx.context
         if not memory_core.initialized: memory_core.initialize()
 
         memory_id = str(uuid.uuid4())
         timestamp = datetime.datetime.now().isoformat()
-
-        # Apply defaults if params are None
-        actual_memory_type = params.memory_type if params.memory_type is not None else "observation"
-        actual_memory_scope = params.memory_scope if params.memory_scope is not None else "game"
-        actual_significance = params.significance if params.significance is not None else 5
-        actual_memory_level = params.memory_level if params.memory_level is not None else 'detail'
-        actual_fidelity = params.fidelity if params.fidelity is not None else 1.0
-
-        metadata_input = params.metadata or {} # Ensure metadata is a dict
 
         metadata = MemoryMetadata(
             timestamp=timestamp,
@@ -682,18 +682,20 @@ async def add_memory(
             memory_level=actual_memory_level,
             source_memory_ids=params.source_memory_ids,
             summary_of=params.summary_of,
-            original_form=params.memory_text, 
-            **metadata_input # Use the prepared metadata_input
+            original_form=params.memory_text,
+            **actual_metadata_input # Use the prepared actual_metadata_input
         )
-        if 'emotional_context' in metadata_input and isinstance(metadata_input['emotional_context'], dict):
-            metadata.emotional_context = EmotionalMemoryContext(**metadata_input['emotional_context'])
+        # This check needs to use actual_metadata_input as params.metadata might be None
+        if 'emotional_context' in actual_metadata_input and isinstance(actual_metadata_input['emotional_context'], dict):
+            metadata.emotional_context = EmotionalMemoryContext(**actual_metadata_input['emotional_context'])
 
         embedding = await _generate_embedding(ctx, params.memory_text)
 
         memory_data = Memory(
             id=memory_id, memory_text=params.memory_text, memory_type=actual_memory_type,
             memory_scope=actual_memory_scope, significance=actual_significance,
-            tags=params.tags or [], metadata=metadata, embedding=embedding,
+            tags=actual_tags, # Use actual_tags
+            metadata=metadata, embedding=embedding,
             created_at=timestamp
         )
 
@@ -706,7 +708,7 @@ async def add_memory(
         memory_core.level_index[actual_memory_level].add(memory_id)
         sig_level = min(10, max(1, int(actual_significance)))
         memory_core.significance_index[sig_level].add(memory_id)
-        for tag in params.tags or []: memory_core.tag_index[tag].add(memory_id)
+        for tag in actual_tags: memory_core.tag_index[tag].add(memory_id) # Use actual_tags
         dt_timestamp = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         memory_core.temporal_index.append((dt_timestamp, memory_id))
         memory_core.temporal_index.sort(key=lambda x: x[0])
@@ -720,11 +722,12 @@ async def add_memory(
 
         memory_core.query_cache = {}
         # --- Call _check_for_patterns (Restored) ---
-        if actual_memory_type == "observation" and (params.tags or []): # Use actual_memory_type
-            asyncio.create_task(_check_for_patterns(ctx, params.tags))
+        if actual_memory_type == "observation" and actual_tags: # Use actual_tags
+            asyncio.create_task(_check_for_patterns(ctx, actual_tags))
 
         logger.debug(f"Added {actual_memory_level} memory {memory_id} of type {actual_memory_type}")
         return memory_id
+
 
 
 @function_tool
