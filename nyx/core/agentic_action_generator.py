@@ -267,8 +267,8 @@ class EnhancedAgenticActionGenerator:
                  config=None, # Added config as it was in the original snippet for context
                  perception_system=None, # Added for context
                  world_model=None, # Added for context
-                 task_planner=None): # Added for context                 
-                 ):
+                 task_planner=None
+                ): # Added for context                 
                      
         """Initialize with references to required subsystems"""
         # Core systems 
