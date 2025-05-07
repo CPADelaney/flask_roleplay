@@ -378,7 +378,6 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.reasoning_triage_agent = reasoning_triage_agent
             self.internal_feedback = InternalFeedbackSystem()
             self.dynamic_adaptation = DynamicAdaptationSystem()
-            self.reward_system = RewardSystemProcessor()
             self.context_system = ContextAwarenessSystem(emotional_core=self.emotional_core)
             self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
             self.experience_consolidation = ExperienceConsolidationSystem(memory_core=self.memory_core, experience_interface=self.experience_interface)
@@ -397,8 +396,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.digital_somatosensory_system = DigitalSomatosensorySystem(
                 memory_core=self.memory_core, emotional_core=self.emotional_core, reward_system=self.reward_system
             )
-            with trace(workflow_name="DigitalSomatosensorySystem_Initialize_Brain", group_id=self.trace_group_id):
-                await self.digital_somatosensory_system.initialize()
+            await self.digital_somatosensory_system.initialize()
             self.reward_system.somatosensory_system = self.digital_somatosensory_system
             if self.identity_evolution: self.identity_evolution.somatosensory_system = self.digital_somatosensory_system
 
@@ -412,11 +410,10 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             self.conditioned_input_processor = BlendedInputProcessor(
                 conditioning_system=self.conditioning_system, emotional_core=self.emotional_core, somatosensory_system=self.digital_somatosensory_system
             )
-            with trace(workflow_name="BaselinePersonalityConditioning_Brain", group_id=self.trace_group_id):
-                personality_profile_obj = await self.conditioning_config.get_personality_profile()
-                personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
-                await ConditioningSystem.initialize_baseline_personality(
-                    conditioning_system=self.conditioning_system, personality_profile=personality_profile_dict
+            personality_profile_obj = await self.conditioning_config.get_personality_profile()
+            personality_profile_dict = personality_profile_obj.model_dump() if hasattr(personality_profile_obj, "model_dump") else personality_profile_obj
+            await ConditioningSystem.initialize_baseline_personality(
+                conditioning_system=self.conditioning_system, personality_profile=personality_profile_dict
                 )
             logger.debug("Baseline personality conditioning completed.")
 
