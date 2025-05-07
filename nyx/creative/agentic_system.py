@@ -70,9 +70,38 @@ def _embed(texts: List[str]) -> np.ndarray:  # (n, 1536)
 # ---------------------------------------------------------------------------
 
 class GitChangeTracker:
-    def __init__(self, repo_root: str = ".", base_ref: str = "HEAD") -> None:
+    def __init__(self, repo_root: str = ".", base_ref: Optional[str] = None) -> None:
         self.root = Path(repo_root).resolve()
-        self.base = base_ref
+        self.base_ref_for_diff = base_ref # Will be used if it *is* a git repo
+        # Check for the .git directory to determine if it's a git repo
+        self.is_git_repo = (self.root / ".git").is_dir()
+
+        if not self.is_git_repo:
+            logger.warning(
+                f"Directory '{self.root}' does not appear to be a Git repository (no .git folder found). "
+                f"Git-based change tracking will be effectively disabled for this tracker instance. "
+                f"The system will assume no files have changed according to git for incremental analysis."
+            )
+        else:
+            logger.info(f"GitChangeTracker initialized for git repo at '{self.root}'. Base for diff: {self.base_ref_for_diff}")
+            # Optionally, try to get current commit if needed for complex diff logic later
+            # self.current_commit_at_init = self._get_current_commit_hash()
+
+    def _get_current_commit_hash(self) -> Optional[str]: # Keep this helper
+        if not self.is_git_repo:
+            return None
+        try:
+            return subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True, stderr=subprocess.DEVNULL
+            ).strip()
+        except Exception:
+            logger.warning(f"Could not get current git commit hash for repo at '{self.root}'.")
+            return None
+
+    def changed_files(self, exts: Optional[List[str]] = None, first_run_behavior: str = "list_all_tracked") -> List[Path]:
+        if not self.is_git_repo:
+            logger.info("GitChangeTracker: Not a git repository. Returning no files based on git changes.")
+            return [] # CRITICAL: If not a git repo, return empty list.    
 
     def changed_files(self, exts: Optional[List[str]] = None) -> List[Path]:
         exts = exts or [
@@ -86,14 +115,30 @@ class GitChangeTracker:
             ".txt",
         ]
         try:
-            diff = subprocess.check_output(
-                ["git", "diff", "--name-only", self.base], cwd=self.root, text=True
-            )
-            files = [self.root / p.strip() for p in diff.splitlines() if p.strip()]
+            cmd = ['git', 'ls-files'] + [f'--'] + [f'*{ext}' for ext in exts] # Default to listing relevant files
+            if self.base_ref_for_diff: # If you have a specific commit to diff against
+                current_head = self._get_current_commit_hash()
+                if current_head and self.base_ref_for_diff != current_head:
+                    cmd = ['git', 'diff', '--name-only', self.base_ref_for_diff, 'HEAD']
+                elif not current_head: # Couldn't get current head, fall back
+                    logger.warning("Could not get current HEAD for diff, falling back to ls-files.")
+
+            logger.debug(f"GitChangeTracker running command: {' '.join(cmd)} in {self.root}")
+            output = subprocess.check_output(cmd, cwd=self.root, text=True, stderr=subprocess.PIPE)
+            git_files = [self.root / p.strip() for p in output.splitlines() if p.strip()]
+            files_to_return = [p for p in git_files if p.suffix in exts and p.is_file()]
+
+            # Update base_ref for next time (optional, if you want incremental diffs within a session)
+            # new_head = self._get_current_commit_hash()
+            # if new_head: self.base_ref_for_diff = new_head
+
+            return files_to_return
         except subprocess.CalledProcessError as exc:
-            logger.warning("git diff failed (%s); scanning repo", exc)
-            files = list(self.root.rglob("*"))
-        return [p for p in files if p.suffix in exts and p.exists()]
+            logger.warning(f"git command '{' '.join(exc.cmd)}' failed (code {exc.returncode}): {exc.stderr.strip()}. Returning empty list.")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in GitChangeTracker.changed_files: {e}", exc_info=True)
+            return []
 
 # ---------------------------------------------------------------------------
 # 2. SQLite content store (unchanged API)
@@ -255,31 +300,47 @@ class ParallelCodeAnalyzer:
     def __init__(self, max_workers: int | None = None):
         self.max_workers = max_workers or os.cpu_count() or 4
 
-    def analyze(self, paths: List[Path]):
-        py_files = [p for p in paths if p.suffix == ".py"]
+    def analyze(self, paths: List[Path]): # paths are already Path objects
+        # Filter for Python files and ensure they actually exist as files
+        py_files = [p for p in paths if p.suffix == ".py" and p.is_file()]
         results: Dict[str, Dict[str, int]] = {}
-        if not py_files: # Add check for empty list
-            logger.info("CodeAnalyzer: No Python files to analyze.")
+
+        if not py_files:
+            logger.info("CodeAnalyzer: No Python files provided or found to analyze.")
             return results
-    
-        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:   # NEW
-            # Create a list of future-to-path mappings to handle potential errors per file
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
             future_to_path = {}
             for p in py_files:
                 try:
-                    # Reading text should be safe here, but actual parsing is in _scan
-                    future_to_path[pool.submit(p.read_text, encoding="utf-8")] = p
+                    # Submit a helper that reads then analyzes
+                    future_to_path[pool.submit(self._read_and_analyze_single_file, p)] = p
                 except Exception as e:
-                    logger.error(f"Failed to submit read task for file {p}: {e}")
-    
+                    logger.error(f"Failed to submit analysis task for file {p}: {e}")
+            
             for fut in as_completed(future_to_path):
-                p = future_to_path[fut]
+                p_path = future_to_path[fut]
                 try:
-                    file_content = fut.result() # Get content from future
-                    results[str(p)] = _scan(file_content) # Pass content to _scan
+                    analysis_metrics = fut.result() # Result from _read_and_analyze_single_file
+                    if analysis_metrics is not None: # Check if analysis was successful
+                        results[str(p_path)] = analysis_metrics
                 except Exception as exc:
-                    logger.error("AST scan/processing failure for file %s: %s", p, exc)
+                    # Log error for this specific file but continue with others
+                    logger.error("Analysis/processing failure for file %s: %s", p_path, exc, exc_info=True)
         return results
+
+    def _read_and_analyze_single_file(self, file_path: Path) -> Optional[Dict[str, int]]:
+        """Helper method to read a file's content and then analyze it."""
+        try:
+            code_content = file_path.read_text(encoding="utf-8")
+            return _scan(code_content) # _scan is your existing AST parsing function
+        except FileNotFoundError:
+            logger.warning(f"File not found during analysis: {file_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to read or perform AST scan on file {file_path}: {e}", exc_info=True)
+            return None
+
 
 # ---------------------------------------------------------------------------
 # 6. Orchestrator with prompt builder
@@ -296,17 +357,60 @@ class AgenticCreativitySystemV2:
 
     # --------------- ingestion ----------------
     async def incremental_codebase_analysis(self):
-        changed = self.tracker.changed_files()
+        if not self.tracker.is_git_repo:
+            logger.info("Git repository not available in the current environment. "
+                        "Skipping incremental codebase analysis based on git changes.")
+            # Depending on requirements, you might still want to embed *all* files
+            # on first run if no git, or do nothing. For now, just skipping git part.
+            # If you want to embed all files if no git, that logic would go here.
+            # For now, it just means no "changed" files are found via git.
+            # The embedder might still be called with an empty list or a list from another source.
+            return {"status": "skipped_no_git_repo", "changed_files_git": 0, "files_analyzed_metrics": 0}
+
+        # If it IS a git repo, proceed:
+        # Pass first_run_behavior='list_all_tracked' if you want to embed everything the first time
+        # this AgenticCreativitySystemV2 instance is used in a git repo.
+        # Or, if you manage a persistent `base_ref` across restarts, pass that.
+        changed = self.tracker.changed_files(first_run_behavior="list_all_tracked")
+
         if not changed:
-            return {"changed_files": 0}
-        metrics = self.analyzer.analyze(changed)
-        for p in changed:
+            logger.info("No changed files detected by GitChangeTracker for incremental analysis.")
+            return {"status": "no_changes", "changed_files_git": 0, "files_analyzed_metrics": 0}
+
+        logger.info(f"Found {len(changed)} files via GitChangeTracker for incremental analysis.")
+        # The 'changed' list here will be based on git operations if is_git_repo was true,
+        # or empty if is_git_repo was false.
+        metrics = self.analyzer.analyze(changed) # analyzer now uses ThreadPoolExecutor
+
+        files_embedded_count = 0
+        for p in changed: # Only iterate if 'changed' is not empty
             try:
                 self.embedder.embed_file(p)
+                files_embedded_count +=1
             except Exception as exc:
-                logger.warning("Embedding failed %s: %s", p, exc)
-        summary = {"changed_files": len(changed), "aggregated_loc": sum(m["loc"] for m in metrics.values()), "files": metrics}
-        await self.storage.store_content(content_type="analysis", title=f"Incremental analysis {datetime.utcnow().isoformat(timespec='seconds')}", content=json.dumps(summary, indent=2))
+                logger.warning("Embedding failed for changed file %s: %s", p, exc)
+        
+        analyzed_count = len(metrics)
+        summary = {
+            "status": "completed" if changed else "no_changes_processed",
+            "changed_files_git": len(changed),
+            "files_analyzed_for_metrics": analyzed_count,
+            "files_embedded": files_embedded_count,
+            "aggregated_loc": sum(m.get("loc", 0) for m in metrics.values()),
+            "files_details": metrics
+        }
+        # Storing analysis results might be optional depending on runtime needs
+        # For self-analysis, Nyx might want to store this.
+        try:
+            await self.storage.store_content(
+               content_type="analysis",
+               title=f"Runtime incremental analysis {datetime.utcnow().isoformat(timespec='seconds')}",
+               content=json.dumps(summary, indent=2)
+            )
+        except Exception as e:
+            logger.error(f"Failed to store content analysis: {e}")
+
+        logger.info(f"Incremental codebase analysis completed. Git-detected changes: {len(changed)}, Analyzed for metrics: {analyzed_count}, Embedded: {files_embedded_count}.")
         return summary
 
     # --------------- retrieval ----------------
