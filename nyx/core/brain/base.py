@@ -419,6 +419,13 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                 )
             logger.debug("Baseline personality conditioning completed.")
 
+            if self.reward_system and self.needs_system:
+                if hasattr(self.reward_system, 'needs_system'): # Check if attribute exists
+                    self.reward_system.needs_system = self.needs_system
+                    logger.debug("Linked NeedsSystem reference to RewardSignalProcessor.")
+                else:
+                    logger.warning("RewardSignalProcessor does not have a 'needs_system' attribute to link to.")
+
             # --- Step 5: Higher-Level Cognitive & Interaction Systems (Part 1) ---
             logger.debug(f"NyxBrain Init Step 5: Higher-Level Systems (Part 1) for {self.user_id}-{self.conversation_id}")
             if has_relationship_manager and RelationshipManager:
