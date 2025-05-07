@@ -2008,18 +2008,11 @@ async def attempt_faction_coup(
 
 # Narrative Integration Tool (Added based on review)
 
-@function_tool
-async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str) -> Dict[str, Any]:
+async def _internal_add_conflict_to_narrative_logic(ctx: RunContextWrapper, narrative_text: str) -> Dict[str, Any]:
     """
-    Analyze a narrative text to determine if it should trigger a conflict.
-    
-    Args:
-        narrative_text: The narrative text to analyze
-        
-    Returns:
-        Dictionary with analysis result and potentially a new conflict
+    Core logic to analyze narrative text and potentially add a new conflict.
+    This function is intended for direct Python calls.
     """
-    context = ctx.context
     
     # Get current day
     current_day = await get_current_day(ctx)
@@ -2056,29 +2049,24 @@ async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str)
     Return your response in JSON format.
     """
     
-    response = await get_chatgpt_response(
+    response = await get_chatgpt_response( # Assuming this is a callable async function
         context.conversation_id,
         "conflict_analysis",
         prompt
     )
     
-    # Extract analysis from response
     conflict_analysis = {}
     if response and "function_args" in response:
         conflict_analysis = response["function_args"]
     else:
-        # Try to extract JSON from text response
         try:
             response_text = response.get("response", "{}")
-            
-            # Find JSON in the response
             json_match = re.search(r'{.*}', response_text, re.DOTALL)
             if json_match:
                 conflict_analysis = json.loads(json_match.group(0))
         except (json.JSONDecodeError, TypeError):
-            pass
+            pass # Keep conflict_analysis as {}
     
-    # Determine if we should generate a conflict
     should_generate = conflict_analysis.get("conflict_potential", False)
     if not should_generate:
         return {
@@ -2087,20 +2075,17 @@ async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str)
             "analysis": conflict_analysis
         }
     
-    # Get mentioned NPCs from narrative
+    # Assuming extract_npcs_from_narrative, create_conflict_record, etc. are callable async functions
     mentioned_npcs = await extract_npcs_from_narrative(ctx, narrative_text)
     if not mentioned_npcs or len(mentioned_npcs) < 2:
-        # Not enough NPCs to create an interesting conflict
         return {
             "trigger_conflict": False,
             "reason": "Not enough NPCs involved in the narrative",
             "mentioned_npcs": mentioned_npcs
         }
     
-    # Generate a conflict based on the narrative analysis
     conflict_type = conflict_analysis.get("conflict_type", "minor")
     
-    # Generate conflict
     conflict_data = {
         "conflict_type": conflict_type,
         "conflict_name": conflict_analysis.get("conflict_name", f"Narrative-triggered {conflict_type} conflict"),
@@ -2110,18 +2095,15 @@ async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str)
         "narrative_source": narrative_text[:100] + "..." if len(narrative_text) > 100 else narrative_text
     }
     
-    # Create conflict record
     conflict_id = await create_conflict_record(ctx, conflict_data, current_day)
     
-    # Create stakeholders from mentioned NPCs
-    stakeholder_npcs = []
-    for npc_id in mentioned_npcs[:4]:  # Limit to 4 NPCs
-        npc_details = await get_npc_details(ctx, npc_id)
+    stakeholder_npcs_details = []
+    for npc_id_val in mentioned_npcs[:4]:
+        npc_details = await get_npc_details(ctx, npc_id_val) # Ensure get_npc_details is callable
         if npc_details:
-            stakeholder_npcs.append(npc_details)
+            stakeholder_npcs_details.append(npc_details)
     
-    # Create stakeholders and paths
-    await create_stakeholders(ctx, conflict_id, conflict_data, stakeholder_npcs)
+    await create_stakeholders(ctx, conflict_id, conflict_data, stakeholder_npcs_details) # Ensure this is callable
     
     # Generate basic resolution paths
     default_paths = [
@@ -2145,26 +2127,40 @@ async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str)
         }
     ]
     
-    conflict_data["resolution_paths"] = default_paths
-    await create_resolution_paths(ctx, conflict_id, conflict_data)
+    conflict_data["resolution_paths"] = default_paths # This seems to be modifying a local dict, ensure it's used correctly if needed.
+    await create_resolution_paths(ctx, conflict_id, {"resolution_paths": default_paths}) # Pass the paths correctly
     
-    # Create initial memory event for the conflict
-    await create_conflict_memory(
+    await create_conflict_memory( # Ensure this is callable
         ctx,
         conflict_id,
         f"A new conflict has emerged from the narrative: {conflict_data['conflict_name']}.",
         significance=7
     )
     
-    # Return success with the created conflict
     return {
         "trigger_conflict": True,
         "conflict_id": conflict_id,
         "conflict_name": conflict_data["conflict_name"],
         "conflict_type": conflict_type,
-        "stakeholders": [npc["npc_name"] for npc in stakeholder_npcs],
+        "stakeholders": [npc["npc_name"] for npc in stakeholder_npcs_details], # Use details for names
         "analysis": conflict_analysis
     }
+
+@function_tool
+# @track_performance("add_conflict_to_narrative_tool") # Optional: if you want to track the tool call separately
+async def add_conflict_to_narrative(ctx: RunContextWrapper, narrative_text: str) -> Dict[str, Any]:
+    """
+    OpenAI Agent Tool: Analyzes narrative text to identify and add conflicts.
+    (This is the tool definition for the agent framework)
+    
+    Args:
+        narrative_text: The narrative text to analyze.
+
+    Returns:
+        A dictionary detailing the outcome of the conflict analysis.
+    """
+    return await _internal_add_conflict_to_narrative_logic(ctx, narrative_text)
+
 
 # Helper Functions
 
