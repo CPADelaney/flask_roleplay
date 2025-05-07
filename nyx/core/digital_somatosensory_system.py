@@ -2061,59 +2061,104 @@ class DigitalSomatosensorySystem:
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Internal context error"}, tripwire_triggered=True)
 
         validation_input_dict = {}
-
         if isinstance(input_data, str):
             try:
                 parsed_input = json.loads(input_data)
-                if isinstance(parsed_input, dict):
-                    validation_input_dict = parsed_input
-                else:
-                    logger.warning(f"Input data was a JSON string but not a dictionary: {input_data}")
-                    validation_input_dict = {"action": "free_text_request", "text_input": input_data}
-            except json.JSONDecodeError:
-                validation_input_dict = {"action": "free_text_request", "text_input": input_data}
-        elif isinstance(input_data, dict):
-            validation_input_dict = input_data
+                if isinstance(parsed_input, dict): validation_input_dict = parsed_input
+                else: logger.warning(f"Input data JSON parsed but not a dict: {input_data}"); validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+            except json.JSONDecodeError: validation_input_dict = {"action": "free_text_request", "text_input": input_data}
+        elif isinstance(input_data, dict): validation_input_dict = input_data
         else:
             logger.error(f"Unexpected input type for validation: {type(input_data)}")
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"}, tripwire_triggered=True)
 
         if validation_input_dict.get("action") == "free_text_request":
-            logger.debug("Input identified as free_text_request, skipping detailed stimulus validation.")
+            logger.debug("Input identified as free_text_request, skipping detailed stimulus validation in guardrail.")
             return GuardrailFunctionOutput(
                 output_info={"is_valid": True, "reason": "Free text request, validation skipped by guardrail."},
                 tripwire_triggered=False
             )
 
-        validator_agent_input = {
+        validator_agent_input_dict = { # Renamed to clarify it's a dict
             "stimulus_type": validation_input_dict.get("stimulus_type"),
             "body_region": validation_input_dict.get("body_region"),
             "intensity": validation_input_dict.get("intensity"),
             "duration": validation_input_dict.get("duration"),
         }
 
-        # Run validation agent with tracing
-        # CORRECTED LINE: Changed 'async with' to 'with'
-        async with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id):
+        # Convert the dictionary to a JSON string to pass as input
+        # This assumes the stimulus_validator agent is prompted to understand this JSON string
+        # or has tools that can parse it.
+        # ALTERNATIVELY, if validator_agent_input_dict is meant to be tool parameters
+        # for a tool the stimulus_validator agent *calls*, then the input to Runner.run
+        # should be a user message prompting the agent to use that tool.
+        # For now, assuming the agent can process this JSON string directly as its "query".
+
+        # --- CHANGE: Convert validator_agent_input_dict to a string or list[InputItem] ---
+        # Option A: Pass as a JSON string (simplest change if agent understands it)
+        input_for_validator_agent = json.dumps(validator_agent_input_dict)
+        
+        # Option B: Format as a list of input items (more explicit for SDK)
+        # Example: Treat it as a user message containing the JSON
+        # from openai.types.responses import ResponseInputUserMessageParam # Requires import
+        # input_for_validator_agent = [
+        #     ResponseInputUserMessageParam(content=json.dumps(validator_agent_input_dict))
+        # ]
+        # For this option, the stimulus_validator agent's instructions would need to be clear
+        # that it should parse the user message content.
+
+        # Let's go with Option A (JSON string) for now, as it's a common way to pass structured data.
+        # The stimulus_validator agent's instructions are:
+        # "You validate inputs...Return validation results and reasoning. Use the available tool to get valid regions."
+        # It doesn't explicitly say it expects a JSON string, but it's plausible.
+        # If the agent's tools are designed to take these fields directly (e.g. if the agent is
+        # supposed to call a tool named `validate_stimulus_details` with these params), then the input
+        # to Runner.run should be a prompt like "Validate these stimulus details: ..." and the agent
+        # would make a tool call with `validator_agent_input_dict` as arguments.
+        # However, `stimulus_validator` itself *is* the agent doing the validation, and its output_type
+        # is `StimulusValidationOutput`. This implies it should directly produce this output based on its input.
+
+        # Given the `stimulus_validator`'s instructions and its `output_type=StimulusValidationOutput`,
+        # it's most likely that the agent should receive the parameters it needs to validate
+        # as part of its direct input, which it then processes to produce `StimulusValidationOutput`.
+        # The SDK might handle structured input if the agent has an `input_type` defined or if
+        # the model is instructed to parse a specific format. Since we are passing a string,
+        # the agent needs to be robust to that.
+
+        # If `stimulus_validator` is meant to *receive* these fields (stimulus_type, body_region etc.)
+        # as if they were arguments to a function it *is*, then the SDK's new "Responses API" with structured inputs
+        # might be relevant if `output_type` also implies a structured *input* schema.
+        # However, the error message comes from the generic `input.extend`, so the issue is the top-level input type.
+
+        # Let's use a string input, as it's one of the accepted types. The agent's prompt
+        # might need adjustment if it can't naturally parse the JSON string.
+        # "Validate this stimulus data: {json.dumps(validator_agent_input_dict)}" could be a more explicit prompt.
+
+        descriptive_input_string = f"Please validate the following stimulus data and provide your output in the StimulusValidationOutput format: {json.dumps(validator_agent_input_dict)}"
+
+
+        async with trace(workflow_name="Stimulus_Validation_Guardrail_Run", group_id=system_instance.trace_group_id): # Added _Run
             try:
-                # THIS IS THE CALL TO Runner.run THAT'S FAILING INTERNALLY
                 result = await Runner.run(
-                    system_instance.stimulus_validator, # The agent to run
-                    validator_agent_input,              # The input to this agent
-                    context=ctx.context,                # The SomatosensorySystemContext object
+                    system_instance.stimulus_validator,
+                    # descriptive_input_string, # Pass the stringified JSON as input
+                    input_for_validator_agent, # If using Option A (raw JSON string)
+                    context=ctx.context,
                     run_config=RunConfig(
-                        workflow_name="StimulusValidationRun", 
-                        trace_id=None,
+                        workflow_name="StimulusValidationRunInner", # More specific name
+                        trace_id=None, # Will be auto-generated
+                        # group_id=system_instance.trace_group_id # Group to the outer trace if needed
                     )
                 )
+                
                 validation_output = result.final_output_as(StimulusValidationOutput)
                 return GuardrailFunctionOutput(
-                    output_info=validation_output.model_dump(), 
+                    output_info=validation_output.model_dump(),
                     tripwire_triggered=not validation_output.is_valid
                 )
             except Exception as e:
-                 logger.error(f"Error running stimulus validator agent in guardrail: {e}", exc_info=True)
-                 return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Error during validation: {e}"}, tripwire_triggered=True)
+                 logger.error(f"Error running stimulus validator agent in guardrail: {e.__class__.__name__}", exc_info=True) # More specific error class
+                 return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Error during validation: {str(e)}"}, tripwire_triggered=True)
 
 # =============== Helper Methods ===============
     
