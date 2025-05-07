@@ -1,0 +1,1 @@
+It looks like the lint issues and context snippets didn’t come through—could you please paste them so I can propose targeted patch diffs?
