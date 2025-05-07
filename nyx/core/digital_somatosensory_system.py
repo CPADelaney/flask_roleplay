@@ -2053,82 +2053,64 @@ class DigitalSomatosensorySystem:
     
     # =============== Guardrail Functions ===============
     
-    @staticmethod # Add decorator
+    @staticmethod
     async def _validate_input(ctx: RunContextWrapper[SomatosensorySystemContext], agent: Agent, input_data: Any) -> GuardrailFunctionOutput:
-        """Validate input data for the body orchestrator."""
         system_instance = ctx.context.system_instance
         if not system_instance:
             logger.error("Guardrail _validate_input called without system instance in context.")
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": "Internal context error"}, tripwire_triggered=True)
 
-        validation_input_dict = {} # This will hold the dict form of the input
+        validation_input_dict = {}
 
-        # --- CHANGED: Robust input_data handling ---
         if isinstance(input_data, str):
             try:
-                # Attempt to parse if it's a JSON string, common for agent inputs
                 parsed_input = json.loads(input_data)
                 if isinstance(parsed_input, dict):
                     validation_input_dict = parsed_input
-                else: # Parsed but not a dict (e.g. JSON string of a list or number)
-                    # This case might indicate an issue or needs specific handling.
-                    # For now, treat as if it's a text input that couldn't be structured as expected.
+                else:
                     logger.warning(f"Input data was a JSON string but not a dictionary: {input_data}")
                     validation_input_dict = {"action": "free_text_request", "text_input": input_data}
             except json.JSONDecodeError:
-                # Not a JSON string, assume it's a free text request to the orchestrator
                 validation_input_dict = {"action": "free_text_request", "text_input": input_data}
         elif isinstance(input_data, dict):
             validation_input_dict = input_data
         else:
-            # Handle other unexpected input types
             logger.error(f"Unexpected input type for validation: {type(input_data)}")
             return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Unexpected input type: {type(input_data).__name__}"}, tripwire_triggered=True)
-        # --- END CHANGED ---
 
-        # If the action is free_text_request, it might not need stimulus validation.
         if validation_input_dict.get("action") == "free_text_request":
             logger.debug("Input identified as free_text_request, skipping detailed stimulus validation.")
             return GuardrailFunctionOutput(
                 output_info={"is_valid": True, "reason": "Free text request, validation skipped by guardrail."},
-                tripwire_triggered=False # Not a tripwire if it's a valid path
+                tripwire_triggered=False
             )
 
-        # --- CHANGED: Prepare specific fields for the stimulus_validator agent ---
-        # The stimulus_validator agent expects specific fields based on its instructions.
         validator_agent_input = {
             "stimulus_type": validation_input_dict.get("stimulus_type"),
             "body_region": validation_input_dict.get("body_region"),
             "intensity": validation_input_dict.get("intensity"),
-            "duration": validation_input_dict.get("duration"), # Assuming validator checks duration
-            # Add any other fields the stimulus_validator agent might check from its instructions
+            "duration": validation_input_dict.get("duration"),
         }
-        # --- END CHANGED ---
 
         # Run validation agent with tracing
-        async with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id): # Added _Guardrail to name
+        # CORRECTED LINE: Changed 'async with' to 'with'
+        with trace(workflow_name="Stimulus_Validation_Guardrail", group_id=system_instance.trace_group_id):
             try:
-                # --- CHANGED: Pass the original context object (ctx.context) ---
                 result = await Runner.run(
                     system_instance.stimulus_validator,
-                    validator_agent_input,                   # Pass the prepared dictionary
-                    context=ctx.context,                # Pass the SomatosensorySystemContext object
+                    validator_agent_input,
+                    context=ctx.context, 
                     run_config=RunConfig(
-                        workflow_name="StimulusValidationRun", # More specific name
+                        workflow_name="StimulusValidationRun",
                         trace_id=None,
                     )
                 )
-                # --- END CHANGED ---
-
-                # --- CHANGED: Cast to expected type and use model_dump ---
+                
                 validation_output = result.final_output_as(StimulusValidationOutput)
-                # The GuardrailFunctionOutput.output_info expects a dict or Pydantic model.
-                # If validation_output is already a Pydantic model, .model_dump() is good.
                 return GuardrailFunctionOutput(
-                    output_info=validation_output.model_dump(), # Send dict back
+                    output_info=validation_output.model_dump(), 
                     tripwire_triggered=not validation_output.is_valid
                 )
-                # --- END CHANGED ---
             except Exception as e:
                  logger.error(f"Error running stimulus validator agent in guardrail: {e}", exc_info=True)
                  return GuardrailFunctionOutput(output_info={"is_valid": False, "reason": f"Error during validation: {e}"}, tripwire_triggered=True)
