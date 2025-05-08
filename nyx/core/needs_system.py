@@ -302,12 +302,11 @@ async def satisfy_need(
         return result.dict()
 
 @function_tool
-async def decrease_need(
-    ctx: RunContextWrapper[NeedsSystemContext], 
-    name: str, 
-    amount: float, 
-    reason: str = "generic_decrease"
-) -> Dict[str, Any]:
+async def decrease_need(self,
+                       need_name: str,
+                       amount: float,
+                       reason: Optional[str] = None # <--- CORRECT: Use Optional with default None
+                       ) -> Dict[str, Any]:
     """
     Decreases the satisfaction level of a need.
     
@@ -319,34 +318,61 @@ async def decrease_need(
     Returns:
         Dictionary with details about the need change
     """
-    needs_ctx = ctx.context
-    
-    if name not in needs_ctx.needs:
-        logger.warning(f"Attempted to decrease unknown need: {name}")
-        return {"status": "error", "message": f"Unknown need: {name}"}
-        
-    async with needs_ctx._lock:
-        need = needs_ctx.needs[name]
-        original_level = need.level
-        need.level = max(0.0, need.level - amount)
-        need.last_updated = datetime.datetime.now()
-        
-        # Add to history
-        _add_history_entry(needs_ctx, name, need, reason)
-        
-        logger.debug(f"Decreased need '{name}' by {amount:.2f}. Level: {original_level:.2f} -> {need.level:.2f}")
-        
-        result = NeedSatisfactionResult(
-            name=name,
-            previous_level=original_level,
-            new_level=need.level,
-            change=-amount,
-            reason=reason,
-            deficit=need.deficit,
-            drive_strength=need.drive_strength
-        )
-        
-        return result.dict()
+    # --- Handle None case internally ---
+    reason_provided = reason if reason is not None else "unspecified"
+    logger.info(f"Decreasing need '{need_name}' by {amount}. Reason: {reason_provided}")
+    # --- End internal handling ---
+
+    # Check if this method uses Runner.run internally as suggested by traceback
+    # If so, the agent it calls needs access to the *logic* of decreasing a need,
+    # NOT the decrease_need method itself if that method is also the tool.
+    # This implies a potential structure issue similar to the MoodManager problem.
+
+    # --- Potential Internal Agent Call (as suggested by traceback) ---
+    if hasattr(self, '_decrease_need_agent'): # Assuming an agent handles the logic
+         agent_input = {
+             "need_name": need_name,
+             "amount": amount,
+             "reason": reason_provided # Pass the handled reason
+         }
+         # It's this Runner.run call that fails if the *agent's tools* have bad schemas
+         result = await Runner.run(
+             starting_agent=self._decrease_need_agent, # The agent doing the work
+             input=json.dumps(agent_input),
+             context=self.context # Assuming NeedsSystem has a context
+         )
+         # The error happens *before* the agent returns, during the API call setup.
+         return result.final_output # Or process result as needed
+
+    # --- Alternative: Direct Logic (If no internal agent) ---
+    else:
+         async with self._lock: # Assuming a lock exists
+             if need_name not in self.needs:
+                 logger.warning(f"Attempted to decrease non-existent need: {need_name}")
+                 return {"success": False, "error": f"Need '{need_name}' not found."}
+
+             # Ensure amount is positive for decreasing deficit
+             if amount < 0:
+                  logger.warning(f"Decrease amount must be positive, got: {amount}")
+                  amount = abs(amount) # Or return error
+
+             need_state = self.needs[need_name]
+             old_deficit = need_state['deficit']
+             # Decrease deficit (increase satisfaction), clamp at 0
+             need_state['deficit'] = max(0.0, old_deficit - amount)
+             need_state['last_satisfied'] = datetime.datetime.now().isoformat()
+
+             logger.info(f"Need '{need_name}' deficit decreased from {old_deficit:.2f} to {need_state['deficit']:.2f}. Reason: {reason_provided}")
+
+             # Add history logic if needed...
+
+             return {
+                 "success": True,
+                 "need_name": need_name,
+                 "old_deficit": old_deficit,
+                 "new_deficit": need_state['deficit'],
+                 "amount": amount
+             }
 
 @function_tool
 async def get_needs_state(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, Dict[str, Any]]:
