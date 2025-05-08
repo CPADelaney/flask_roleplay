@@ -294,14 +294,12 @@ class RewardSignalProcessor:
         and trigger learning and other effects.
         """
         async with self._main_lock:
-            # Ensure needs system is available for check later
             if not self.needs_system:
                  logger.warning("NeedsSystem not available for reward processing.")
-                 # Handle appropriately, maybe skip need-related logic
-    
+
             with trace(workflow_name="process_reward", group_id=f"reward_{reward.source}"):
-                # 1. Update nyxamine levels (using the logic function directly)
-                nyxamine_change = await self._update_nyxamine_level(reward.value) # Uses the fixed _update_nyxamine_level
+                # 1. Update nyxamine levels
+                nyxamine_change = await self._update_nyxamine_level(reward.value)
                 
                 # 2. Store in history
                 history_entry = {
@@ -312,8 +310,6 @@ class RewardSignalProcessor:
                     "nyxamine_level": self.current_nyxamine
                 }
                 self.reward_history.append(history_entry)
-                
-                # Trim history if needed
                 if len(self.reward_history) > self.max_history_size:
                     self.reward_history = self.reward_history[-self.max_history_size:]
                 
@@ -340,13 +336,18 @@ class RewardSignalProcessor:
                 depravity_score = self._estimate_depravity_level(reward)
 
                 # 🧠 Mood modulation
-                mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
+                mood_state_obj: Optional[MoodState] = None
                 mood_boost = 0.0
-                if mood:
-                    mood_boost = (
-                        (getattr(mood, "arousal", 0.5) * 0.2) +
-                        (getattr(mood, "control", 0.0) * 0.3 if getattr(mood, "control", 0.0) > 0 else 0)
-                    )
+                try:
+                    if self.mood_manager:
+                         mood_state_obj = await self.mood_manager.get_current_mood() # Now returns MoodState
+                         if mood_state_obj:
+                             mood_boost = (
+                                 (mood_state_obj.arousal * 0.2) +
+                                 (mood_state_obj.control * 0.3 if mood_state_obj.control > 0 else 0)
+                             )
+                except Exception as mood_err:
+                     logger.warning(f"Error getting mood state during reward processing: {mood_err}", exc_info=True)
 
                 amplified_depravity = min(1.0, depravity_score + mood_boost)
 
@@ -412,12 +413,19 @@ class RewardSignalProcessor:
             depravity_hint=depravity
         )
 
-        mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
-        mood_snapshot = {
-            "arousal": getattr(mood, "arousal", 0.5),
-            "control": getattr(mood, "control", 0.0),
-            "valence": getattr(mood, "valence", 0.0)
-        }
+        mood_state_obj: Optional[MoodState] = None
+        mood_snapshot = {"arousal": 0.5, "control": 0.0, "valence": 0.0} # Defaults
+        try:
+            if self.mood_manager:
+                 mood_state_obj = await self.mood_manager.get_current_mood() # Returns MoodState
+                 if mood_state_obj:
+                     mood_snapshot = {
+                         "arousal": mood_state_obj.arousal,
+                         "control": mood_state_obj.control,
+                         "valence": mood_state_obj.valence
+                     }
+        except Exception as mood_err:
+            logger.warning(f"Error getting mood state during submission reward: {mood_err}", exc_info=True)
     
         return await self.process_reward_signal(RewardSignal(
             value=reward_value,
@@ -1251,18 +1259,19 @@ class RewardSignalProcessor:
 
         state_key = self._create_state_key(state)
     
-        # Mood integration
+        mood_state_obj: Optional[MoodState] = None
         valence = 0.0
         arousal = 0.5
         control = 0.0
         try:
-            if hasattr(self, "mood_manager") and self.mood_manager:
-                mood = await self.mood_manager.get_current_mood()
-                valence = getattr(mood, "valence", 0.0)
-                arousal = getattr(mood, "arousal", 0.5)
-                control = getattr(mood, "control", 0.0)
-        except Exception as e:
-            logger.warning(f"[Mood] Unable to retrieve mood state: {e}")
+            if self.mood_manager:
+                 mood_state_obj = await self.mood_manager.get_current_mood() # Returns MoodState
+                 if mood_state_obj:
+                     valence = mood_state_obj.valence
+                     arousal = mood_state_obj.arousal
+                     control = mood_state_obj.control
+        except Exception as mood_err:
+            logger.warning(f"Error getting mood state during action prediction: {mood_err}", exc_info=True)
     
         # Adjust novelty weighting based on mood
         novelty_weight = 0.2 + arousal * 0.4  # 0.2 → 0.6
@@ -1337,6 +1346,12 @@ class RewardSignalProcessor:
         q_value = q_values.get(selected_action, 0.0)
         habit = habit_strengths.get(selected_action, 0.0)
         confidence = (q_value * 0.4) + (habit * 0.3) + (avg_confidence * 0.3)
+
+        mood_snapshot_for_return = { # Create dict for return value
+             "arousal": arousal,
+             "control": control,
+             "valence": valence
+        }
     
         return {
             "best_action": selected_action,
