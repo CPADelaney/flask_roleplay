@@ -404,15 +404,13 @@ class RewardSignalProcessor:
         novelty_value = self.novelty_decay[action_key]
         depravity = self.estimate_depravity(submission_type=submission_type)
 
-        # --- CORRECTED CALL ---
         # Use the internal logic function directly
-        reward_value = compliance_level * await _calculate_submission_value_logic(
+        reward_value = compliance_level * await _calculate_submission_value_logic( 
             submission_type=submission_type,
             was_initially_resistant=was_initially_resistant,
             novelty=novelty_value,
             depravity_hint=depravity
         )
-        # --- END CORRECTION ---
 
         mood = await self.mood_manager.get_current_mood() if self.mood_manager else None
         mood_snapshot = {
@@ -420,7 +418,7 @@ class RewardSignalProcessor:
             "control": getattr(mood, "control", 0.0),
             "valence": getattr(mood, "valence", 0.0)
         }
-
+    
         return await self.process_reward_signal(RewardSignal(
             value=reward_value,
             source="user_submission",
@@ -594,7 +592,6 @@ class RewardSignalProcessor:
                     }
                 ))
 
-    
     async def _update_nyxamine_level(self, reward_value: float) -> float:
         """Update nyxamine level based on reward value and time decay"""
         async with self._nyxamine_lock:
@@ -607,13 +604,14 @@ class RewardSignalProcessor:
                 elif self.current_nyxamine < self.baseline_nyxamine:
                     self.current_nyxamine = min(self.baseline_nyxamine, self.current_nyxamine + decay_amount)
                 self.last_update_time = current_time
-
+    
             # Apply reward effect using the LOGIC function directly
-            result = await _calculate_nyxamine_change_logic( # <<< Call the logic func
+            result = await _calculate_nyxamine_change_logic( 
                 reward_value=reward_value,
                 current_nyxamine=self.current_nyxamine,
                 baseline_nyxamine=self.baseline_nyxamine
             )
+    
             self.current_nyxamine = result["new_nyxamine"]
             return result["nyxamine_change"]
 
