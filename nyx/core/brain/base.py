@@ -11,6 +11,8 @@ import json
 from collections import defaultdict # Added
 from enum import Enum, auto
 
+from nyx.core.integration.integration_manager import create_integration_manager
+
 from agents import (
     Agent, Runner, trace, function_tool, handoff, RunContextWrapper,
     ModelSettings
