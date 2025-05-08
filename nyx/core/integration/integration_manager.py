@@ -44,127 +44,127 @@ class IntegrationManager:
         
         logger.info("IntegrationManager initialized")
     
-def _setup_bridges(self):
-    """Set up all integration bridges with appropriate dependencies."""
-    try:
-        # Import bridge creation functions
-        from nyx.core.integration.action_selector import create_action_selector
-        from nyx.core.integration.adaptation_goal_bridge import create_core_systems_integration_bridge
-        from nyx.core.integration.autonomous_cognitive_bridge import create_autonomous_cognitive_bridge
-        from nyx.core.integration.decision_action_coordinator import create_decision_action_coordinator
-        from nyx.core.integration.dynamic_attention_system import create_dynamic_attention_system
-        from nyx.core.integration.emotional_cognitive_bridge import create_emotional_cognitive_bridge
-        from nyx.core.integration.emotional_hormonal_bridge import create_emotional_hormonal_bridge
-        from nyx.core.integration.identity_imagination_emotional_bridge import create_identity_imagination_emotional_bridge
-        from nyx.core.integration.knowledge_curiosity_exploration_bridge import create_knowledge_curiosity_exploration_bridge
-        from nyx.core.integration.knowledge_memory_reasoning_bridge import create_knowledge_memory_reasoning_bridge
-        from nyx.core.integration.memory_integration_bridge import create_memory_integration_bridge
-        from nyx.core.integration.mood_emotional_bridge import create_mood_emotional_bridge
-        from nyx.core.integration.multimodal_attention_bridge import create_multimodal_attention_bridge
-        from nyx.core.integration.narrative_memory_identity_nexus import create_narrative_memory_identity_nexus
-        from nyx.core.integration.need_goal_action_pipeline import create_need_goal_action_pipeline
-        from nyx.core.integration.perceptual_integration_layer import create_perceptual_integration_layer
-        from nyx.core.integration.prediction_imagination_bridge import create_prediction_imagination_bridge
-        from nyx.core.integration.procedural_memory_integration_bridge import create_procedural_memory_integration_bridge
-        from nyx.core.integration.reasoning_cognitive_bridge import create_reasoning_cognitive_bridge
-        from nyx.core.integration.relationship_tom_bridge import create_relationship_tom_bridge
-        from nyx.core.integration.reward_learning_bridge import create_reward_learning_bridge
-        from nyx.core.integration.somatic_perception_bridge import create_somatic_perception_bridge
-        from nyx.core.integration.tom_integration import create_tom_integrator
-        from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
-        from nyx.core.relationship_reflection import RelationshipReflectionSystem
-        from nyx.core.integration.spatial_integration_bridge import create_spatial_integration_bridge
-        from nyx.core.integration.conditioning_integration_bridge import create_conditioning_integration_bridge
-        
-        # Dominance-related bridges
-        from nyx.core.integration.dominance_integration_manager import create_dominance_integration_manager
-        from nyx.core.integration.dominance_imagination_decision_bridge import create_dominance_imagination_decision_bridge
-        from nyx.core.integration.dominance_memory_reflection_bridge import create_dominance_memory_reflection_bridge
-        from nyx.core.integration.dominance_reward_identity_bridge import create_dominance_reward_identity_bridge
-        
-        # Register core system bridges first (no dependencies)
-        self.register_bridge("action_selector", create_action_selector(self.brain), [])
-        self.register_bridge("dynamic_attention", create_dynamic_attention_system(self.brain), [])
-        self.register_bridge("perceptual_integration", create_perceptual_integration_layer(self.brain), [])
-        self.register_bridge("somatic_perception", create_somatic_perception_bridge(self.brain), [])
-        
-        # Register secondary bridges with dependencies on core bridges
-        self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
-                           ["dynamic_attention"])
-        self.register_bridge("emotional_hormonal", create_emotional_hormonal_bridge(self.brain), 
-                           ["emotional_cognitive"])
-        self.register_bridge("mood_emotional", create_mood_emotional_bridge(self.brain), 
-                           ["emotional_cognitive", "emotional_hormonal"])
-        self.register_bridge("multimodal_attention", create_multimodal_attention_bridge(self.brain), 
-                           ["dynamic_attention", "perceptual_integration"])
-        self.register_bridge("memory_integration", create_memory_integration_bridge(self.brain), 
-                           ["dynamic_attention"])
-        self.register_bridge("prediction_imagination", create_prediction_imagination_bridge(self.brain), 
-                           [])
-        self.register_bridge("identity_imagination_emotional", create_identity_imagination_emotional_bridge(self.brain), 
-                           ["emotional_cognitive", "prediction_imagination"])
-        self.register_bridge("narrative_memory_identity", create_narrative_memory_identity_nexus(self.brain), 
-                           ["memory_integration", "identity_imagination_emotional"])
-        self.register_bridge("procedural_memory", create_procedural_memory_integration_bridge(self.brain), 
-                           ["memory_integration", "emotional_cognitive"])
-        
-        # Register bridges that depend on secondary bridges
-        self.register_bridge("knowledge_memory_reasoning", create_knowledge_memory_reasoning_bridge(self.brain), 
-                           ["memory_integration"])
-        self.register_bridge("knowledge_curiosity", create_knowledge_curiosity_exploration_bridge(self.brain), 
-                           ["knowledge_memory_reasoning"])
-        self.register_bridge("reasoning_cognitive", create_reasoning_cognitive_bridge(self.brain), 
-                           ["emotional_cognitive", "memory_integration"])
-        self.register_bridge("tom_integrator", create_tom_integrator(self.brain), 
-                           ["emotional_cognitive"])
-        self.register_bridge("relationship_tom", create_relationship_tom_bridge(self.brain), 
-                           ["tom_integrator", "memory_integration"])
-        self.register_bridge("reward_learning", create_reward_learning_bridge(self.brain), 
-                           ["action_selector", "memory_integration"])
-        self.register_bridge("core_systems_integration", create_core_systems_integration_bridge(self.brain), 
-                           ["action_selector"])
-        self.register_bridge("autonomous_cognitive", create_autonomous_cognitive_bridge(self.brain), 
-                           ["emotional_cognitive", "memory_integration", "reasoning_cognitive"])
-
-        self.register_bridge("conditioning_integration", create_conditioning_integration_bridge(self.brain), 
-                           ["reward_learning", "memory_integration"])
-        
-        # Register dominance-related bridges
-        self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
-                           ["reward_learning", "identity_imagination_emotional"])
-        self.register_bridge("dominance_memory_reflection", create_dominance_memory_reflection_bridge(self.brain), 
-                           ["memory_integration"])
-        self.register_bridge("dominance_imagination_decision", create_dominance_imagination_decision_bridge(self.brain), 
-                           ["prediction_imagination", "relationship_tom"])
-        
-        # Register main dominance integration manager
-        self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
-                           ["dominance_reward_identity", "dominance_memory_reflection", "dominance_imagination_decision"])
-
-        self.register_bridge("spatial_integration", create_spatial_integration_bridge(self.brain), 
-                            ["memory_integration", "dynamic_attention"])
-        
-        # Register high-level pipeline bridges
-        self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
-                           ["action_selector", "reward_learning"])
-        self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
-                           ["action_selector", "need_goal_action", "prediction_imagination"])
-
-        self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
-                     ["event_bus", "memory_integration", "dynamic_attention"])
-
-        self.brain.relationship_reflection_system = RelationshipReflectionSystem(
-            relationship_manager=self.brain.relationship_manager,
-            theory_of_mind=self.brain.theory_of_mind,
-            memory_core=self.brain.memory_core,
-            identity_evolution=self.brain.identity_evolution,
-            hormone_system=self.brain.hormone_system if hasattr(self.brain, "hormone_system") else None
-        )
-        
-        logger.info(f"Set up {len(self.bridges)} integration bridges")
-        
-    except Exception as e:
-        logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
+    def _setup_bridges(self):
+        """Set up all integration bridges with appropriate dependencies."""
+        try:
+            # Import bridge creation functions
+            from nyx.core.integration.action_selector import create_action_selector
+            from nyx.core.integration.adaptation_goal_bridge import create_core_systems_integration_bridge
+            from nyx.core.integration.autonomous_cognitive_bridge import create_autonomous_cognitive_bridge
+            from nyx.core.integration.decision_action_coordinator import create_decision_action_coordinator
+            from nyx.core.integration.dynamic_attention_system import create_dynamic_attention_system
+            from nyx.core.integration.emotional_cognitive_bridge import create_emotional_cognitive_bridge
+            from nyx.core.integration.emotional_hormonal_bridge import create_emotional_hormonal_bridge
+            from nyx.core.integration.identity_imagination_emotional_bridge import create_identity_imagination_emotional_bridge
+            from nyx.core.integration.knowledge_curiosity_exploration_bridge import create_knowledge_curiosity_exploration_bridge
+            from nyx.core.integration.knowledge_memory_reasoning_bridge import create_knowledge_memory_reasoning_bridge
+            from nyx.core.integration.memory_integration_bridge import create_memory_integration_bridge
+            from nyx.core.integration.mood_emotional_bridge import create_mood_emotional_bridge
+            from nyx.core.integration.multimodal_attention_bridge import create_multimodal_attention_bridge
+            from nyx.core.integration.narrative_memory_identity_nexus import create_narrative_memory_identity_nexus
+            from nyx.core.integration.need_goal_action_pipeline import create_need_goal_action_pipeline
+            from nyx.core.integration.perceptual_integration_layer import create_perceptual_integration_layer
+            from nyx.core.integration.prediction_imagination_bridge import create_prediction_imagination_bridge
+            from nyx.core.integration.procedural_memory_integration_bridge import create_procedural_memory_integration_bridge
+            from nyx.core.integration.reasoning_cognitive_bridge import create_reasoning_cognitive_bridge
+            from nyx.core.integration.relationship_tom_bridge import create_relationship_tom_bridge
+            from nyx.core.integration.reward_learning_bridge import create_reward_learning_bridge
+            from nyx.core.integration.somatic_perception_bridge import create_somatic_perception_bridge
+            from nyx.core.integration.tom_integration import create_tom_integrator
+            from nyx.core.integration.synergy_optimizer import create_synergy_optimizer
+            from nyx.core.relationship_reflection import RelationshipReflectionSystem
+            from nyx.core.integration.spatial_integration_bridge import create_spatial_integration_bridge
+            from nyx.core.integration.conditioning_integration_bridge import create_conditioning_integration_bridge
+            
+            # Dominance-related bridges
+            from nyx.core.integration.dominance_integration_manager import create_dominance_integration_manager
+            from nyx.core.integration.dominance_imagination_decision_bridge import create_dominance_imagination_decision_bridge
+            from nyx.core.integration.dominance_memory_reflection_bridge import create_dominance_memory_reflection_bridge
+            from nyx.core.integration.dominance_reward_identity_bridge import create_dominance_reward_identity_bridge
+            
+            # Register core system bridges first (no dependencies)
+            self.register_bridge("action_selector", create_action_selector(self.brain), [])
+            self.register_bridge("dynamic_attention", create_dynamic_attention_system(self.brain), [])
+            self.register_bridge("perceptual_integration", create_perceptual_integration_layer(self.brain), [])
+            self.register_bridge("somatic_perception", create_somatic_perception_bridge(self.brain), [])
+            
+            # Register secondary bridges with dependencies on core bridges
+            self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
+                               ["dynamic_attention"])
+            self.register_bridge("emotional_hormonal", create_emotional_hormonal_bridge(self.brain), 
+                               ["emotional_cognitive"])
+            self.register_bridge("mood_emotional", create_mood_emotional_bridge(self.brain), 
+                               ["emotional_cognitive", "emotional_hormonal"])
+            self.register_bridge("multimodal_attention", create_multimodal_attention_bridge(self.brain), 
+                               ["dynamic_attention", "perceptual_integration"])
+            self.register_bridge("memory_integration", create_memory_integration_bridge(self.brain), 
+                               ["dynamic_attention"])
+            self.register_bridge("prediction_imagination", create_prediction_imagination_bridge(self.brain), 
+                               [])
+            self.register_bridge("identity_imagination_emotional", create_identity_imagination_emotional_bridge(self.brain), 
+                               ["emotional_cognitive", "prediction_imagination"])
+            self.register_bridge("narrative_memory_identity", create_narrative_memory_identity_nexus(self.brain), 
+                               ["memory_integration", "identity_imagination_emotional"])
+            self.register_bridge("procedural_memory", create_procedural_memory_integration_bridge(self.brain), 
+                               ["memory_integration", "emotional_cognitive"])
+            
+            # Register bridges that depend on secondary bridges
+            self.register_bridge("knowledge_memory_reasoning", create_knowledge_memory_reasoning_bridge(self.brain), 
+                               ["memory_integration"])
+            self.register_bridge("knowledge_curiosity", create_knowledge_curiosity_exploration_bridge(self.brain), 
+                               ["knowledge_memory_reasoning"])
+            self.register_bridge("reasoning_cognitive", create_reasoning_cognitive_bridge(self.brain), 
+                               ["emotional_cognitive", "memory_integration"])
+            self.register_bridge("tom_integrator", create_tom_integrator(self.brain), 
+                               ["emotional_cognitive"])
+            self.register_bridge("relationship_tom", create_relationship_tom_bridge(self.brain), 
+                               ["tom_integrator", "memory_integration"])
+            self.register_bridge("reward_learning", create_reward_learning_bridge(self.brain), 
+                               ["action_selector", "memory_integration"])
+            self.register_bridge("core_systems_integration", create_core_systems_integration_bridge(self.brain), 
+                               ["action_selector"])
+            self.register_bridge("autonomous_cognitive", create_autonomous_cognitive_bridge(self.brain), 
+                               ["emotional_cognitive", "memory_integration", "reasoning_cognitive"])
+    
+            self.register_bridge("conditioning_integration", create_conditioning_integration_bridge(self.brain), 
+                               ["reward_learning", "memory_integration"])
+            
+            # Register dominance-related bridges
+            self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
+                               ["reward_learning", "identity_imagination_emotional"])
+            self.register_bridge("dominance_memory_reflection", create_dominance_memory_reflection_bridge(self.brain), 
+                               ["memory_integration"])
+            self.register_bridge("dominance_imagination_decision", create_dominance_imagination_decision_bridge(self.brain), 
+                               ["prediction_imagination", "relationship_tom"])
+            
+            # Register main dominance integration manager
+            self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
+                               ["dominance_reward_identity", "dominance_memory_reflection", "dominance_imagination_decision"])
+    
+            self.register_bridge("spatial_integration", create_spatial_integration_bridge(self.brain), 
+                                ["memory_integration", "dynamic_attention"])
+            
+            # Register high-level pipeline bridges
+            self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
+                               ["action_selector", "reward_learning"])
+            self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
+                               ["action_selector", "need_goal_action", "prediction_imagination"])
+    
+            self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
+                         ["event_bus", "memory_integration", "dynamic_attention"])
+    
+            self.brain.relationship_reflection_system = RelationshipReflectionSystem(
+                relationship_manager=self.brain.relationship_manager,
+                theory_of_mind=self.brain.theory_of_mind,
+                memory_core=self.brain.memory_core,
+                identity_evolution=self.brain.identity_evolution,
+                hormone_system=self.brain.hormone_system if hasattr(self.brain, "hormone_system") else None
+            )
+            
+            logger.info(f"Set up {len(self.bridges)} integration bridges")
+            
+        except Exception as e:
+            logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
     
     def register_bridge(self, name: str, bridge: Any, dependencies: List[str] = None) -> None:
         """
