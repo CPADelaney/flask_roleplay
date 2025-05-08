@@ -166,20 +166,26 @@ class IntegrationManager:
         except Exception as e:
             logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
     
-    def register_bridge(self, name: str, bridge: Any, dependencies: List[str] = None) -> None:
+    async def register_bridge(self, 
+                              bridge_name: str, 
+                              bridge_instance: Any, 
+                              dependencies: List[str] = None) -> None: # Changed to async def
         """
-        Register an integration bridge.
-        
-        Args:
-            name: Name of the bridge
-            bridge: Bridge instance
-            dependencies: List of bridge names this bridge depends on
+        Registers a bridge with the integration manager.
+        This method is now asynchronous.
         """
-        self.bridges[name] = bridge
-        self.bridge_statuses[name] = False
-        self.bridge_dependencies[name] = dependencies or []
+        if bridge_name in self.bridges:
+            logger.warning(f"Bridge '{bridge_name}' is already registered. Overwriting.")
         
-        logger.info(f"Registered bridge: {name}")
+        self.bridges[bridge_name] = bridge_instance
+        self.bridge_dependencies[bridge_name] = dependencies or []
+        logger.info(f"Bridge '{bridge_name}' registered with dependencies: {self.bridge_dependencies[bridge_name]}.")
+        
+        # Example of an async operation you might do here:
+        # await self.event_bus.publish(Event("bridge_registered", "integration_manager", {"name": bridge_name}))
+        # For now, if there's no specific async work, it's fine.
+        # The key is that it's `async def` so it returns a coroutine.
+        return # Implicitly returns None, but after `await` is satisfied.
     
     @trace_method(level=TraceLevel.INFO, group_id="IntegrationManager")
     async def initialize(self) -> bool:
