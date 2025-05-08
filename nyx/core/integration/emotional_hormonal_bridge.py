@@ -574,16 +574,17 @@ class EmotionalHormonalIntegrationBridge:
             # Update emotional state cache
             if self.emotional_core:
                 if hasattr(self.emotional_core, 'get_emotional_state_matrix'):
-                    # Use async method if available
                     try:
                         self.cached_emotional_state = await self.emotional_core.get_emotional_state_matrix()
                     except Exception:
-                        # Fallback to synchronous version if available
                         if hasattr(self.emotional_core, '_get_emotional_state_matrix_sync'):
                             self.cached_emotional_state = self.emotional_core._get_emotional_state_matrix_sync()
                 elif hasattr(self.emotional_core, 'get_emotional_state'):
-                    # Fallback to simpler method
-                    self.cached_emotional_state = self.emotional_core.get_emotional_state()
+                    # Assuming get_emotional_state might also be async
+                    if asyncio.iscoroutinefunction(self.emotional_core.get_emotional_state):
+                        self.cached_emotional_state = await self.emotional_core.get_emotional_state()
+                    else:
+                        self.cached_emotional_state = self.emotional_core.get_emotional_state()
                 
                 # Get neurochemical levels if available
                 if hasattr(self.emotional_core, 'neurochemicals'):
@@ -594,7 +595,11 @@ class EmotionalHormonalIntegrationBridge:
             # Update hormone state cache
             if self.hormone_system:
                 if hasattr(self.hormone_system, 'get_hormone_levels'):
-                    self.cached_hormone_state = self.hormone_system.get_hormone_levels()
+                    # Check if get_hormone_levels is async
+                    if asyncio.iscoroutinefunction(self.hormone_system.get_hormone_levels):
+                        self.cached_hormone_state = await self.hormone_system.get_hormone_levels() # Added await
+                    else: # If it's synchronous
+                        self.cached_hormone_state = self.hormone_system.get_hormone_levels()
             
             # Set new cache expiry
             self.cache_expiry = datetime.datetime.now() + datetime.timedelta(seconds=self.cache_lifetime)
