@@ -47,7 +47,7 @@ from nyx.tools.ui_interaction import UIConversationManager
 from nyx.core.internal_thoughts import InternalThoughtsManager, pre_process_input, pre_process_output
 
 
-from agents import Agent, Runner, handoff, InputGuardrail, function_tool, trace, GuardrailFunctionOutput
+from agents import Agent, Runner, handoff, InputGuardrail, function_tool, trace, GuardrailFunctionOutput, ModelSettings
 from typing import List, Dict, Any, Optional, Union, Literal
 
 # Configure logging
@@ -1176,34 +1176,32 @@ class EnhancedAgenticActionGenerator:
         if self.creative_system:
             tools += [
                 function_tool(self.create_story,
-                              name="create_story",
-                              description="Have Nyx write a short story"),
+                              name_override="create_story",
+                              description_override="Have Nyx write a short story"),
                 function_tool(self.create_poem,
-                              name="create_poem",
-                              description="Have Nyx compose a poem"),
+                              name_override="create_poem",
+                              description_override="Have Nyx compose a poem"),
                 function_tool(self.create_lyrics,
-                              name="create_lyrics",
-                              description="Have Nyx write song lyrics"),
+                              name_override="create_lyrics",
+                              description_override="Have Nyx write song lyrics"),
                 function_tool(self.create_journal,
-                              name="create_journal",
-                              description="Have Nyx free-write a journal entry"),
+                              name_override="create_journal",
+                              description_override="Have Nyx free-write a journal entry"),
                 function_tool(self.list_creations,
-                              name="list_creations",
-                              description="List Nyx’s recent creative works"),
+                              name_override="list_creations",
+                              description_override="List Nyx’s recent creative works"),
                 function_tool(self.retrieve_content,
-                              name="retrieve_content",
-                              description="Retrieve a piece of content by ID"),
+                              name_override="retrieve_content",
+                              description_override="Retrieve a piece of content by ID"),
             ]
 
         if self.capability_assessor:
             tools.append(
                 function_tool(self.assess_capabilities,
-                              name="assess_capabilities",
-                              description="Assess Nyx’s current creative capabilities")
+                              name_override="assess_capabilities", # Corrected
+                              description_override="Assess Nyx’s current creative capabilities") # Corrected
             )
 
-        return tools
-            
         return tools
     
     # Tools implementation
@@ -2760,38 +2758,5 @@ class EnhancedAgenticActionGenerator:
             except Exception as exc:
                 logger.error(f"Error in periodic_hobby_meta_loop: {exc}", exc_info=True)
                 await asyncio.sleep(interval)
-
-    async def create_story(self, title: str, prompt: str = "", metadata: Optional[Dict[str,Any]] = None):
-        """Tool: write & store a story, tagging it with Nyx’s current mood."""
-        # you can pull in mood or recent thought if you like:
-        mood = (await self.mood_manager.get_current_mood()).dict() if self.mood_manager else {}
-        metadata = metadata or {}
-        metadata.update({"mood": mood})
-        return await self.creative_system.store_content("story", title, prompt, metadata)
-
-    async def create_poem(self, title: str, prompt: str = "", metadata: Optional[Dict[str,Any]] = None):
-        metadata = metadata or {}
-        metadata.update({"mood": (await self.mood_manager.get_current_mood()).dict()})
-        return await self.creative_system.store_content("poem", title, prompt, metadata)
-
-    async def create_lyrics(self, title: str, prompt: str = "", metadata: Optional[Dict[str,Any]] = None):
-        metadata = metadata or {}
-        return await self.creative_system.store_content("lyrics", title, prompt, metadata)
-
-    async def create_journal(self, title: str, prompt: str = "", metadata: Optional[Dict[str,Any]] = None):
-        metadata = metadata or {}
-        return await self.creative_system.store_content("journal", title, prompt, metadata)
-
-    async def list_creations(self, content_type: Optional[str] = None,
-                             limit: int = 20, offset: int = 0):
-        return await self.creative_system.list_content(content_type, limit, offset)
-                                 
-
-    async def retrieve_content(self, content_id: str):
-        return await self.creative_system.retrieve_content(content_id)
-
-    async def assess_capabilities(self):
-        """Run the CapabilityAssessmentSystem and return its report."""
-        return await self.capability_assessor.assess_all()
-
+                
 AgenticActionGenerator = EnhancedAgenticActionGenerator
