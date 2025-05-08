@@ -99,9 +99,9 @@ class SpatialIntegrationBridge:
             """,
             handoffs=[
                 handoff(self.navigator_agent.navigator_agent, 
-                        tool_description="For navigation, route finding, and direction giving tasks"),
+                        tool_description_override="For navigation, route finding, and direction giving tasks"),
                 handoff(self.navigator_agent.mapper_agent, 
-                        tool_description="For map building, observation processing, and spatial environment understanding")
+                        tool_description_override="For map building, observation processing, and spatial environment understanding")
             ],
             tools=[
                 function_tool(self.process_spatial_observation),
