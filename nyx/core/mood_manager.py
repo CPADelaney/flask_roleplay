@@ -90,12 +90,12 @@ class MoodManager:
         
         Use the appropriate tools to perform these tasks and maintain the AI's affective state.
         """,
-            tools=[
-                self.update_mood,
-                self.get_current_mood,
-                self.modify_mood,
-                self.handle_significant_event,
-                self.get_mood_history
+            tools = [
+                function_tool(self.update_mood),
+                function_tool(self.get_current_mood), # Wraps the actual method
+                function_tool(self.modify_mood),
+                function_tool(self.handle_significant_event),
+                function_tool(self.get_mood_history)
             ]
         )
         return agent
@@ -142,18 +142,18 @@ class MoodManager:
             self.mood_history.pop(0)
 
     # Function tools for the agent
-    @function_tool
-    async def update_mood(self) -> Dict[str, Any]:
+
+    async def update_mood(self) -> MoodState: # Return MoodState object
         """
-        Updates the current mood based on various system states.
-        
+        Updates the current mood based on various system states. Service method.
+
         Returns:
-            Updated mood state information
+            The updated MoodState object.
         """
-        async with self._lock:  # Ensure thread safety
+        async with self._lock:
             now = datetime.datetime.now()
             if (now - self.last_update_time).total_seconds() < self.update_interval_seconds:
-                return self.current_mood.dict()  # Not time to update yet
+                return self.current_mood # Return the object
     
             # Calculate elapsed time factor (adjusts influence strength)
             elapsed = (now - self.last_update_time).total_seconds()
@@ -380,155 +380,109 @@ class MoodManager:
             logger.info(f"Mood updated: {self.current_mood.dominant_mood} (V:{self.current_mood.valence:.2f} A:{self.current_mood.arousal:.2f} C:{self.current_mood.control:.2f})")
             return self.current_mood.dict()
 
-    @function_tool
-    async def get_current_mood(self) -> Dict[str, Any]:  # Change return type from MoodState to Dict
+    async def get_current_mood(self) -> MoodState: # Return MoodState object
         """Returns the current mood state, updating if needed."""
         now = datetime.datetime.now()
-        
         # If the mood is stale, update it
         if (now - self.last_update_time).total_seconds() > self.update_interval_seconds:
-            await self.update_mood()
-            
-        return self.current_mood.dict()  # Return dict instead of object
+            await self.update_mood() # This now correctly returns MoodState
+        return self.current_mood # Return the object
         
-    @function_tool
     async def modify_mood(
-        self, 
+        self,
         valence_change: Optional[float] = None,
         arousal_change: Optional[float] = None,
         control_change: Optional[float] = None,
         reason: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> MoodState: # Return MoodState object
         """
         Manually modify the current mood (for testing or external influences).
-        
-        Args:
-            valence_change: Change to valence (pleasantness) dimension (-1.0 to 1.0)
-            arousal_change: Change to arousal (energy) dimension (-1.0 to 1.0)
-            control_change: Change to control (dominance) dimension (-1.0 to 1.0)
-            reason: Reason for the mood modification
-            
-        Returns:
-            Updated mood state
+        Service method.
         """
-        # Set default values inside the function body
-        valence_change = 0 if valence_change is None else valence_change
-        arousal_change = 0 if arousal_change is None else arousal_change
-        control_change = 0 if control_change is None else control_change
+        valence_change = 0.0 if valence_change is None else valence_change
+        arousal_change = 0.0 if arousal_change is None else arousal_change
+        control_change = 0.0 if control_change is None else control_change
         reason = "manual_adjustment" if reason is None else reason
-        
+
         async with self._lock:
-            # Get current mood to ensure it's up to date
+            # Ensure current mood is up-to-date before modification
             await self.get_current_mood()
-            
-            # Apply changes
+
             self.current_mood.valence = max(-1.0, min(1.0, self.current_mood.valence + valence_change))
             self.current_mood.arousal = max(0.0, min(1.0, self.current_mood.arousal + arousal_change))
             self.current_mood.control = max(-1.0, min(1.0, self.current_mood.control + control_change))
-            
-            # Update derived properties
+
             self.current_mood.dominant_mood = self._get_dominant_mood_label(
                 self.current_mood.valence, self.current_mood.arousal, self.current_mood.control
             )
-            
-            # Update intensity
             intensity = math.sqrt(
-                self.current_mood.valence**2 + 
-                ((self.current_mood.arousal - 0.5)*2)**2 + 
+                self.current_mood.valence**2 +
+                ((self.current_mood.arousal - 0.5)*2)**2 +
                 self.current_mood.control**2
             ) / math.sqrt(1**2 + 1**2 + 1**2)
-            
             self.current_mood.intensity = min(1.0, intensity)
             self.current_mood.last_updated = datetime.datetime.now()
-            
-            # Add to history
+
             self._add_to_history(f"manual:{reason}")
-            
-            return self.current_mood.dict()
+            logger.info(f"Mood modified ({reason}): {self.current_mood.dominant_mood} (V:{self.current_mood.valence:.2f} A:{self.current_mood.arousal:.2f} C:{self.current_mood.control:.2f})")
+            return self.current_mood # Return the object
+
     
-    @function_tool
     async def handle_significant_event(
         self,
-        event_type: str, 
-        intensity: float, 
+        event_type: str,
+        intensity: float,
         valence: float,
         arousal_change: Optional[float] = None,
         control_change: Optional[float] = None
-    ) -> Dict[str, Any]:
+    ) -> MoodState: # Return MoodState object
         """
-        Handle a significant event that should influence mood.
-        
-        Args:
-            event_type: Type of event (e.g., "user_feedback", "system_error")
-            intensity: How strong the event's influence should be (0-1)
-            valence: The positive/negative nature of the event (-1 to 1)
-            arousal_change: Optional specific change to arousal
-            control_change: Optional specific change to sense of control
-            
-        Returns:
-            Updated mood state
+        Handle a significant event that should influence mood. Service method.
         """
         async with self._lock:
-            # Calculate changes based on event properties
             weight = min(1.0, intensity * self.influence_weights.get("external_events", 0.2))
-            
-            # Default arousal and control changes if not specified
-            if arousal_change is None:
-                # High intensity events increase arousal for both positive/negative events
-                arousal_change = (intensity - 0.5) * 0.3
-                
-            if control_change is None:
-                # Positive events increase control, negative decrease it
-                control_change = valence * intensity * 0.2
-            
-            # Apply changes
-            valence_change = valence * weight
-            arousal_change = arousal_change * weight
-            control_change = control_change * weight
-            
-            # Update mood
-            result = await self.modify_mood(
-                valence_change=valence_change,
-                arousal_change=arousal_change,
-                control_change=control_change,
+
+            # Calculate defaults if not provided
+            calc_arousal_change = arousal_change if arousal_change is not None else (intensity - 0.5) * 0.3
+            calc_control_change = control_change if control_change is not None else valence * intensity * 0.2
+
+            final_valence_change = valence * weight
+            final_arousal_change = calc_arousal_change * weight
+            final_control_change = calc_control_change * weight
+
+            # Use modify_mood to apply changes
+            updated_mood_state = await self.modify_mood(
+                valence_change=final_valence_change,
+                arousal_change=final_arousal_change,
+                control_change=final_control_change,
                 reason=f"event:{event_type}"
             )
-            
-            return result
-    
-    @function_tool
+
+            return updated_mood_state # Return the object
+
     async def get_mood_history(
         self,
         hours: Optional[int] = None,
         include_details: Optional[bool] = None
     ) -> List[Dict[str, Any]]:
         """
-        Get mood history for the specified time period.
-        
-        Args:
-            hours: How many hours of history to retrieve
-            include_details: Whether to include full details or just summaries
-            
-        Returns:
-            List of mood states with timestamps
+        Get mood history for the specified time period. Service method.
         """
-        # Handle default values inside the function
         hours = 24 if hours is None else hours
         include_details = False if include_details is None else include_details
-        
+
         async with self._lock:
             cutoff_time = datetime.datetime.now() - datetime.timedelta(hours=hours)
-            
-            # Filter history to requested time period
+
             filtered_history = [
                 entry for entry in self.mood_history
                 if entry.timestamp >= cutoff_time
             ]
-            
-            # Format based on detail level
+
             if include_details:
-                return [entry.dict() for entry in filtered_history]
+                return [entry.dict() for entry in filtered_history] # Return dicts for API consistency if needed
             else:
+                # Return summary dicts
                 return [
                     {
                         "timestamp": entry.timestamp.isoformat(),
