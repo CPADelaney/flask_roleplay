@@ -102,10 +102,9 @@ Always return your evaluation as a JSON object with:
 
 Focus ONLY on the requested dimension in each evaluation.
 """,
-            model="gpt-3.5-turbo",  # Using a smaller model for cost efficiency
+            model="gpt-4o",  # Using a smaller model for cost efficiency
             model_settings=ModelSettings(
                 temperature=0.2,  # Low temperature for consistent evaluations
-                response_format={"type": "json_object"}
             ),
             tools=[
                 self._get_evaluation_criteria
