@@ -32,26 +32,28 @@ class SynergyOptimizerAgent:
     async def initialize(self):
         """Initialize the synergy optimizer."""
         try:
-            # Subscribe to all events with wildcard
-            self.event_bus.subscribe("*", self._handle_event)
+            self.event_bus.subscribe("*", self._handle_event) # Assuming _handle_event is async or safe to call from sync
             
-            # Register with integration manager
             if self.brain.integration_manager:
+                # This await is now fine because IntegrationManager.register_bridge is async def
                 await self.brain.integration_manager.register_bridge(
                     "synergy_optimizer", 
                     self,
-                    ["event_bus"]  # Depends on event bus
+                    ["event_bus"] 
                 )
+            
             
             # Start monitoring
             self.active = True
-            asyncio.create_task(self.run_periodic_analysis())
+            # Ensure run_periodic_analysis is also an async method
+            asyncio.create_task(self.run_periodic_analysis()) 
             
-            logger.info("SynergyOptimizerAgent initialized")
+            logger.info("SynergyOptimizerAgent initialized successfully.")
             return True
         except Exception as e:
-            logger.error(f"Error initializing SynergyOptimizerAgent: {e}")
+            logger.error(f"Error initializing SynergyOptimizerAgent: {e}", exc_info=True)
             return False
+
     
     async def _handle_event(self, event: Event):
         """Process an event from the event bus."""
