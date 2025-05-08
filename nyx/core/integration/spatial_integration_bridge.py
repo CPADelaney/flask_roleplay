@@ -4,7 +4,7 @@ import logging
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper
+from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper, trace_method
 from agents.tracing import custom_span
 
 # Import spatial components
