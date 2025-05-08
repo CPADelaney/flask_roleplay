@@ -11,6 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple, TypedDict, Union
 from pydantic import BaseModel, Field
 from collections import defaultdict
 from enum import Enum
+from nyx.core.emotions.context import EmotionalContext
 
 from agents import (
     Agent, 
