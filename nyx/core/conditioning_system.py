@@ -416,9 +416,25 @@ class ConditioningSystem:
         """
         Generate a reward signal for the reward system.
         """
-        if not ctx.context.reward_system:
+        # --- Debugging ---
+        logger.debug(f"Entering _generate_reward_signal_logic for behavior: {behavior}")
+        if not hasattr(ctx, 'context') or ctx.context is None:
+            logger.error("Context object missing in _generate_reward_signal_logic's RunContextWrapper.")
             return False
-    
+        if not hasattr(ctx.context, 'reward_system') or ctx.context.reward_system is None:
+            logger.error("reward_system attribute missing or None on ctx.context in _generate_reward_signal_logic.")
+            return False
+
+        reward_system_instance = ctx.context.reward_system
+        # <<< ADD THIS LOGGING >>>
+        logger.info(f"Inside _generate_reward_signal_logic: Type of reward_system_instance = {type(reward_system_instance)}")
+        logger.info(f"Inside _generate_reward_signal_logic: Does reward_system_instance have process_reward_signal? {hasattr(reward_system_instance, 'process_reward_signal')}")
+        # <<< END ADDED LOGGING >>>
+
+        if not reward_system_instance:
+             logger.error("Reward system instance is None, cannot generate reward signal.")
+             return False
+
         try:
             reward_signal = RewardSignal(
                 value=reward_value,
@@ -429,13 +445,14 @@ class ConditioningSystem:
                     **(metadata or {}),
                 },
             )
-    
-            # Dispatch the signal
-            await ctx.context.reward_system.process_reward_signal(reward_signal)
+            logger.debug(f"Dispatching reward signal: {reward_signal.model_dump_json(indent=2)}")
+            # The potentially failing call (around line 183)
+            await reward_system_instance.process_reward_signal(reward_signal)
+            logger.debug("Reward signal dispatched successfully.")
             return True
-    
+
         except Exception as e:
-            logger.error(f"Error generating reward signal: {e}")
+            logger.error(f"Error during reward signal generation/dispatch for behavior '{behavior}': {e}", exc_info=True)
             return False
     
 
