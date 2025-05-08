@@ -4,8 +4,10 @@ import logging
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper, trace_method
+from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, RunContextWrapper
 from agents.tracing import custom_span
+
+from nyx.core.integration.integrated_tracer import get_tracer, TraceLevel, trace_method
 
 # Import spatial components
 from nyx.core.spatial.spatial_mapper import SpatialMapper, SpatialMapperContext
