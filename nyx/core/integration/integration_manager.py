@@ -39,12 +39,9 @@ class IntegrationManager:
         self.initialization_sequence = []
         self.initialized = False
         
-        # Register all bridges
-        self._setup_bridges()
-        
         logger.info("IntegrationManager initialized")
     
-    def _setup_bridges(self):
+    async def _setup_bridges(self):
         """Set up all integration bridges with appropriate dependencies."""
         try:
             # Import bridge creation functions
@@ -83,74 +80,74 @@ class IntegrationManager:
             from nyx.core.integration.dominance_reward_identity_bridge import create_dominance_reward_identity_bridge
             
             # Register core system bridges first (no dependencies)
-            self.register_bridge("action_selector", create_action_selector(self.brain), [])
-            self.register_bridge("dynamic_attention", create_dynamic_attention_system(self.brain), [])
-            self.register_bridge("perceptual_integration", create_perceptual_integration_layer(self.brain), [])
-            self.register_bridge("somatic_perception", create_somatic_perception_bridge(self.brain), [])
+            await self.register_bridge("action_selector", create_action_selector(self.brain), [])
+            await self.register_bridge("dynamic_attention", create_dynamic_attention_system(self.brain), [])
+            await self.register_bridge("perceptual_integration", create_perceptual_integration_layer(self.brain), [])
+            await self.register_bridge("somatic_perception", create_somatic_perception_bridge(self.brain), [])
             
             # Register secondary bridges with dependencies on core bridges
-            self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
+            await self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
                                ["dynamic_attention"])
-            self.register_bridge("emotional_hormonal", create_emotional_hormonal_bridge(self.brain), 
+            await self.register_bridge("emotional_hormonal", create_emotional_hormonal_bridge(self.brain), 
                                ["emotional_cognitive"])
-            self.register_bridge("mood_emotional", create_mood_emotional_bridge(self.brain), 
+            await self.register_bridge("mood_emotional", create_mood_emotional_bridge(self.brain), 
                                ["emotional_cognitive", "emotional_hormonal"])
-            self.register_bridge("multimodal_attention", create_multimodal_attention_bridge(self.brain), 
+            await self.register_bridge("multimodal_attention", create_multimodal_attention_bridge(self.brain), 
                                ["dynamic_attention", "perceptual_integration"])
-            self.register_bridge("memory_integration", create_memory_integration_bridge(self.brain), 
+            await self.register_bridge("memory_integration", create_memory_integration_bridge(self.brain), 
                                ["dynamic_attention"])
-            self.register_bridge("prediction_imagination", create_prediction_imagination_bridge(self.brain), 
+            await self.register_bridge("prediction_imagination", create_prediction_imagination_bridge(self.brain), 
                                [])
-            self.register_bridge("identity_imagination_emotional", create_identity_imagination_emotional_bridge(self.brain), 
+            await self.register_bridge("identity_imagination_emotional", create_identity_imagination_emotional_bridge(self.brain), 
                                ["emotional_cognitive", "prediction_imagination"])
-            self.register_bridge("narrative_memory_identity", create_narrative_memory_identity_nexus(self.brain), 
+            await self.register_bridge("narrative_memory_identity", create_narrative_memory_identity_nexus(self.brain), 
                                ["memory_integration", "identity_imagination_emotional"])
-            self.register_bridge("procedural_memory", create_procedural_memory_integration_bridge(self.brain), 
+            await self.register_bridge("procedural_memory", create_procedural_memory_integration_bridge(self.brain), 
                                ["memory_integration", "emotional_cognitive"])
             
             # Register bridges that depend on secondary bridges
-            self.register_bridge("knowledge_memory_reasoning", create_knowledge_memory_reasoning_bridge(self.brain), 
+            await self.register_bridge("knowledge_memory_reasoning", create_knowledge_memory_reasoning_bridge(self.brain), 
                                ["memory_integration"])
-            self.register_bridge("knowledge_curiosity", create_knowledge_curiosity_exploration_bridge(self.brain), 
+            await self.register_bridge("knowledge_curiosity", create_knowledge_curiosity_exploration_bridge(self.brain), 
                                ["knowledge_memory_reasoning"])
-            self.register_bridge("reasoning_cognitive", create_reasoning_cognitive_bridge(self.brain), 
+            await self.register_bridge("reasoning_cognitive", create_reasoning_cognitive_bridge(self.brain), 
                                ["emotional_cognitive", "memory_integration"])
-            self.register_bridge("tom_integrator", create_tom_integrator(self.brain), 
+            await self.register_bridge("tom_integrator", create_tom_integrator(self.brain), 
                                ["emotional_cognitive"])
-            self.register_bridge("relationship_tom", create_relationship_tom_bridge(self.brain), 
+            await self.register_bridge("relationship_tom", create_relationship_tom_bridge(self.brain), 
                                ["tom_integrator", "memory_integration"])
-            self.register_bridge("reward_learning", create_reward_learning_bridge(self.brain), 
+            await self.register_bridge("reward_learning", create_reward_learning_bridge(self.brain), 
                                ["action_selector", "memory_integration"])
-            self.register_bridge("core_systems_integration", create_core_systems_integration_bridge(self.brain), 
+            await self.register_bridge("core_systems_integration", create_core_systems_integration_bridge(self.brain), 
                                ["action_selector"])
-            self.register_bridge("autonomous_cognitive", create_autonomous_cognitive_bridge(self.brain), 
+            await self.register_bridge("autonomous_cognitive", create_autonomous_cognitive_bridge(self.brain), 
                                ["emotional_cognitive", "memory_integration", "reasoning_cognitive"])
     
-            self.register_bridge("conditioning_integration", create_conditioning_integration_bridge(self.brain), 
+            await self.register_bridge("conditioning_integration", create_conditioning_integration_bridge(self.brain), 
                                ["reward_learning", "memory_integration"])
             
             # Register dominance-related bridges
-            self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
+            await self.register_bridge("dominance_reward_identity", create_dominance_reward_identity_bridge(self.brain), 
                                ["reward_learning", "identity_imagination_emotional"])
-            self.register_bridge("dominance_memory_reflection", create_dominance_memory_reflection_bridge(self.brain), 
+            await self.register_bridge("dominance_memory_reflection", create_dominance_memory_reflection_bridge(self.brain), 
                                ["memory_integration"])
-            self.register_bridge("dominance_imagination_decision", create_dominance_imagination_decision_bridge(self.brain), 
+            await self.register_bridge("dominance_imagination_decision", create_dominance_imagination_decision_bridge(self.brain), 
                                ["prediction_imagination", "relationship_tom"])
             
             # Register main dominance integration manager
-            self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
+            await self.register_bridge("dominance_integration", create_dominance_integration_manager(self.brain), 
                                ["dominance_reward_identity", "dominance_memory_reflection", "dominance_imagination_decision"])
     
-            self.register_bridge("spatial_integration", create_spatial_integration_bridge(self.brain), 
+            await self.register_bridge("spatial_integration", create_spatial_integration_bridge(self.brain), 
                                 ["memory_integration", "dynamic_attention"])
             
             # Register high-level pipeline bridges
-            self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
+            await self.register_bridge("need_goal_action", create_need_goal_action_pipeline(self.brain), 
                                ["action_selector", "reward_learning"])
-            self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
+            await self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
                                ["action_selector", "need_goal_action", "prediction_imagination"])
     
-            self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
+            await self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
                          ["event_bus", "memory_integration", "dynamic_attention"])
     
             self.brain.relationship_reflection_system = RelationshipReflectionSystem(
@@ -164,65 +161,54 @@ class IntegrationManager:
             logger.info(f"Set up {len(self.bridges)} integration bridges")
             
         except Exception as e:
-            logger.error(f"Error setting up integration bridges: {e}", exc_info=True)
+            logger.error(f"Error setting up integration bridges asynchronously: {e}", exc_info=True)
+            raise # Re-raise to indicate setup failure
     
     async def register_bridge(self, 
                               bridge_name: str, 
                               bridge_instance: Any, 
-                              dependencies: List[str] = None) -> None: # Changed to async def
-        """
-        Registers a bridge with the integration manager.
-        This method is now asynchronous.
-        """
+                              dependencies: List[str] = None) -> None:
         if bridge_name in self.bridges:
             logger.warning(f"Bridge '{bridge_name}' is already registered. Overwriting.")
         
         self.bridges[bridge_name] = bridge_instance
         self.bridge_dependencies[bridge_name] = dependencies or []
         logger.info(f"Bridge '{bridge_name}' registered with dependencies: {self.bridge_dependencies[bridge_name]}.")
-        
-        # Example of an async operation you might do here:
-        # await self.event_bus.publish(Event("bridge_registered", "integration_manager", {"name": bridge_name}))
-        # For now, if there's no specific async work, it's fine.
-        # The key is that it's `async def` so it returns a coroutine.
-        return # Implicitly returns None, but after `await` is satisfied.
+        return
     
     @trace_method(level=TraceLevel.INFO, group_id="IntegrationManager")
     async def initialize(self) -> bool:
         """Initialize all integration bridges in correct order."""
         try:
-            # Build dependency graph
-            self._build_dependency_graph()
+            # Call async setup first
+            await self._setup_bridges() # <<< CALL IT HERE
+
+            # Build dependency graph (can stay sync if it only reads self.bridges/self.bridge_dependencies)
+            self._build_dependency_graph() 
             
-            # Determine initialization sequence
+            # Determine initialization sequence (can stay sync)
             self._determine_initialization_sequence()
             
             # Initialize bridges in sequence
             for bridge_name in self.initialization_sequence:
                 if bridge_name in self.bridges:
                     bridge = self.bridges[bridge_name]
-                    
-                    # Skip if bridge is None (not available)
                     if bridge is None:
                         logger.warning(f"Bridge {bridge_name} not available, skipping")
+                        self.bridge_statuses[bridge_name] = False # Mark as failed if None
                         continue
                     
                     logger.info(f"Initializing bridge: {bridge_name}")
-                    
-                    # Check if bridge has initialize method
                     if hasattr(bridge, 'initialize') and callable(getattr(bridge, 'initialize')):
-                        success = await bridge.initialize()
+                        success = await bridge.initialize() # This bridge.initialize() MUST be async
                         self.bridge_statuses[bridge_name] = success
-                        
                         if not success:
                             logger.warning(f"Bridge {bridge_name} initialization failed")
                     else:
                         logger.warning(f"Bridge {bridge_name} has no initialize method")
-                        self.bridge_statuses[bridge_name] = True  # Assume success if no method
+                        self.bridge_statuses[bridge_name] = True 
             
-            # Check overall initialization status
             failed_bridges = [name for name, status in self.bridge_statuses.items() if not status]
-            
             if failed_bridges:
                 logger.error(f"Failed to initialize bridges: {failed_bridges}")
                 self.initialized = False
