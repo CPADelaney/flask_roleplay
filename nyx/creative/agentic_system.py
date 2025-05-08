@@ -466,6 +466,96 @@ class AgenticCreativitySystemV2:
         context = "\n\n".join(ctx_parts)
         return f"{context}\n\n# User question\n{user_msg}"
 
+    async def write_story(self, prompt: str, length: str = "medium", genre: str = None) -> Dict[str, Any]:
+        """Generate a creative story based on the provided prompt."""
+        # Use the semantic search and prompt builder to find relevant context
+        context_enriched_prompt = await self.prepare_prompt(prompt, f"Write a {length} story about {prompt}" + (f" in {genre} genre" if genre else ""))
+        
+        # Store the generated content
+        result = await self.storage.store_content(
+            content_type="story",
+            title=f"Story: {prompt[:50]}",
+            content=f"# {prompt}\n\n[Story would be generated here with a more advanced generation system]"
+        )
+        
+        return result
+    
+    async def write_poem(self, topic: str, style: str = None) -> Dict[str, Any]:
+        """Generate a poem on the specified topic and in the specified style."""
+        style_prompt = f" in {style} style" if style else ""
+        context_enriched_prompt = await self.prepare_prompt(topic, f"Write a poem about {topic}{style_prompt}")
+        
+        result = await self.storage.store_content(
+            content_type="poem",
+            title=f"Poem: {topic[:50]}",
+            content=f"# {topic}\n\n[Poem would be generated here with a more advanced generation system]"
+        )
+        
+        return result
+    
+    async def write_lyrics(self, theme: str, genre: str = "pop") -> Dict[str, Any]:
+        """Generate song lyrics based on theme and genre."""
+        context_enriched_prompt = await self.prepare_prompt(theme, f"Write {genre} song lyrics about {theme}")
+        
+        result = await self.storage.store_content(
+            content_type="lyrics",
+            title=f"{genre.capitalize()} Song: {theme[:50]}",
+            content=f"# {theme} ({genre})\n\n[Lyrics would be generated here with a more advanced generation system]"
+        )
+        
+        return result
+    
+    async def write_journal(self, topic: str, perspective: str = "first-person") -> Dict[str, Any]:
+        """Generate a journal entry on the specified topic."""
+        context_enriched_prompt = await self.prepare_prompt(topic, f"Write a {perspective} journal entry about {topic}")
+        
+        result = await self.storage.store_content(
+            content_type="journal",
+            title=f"Journal: {topic[:50]}",
+            content=f"# {topic}\n\n[Journal entry would be generated here with a more advanced generation system]"
+        )
+        
+        return result
+    
+    async def write_and_execute_code(self, task: str, language: str = "python") -> Dict[str, Any]:
+        """Generate and execute code to solve a specific task."""
+        context_enriched_prompt = await self.prepare_prompt(task, f"Write {language} code to {task}")
+        
+        # Placeholder for code generation
+        code = f"# {language} code to {task}\n\n# [Code would be generated and executed here]"
+        
+        result = await self.storage.store_content(
+            content_type="code",
+            title=f"Code: {task[:50]}",
+            content=code,
+            metadata={"language": language, "task": task}
+        )
+        
+        return result
+    
+    # Connect to the CodeAnalyzer for these methods
+    async def analyze_module(self, module_path: str) -> Dict[str, Any]:
+        """Analyze a Python module structure."""
+        # This would ideally be connected to CodeAnalyzer.analyze_module
+        from nyx.creative.analysis_sandbox import CodeAnalyzer
+        analyzer = CodeAnalyzer(self.storage)
+        return await analyzer.analyze_module(module_path)
+    
+    async def review_code(self, code: str, language: str = "python") -> Dict[str, Any]:
+        """Review code for improvements and issues."""
+        # This would ideally be connected to CodeAnalyzer.review_code
+        from nyx.creative.analysis_sandbox import CodeAnalyzer
+        analyzer = CodeAnalyzer(self.storage)
+        return await analyzer.review_code(code, language)
+    
+    # Connect to the CapabilityAssessmentSystem for this method
+    async def assess_capabilities(self, goal: str) -> Dict[str, Any]:
+        """Assess capabilities required for a specific goal."""
+        # This would ideally be connected to CapabilityAssessmentSystem.assess_required_capabilities
+        from nyx.creative.capability_system import CapabilityAssessmentSystem
+        assessor = CapabilityAssessmentSystem(creative_content_system=self.storage)
+        return await assessor.assess_required_capabilities(goal)
+
 async def integrate_with_existing_system(nyx_brain=None):
     """
     Integrates the creativity system with an existing NyxBrain instance.
