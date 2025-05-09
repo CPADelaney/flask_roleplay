@@ -4,6 +4,7 @@ import os
 import logging
 import time
 import json
+import aioredis 
 import asyncio
 from typing import Dict, Any, Optional
 
@@ -24,7 +25,7 @@ import atexit
 
 # External services
 import asyncpg # Use asyncpg directly where needed
-from redis import Redis # Keep Redis sync for now, unless heavy usage requires aioredis
+from redis import Redis # Keep Redis sync for now, unless heavy usage requires 
 from celery import Celery # Keep Celery object import
 
 # Blueprint imports (ensure these use asyncpg in their async routes)
@@ -75,8 +76,8 @@ from db.connection import (
 from nyx.core.sync.nyx_sync_daemon import NyxSyncDaemon
 
 # Middleware
-from middleware.rate_limiting import rate_limit, ip_block_list, ip_block_middleware
-from middleware.validation import validate_request
+from middleware.rate_limiting import rate_limit, async_ip_block_middleware # Use the async IP block
+from middleware.validation import validate_request 
 
 from logic.aggregator_sdk import init_singletons
 
@@ -385,6 +386,31 @@ async def initialize_systems(app):
         await register_with_governance(story_user_id, story_conversation_id)
         logger.info("StoryDirector initialized and registered with governance.")
 
+        try:
+            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            if redis_url:
+                # For Rate Limiter
+                app.aioredis_rate_limit_pool = aioredis.from_url(redis_url, decode_responses=True)
+                await app.aioredis_rate_limit_pool.ping() # Test connection
+                logger.info("aioredis pool for Rate Limiter initialized.")
+    
+                # For IP Block List (can use the same pool or a different one if needed)
+                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Or create new if different DB/config
+                logger.info("aioredis pool for IP Block List configured.")
+            else:
+                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will fall back to local.")
+                app.aioredis_rate_limit_pool = None
+                app.aioredis_ip_block_pool = None
+    
+        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+            logger.error(f"Failed to initialize aioredis pools: {e}")
+            app.aioredis_rate_limit_pool = None # Ensure it's None on failure
+            app.aioredis_ip_block_pool = None
+        except Exception as e:
+            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
+
         from nyx.core.brain import base as nyx_base
         print('Dir on NyxBrain:', dir(nyx_base.NyxBrain))
         print('NyxBrain.__dict__:', nyx_base.NyxBrain.__dict__.keys())
@@ -540,7 +566,7 @@ def create_quart_app():
     app.register_blueprint(nyx_agent_bp, url_prefix='/nyx')
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
-    app.before_request(ip_block_middleware)
+    app.before_request(async_ip_block_middleware)
     register_auth_routes(app)
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
@@ -574,54 +600,64 @@ def create_quart_app():
         return await render_template("register.html") # Ensure register.html exists
 
     @app.route("/login", methods=["POST"])
-    @rate_limit(limit=5, period=60) # Example rate limit
-    @validate_request({ # Ensure middleware correctly populates request.sanitized_data
-        'username': {'type': 'string', 'pattern': r'^[a-zA-Z0-9_.-]{3,30}$', 'required': True}, # Added pattern
-        'password': {'type': 'string', 'max_length': 100, 'required': True}
-    })
-    async def login(): # Make async to use asyncpg
-        # Use request.sanitized_data if middleware provides it, else request.json
-        data = getattr(request, 'sanitized_data', request.get_json())
-        if not data:
-            return jsonify({"error": "Invalid request data"}), 400
-        username = data.get("username")
-        password = data.get("password")
-
-        if not username or not password:
-             return jsonify({"error": "Missing username or password"}), 400
-
-        # Use asyncpg for database access
-        try:
-            async with get_db_connection_context() as conn:
-                row = await conn.fetchrow(
-                    "SELECT id, password_hash FROM users WHERE username=$1",
-                    username
-                )
-
-            if not row: # User not found
-                 # Mitigate timing attacks
-                 fake_hash = bcrypt.hashpw(b"dummy", bcrypt.gensalt())
-                 bcrypt.checkpw(password.encode('utf-8'), fake_hash)
-                 logger.warning(f"Login failed (no such user): {username}")
-                 return jsonify({"error": "Invalid username or password"}), 401
-
-            user_id, hashed_password_bytes = row['id'], row['password_hash'].encode('utf-8')
-
-            if bcrypt.checkpw(password.encode('utf-8'), hashed_password_bytes):
-                 session["user_id"] = user_id
-                 session.permanent = True
-                 logger.info(f"Login successful: User {user_id}")
-                 return jsonify({"message": "Logged in", "user_id": user_id})
-            else:
-                 logger.warning(f"Login failed (bad password): User {user_id}")
-                 return jsonify({"error": "Invalid username or password"}), 401
-
-        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-            logger.error(f"Login DB error for {username}: {db_err}", exc_info=True)
-            return jsonify({"error": "Database error during login"}), 500
-        except Exception as e:
-            logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
-            return jsonify({"error": "Server error during login"}), 500
+        @rate_limit(limit=5, period=60)
+        @validate_request({ # This should populate request.sanitized_data
+            'username': {'type': 'string', 'pattern': r'^[a-zA-Z0-9_.-]{3,30}$', 'required': True},
+            'password': {'type': 'string', 'max_length': 100, 'required': True}
+        })
+        async def login():
+            # Prefer request.sanitized_data
+            data = getattr(request, 'sanitized_data', None)
+            
+            if data is None: # Fallback if sanitized_data is not set by middleware
+                logger.warning("/login route: request.sanitized_data not found, attempting direct JSON parse.")
+                try:
+                    data = await request.get_json()
+                    if data is None: # Check if JSON body itself was empty e.g. {} or null
+                        return jsonify({"error": "Request body is empty or null JSON"}), 400
+                except Exception as json_err: # Catch errors parsing JSON
+                    logger.error(f"Error parsing JSON directly in /login route: {json_err}")
+                    return jsonify({"error": "Invalid JSON request body"}), 400
+        
+            # Now that 'data' is guaranteed to be a dict (or an error was returned)
+            username = data.get("username")
+            password = data.get("password")
+        
+            if not username or not password:
+                 return jsonify({"error": "Missing username or password"}), 400
+    
+            # Use asyncpg for database access
+            try:
+                async with get_db_connection_context() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT id, password_hash FROM users WHERE username=$1",
+                        username
+                    )
+    
+                if not row: # User not found
+                     # Mitigate timing attacks
+                     fake_hash = bcrypt.hashpw(b"dummy", bcrypt.gensalt())
+                     bcrypt.checkpw(password.encode('utf-8'), fake_hash)
+                     logger.warning(f"Login failed (no such user): {username}")
+                     return jsonify({"error": "Invalid username or password"}), 401
+    
+                user_id, hashed_password_bytes = row['id'], row['password_hash'].encode('utf-8')
+    
+                if bcrypt.checkpw(password.encode('utf-8'), hashed_password_bytes):
+                     session["user_id"] = user_id
+                     session.permanent = True
+                     logger.info(f"Login successful: User {user_id}")
+                     return jsonify({"message": "Logged in", "user_id": user_id})
+                else:
+                     logger.warning(f"Login failed (bad password): User {user_id}")
+                     return jsonify({"error": "Invalid username or password"}), 401
+    
+            except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+                logger.error(f"Login DB error for {username}: {db_err}", exc_info=True)
+                return jsonify({"error": "Database error during login"}), 500
+            except Exception as e:
+                logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
+                return jsonify({"error": "Server error during login"}), 500
 
     @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
@@ -887,14 +923,38 @@ def create_quart_app():
         redis_host = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
         redis_port = int(os.getenv("REDIS_PORT", 6379))
         try:
-            # Use short timeout for readiness check
-            r = Redis(host=redis_host, port=redis_port, socket_timeout=2, socket_connect_timeout=2)
-            r.ping()
-            status["checks"]["redis"] = "connected"
-        except Exception as e:
-            status["checks"]["redis"] = f"error: {str(e)}"
+            # Get the aioredis pool/client similar to how your middleware does.
+            # For simplicity, let's assume you have a way to get an aioredis client instance.
+            # If you stored the pool on 'current_app' during initialize_systems:
+            # redis_pool = getattr(current_app, 'aioredis_rate_limit_pool', None)
+            # Or create a temporary one for the check if not easily accessible:
+            redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            if redis_url:
+                # Use a timeout for the connection attempt in readiness
+                try:
+                    aredis_client = await asyncio.wait_for(
+                        aioredis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2),
+                        timeout=3 # Overall timeout for from_url and ping
+                    )
+                    await aredis_client.ping()
+                    status["checks"]["aioredis"] = "connected"
+                    await aredis_client.close() # Close the temporary client/pool
+                except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as aredis_err:
+                    status["checks"]["aioredis"] = f"error: {type(aredis_err).__name__}"
+                    is_ready = False
+                    logger.warning(f"Readiness aioredis check failed: {aredis_err}")
+                except Exception as e_aredis: # Catch any other exception during aioredis init/ping
+                    status["checks"]["aioredis"] = f"unexpected error: {type(e_aredis).__name__}"
+                    is_ready = False
+                    logger.warning(f"Readiness aioredis check unexpected error: {e_aredis}", exc_info=True)
+            else:
+                status["checks"]["aioredis"] = "not configured (REDIS_URL missing)"
+                is_ready = False # Or handle as per your requirements
+
+        except Exception as e: # General catch for the try block
+            status["checks"]["aioredis"] = f"error: {type(e).__name__}"
             is_ready = False
-            logger.warning(f"Readiness check Redis error: {e}")
+            logger.warning(f"Readiness check aioredis setup error: {e}", exc_info=True)
 
         # --- Celery Check (using inspect) ---
         # This can be slow and unreliable; consider a dedicated health check task
@@ -942,6 +1002,21 @@ def create_quart_app():
             pass  # Ignore errors here
     except:
         pass  # In case wsgi is not available
+
+    async def shutdown_redis_pools():
+        logger.info("Attempting to shut down aioredis pools...")
+        if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
+            await app.aioredis_rate_limit_pool.close()
+            # await app.aioredis_rate_limit_pool.wait_closed() # For older aioredis
+            logger.info("Rate limiter aioredis pool closed.")
+        # No need to close ip_block_pool if it's the same object as rate_limit_pool
+        # If they were different:
+        # if hasattr(app, 'aioredis_ip_block_pool') and app.aioredis_ip_block_pool and \
+        #    app.aioredis_ip_block_pool is not app.aioredis_rate_limit_pool:
+        #     await app.aioredis_ip_block_pool.close()
+        #     logger.info("IP blocklist aioredis pool closed.")
+    
+    app.after_serving(shutdown_redis_pools)
     
     return app
 
