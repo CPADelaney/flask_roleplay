@@ -1228,17 +1228,17 @@ async def calculate_coup_success_chance(ctx: RunContextWrapper, struggle_id: int
     return await _internal_calculate_coup_success_chance_logic(ctx, struggle_id, approach, supporting_npcs, resources_committed)
 
 @function_tool
-async def add_resolution_path(ctx: RunContextWrapper, conflict_id: int, path_data: Dict[str, Any]) -> Dict[str, Any]]:
+async def add_resolution_path(ctx: RunContextWrapper, conflict_id: int, path_data: Dict[str, Any]) -> Dict[str, Any]:
     """Add a new resolution path to an existing conflict."""
     return await _internal_add_resolution_path_logic(ctx, conflict_id, path_data)
 
 @function_tool
-async def update_player_involvement(ctx: RunContextWrapper, conflict_id: int, involvement_data: Dict[str, Any]) -> Dict[str, Any]]:
+async def update_player_involvement(ctx: RunContextWrapper, conflict_id: int, involvement_data: Dict[str, Any]) -> Dict[str, Any]:
     """Update player's involvement in a conflict."""
     return await _internal_update_player_involvement_logic(ctx, conflict_id, involvement_data)
 
 @function_tool
-async def add_internal_conflict(ctx: RunContextWrapper, conflict_id: int, internal_conflict_data: Dict[str, Any]) -> Dict[str, Any]]:
+async def add_internal_conflict(ctx: RunContextWrapper, conflict_id: int, internal_conflict_data: Dict[str, Any]) -> Dict[str, Any]:
     """Add an internal faction conflict to a main conflict."""
     return await _internal_add_internal_conflict_logic(ctx, conflict_id, internal_conflict_data)
 
