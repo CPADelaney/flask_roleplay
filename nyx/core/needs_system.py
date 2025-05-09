@@ -644,13 +644,22 @@ async def get_most_unfulfilled_need_tool_impl(ctx: RunContextWrapper[NeedsSystem
 async def get_need_history_tool_impl(
     ctx: RunContextWrapper[NeedsSystemContext],
     need_name: str,
-    limit: int = 20
+    limit: Optional[int] = None # <--- CHANGE: Make Optional, default to None
 ) -> List[Dict[str, Any]]:
     """
     Tool: Gets the history for a specific need.
     """
     needs_ctx = ctx.context
-    return needs_ctx.needs_system_ref._get_need_history_logic(need_name, limit) # Call logic method
+
+    # --- Handle default for limit internally ---
+    actual_limit = limit if limit is not None else 20
+    if actual_limit <= 0: # Ensure limit is positive if provided, or use default if 0 or negative
+        actual_limit = 20 # or handle as an error if 0 is invalid for your logic
+    # --- End internal handling ---
+
+    # Call the actual logic method on the NeedsSystem instance via the context reference
+    # Pass the 'actual_limit' that includes the default handling
+    return needs_ctx.needs_system_ref._get_need_history_logic(need_name, actual_limit)
 
 @function_tool
 async def get_total_drive_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> float:
@@ -835,10 +844,13 @@ For example, if the request is "Decrease need 'pleasure_indulgence' by 0.3 becau
             }
         return {"name": "none", "drive_strength": 0}
 
-    def _get_need_history_logic(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def _get_need_history_logic(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]: # Logic can keep default
         if need_name not in self.needs: return []
+        # Ensure limit is positive for slicing logic
+        effective_limit = limit if limit > 0 else self.max_history_per_need # or some other sensible default if limit is invalid
+
         history = self.need_history.get(need_name, [])
-        return history[-limit:] if limit > 0 else history
+        return history[-effective_limit:] # Slicing with negative or zero limit behaves differently
 
     def _get_total_drive_logic(self) -> float:
         return sum(need.drive_strength for need in self.needs.values())
@@ -921,10 +933,19 @@ For example, if the request is "Decrease need 'pleasure_indulgence' by 0.3 becau
         return final_output if isinstance(final_output, dict) else {}
 
     async def get_need_history(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]:
-        prompt = f"Retrieve the history for the need named '{need_name}', limiting to the last {limit} entries."
+        # The prompt for the agent should reflect that 'limit' is optional.
+        # The agent's instructions should also mention this.
+        prompt_parts = [f"Retrieve the history for the need named '{need_name}'."]
+        if limit != 20: # Only add limit to prompt if it's not the default, or always add it
+            prompt_parts.append(f"Limit the results to {limit} entries.")
+        prompt = " ".join(prompt_parts)
+        
+        # Or, more directly if the agent expects structured args from the prompt:
+        # prompt = f"get_need_history_tool_impl: need_name='{need_name}', limit={limit}"
+
         result = await Runner.run(
             self.agent,
-            prompt,
+            prompt, # The agent will extract 'need_name' and 'limit' for the tool call
             context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, list) else []
