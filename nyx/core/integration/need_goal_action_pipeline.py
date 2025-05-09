@@ -139,7 +139,7 @@ class NeedGoalActionPipeline:
                 drive_strengths = await self.needs_system.update_needs()
                 
                 # Get detailed needs state
-                needs_state = self.needs_system.get_needs_state()
+                needs_state = await self.needs_system.get_needs_state_async()
                 cycle_results["needs_checked"] = len(needs_state)
                 
                 # Find unmet needs that exceed threshold
@@ -234,7 +234,7 @@ class NeedGoalActionPipeline:
         
         try:
             # Get need state
-            needs_state = self.needs_system.get_needs_state()
+            needs_state = await self.needs_system.get_needs_state_async()
             
             if need_name not in needs_state:
                 return {"status": "error", "message": f"Unknown need: {need_name}"}
@@ -463,7 +463,7 @@ class NeedGoalActionPipeline:
             # Get need states if available
             need_states = {}
             if self.needs_system:
-                need_states = self.needs_system.get_needs_state()
+                need_states = await self.needs_system.get_needs_state_async()
             
             # Get active goals if available
             active_goals = []
