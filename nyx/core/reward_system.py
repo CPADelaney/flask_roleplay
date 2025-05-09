@@ -1300,7 +1300,7 @@ class RewardSignalProcessor:
             adjusted_novelty = novelty + control_boost
 
             # Optional: boost preference for pleasure when needy
-            pleasure_drive = self.needs_system.get_needs_state().get("pleasure_indulgence", {}).get("drive_strength", 0.0)
+            pleasure_drive = await self.needs_system.get_needs_state_async().get("pleasure_indulgence", {}).get("drive_strength", 0.0)
             if pleasure_drive > 0.7 and control > 0.3:
                 logger.info(f"[Nyx] High pleasure drive ({pleasure_drive:.2f}) + control ({control:.2f}) — escalating assertiveness.")
 
