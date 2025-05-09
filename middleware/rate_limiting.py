@@ -254,7 +254,7 @@ def _rate_limit_exceeded_response_data(limit_info: Dict) -> Tuple[Dict[str, Any]
         "retry_after_seconds": limit_info.get('retry_after', 0)
     }, 429
 
-async def _add_rate_limit_headers_to_response_obj(response: QuartResponse, limit_info: Dict): # หรือ 'quart.Response'
+async def _add_rate_limit_headers_to_response_obj(response: Response, limit_info: Dict):
     """Actually sets headers on a given Response object."""
     try:
         response.headers.set("X-RateLimit-Limit", str(limit_info['limit']))
