@@ -420,7 +420,7 @@ class KnowledgeCuriosityExplorationBridge:
             # Get need states if available
             need_weights = {}
             if self.need_system:
-                need_states = self.need_system.get_needs_state()
+                need_states = await self.need_system.get_needs_state_async()
                 
                 # Map needs to knowledge domains
                 for need_name, need_data in need_states.items():
@@ -523,7 +523,7 @@ class KnowledgeCuriosityExplorationBridge:
             
             # Adjust based on needs if available
             if self.need_system:
-                need_states = self.need_system.get_needs_state()
+                need_states = await self.need_system.get_needs_state_async()
                 
                 knowledge_need = 0.5  # Default
                 if "knowledge" in need_states:
