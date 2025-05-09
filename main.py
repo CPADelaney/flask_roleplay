@@ -496,13 +496,29 @@ def create_quart_app():
     # 6) Security headers
     @app.after_request
     async def set_security_headers(response):
+        # Define allowed CDN sources
+        cdn_scripts = "https://cdn.jsdelivr.net https://cdn.socket.io https://code.jquery.com"
+        cdn_styles = "https://cdn.jsdelivr.net" # For Bootstrap CSS
+
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self'; "
-            "img-src 'self' data:; "
-            "connect-src 'self' ws://* wss://*"
+            f"script-src 'self' {cdn_scripts}; " # Allow 'self' and specific CDNs for scripts
+            f"style-src 'self' {cdn_styles}; "   # Allow 'self' and specific CDNs for styles
+            "img-src 'self' data: https://*; " # Allow images from self, data URIs, and any HTTPS source (be more specific if possible)
+            "font-src 'self' https://cdn.jsdelivr.net; " # If Bootstrap uses webfonts from its CDN
+            "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com; " # Allows connections to self, all WebSocket URLs, and your Render domain explicitly.
+            "frame-ancestors 'none'; " # Good practice to prevent clickjacking
+            "object-src 'none'; " # Good practice, disallow <object>, <embed>, <applet>
+            "base-uri 'self';" # Restricts <base> tag
+            "form-action 'self';" # Restricts where forms can submit to
         )
+        # Other security headers (optional but recommended)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY" # Or SAMEORIGIN
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # Only if site is HTTPS only
+
         return response
 
     # (Removed stray PrometheusMetrics import & metrics.info — we’re using aioprometheus now)
