@@ -9,8 +9,7 @@
   <h2>Register a New User</h2>
   <input type="text" id="reg_username" placeholder="New username">
   <input type="password" id="reg_password" placeholder="Password">
-  <!-- type="button" to prevent form submission -->
-  <button type="button" onclick="registerUser()">Register</button>
+  <button type="button" id="registerBtn">Register</button> <!-- Added ID, removed onclick -->
   <div id="registerStatus"></div>
 
   <hr/>
@@ -18,8 +17,7 @@
   <h2>Login</h2>
   <input type="text" id="username" placeholder="Username">
   <input type="password" id="password" placeholder="Password">
-  <!-- type="button" to prevent form submission -->
-  <button type="button" onclick="attemptLogin()">Login</button>
+  <button type="button" id="loginBtn">Login</button> <!-- Added ID, removed onclick -->
   <div id="loginStatus"></div>
 
   <script>
