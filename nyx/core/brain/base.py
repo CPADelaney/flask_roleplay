@@ -1425,10 +1425,19 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         # --- Needs state ---
         if self.needs_system:
             try:
-                if hasattr(self.needs_system, "get_needs_state"):
-                    state["needs"] = self.needs_system.get_needs_state()
+                needs_data = await self.needs_system.get_needs_state_async()
+                if isinstance(needs_data, dict) and "error" not in needs_data:
+                    state["needs"] = needs_data
+                elif isinstance(needs_data, dict) and "error" in needs_data:
+                     logger.warning(f"Checkpoint: Error fetching needs state (from needs_system): {needs_data['error']}")
+                     state["needs"] = {"error": "Failed to retrieve needs state"} # Or handle differently
+                else:
+                    logger.warning(f"Checkpoint: Unexpected data type from needs_system.get_needs_state_async: {type(needs_data)}")
+                    state["needs"] = {"error": "Unexpected data from needs state"}
+
             except Exception as e:
-                logger.warning(f"Checkpoint: error getting needs: {e}")
+                logger.warning(f"Checkpoint: Exception while getting needs: {e}", exc_info=True)
+                state["needs"] = {"error": f"Exception during needs retrieval: {str(e)}"}
 
         # --- Goals ---
         if self.goal_manager:
@@ -1669,9 +1678,16 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
                     try:
                         logger.debug("Running MetaCore cycle...")
                         # Prepare context for MetaCore
-                        meta_context = context_data or {}
+                        meta_context = context_data or {} 
                         if instance.needs_system:
-                            meta_context['needs_state'] = instance.needs_system.get_needs_state()
+                            # --- CORRECTED CALL ---
+                            needs_data = await instance.needs_system.get_needs_state_async()
+                            if isinstance(needs_data, dict) and "error" not in needs_data:
+                                meta_context['needs_state'] = needs_data
+                            else:
+                                logger.warning(f"MetaCore: Error or unexpected data from get_needs_state_async: {needs_data}")
+                                meta_context['needs_state'] = {"error": "Failed to retrieve needs state for MetaCore"}
+                            # --- END CORRECTION ---
                         if instance.goal_manager:
                             meta_context['active_goals'] = await instance.goal_manager.get_all_goals(
                                 status_filter=["active"]
@@ -3741,7 +3757,7 @@ System Prompt End
             # Get needs stats if available
             if self.needs_system:
                 try:
-                    needs_state = self.needs_system.get_needs_state()
+                    needs_state = await self.needs_system.get_needs_state_async()
                     stats["needs_stats"] = {
                         "current_levels": {n: s['level'] for n, s in needs_state.items()},
                         "drive_strengths": {n: s['drive_strength'] for n, s in needs_state.items()},
