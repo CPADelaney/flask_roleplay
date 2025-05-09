@@ -254,9 +254,14 @@ def _rate_limit_exceeded_response_data(limit_info: Dict) -> Tuple[Dict[str, Any]
         "retry_after_seconds": limit_info.get('retry_after', 0)
     }, 429
 
-async def _add_rate_limit_headers_to_response_obj(response: Response, limit_info: Dict):
+async def _add_rate_limit_headers_to_response_obj(response: Response, limit_info: Dict): # CHANGED QuartResponse to Response
     """Actually sets headers on a given Response object."""
     try:
+        # This check is fine, as current_app will be available when this function is *called*
+        if not isinstance(response, current_app.response_class):
+            logger.warning("_add_rate_limit_headers_to_response_obj received non-Response object, attempting to convert.")
+            response = await current_app.make_response(response)
+
         response.headers.set("X-RateLimit-Limit", str(limit_info['limit']))
         response.headers.set("X-RateLimit-Remaining", str(limit_info['remaining']))
         response.headers.set("X-RateLimit-Reset", str(limit_info['reset']))
