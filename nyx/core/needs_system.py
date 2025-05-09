@@ -686,16 +686,23 @@ class NeedsSystem:
 
         # *** Agent is now created here, using the _tool_impl FunctionTool objects ***
         self.agent = Agent(
-            name="Needs_Manager_Agent", # Give it a unique name if you have multiple agents
-            instructions="""You manage the AI's simulated needs, responsible for:
-1. Updating needs based on time decay and AI activities
-2. Satisfying needs when relevant interactions occur
-3. Triggering goals when needs are significantly unfulfilled
-4. Providing insights into current need states
+            name="Needs_Manager_Agent",
+            instructions="""You manage the AI's simulated needs.
+Your primary functions are to update need states, satisfy or decrease needs based on requests,
+and provide information about needs.
+Available tools:
+- update_needs_tool_impl: Call this to update all needs and trigger goals if necessary.
+- satisfy_need_tool_impl: Call this to increase the satisfaction of a specific need. Requires 'name', 'amount', and optional 'context'.
+- decrease_need_tool_impl: Call this to decrease the satisfaction of a specific need. Requires 'need_name', 'amount', and optional 'reason'.
+- get_needs_state_tool_impl: Call this to get the current state of all needs.
+- get_needs_by_category_tool_impl: Call this to get needs organized by category.
+- get_most_unfulfilled_need_tool_impl: Call this to find the most urgent need.
+- get_need_history_tool_impl: Call this to get history for a specific need. Requires 'need_name' and optional 'limit'.
+- get_total_drive_tool_impl: Call this to get the sum of all need drives.
+- reset_need_to_default_tool_impl: Call this to reset a specific need. Requires 'need_name'.
 
-Use the appropriate tools to perform these tasks and maintain the AI's underlying need system.
-Your available tools include: update_needs_tool_impl, satisfy_need_tool_impl, decrease_need_tool_impl, etc.
-When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_impl' tool with the appropriate arguments.
+When asked to perform an action like "decrease need X", identify the correct tool (e.g., 'decrease_need_tool_impl') and extract the necessary arguments from the request to call the tool.
+For example, if the request is "Decrease need 'pleasure_indulgence' by 0.3 because of 'denied_gratification'", you should call 'decrease_need_tool_impl' with need_name='pleasure_indulgence', amount=0.3, and reason='denied_gratification'.
 """,
             tools=[
                 update_needs_tool_impl,
@@ -708,7 +715,7 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
                 get_total_drive_tool_impl,
                 reset_need_to_default_tool_impl
             ],
-            model_settings=ModelSettings(temperature=0.1)
+            model_settings=ModelSettings(temperature=0.0) # Lower temperature for more deterministic tool use
         )
         logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
@@ -865,36 +872,27 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
 
     # --- Public API Methods (now call the agent) ---
     async def update_needs(self) -> Dict[str, float]:
+        # Let the agent decide to use the 'update_needs_tool_impl' based on this prompt
+        # and its instructions.
+        prompt = "Please update all needs status and manage any urgent unfulfilled needs."
         result = await Runner.run(
             self.agent,
-            [{"role": "user", "content": "Update all needs and trigger goals if necessary."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_update", "type": "function", "function": {
-                     "name": "update_needs_tool_impl",
-                     "arguments": json.dumps({})
-                 }}
-             ]}],
+            prompt,
             context=self.context
         )
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {}
 
-
     async def satisfy_need(self, name: str, amount: float, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        tool_args = {"name": name, "amount": amount, "context": context_data or {}}
+        # Construct a descriptive prompt for the agent
+        prompt_parts = [f"Satisfy the need named '{name}' by an amount of {amount}."]
+        if context_data:
+            prompt_parts.append(f"Consider the following context: {json.dumps(context_data)}.")
+        prompt = " ".join(prompt_parts)
+
         result = await Runner.run(
             self.agent,
-            [{"role": "user", "content": f"Satisfy need '{name}'."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_satisfy", "type": "function", "function": {
-                     "name": "satisfy_need_tool_impl",
-                     "arguments": json.dumps(tool_args)
-                 }}
-             ]}],
+            prompt,
             context=self.context
         )
         final_output = result.final_output
@@ -902,73 +900,43 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
 
     async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> Dict[str, Any]:
         reason_provided = reason if reason is not None else "generic_decrease_api_call"
-        tool_args = {"need_name": name, "amount": amount, "reason": reason_provided}
+        # Construct a descriptive prompt for the agent
+        prompt = f"Decrease the need named '{name}' by an amount of {amount}. The reason is: '{reason_provided}'."
+        
         result = await Runner.run(
             self.agent,
-            [{"role": "user", "content": f"Decrease need '{name}'."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_decrease", "type": "function", "function": {
-                     "name": "decrease_need_tool_impl",
-                     "arguments": json.dumps(tool_args)
-                 }}
-             ]}],
+            prompt, # Single string prompt
             context=self.context
         )
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict for decrease_need."}
 
     async def get_most_unfulfilled_need(self) -> Dict[str, Any]:
+        prompt = "Identify and return details for the most unfulfilled need currently."
         result = await Runner.run(
             self.agent,
-            [{"role": "user", "content": "Find the most unfulfilled need."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_get_most", "type": "function", "function": {
-                     "name": "get_most_unfulfilled_need_tool_impl",
-                     "arguments": json.dumps({})
-                 }}
-             ]}],
+            prompt,
             context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {}
 
     async def get_need_history(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]:
-        tool_args = {"need_name": need_name, "limit": limit}
+        prompt = f"Retrieve the history for the need named '{need_name}', limiting to the last {limit} entries."
         result = await Runner.run(
             self.agent,
-            [{"role": "user", "content": f"Get history for need '{need_name}'."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_history", "type": "function", "function": {
-                     "name": "get_need_history_tool_impl",
-                     "arguments": json.dumps(tool_args)
-                 }}
-             ]}],
+            prompt,
             context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, list) else []
 
     async def reset_need_to_default(self, need_name: str) -> Dict[str, Any]:
-        tool_args = {"need_name": need_name}
+        prompt = f"Reset the need named '{need_name}' to its default state."
         result = await Runner.run(
             self.agent,
-             [{"role": "user", "content": f"Reset need '{need_name}'."},
-             {"role": "assistant", 
-              "content": "",  # <--- CHANGE: None to ""
-              "tool_calls": [
-                 {"id": "call_reset", "type": "function", "function": {
-                     "name": "reset_need_to_default_tool_impl",
-                     "arguments": json.dumps(tool_args)
-                 }}
-             ]}],
+            prompt,
             context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {}
-
 
     # Synchronous wrappers for compatibility, if strictly needed, but discourage for agent interactions
     def get_needs_state(self) -> Dict[str, Dict[str, Any]]:
