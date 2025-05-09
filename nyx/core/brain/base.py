@@ -631,8 +631,8 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
 
             await self._register_processing_modules()
             await self.integrate_procedural_memory_with_actions()
-            if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions): # Check callable
-                 self._register_creative_actions()
+            if hasattr(self, "agentic_action_generator") and hasattr(self, "_register_creative_actions") and callable(self._register_creative_actions):
+                 await self._register_creative_actions()
 
             await self._build_internal_module_registry()
             self.default_active_modules = {
