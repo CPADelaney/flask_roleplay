@@ -1708,7 +1708,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
             logger.debug(f"--- Finished Cognitive Cycle {instance.cognitive_cycles_executed} ---")
         return cycle_results
 
-    def _register_creative_actions(self):
+    async def _register_creative_actions(self):
         """Register creative actions with the action generator."""
         # Map action names to creative system methods
         action_mappings = {
