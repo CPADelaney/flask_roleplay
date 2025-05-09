@@ -250,7 +250,7 @@ async def sanitize_json(json_data, schema):
                 sanitized[field] = value
     
     return sanitized, errors if errors else None
-
+    
 def validate_request(schema):
     """
     Decorator to validate and sanitize request data.
@@ -264,16 +264,26 @@ def validate_request(schema):
     def decorator(f):
         @wraps(f)
         async def decorated_function(*args, **kwargs):
+            data_to_validate = {} # Initialize with a default
+
             # Get request data based on content type
             if request.is_json:
-                data = request.get_json()
+                try:
+                    # AWAIT the coroutine to get the actual JSON data
+                    data_to_validate = await request.get_json()
+                    if data_to_validate is None: # Handle empty JSON body properly
+                        data_to_validate = {}
+                except Exception as e: # Catch errors if body is not valid JSON
+                    logger.warning(f"Request to {request.path} with Content-Type application/json had invalid JSON body: {e}")
+                    return jsonify({"error": "Invalid JSON in request body", "status_code": 400}), 400
             elif request.form:
-                data = request.form.to_dict()
-            else:
-                data = request.args.to_dict()
+                data_to_validate = request.form.to_dict()
+            else: # Fallback or for GET requests if schema is used
+                data_to_validate = request.args.to_dict()
             
             # Sanitize and validate
-            sanitized, errors = await sanitize_json(data, schema)
+            # Now 'data_to_validate' will be an actual dictionary (or whatever request.form/args return)
+            sanitized, errors = await sanitize_json(data_to_validate, schema) 
             
             if errors:
                 return jsonify({
