@@ -1,22 +1,30 @@
-// login_page.js
+// static/login_page.js
 
 // Function to check if user is already logged in
 async function checkAlreadyLoggedIn() {
   try {
     const res = await fetch("/whoami", {
       method: "GET",
-      credentials: "include" // Send cookies
+      credentials: "include"
     });
     if (res.ok) {
       const data = await res.json();
       if (data.logged_in) {
-        // If they're logged in, redirect to the chat page
         window.location.href = "/chat";
       }
     }
   } catch (err) {
     console.log("No login session found or an error occurred during checkAlreadyLoggedIn:", err);
-    // Don't redirect, stay on login page
+  }
+}
+
+// Helper function to set status message and class
+function setStatus(statusDiv, message, type) {
+  statusDiv.innerText = message;
+  // Remove previous status types and add the new one, keeping 'status-message'
+  statusDiv.className = 'status-message'; // Reset to base class
+  if (type) {
+    statusDiv.classList.add(`status-${type}`);
   }
 }
 
@@ -26,36 +34,30 @@ async function registerUser() {
   const pass = document.getElementById("reg_password").value.trim();
   const statusDiv = document.getElementById("registerStatus");
 
-  console.log("Registering user:", user); // For debugging, avoid logging pass in production
+  console.log("Registering user:", user);
 
   if (!user || !pass) {
-    statusDiv.innerText = "Username & password required to register.";
-    statusDiv.style.color = "red";
+    setStatus(statusDiv, "Username & password required to register.", "error");
     return;
   }
-  statusDiv.innerText = "Registering...";
-  statusDiv.style.color = "black";
+  setStatus(statusDiv, "Registering...", "processing");
 
   try {
     const res = await fetch("/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include", // Send/receive session cookies
+      credentials: "include",
       body: JSON.stringify({ username: user, password: pass })
     });
     const data = await res.json();
     if (res.ok) {
-      statusDiv.innerText = `Registration successful! Welcome, ${data.username || user}! Redirecting...`;
-      statusDiv.style.color = "green";
-      // Redirect to chat page on successful registration
-      window.location.href = "/chat";
+      setStatus(statusDiv, `Registration successful! Welcome, ${data.username || user}! Redirecting...`, "success");
+      setTimeout(() => { window.location.href = "/chat"; }, 1500); // Give user time to see message
     } else {
-      statusDiv.innerText = `Registration error: ${data.error || "Unknown error"}`;
-      statusDiv.style.color = "red";
+      setStatus(statusDiv, `Registration error: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
-    statusDiv.innerText = "Registration request failed. Please try again or check the console.";
-    statusDiv.style.color = "red";
+    setStatus(statusDiv, "Registration request failed. Please try again or check the console.", "error");
     console.error("Registration error:", err);
   }
 }
@@ -66,69 +68,57 @@ async function attemptLogin() {
   const pass = document.getElementById("password").value.trim();
   const statusDiv = document.getElementById("loginStatus");
 
-  console.log("Attempting login with:", user); // For debugging, avoid logging pass in production
+  console.log("Attempting login with:", user);
 
   if (!user || !pass) {
-    statusDiv.innerText = "Username & password required to login.";
-    statusDiv.style.color = "red";
+    setStatus(statusDiv, "Username & password required to login.", "error");
     return;
   }
-  statusDiv.innerText = "Logging in...";
-  statusDiv.style.color = "black";
+  setStatus(statusDiv, "Logging in...", "processing");
 
   try {
     const res = await fetch("/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include", // Send/receive session cookies
+      credentials: "include",
       body: JSON.stringify({ username: user, password: pass })
     });
     const data = await res.json();
     if (res.ok) {
-      statusDiv.innerText = `Login successful! Welcome back, ${data.username || user}! Redirecting...`;
-      statusDiv.style.color = "green";
-      // Redirect to chat page on successful login
-      window.location.href = "/chat";
+      setStatus(statusDiv, `Login successful! Welcome back, ${data.username || user}! Redirecting...`, "success");
+      setTimeout(() => { window.location.href = "/chat"; }, 1500); // Give user time to see message
     } else {
-      statusDiv.innerText = `Login error: ${data.error || "Unknown error"}`;
-      statusDiv.style.color = "red";
+      setStatus(statusDiv, `Login error: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
-    statusDiv.innerText = "Login request failed. Please try again or check the console.";
-    statusDiv.style.color = "red";
+    setStatus(statusDiv, "Login request failed. Please try again or check the console.", "error");
     console.error("Login error:", err);
   }
 }
 
-// Wait for the DOM to be fully loaded before running scripts that interact with it
 document.addEventListener('DOMContentLoaded', async function() {
-  // Check if user is already logged in when the page loads
   await checkAlreadyLoggedIn();
 
-  // Attach event listener to the Register button
   const registerButton = document.getElementById("registerBtn");
   if (registerButton) {
     registerButton.addEventListener("click", registerUser);
   }
 
-  // Attach event listener to the Login button
   const loginButton = document.getElementById("loginBtn");
   if (loginButton) {
     loginButton.addEventListener("click", attemptLogin);
   }
 
-  // Optional: Add Enter key press listeners for input fields
   document.getElementById("reg_password").addEventListener("keypress", function(event) {
-     if (event.key === "Enter") {
-         event.preventDefault(); // Prevent default form submission if it were a form
-         registerUser();
-     }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      registerUser();
+    }
   });
   document.getElementById("password").addEventListener("keypress", function(event) {
-     if (event.key === "Enter") {
-         event.preventDefault();
-         attemptLogin();
-     }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      attemptLogin();
+    }
   });
-
 });
