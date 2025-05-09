@@ -10,6 +10,7 @@ import json
 import random
 import re
 from typing import Dict, List, Any, Optional, Union, Tuple
+from collections import defaultdict
 from pydantic import BaseModel, Field
 from agents import (
     Agent, Runner, trace, function_tool, 
