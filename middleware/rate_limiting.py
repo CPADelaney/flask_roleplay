@@ -5,7 +5,7 @@ import asyncio
 import time
 import logging
 from functools import wraps
-from quart import request, jsonify, current_app, g, abort
+from quart import request, jsonify, current_app, g, abort, Response
 from typing import Dict, Optional, Tuple, Set, Any
 import aioredis # Changed from redis to aioredis
 from dataclasses import dataclass
