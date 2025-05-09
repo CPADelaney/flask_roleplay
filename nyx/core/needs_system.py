@@ -867,7 +867,15 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
     async def update_needs(self) -> Dict[str, float]:
         result = await Runner.run(
             self.agent,
-            "Execute the 'update_needs_tool_impl' tool.", # More direct prompt
+            [{"role": "user", "content": "Update all needs and trigger goals if necessary."},
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
+                 {"id": "call_update", "type": "function", "function": {
+                     "name": "update_needs_tool_impl",
+                     "arguments": json.dumps({})
+                 }}
+             ]}],
             context=self.context
         )
         final_output = result.final_output
@@ -875,54 +883,32 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
 
 
     async def satisfy_need(self, name: str, amount: float, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        # The agent will call satisfy_need_tool_impl with these parameters
-        prompt = f"Execute satisfy_need_tool_impl for need '{name}' with amount {amount}."
-        if context_data:
-            prompt += f" Context: {json.dumps(context_data)}"
-            
-        # Construct input for the agent that it will parse to call the tool
-        # The agent's tool (satisfy_need_tool_impl) expects 'name', 'amount', 'context'
-        agent_input_payload = {
-            "name": name,
-            "amount": amount,
-            "context": context_data or {}
-        }
-
-        # If the agent is smart enough to call the tool directly based on "Satisfy need X" that's simpler.
-        # Otherwise, we might need to explicitly tell it which tool to use.
-        # For now, assume the agent's instructions guide it to use the tool correctly
-        # when given structured input or a descriptive prompt.
-        # A more direct way is to ensure the agent expects to call a tool:
-        
+        tool_args = {"name": name, "amount": amount, "context": context_data or {}}
         result = await Runner.run(
             self.agent,
-            # Input should be structured if the agent is to use it as tool arguments
-            # Or a natural language prompt that leads it to call the tool.
-            # Let's try making the input a structured request for the tool.
-            [{"role": "user", "content": "I need to satisfy a need."},
-             {"role": "assistant", "content": None, "tool_calls": [
+            [{"role": "user", "content": f"Satisfy need '{name}'."},
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
                  {"id": "call_satisfy", "type": "function", "function": {
-                     "name": "satisfy_need_tool_impl", # Name of the tool as defined in the agent
-                     "arguments": json.dumps({"name": name, "amount": amount, "context": context_data or {}})
+                     "name": "satisfy_need_tool_impl",
+                     "arguments": json.dumps(tool_args)
                  }}
              ]}],
             context=self.context
         )
         final_output = result.final_output
-        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict."}
-
+        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict for satisfy_need."}
 
     async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> Dict[str, Any]:
         reason_provided = reason if reason is not None else "generic_decrease_api_call"
-        # This public method now correctly calls the agent, which will use the `decrease_need_tool_impl`.
-        # The `decrease_need_tool_impl` does not have `self` in its signature.
-        # The prompt should guide the agent to use the `decrease_need_tool_impl`.
         tool_args = {"need_name": name, "amount": amount, "reason": reason_provided}
-        
         result = await Runner.run(
             self.agent,
             [{"role": "user", "content": f"Decrease need '{name}'."},
-             {"role": "assistant", "content": None, "tool_calls": [
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
                  {"id": "call_decrease", "type": "function", "function": {
                      "name": "decrease_need_tool_impl",
                      "arguments": json.dumps(tool_args)
@@ -931,23 +917,21 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
             context=self.context
         )
         final_output = result.final_output
-        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict."}
-
-    # Synchronous wrappers for compatibility, if strictly needed, but discourage for agent interactions
-    def get_needs_state(self) -> Dict[str, Dict[str, Any]]:
-        logger.warning("Synchronous get_needs_state called; prefer async agent interaction or direct logic call if within NeedsSystem.")
-        return self._get_needs_state_logic() # Calls internal logic directly for sync access
-
-    def get_total_drive(self) -> float:
-        logger.warning("Synchronous get_total_drive called; prefer async agent interaction or direct logic call if within NeedsSystem.")
-        return self._get_total_drive_logic()
-
-    def get_needs_by_category(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        logger.warning("Synchronous get_needs_by_category called; prefer async agent interaction or direct logic call if within NeedsSystem.")
-        return self._get_needs_by_category_logic()
+        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict for decrease_need."}
 
     async def get_most_unfulfilled_need(self) -> Dict[str, Any]:
-        result = await Runner.run(self.agent, "Execute get_most_unfulfilled_need_tool_impl tool.", context=self.context)
+        result = await Runner.run(
+            self.agent,
+            [{"role": "user", "content": "Find the most unfulfilled need."},
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
+                 {"id": "call_get_most", "type": "function", "function": {
+                     "name": "get_most_unfulfilled_need_tool_impl",
+                     "arguments": json.dumps({})
+                 }}
+             ]}],
+            context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {}
 
@@ -956,7 +940,9 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
         result = await Runner.run(
             self.agent,
             [{"role": "user", "content": f"Get history for need '{need_name}'."},
-             {"role": "assistant", "content": None, "tool_calls": [
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
                  {"id": "call_history", "type": "function", "function": {
                      "name": "get_need_history_tool_impl",
                      "arguments": json.dumps(tool_args)
@@ -971,7 +957,9 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
         result = await Runner.run(
             self.agent,
              [{"role": "user", "content": f"Reset need '{need_name}'."},
-             {"role": "assistant", "content": None, "tool_calls": [
+             {"role": "assistant", 
+              "content": "",  # <--- CHANGE: None to ""
+              "tool_calls": [
                  {"id": "call_reset", "type": "function", "function": {
                      "name": "reset_need_to_default_tool_impl",
                      "arguments": json.dumps(tool_args)
@@ -980,3 +968,19 @@ When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_
             context=self.context)
         final_output = result.final_output
         return final_output if isinstance(final_output, dict) else {}
+
+
+    # Synchronous wrappers for compatibility, if strictly needed, but discourage for agent interactions
+    def get_needs_state(self) -> Dict[str, Dict[str, Any]]:
+        logger.warning("Synchronous get_needs_state called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_needs_state_logic() # Calls internal logic directly for sync access
+
+    def get_total_drive(self) -> float:
+        logger.warning("Synchronous get_total_drive called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_total_drive_logic()
+
+    def get_needs_by_category(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        logger.warning("Synchronous get_needs_by_category called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_needs_by_category_logic()
+
+ 
