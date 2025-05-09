@@ -973,3 +973,26 @@ For example, if the request is "Decrease need 'pleasure_indulgence' by 0.3 becau
         return self._get_needs_by_category_logic()
 
  
+    async def get_needs_state_async(self) -> Dict[str, Dict[str, Any]]:
+        prompt = "Get the current state of all needs."
+        result = await Runner.run(self.agent, prompt, context=self.context)
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {}
+
+    async def get_total_drive_async(self) -> float:
+        prompt = "Calculate the total drive of all needs."
+        result = await Runner.run(self.agent, prompt, context=self.context)
+        final_output = result.final_output
+        # Assuming the agent's tool returns just the float or a dict containing it
+        if isinstance(final_output, float):
+            return final_output
+        elif isinstance(final_output, dict) and 'total_drive' in final_output:
+            return final_output['total_drive']
+        logger.warning(f"get_total_drive_async: Unexpected output type {type(final_output)}")
+        return 0.0 # Default or raise
+
+    async def get_needs_by_category_async(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        prompt = "Get all needs organized by their categories."
+        result = await Runner.run(self.agent, prompt, context=self.context)
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {}
