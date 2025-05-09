@@ -469,7 +469,7 @@ class KnowledgeCoreContext:
     
     def __init__(self, 
                  knowledge_store_file: str = "knowledge_store.json",
-                 embedding_model_name: Optional[str] = "all-mpnet-base-v2"):
+                 embedding_model_name: Optional[str] = "sentence-transformers/all-mpnet-base-v2"):
         # Graph and nodes
         self.graph = nx.DiGraph()
         self.nodes: Dict[str, KnowledgeNode] = {}
