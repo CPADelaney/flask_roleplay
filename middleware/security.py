@@ -75,9 +75,22 @@ def validate_input(schema: Optional[Dict[str, Any]] = None, patterns: Optional[D
             
             # Validate JSON body
             if schema and request.is_json:
-                data = request.get_json()
+                try:
+                    data = await request.get_json() # ADD AWAIT
+                    if data is None: # Handle empty JSON body
+                        data = {}
+                except Exception as json_err:
+                    logger.warning(f"Invalid JSON body for validation in 'validate_input': {json_err}")
+                    # Consider using your create_error_response or handle_validation_errors here
+                    # instead of abort, for consistent error format.
+                    # For example:
+                    # err_resp, status = await create_error_response(json_err, "Invalid JSON request body", 400)
+                    # return err_resp, status
+                    abort(400, "Invalid JSON request body") # abort() is fine too
+                
                 if not await security.validate_json_structure(data, schema):
-                    abort(400, "Invalid request body")
+                    # Same here, consider consistent error response
+                    abort(400, "Invalid request body structure")
             
             return await f(*args, **kwargs)
         return decorated_function
