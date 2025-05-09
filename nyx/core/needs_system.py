@@ -554,18 +554,14 @@ def _add_history_entry(needs_ctx: NeedsSystemContext, need_name: str, need: Need
     if len(needs_ctx.need_history[need_name]) > needs_ctx.max_history_per_need:
         needs_ctx.need_history[need_name] = needs_ctx.need_history[need_name][-needs_ctx.max_history_per_need:]
 
-async def _trigger_goal_creation(ctx: NeedsSystemContext, needs_list: List[NeedState]) -> List[str]:
-    """Asks the GoalManager to create goals for unmet needs."""
-    if not ctx.goal_manager: 
-        return []
-
+async def _trigger_goal_creation(needs_ctx: NeedsSystemContext, needs_list: List[NeedState]) -> List[str]:
+    if not needs_ctx.goal_manager: return []
     logger.info(f"Needs [{', '.join(n.name for n in needs_list)}] exceeded drive threshold. Requesting goal creation.")
     created_goal_ids = []
-    
     for need in needs_list:
         priority = 0.5 + (need.drive_strength * 0.5)
         try:
-            if hasattr(needs_ctx.goal_manager, 'add_goal'):
+            if hasattr(needs_ctx.goal_manager, 'add_goal'): # Corrected from needs_ctx.goal_manager to ctx.goal_manager
                 goal_id = await needs_ctx.goal_manager.add_goal(
                     description=f"Satisfy need for {need.name} (Current level: {need.level:.2f}, Drive: {need.drive_strength:.2f})",
                     priority=priority,
@@ -577,6 +573,7 @@ async def _trigger_goal_creation(ctx: NeedsSystemContext, needs_list: List[NeedS
         except Exception as e:
             logger.error(f"Error creating goal for need '{need.name}': {e}")
     return created_goal_ids
+
 
 @function_tool
 async def update_needs_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, float]:
@@ -674,43 +671,46 @@ async def reset_need_to_default_tool_impl(
     needs_ctx = ctx.context
     return await needs_ctx.needs_system_ref._reset_need_to_default_logic(need_name) # Call logic method
 
+class NeedsSystem:
+    """Manages Nyx's core digital needs using Agent SDK."""
 
-# Create agent
-needs_agent = Agent(
-    name="Needs Manager",
-    instructions="""You manage the AI's simulated needs, responsible for:
+    def __init__(self, goal_manager=None):
+        self.context = NeedsSystemContext(needs_system_instance=self, goal_manager=goal_manager)
+        # Make critical attributes directly accessible on self for the _logic methods
+        self._lock = self.context._lock
+        self.needs = self.context.needs
+        self.need_history = self.context.need_history
+        self.max_history_per_need = self.context.max_history_per_need
+        self.last_update_time = self.context.last_update_time # Initialized by NeedsSystemContext
+        self.goal_cooldown = self.context.goal_cooldown # Initialized by NeedsSystemContext
+
+        # *** Agent is now created here, using the _tool_impl FunctionTool objects ***
+        self.agent = Agent(
+            name="Needs_Manager_Agent", # Give it a unique name if you have multiple agents
+            instructions="""You manage the AI's simulated needs, responsible for:
 1. Updating needs based on time decay and AI activities
 2. Satisfying needs when relevant interactions occur
 3. Triggering goals when needs are significantly unfulfilled
 4. Providing insights into current need states
 
 Use the appropriate tools to perform these tasks and maintain the AI's underlying need system.
+Your available tools include: update_needs_tool_impl, satisfy_need_tool_impl, decrease_need_tool_impl, etc.
+When a user asks to "decrease need 'X'", you should use the 'decrease_need_tool_impl' tool with the appropriate arguments.
 """,
-    tools=[
-        update_needs_tool_impl,
-        satisfy_need_tool_impl,
-        decrease_need_tool_impl, # Use the new tool implementation
-        get_needs_state_tool_impl,
-        get_needs_by_category_tool_impl,
-        get_most_unfulfilled_need_tool_impl,
-        get_need_history_tool_impl,
-        get_total_drive_tool_impl,
-        reset_need_to_default_tool_impl
-    ],
-    model_settings=ModelSettings(temperature=0.1) # Can fine-tune if needed
-)
-
-class NeedsSystem:
-    """Manages Nyx's core digital needs using Agent SDK."""
-
-    def __init__(self, goal_manager=None):
-        self.context = NeedsSystemContext(needs_system_instance=self, goal_manager=goal_manager)
-        self._lock = self.context._lock # Share lock with context for internal logic methods
-        self.needs = self.context.needs # Direct access for logic methods
-        self.need_history = self.context.need_history
-        self.max_history_per_need = self.context.max_history_per_need
-        self.last_update_time = self.context.last_update_time
-        self.goal_cooldown = self.context.goal_cooldown
+            tools=[
+                update_needs_tool_impl,
+                satisfy_need_tool_impl,
+                decrease_need_tool_impl,
+                get_needs_state_tool_impl,
+                get_needs_by_category_tool_impl,
+                get_most_unfulfilled_need_tool_impl,
+                get_need_history_tool_impl,
+                get_total_drive_tool_impl,
+                reset_need_to_default_tool_impl
+            ],
+            model_settings=ModelSettings(temperature=0.1)
+        )
+        logger.info("NeedsSystem initialized with Agent SDK and refactored tools")
 
 
     async def _update_needs_logic(self) -> Dict[str, float]:
