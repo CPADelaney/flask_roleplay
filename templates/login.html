@@ -2,114 +2,55 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Login</title>
+  <title>Login / Register</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    h2 { margin-top: 30px; margin-bottom: 10px; }
+    input[type="text"], input[type="password"] {
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      width: 200px;
+    }
+    button {
+      padding: 10px 15px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    hr { margin: 30px 0; }
+    #registerStatus, #loginStatus {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
 </head>
 <body>
 
   <h2>Register a New User</h2>
-  <input type="text" id="reg_username" placeholder="New username">
-  <input type="password" id="reg_password" placeholder="Password">
-  <button type="button" id="registerBtn">Register</button> <!-- Added ID, removed onclick -->
+  <input type="text" id="reg_username" placeholder="New username" autocomplete="username">
+  <input type="password" id="reg_password" placeholder="Password" autocomplete="new-password">
+  <!-- Added id, removed onclick -->
+  <button type="button" id="registerBtn">Register</button>
   <div id="registerStatus"></div>
 
   <hr/>
 
   <h2>Login</h2>
-  <input type="text" id="username" placeholder="Username">
-  <input type="password" id="password" placeholder="Password">
-  <button type="button" id="loginBtn">Login</button> <!-- Added ID, removed onclick -->
+  <input type="text" id="username" placeholder="Username" autocomplete="username">
+  <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+  <!-- Added id, removed onclick -->
+  <button type="button" id="loginBtn">Login</button>
   <div id="loginStatus"></div>
 
-  <script>
-    // On page load, check if user is already logged in
-    window.onload = async function() {
-      await checkAlreadyLoggedIn();
-    };
-
-    async function checkAlreadyLoggedIn() {
-      try {
-        const res = await fetch("/whoami", {
-          method: "GET",
-          credentials: "include"
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.logged_in) {
-            // If they're logged in, skip this page
-            window.location.href = "/chat";
-          }
-        }
-      } catch (err) {
-        console.log("No login session found or an error occurred:", err);
-      }
-    }
-
-    // 1) Registration
-    async function registerUser() {
-      const user = document.getElementById("reg_username").value.trim();
-      const pass = document.getElementById("reg_password").value.trim();
-      const statusDiv = document.getElementById("registerStatus");
-
-      console.log("Registering user:", user, pass); // For debugging
-
-      if (!user || !pass) {
-        statusDiv.innerText = "Username & password required to register.";
-        return;
-      }
-
-      try {
-        const res = await fetch("/register", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",  // session cookies
-          body: JSON.stringify({ username: user, password: pass })
-        });
-        const data = await res.json();
-        if (res.ok) {
-          statusDiv.innerText = `Registration successful! user_id=${data.user_id}`;
-          // Redirect to chat if you want:
-          window.location.href = "/chat";
-        } else {
-          statusDiv.innerText = `Registration error: ${data.error || "Unknown error"}`;
-        }
-      } catch (err) {
-        statusDiv.innerText = "Request failed. Check console.";
-        console.error(err);
-      }
-    }
-
-    // 2) Login
-    async function attemptLogin() {
-      const user = document.getElementById("username").value.trim();
-      const pass = document.getElementById("password").value.trim();
-      const statusDiv = document.getElementById("loginStatus");
-
-      console.log("Attempting login with:", user, pass); // For debugging
-
-      if (!user || !pass) {
-        statusDiv.innerText = "Username & password required to login.";
-        return;
-      }
-
-      try {
-        const res = await fetch("/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ username: user, password: pass })
-        });
-        const data = await res.json();
-        if (res.ok) {
-          statusDiv.innerText = `Login successful! user_id=${data.user_id}`;
-          window.location.href = "/chat";
-        } else {
-          statusDiv.innerText = `Login error: ${data.error || "Unknown error"}`;
-        }
-      } catch (err) {
-        statusDiv.innerText = "Login request failed. Check console.";
-        console.error(err);
-      }
-    }
-  </script>
+  <!-- Link to the external JS file, 'defer' ensures it runs after HTML parsing -->
+  <script src="login_page.js" defer></script>
 </body>
 </html>
