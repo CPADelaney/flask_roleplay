@@ -86,6 +86,8 @@ class IntegrationManager:
             await self.register_bridge("somatic_perception", create_somatic_perception_bridge(self.brain), [])
             
             # Register secondary bridges with dependencies on core bridges
+            await self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
+                         ["event_bus", "memory_integration", "dynamic_attention"])            
             await self.register_bridge("emotional_cognitive", create_emotional_cognitive_bridge(self.brain), 
                                ["dynamic_attention"])
             await self.register_bridge("emotional_hormonal", create_emotional_hormonal_bridge(self.brain), 
@@ -146,9 +148,6 @@ class IntegrationManager:
                                ["action_selector", "reward_learning"])
             await self.register_bridge("decision_action_coordinator", create_decision_action_coordinator(self.brain), 
                                ["action_selector", "need_goal_action", "prediction_imagination"])
-    
-            await self.register_bridge("synergy_optimizer", create_synergy_optimizer(self.brain), 
-                         ["event_bus", "memory_integration", "dynamic_attention"])
     
             self.brain.relationship_reflection_system = RelationshipReflectionSystem(
                 relationship_manager=self.brain.relationship_manager,
