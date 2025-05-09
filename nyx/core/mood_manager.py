@@ -245,7 +245,7 @@ class MoodManager:
             # 3. Influence from Needs
             if self.needs_system:
                 try:
-                    needs_state = self.needs_system.get_needs_state()
+                    needs_state = await self.needs_system.get_needs_state_async()
                     if needs_state:
                         # Calculate weighted deficit
                         total_deficit = 0
