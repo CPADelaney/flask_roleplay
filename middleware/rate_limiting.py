@@ -48,28 +48,21 @@ class AsyncRateLimiter: # Renamed to reflect async nature
         self.local_buckets: Dict[str, TokenBucket] = {}
         self.local_buckets_lock = asyncio.Lock() # For managing local_buckets dict
 
-    async def _get_redis(self) -> Optional[aioredis.Redis]:
-        """Get or create aioredis connection."""
+    async def _get_redis(self) -> Optional[aioredis.Redis]: # For AsyncRateLimiter
         try:
-            if not hasattr(g, 'rate_limit_aioredis'):
-                redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-                # aioredis.from_url returns a connection pool by default, which is good.
-                # We get a connection from the pool.
-                g.rate_limit_aioredis_pool = aioredis.from_url(redis_url, decode_responses=True)
-                # For simplicity, let's assume we use one connection per request context if needed.
-                # More robustly, you might pass the pool around or get a connection per operation.
-                # Here, we'll just store the pool and assume individual methods will acquire connections if needed,
-                # OR for pipeline operations, use the pool directly.
-                # For simplicity in this example, let's just return a connection from the pool.
-                # A single connection per request context from 'g' is reasonable.
-                g.rate_limit_aioredis = await g.rate_limit_aioredis_pool.client()
-                await g.rate_limit_aioredis.ping()
-                logger.debug(f"aioredis connection established for AsyncRateLimiter using {redis_url}")
-            # Ensure the connection is still alive (basic check)
-            # if g.rate_limit_aioredis.closed:
-            #     del g.rate_limit_aioredis # Force re-creation
-            #     return await self._get_redis() # Recurse to recreate (careful with recursion depth)
-            return g.rate_limit_aioredis
+            # Use the pool from the app context
+            pool = getattr(current_app, 'aioredis_rate_limit_pool', None)
+            if not pool:
+                logger.warning("aioredis_rate_limit_pool not found on app context.")
+                return None
+            
+            # Get a connection from the pool for this operation/request
+            # Storing the connection on 'g' per request is still a valid pattern
+            if not hasattr(g, 'rate_limit_aioredis_conn') or g.rate_limit_aioredis_conn.closed:
+                g.rate_limit_aioredis_conn = await pool.client() # Get a new client connection
+                # Optional: await g.rate_limit_aioredis_conn.ping() # Ping if you want to be sure
+            return g.rate_limit_aioredis_conn
+            
         except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
             logger.error(f"Failed to connect to aioredis for AsyncRateLimiter: {e}")
             return None
