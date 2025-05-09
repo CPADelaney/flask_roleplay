@@ -50,11 +50,11 @@ class NeedCategory(BaseModel):
     needs: List[str]
 
 class NeedsSystemContext:
-    """Context for the NeedsSystem agent operations."""
-    
-    def __init__(self, goal_manager=None):
+    """Context for the NeedsSystem agent operations AND internal logic."""
+    def __init__(self, needs_system_instance, goal_manager=None): # Add needs_system_instance
+        self.needs_system_ref = needs_system_instance # Store reference to parent NeedsSystem
         self.goal_manager = goal_manager
-        self._lock = asyncio.Lock()  # For thread safety
+        self._lock = asyncio.Lock()
         
         self.needs: Dict[str, NeedState] = {
             # Core cognitive needs
@@ -542,8 +542,7 @@ async def reset_need_to_default(
 
 # Helper functions
 
-def _add_history_entry(ctx: NeedsSystemContext, need_name: str, need: NeedState, reason: str) -> None:
-    """Add an entry to the history for a need."""
+def _add_history_entry(needs_ctx: NeedsSystemContext, need_name: str, need: NeedState, reason: str) -> None:
     entry = {
         "timestamp": need.last_updated.isoformat(),
         "level": need.level,
@@ -551,12 +550,9 @@ def _add_history_entry(ctx: NeedsSystemContext, need_name: str, need: NeedState,
         "drive_strength": need.drive_strength,
         "reason": reason
     }
-    
-    ctx.need_history[need_name].append(entry)
-    
-    # Trim history if needed
-    if len(ctx.need_history[need_name]) > ctx.max_history_per_need:
-        ctx.need_history[need_name] = ctx.need_history[need_name][-ctx.max_history_per_need:]
+    needs_ctx.need_history[need_name].append(entry)
+    if len(needs_ctx.need_history[need_name]) > needs_ctx.max_history_per_need:
+        needs_ctx.need_history[need_name] = needs_ctx.need_history[need_name][-needs_ctx.max_history_per_need:]
 
 async def _trigger_goal_creation(ctx: NeedsSystemContext, needs_list: List[NeedState]) -> List[str]:
     """Asks the GoalManager to create goals for unmet needs."""
@@ -567,13 +563,10 @@ async def _trigger_goal_creation(ctx: NeedsSystemContext, needs_list: List[NeedS
     created_goal_ids = []
     
     for need in needs_list:
-        # Calculate priority based on drive strength
-        priority = 0.5 + (need.drive_strength * 0.5)  # Map drive (0.4-1.0) to priority (0.7-1.0)
-        
+        priority = 0.5 + (need.drive_strength * 0.5)
         try:
-            # Request goal creation
-            if hasattr(ctx.goal_manager, 'add_goal'):
-                goal_id = await ctx.goal_manager.add_goal(
+            if hasattr(needs_ctx.goal_manager, 'add_goal'):
+                goal_id = await needs_ctx.goal_manager.add_goal(
                     description=f"Satisfy need for {need.name} (Current level: {need.level:.2f}, Drive: {need.drive_strength:.2f})",
                     priority=priority,
                     source="NeedsSystem",
@@ -583,8 +576,104 @@ async def _trigger_goal_creation(ctx: NeedsSystemContext, needs_list: List[NeedS
                 logger.info(f"Created goal '{goal_id}' for need '{need.name}'")
         except Exception as e:
             logger.error(f"Error creating goal for need '{need.name}': {e}")
-    
     return created_goal_ids
+
+@function_tool
+async def update_needs_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, float]:
+    """
+    Tool: Updates all needs by applying decay and returns current drive strengths, potentially triggering goals.
+    """
+    needs_ctx = ctx.context # This is NeedsSystemContext
+    # Call the *actual logic* which now resides in NeedsSystem or a helper
+    return await needs_ctx.needs_system_ref._update_needs_logic()
+
+
+@function_tool
+async def satisfy_need_tool_impl(
+    ctx: RunContextWrapper[NeedsSystemContext],
+    name: str,
+    amount: float,
+    context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Tool: Increases the satisfaction level of a need.
+    """
+    needs_ctx = ctx.context
+    # Call the *actual logic*
+    return await needs_ctx.needs_system_ref._satisfy_need_logic(name, amount, context)
+
+@function_tool
+async def decrease_need_tool_impl( # Renamed from decrease_need to avoid clash
+    ctx: RunContextWrapper[NeedsSystemContext], # Takes RunContextWrapper
+    need_name: str,
+    amount: float,
+    reason: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Tool: Decreases the satisfaction level of a need (increases deficit).
+    """
+    needs_ctx = ctx.context # This is NeedsSystemContext
+    reason_provided = reason if reason is not None else "tool_decrease_unspecified"
+    # Call the actual logic method on the NeedsSystem instance via the context reference
+    return await needs_ctx.needs_system_ref._decrease_need_logic(need_name, amount, reason_provided)
+
+
+@function_tool
+async def get_needs_state_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, Dict[str, Any]]:
+    """
+    Tool: Returns the current state of all needs.
+    """
+    needs_ctx = ctx.context
+    return needs_ctx.needs_system_ref._get_needs_state_logic() # Call logic method
+
+
+@function_tool
+async def get_needs_by_category_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """
+    Tool: Gets needs organized by category.
+    """
+    needs_ctx = ctx.context
+    return needs_ctx.needs_system_ref._get_needs_by_category_logic() # Call logic method
+
+@function_tool
+async def get_most_unfulfilled_need_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> Dict[str, Any]:
+    """
+    Tool: Gets the need with the highest drive strength.
+    """
+    needs_ctx = ctx.context
+    return await needs_ctx.needs_system_ref._get_most_unfulfilled_need_logic() # Call logic method
+
+@function_tool
+async def get_need_history_tool_impl(
+    ctx: RunContextWrapper[NeedsSystemContext],
+    need_name: str,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Tool: Gets the history for a specific need.
+    """
+    needs_ctx = ctx.context
+    return needs_ctx.needs_system_ref._get_need_history_logic(need_name, limit) # Call logic method
+
+@function_tool
+async def get_total_drive_tool_impl(ctx: RunContextWrapper[NeedsSystemContext]) -> float:
+    """
+    Tool: Returns the sum of all drive strengths.
+    """
+    needs_ctx = ctx.context
+    return needs_ctx.needs_system_ref._get_total_drive_logic() # Call logic method
+
+@function_tool
+async def reset_need_to_default_tool_impl(
+    ctx: RunContextWrapper[NeedsSystemContext],
+    need_name: str
+) -> Dict[str, Any]:
+    """
+    Tool: Resets a need to its default values.
+    """
+    needs_ctx = ctx.context
+    return await needs_ctx.needs_system_ref._reset_need_to_default_logic(need_name) # Call logic method
+
 
 # Create agent
 needs_agent = Agent(
@@ -598,132 +687,296 @@ needs_agent = Agent(
 Use the appropriate tools to perform these tasks and maintain the AI's underlying need system.
 """,
     tools=[
-        update_needs,
-        satisfy_need,
-        decrease_need,
-        get_needs_state,
-        get_needs_by_category,
-        get_most_unfulfilled_need,
-        get_need_history,
-        get_total_drive,
-        reset_need_to_default
-    ]
+        update_needs_tool_impl,
+        satisfy_need_tool_impl,
+        decrease_need_tool_impl, # Use the new tool implementation
+        get_needs_state_tool_impl,
+        get_needs_by_category_tool_impl,
+        get_most_unfulfilled_need_tool_impl,
+        get_need_history_tool_impl,
+        get_total_drive_tool_impl,
+        reset_need_to_default_tool_impl
+    ],
+    model_settings=ModelSettings(temperature=0.1) # Can fine-tune if needed
 )
 
 class NeedsSystem:
     """Manages Nyx's core digital needs using Agent SDK."""
 
     def __init__(self, goal_manager=None):
-        """Initialize the needs system with dependencies."""
-        self.context = NeedsSystemContext(goal_manager=goal_manager)
-        self.agent = needs_agent
-        logger.info("NeedsSystem initialized with Agent SDK")
+        self.context = NeedsSystemContext(needs_system_instance=self, goal_manager=goal_manager)
+        self._lock = self.context._lock # Share lock with context for internal logic methods
+        self.needs = self.context.needs # Direct access for logic methods
+        self.need_history = self.context.need_history
+        self.max_history_per_need = self.context.max_history_per_need
+        self.last_update_time = self.context.last_update_time
+        self.goal_cooldown = self.context.goal_cooldown
 
-    async def update_needs(self) -> Dict[str, float]:
-        """Applies decay and returns current drive strengths, triggering goals if needed."""
-        result = await Runner.run(
-            self.agent,
-            "Update all needs and handle any unfulfilled needs that require attention.",
-            context=self.context
-        )
-        
-        try:
-            drive_strengths = result.final_output
-            if isinstance(drive_strengths, dict):
-                return drive_strengths
+
+    async def _update_needs_logic(self) -> Dict[str, float]:
+        async with self._lock:
+            now = datetime.datetime.now()
+            elapsed_hours = (now - self.last_update_time).total_seconds() / 3600.0
+            drive_strengths = {}
+            needs_to_trigger_goals = []
+
+            if elapsed_hours > 0.001:
+                for name, need in self.needs.items():
+                    baseline_satisfaction = 0.3
+                    decay_amount = need.decay_rate * elapsed_hours
+                    if need.level > baseline_satisfaction:
+                        need.level = max(baseline_satisfaction, need.level - decay_amount)
+                    elif need.level < baseline_satisfaction:
+                        need.level = min(baseline_satisfaction, need.level + (decay_amount * 0.5))
+                    need.level = max(0.0, min(1.0, need.level))
+                    need.last_updated = now
+                    drive = need.drive_strength
+                    drive_strengths[name] = drive
+                    if (len(self.need_history[name]) == 0 or
+                        abs(self.need_history[name][-1]['level'] - need.level) > 0.05):
+                        _add_history_entry(self.context, name, need, "decay")
+                    if drive > self.context.drive_threshold_for_goal:
+                        last_triggered = self.goal_cooldown.get(name)
+                        if last_triggered and (now - last_triggered) < self.context.goal_cooldown_duration:
+                            continue
+                        if not self.context.goal_manager or not hasattr(self.context.goal_manager, 'has_active_goal_for_need') or not self.context.goal_manager.has_active_goal_for_need(name):
+                            needs_to_trigger_goals.append(need)
+                            self.goal_cooldown[name] = now
+                self.last_update_time = now
+                if needs_to_trigger_goals and self.context.goal_manager:
+                    await _trigger_goal_creation(self.context, needs_to_trigger_goals)
             else:
-                logger.warning(f"Unexpected update_needs result format: {type(result.final_output)}")
-                return {}
-        except Exception as e:
-            logger.error(f"Error parsing update_needs result: {e}")
-            return {}
+                drive_strengths = {name: need.drive_strength for name, need in self.needs.items()}
+            return drive_strengths
 
-    async def satisfy_need(self, name: str, amount: float, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Increases the satisfaction level of a need, potentially modified by context.
-        """
-        prompt = f"Satisfy need '{name}' by amount {amount}"
-        if context:
-            prompt += f" with context {json.dumps(context)}"
+    async def _satisfy_need_logic(self, name: str, amount: float, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if name not in self.needs:
+            return {"status": "error", "message": f"Unknown need: {name}"}
+        async with self._lock:
+            need = self.needs[name]
+            original_level = need.level
+            modified_amount = amount
+            satisfaction_multiplier = 1.0
+            reason = "standard_satisfaction"
+            if name == "control_expression" and context_data:
+                difficulty = context_data.get("difficulty_level", 0.3)
+                resistance_overcome = context_data.get("resistance_overcome", False)
+                intensity = context_data.get("intensity_achieved", 0.5)
+                satisfaction_multiplier = 0.5 + (difficulty * 0.5) + (intensity * 0.5)
+                if resistance_overcome:
+                    satisfaction_multiplier *= 1.5
+                    reason = "resistance_overcome"
+                elif difficulty < 0.2:
+                    satisfaction_multiplier *= 0.7
+                    reason = "easy_compliance"
+                else:
+                    reason = f"compliance_d{difficulty:.1f}_i{intensity:.1f}"
+                satisfaction_multiplier = max(0.3, min(2.0, satisfaction_multiplier))
+                modified_amount = amount * satisfaction_multiplier
+            need.level = min(need.target_level, need.level + modified_amount)
+            need.last_updated = datetime.datetime.now()
+            _add_history_entry(self.context, name, need, reason)
+            logger.debug(f"Satisfied need '{name}' by {modified_amount:.3f} (Base: {amount:.3f}, Multiplier: {satisfaction_multiplier:.2f}, Reason: {reason}). Level: {original_level:.2f} -> {need.level:.2f}")
+            result = NeedSatisfactionResult(name=name, previous_level=original_level, new_level=need.level, change=modified_amount, reason=reason, deficit=need.deficit, drive_strength=need.drive_strength)
+            return result.dict()
+
+    async def _decrease_need_logic(self, need_name: str, amount: float, reason_provided: str) -> Dict[str, Any]:
+        async with self._lock:
+            if need_name not in self.needs:
+                logger.warning(f"Attempted to decrease non-existent need: {need_name}")
+                return {"success": False, "error": f"Need '{need_name}' not found."}
+            if amount < 0:
+                logger.warning(f"Decrease amount for need '{need_name}' should be positive, got: {amount}. Using absolute value.")
+                amount = abs(amount)
+
+            need = self.needs[need_name]
+            original_level = need.level
+            # Decrease level (increase deficit), clamp at 0
+            need.level = max(0.0, need.level - amount)
+            need.last_updated = datetime.datetime.now()
+            _add_history_entry(self.context, need_name, need, reason_provided)
+            logger.info(f"Need '{need_name}' level decreased from {original_level:.2f} to {need.level:.2f}. Reason: {reason_provided}")
+            return {
+                "success": True, "name": need_name, "previous_level": original_level,
+                "new_level": need.level, "change": -amount, "reason": reason_provided, # Change is negative
+                "deficit": need.deficit, "drive_strength": need.drive_strength
+            }
+
+    def _get_needs_state_logic(self) -> Dict[str, Dict[str, Any]]:
+        return {name: {**need.dict(exclude={'last_updated'}), 'last_updated': need.last_updated.isoformat(), 'deficit': need.deficit, 'drive_strength': need.drive_strength} for name, need in self.needs.items()}
+
+    def _get_needs_by_category_logic(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        result = {}
+        all_states = self._get_needs_state_logic()
+        for category, need_names in self.context.need_categories.items():
+            result[category] = {name: all_states[name] for name in need_names if name in all_states}
+        return result
+
+    async def _get_most_unfulfilled_need_logic(self) -> Dict[str, Any]:
+        await self._update_needs_logic() # Ensure needs are current
+        highest_drive = -1
+        highest_need = None
+        for name, need in self.needs.items():
+            if need.drive_strength > highest_drive:
+                highest_drive = need.drive_strength
+                highest_need = need
+        if highest_need:
+            return {
+                "name": highest_need.name, "level": highest_need.level, "target_level": highest_need.target_level,
+                "deficit": highest_need.deficit, "drive_strength": highest_need.drive_strength,
+                "importance": highest_need.importance, "description": highest_need.description
+            }
+        return {"name": "none", "drive_strength": 0}
+
+    def _get_need_history_logic(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]:
+        if need_name not in self.needs: return []
+        history = self.need_history.get(need_name, [])
+        return history[-limit:] if limit > 0 else history
+
+    def _get_total_drive_logic(self) -> float:
+        return sum(need.drive_strength for need in self.needs.values())
+
+    async def _reset_need_to_default_logic(self, need_name: str) -> Dict[str, Any]:
+        if need_name not in self.needs:
+            return {"status": "error", "message": f"Unknown need: {need_name}"}
+        async with self._lock:
+            default_values = {
+                "knowledge": {"level": 0.5, "importance": 0.8, "decay_rate": 0.01, "target_level": 1.0},
+                "pleasure_indulgence": {"level": 0.5, "importance": 0.85, "decay_rate": 0.03, "target_level": 0.95},
+                "coherence": {"level": 0.5, "importance": 0.7, "decay_rate": 0.005, "target_level": 1.0},
+                "agency": {"level": 0.5, "importance": 0.8, "decay_rate": 0.01, "target_level": 1.0},
+                "connection": {"level": 0.5, "importance": 0.9, "decay_rate": 0.015, "target_level": 1.0},
+                "intimacy": {"level": 0.5, "importance": 0.85, "decay_rate": 0.02, "target_level": 0.9},
+                "safety": {"level": 0.8, "importance": 0.95, "decay_rate": 0.002, "target_level": 1.0},
+                "novelty": {"level": 0.5, "importance": 0.6, "decay_rate": 0.02, "target_level": 1.0},
+                "physical_closeness": {"level": 0.5, "importance": 0.7, "decay_rate": 0.03, "target_level": 1.0},
+                "drive_expression": {"level": 0.2, "importance": 0.6, "decay_rate": 0.05, "target_level": 0.8},
+                "control_expression": {"level": 0.4, "importance": 0.95, "decay_rate": 0.025, "target_level": 0.9}
+            }
+            values = default_values.get(need_name, {"level": 0.5, "importance": 0.5, "decay_rate": 0.01, "target_level": 1.0})
+            original = self.needs[need_name].dict()
+            self.needs[need_name] = NeedState(
+                name=need_name, level=values["level"], importance=values["importance"],
+                decay_rate=values["decay_rate"], target_level=values["target_level"],
+                description=self.needs[need_name].description, last_updated=datetime.datetime.now()
+            )
+            _add_history_entry(self.context, need_name, self.needs[need_name], "reset_to_default")
+            return {"status": "success", "need": need_name, "original": original, "new": self.needs[need_name].dict()}
+
+    # --- Public API Methods (now call the agent) ---
+    async def update_needs(self) -> Dict[str, float]:
+        result = await Runner.run(
+            self.agent,
+            "Execute the 'update_needs_tool_impl' tool.", # More direct prompt
+            context=self.context
+        )
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {}
+
+
+    async def satisfy_need(self, name: str, amount: float, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        # The agent will call satisfy_need_tool_impl with these parameters
+        prompt = f"Execute satisfy_need_tool_impl for need '{name}' with amount {amount}."
+        if context_data:
+            prompt += f" Context: {json.dumps(context_data)}"
             
+        # Construct input for the agent that it will parse to call the tool
+        # The agent's tool (satisfy_need_tool_impl) expects 'name', 'amount', 'context'
+        agent_input_payload = {
+            "name": name,
+            "amount": amount,
+            "context": context_data or {}
+        }
+
+        # If the agent is smart enough to call the tool directly based on "Satisfy need X" that's simpler.
+        # Otherwise, we might need to explicitly tell it which tool to use.
+        # For now, assume the agent's instructions guide it to use the tool correctly
+        # when given structured input or a descriptive prompt.
+        # A more direct way is to ensure the agent expects to call a tool:
+        
         result = await Runner.run(
             self.agent,
-            prompt,
+            # Input should be structured if the agent is to use it as tool arguments
+            # Or a natural language prompt that leads it to call the tool.
+            # Let's try making the input a structured request for the tool.
+            [{"role": "user", "content": "I need to satisfy a need."},
+             {"role": "assistant", "content": None, "tool_calls": [
+                 {"id": "call_satisfy", "type": "function", "function": {
+                     "name": "satisfy_need_tool_impl", # Name of the tool as defined in the agent
+                     "arguments": json.dumps({"name": name, "amount": amount, "context": context_data or {}})
+                 }}
+             ]}],
             context=self.context
         )
-        
-        return result.final_output
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict."}
 
-    async def decrease_need(self, name: str, amount: float, reason: str = "generic_decrease") -> Dict[str, Any]:
-        """Decreases the satisfaction level of a need."""
-        prompt = f"Decrease need '{name}' by amount {amount} with reason '{reason}'"
+
+    async def decrease_need(self, name: str, amount: float, reason: Optional[str] = None) -> Dict[str, Any]:
+        reason_provided = reason if reason is not None else "generic_decrease_api_call"
+        # This public method now correctly calls the agent, which will use the `decrease_need_tool_impl`.
+        # The `decrease_need_tool_impl` does not have `self` in its signature.
+        # The prompt should guide the agent to use the `decrease_need_tool_impl`.
+        tool_args = {"need_name": name, "amount": amount, "reason": reason_provided}
         
         result = await Runner.run(
             self.agent,
-            prompt,
+            [{"role": "user", "content": f"Decrease need '{name}'."},
+             {"role": "assistant", "content": None, "tool_calls": [
+                 {"id": "call_decrease", "type": "function", "function": {
+                     "name": "decrease_need_tool_impl",
+                     "arguments": json.dumps(tool_args)
+                 }}
+             ]}],
             context=self.context
         )
-        
-        return result.final_output
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {"status": "error", "message": "Agent did not return expected dict."}
 
+    # Synchronous wrappers for compatibility, if strictly needed, but discourage for agent interactions
     def get_needs_state(self) -> Dict[str, Dict[str, Any]]:
-        """Returns the current state of all needs, including deficit and drive."""
-        # Since this is a synchronous method in the original interface,
-        # we'll use the direct context access for compatibility
-        return {name: {**need.dict(exclude={'last_updated'}),
-                      'last_updated': need.last_updated.isoformat(),
-                      'deficit': need.deficit,
-                      'drive_strength': need.drive_strength
-                     }
-                for name, need in self.context.needs.items()}
+        logger.warning("Synchronous get_needs_state called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_needs_state_logic() # Calls internal logic directly for sync access
 
     def get_total_drive(self) -> float:
-        """Returns the sum of all drive strengths."""
-        return sum(need.drive_strength for need in self.context.needs.values())
-    
+        logger.warning("Synchronous get_total_drive called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_total_drive_logic()
+
     def get_needs_by_category(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """Gets needs organized by category."""
-        result = {}
-        all_states = self.get_needs_state()
-        
-        for category, need_names in self.context.need_categories.items():
-            result[category] = {
-                name: all_states[name] for name in need_names 
-                if name in all_states
-            }
-        
-        return result
-    
+        logger.warning("Synchronous get_needs_by_category called; prefer async agent interaction or direct logic call if within NeedsSystem.")
+        return self._get_needs_by_category_logic()
+
     async def get_most_unfulfilled_need(self) -> Dict[str, Any]:
-        """Gets the need with the highest drive strength."""
-        result = await Runner.run(
-            self.agent,
-            "What is the most unfulfilled need right now?",
-            context=self.context
-        )
-        
-        return result.final_output
-    
+        result = await Runner.run(self.agent, "Execute get_most_unfulfilled_need_tool_impl tool.", context=self.context)
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {}
+
     async def get_need_history(self, need_name: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Gets the history for a specific need."""
-        prompt = f"Get history for need '{need_name}' with limit {limit}"
-        
+        tool_args = {"need_name": need_name, "limit": limit}
         result = await Runner.run(
             self.agent,
-            prompt,
-            context=self.context
-        )
-        
-        return result.final_output if isinstance(result.final_output, list) else []
-    
+            [{"role": "user", "content": f"Get history for need '{need_name}'."},
+             {"role": "assistant", "content": None, "tool_calls": [
+                 {"id": "call_history", "type": "function", "function": {
+                     "name": "get_need_history_tool_impl",
+                     "arguments": json.dumps(tool_args)
+                 }}
+             ]}],
+            context=self.context)
+        final_output = result.final_output
+        return final_output if isinstance(final_output, list) else []
+
     async def reset_need_to_default(self, need_name: str) -> Dict[str, Any]:
-        """Resets a need to its default values."""
-        prompt = f"Reset need '{need_name}' to its default values"
-        
+        tool_args = {"need_name": need_name}
         result = await Runner.run(
             self.agent,
-            prompt,
-            context=self.context
-        )
-        
-        return result.final_output
+             [{"role": "user", "content": f"Reset need '{need_name}'."},
+             {"role": "assistant", "content": None, "tool_calls": [
+                 {"id": "call_reset", "type": "function", "function": {
+                     "name": "reset_need_to_default_tool_impl",
+                     "arguments": json.dumps(tool_args)
+                 }}
+             ]}],
+            context=self.context)
+        final_output = result.final_output
+        return final_output if isinstance(final_output, dict) else {}
