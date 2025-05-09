@@ -1,3 +1,5 @@
+# middleware/error_handling.py
+
 """
 Error handling utilities for consistent error responses and logging.
 """
