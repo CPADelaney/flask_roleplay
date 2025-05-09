@@ -1038,7 +1038,7 @@ async def update_conflict_progress(ctx: RunContextWrapper, conflict_id: int, pro
     return await _internal_update_conflict_progress_logic(ctx, conflict_id, progress_increment)
 
 @function_tool
-async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]:
+async def get_active_conflicts(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """Get all active conflicts for the current user and conversation."""
     return await _internal_get_active_conflicts_logic(ctx)
 
@@ -1048,7 +1048,7 @@ async def update_stakeholder_status(ctx: RunContextWrapper, conflict_id: int, np
     return await _internal_update_stakeholder_status_logic(ctx, conflict_id, npc_id, status)
 
 @function_tool
-async def get_player_involvement(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]]:
+async def get_player_involvement(ctx: RunContextWrapper, conflict_id: int) -> Dict[str, Any]:
     """Get player's involvement in a specific conflict."""
     return await _internal_get_player_involvement_logic(ctx, conflict_id)
 
@@ -1058,12 +1058,12 @@ async def get_conflict_details(ctx: RunContextWrapper, conflict_id: int) -> Dict
     return await _internal_get_conflict_details_logic(ctx, conflict_id)
 
 @function_tool
-async def get_conflict_stakeholders(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]:
+async def get_conflict_stakeholders(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get all stakeholders for a specific conflict."""
     return await _internal_get_conflict_stakeholders_logic(ctx, conflict_id)
 
 @function_tool
-async def get_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]:
+async def get_player_manipulation_attempts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get all manipulation attempts targeted at the player for a specific conflict."""
     return await _internal_get_player_manipulation_attempts_logic(ctx, conflict_id)
 
@@ -1073,7 +1073,7 @@ async def generate_conflict(ctx: RunContextWrapper, conflict_type: Optional[str]
     return await _internal_generate_conflict_logic(ctx, conflict_type)
 
 @function_tool
-async def get_internal_conflicts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]:
+async def get_internal_conflicts(ctx: RunContextWrapper, conflict_id: int) -> List[Dict[str, Any]]:
     """Get internal faction conflicts for a specific conflict."""
     return await _internal_get_internal_conflicts_logic(ctx, conflict_id)
 
@@ -1083,7 +1083,7 @@ async def get_current_day(ctx: RunContextWrapper) -> int:
     return await _internal_get_current_day_logic(ctx)
 
 @function_tool
-async def get_available_npcs(ctx: RunContextWrapper) -> List[Dict[str, Any]:
+async def get_available_npcs(ctx: RunContextWrapper) -> List[Dict[str, Any]]:
     """Get available NPCs that could be involved in conflicts."""
     return await _internal_get_available_npcs_logic(ctx)
 
@@ -1163,7 +1163,7 @@ async def get_player_stats(ctx: RunContextWrapper) -> Dict[str, Any]:
     return await _internal_get_player_stats_logic(ctx)
 
 @function_tool
-async def get_stakeholder_secrets(ctx: RunContextWrapper, conflict_id: int, npc_id: int) -> List[Dict[str, Any]:
+async def get_stakeholder_secrets(ctx: RunContextWrapper, conflict_id: int, npc_id: int) -> List[Dict[str, Any]]:
     """Get secrets for a stakeholder in a conflict."""
     return await _internal_get_stakeholder_secrets_logic(ctx, conflict_id, npc_id)
 
