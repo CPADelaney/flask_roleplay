@@ -1222,7 +1222,7 @@ class EnhancedAgenticActionGenerator:
             return {"error": "Needs system not available"}
         
         try:
-            return self.needs_system.get_needs_state()
+            return await self.needs_system.get_needs_state_async()
         except Exception as e:
             logger.error(f"Error getting need states: {e}")
             return {"error": str(e)}
