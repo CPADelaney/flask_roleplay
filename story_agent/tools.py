@@ -716,8 +716,8 @@ async def analyze_narrative_and_activity(
     conflict_manager = context.conflict_manager
 
     try:
-        # Change this line to use the imported function
-        conflict_analysis = await add_conflict_to_narrative(ctx, narrative_text)
+        # Directly call the internal logic function you want to execute
+        conflict_analysis = await _internal_add_conflict_to_narrative_logic(ctx, narrative_text)
         results = {"conflict_analysis": conflict_analysis, "activity_effects": None, "relationship_impacts": [], "resource_changes": {}, "conflict_progression": []}
 
         if player_activity:
