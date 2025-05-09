@@ -206,7 +206,7 @@ class RateLimiter:
         remaining = int(bucket.tokens)
         return allowed, remaining
 
-
+global_rate_limiter = RateLimiter()
 # --- Decorator ---
 def rate_limit(
     limit: int = 100,
@@ -216,50 +216,37 @@ def rate_limit(
     distributed: bool = True
 ):
     def decorator(f):
-        # The wrapper can be async if the decorated function `f` is async
-        # Or it can be sync if `f` is sync. @wraps helps preserve metadata.
-        # We determine if f is async *once* when the decorator is applied.
         is_async = asyncio.iscoroutinefunction(f)
 
         if is_async:
             @wraps(f)
             async def wrapped(*args, **kwargs):
-                # Get rate limit key
                 key = _get_request_key(key_func)
-                # Get request cost
                 cost = cost_func(request) if cost_func else 1
 
-                # Check rate limit (now synchronous)
-                allowed, limit_info = rate_limiter.check_rate_limit(
+                # Use the global instance
+                allowed, limit_info = global_rate_limiter.check_rate_limit( # <--- CHANGED
                     key=key, limit=limit, period=period, cost=cost, distributed=distributed
                 )
 
                 if not allowed:
                     return _rate_limit_exceeded_response(limit_info)
-
-                # Call the original async function
                 response = await f(*args, **kwargs)
-
-                # Add rate limit headers
                 return _add_rate_limit_headers(response, limit_info)
-        else: # Original function `f` is synchronous
+        else:
              @wraps(f)
              def wrapped(*args, **kwargs):
                 key = _get_request_key(key_func)
                 cost = cost_func(request) if cost_func else 1
 
-                # Check rate limit (synchronous)
-                allowed, limit_info = rate_limiter.check_rate_limit(
+                # Use the global instance
+                allowed, limit_info = global_rate_limiter.check_rate_limit( # <--- CHANGED
                     key=key, limit=limit, period=period, cost=cost, distributed=distributed
                 )
 
                 if not allowed:
                     return _rate_limit_exceeded_response(limit_info)
-
-                # Call the original sync function
                 response = f(*args, **kwargs)
-
-                # Add rate limit headers
                 return _add_rate_limit_headers(response, limit_info)
 
         return wrapped
