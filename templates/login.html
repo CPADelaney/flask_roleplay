@@ -20,11 +20,10 @@
   <h2>Login</h2>
   <input type="text" id="username" placeholder="Username" autocomplete="username">
   <input type="password" id="password" placeholder="Password" autocomplete="current-password">
-  <!-- Added id, removed onclick -->
   <button type="button" id="loginBtn">Login</button>
-  <div id="loginStatus"></div>
+  <!-- Add the base class for styling -->
+  <div id="loginStatus" class="status-message"></div>
 
-  <!-- Link to the external JS file, 'defer' ensures it runs after HTML parsing -->
   <script src="/static/login_page.js" defer></script>
 </body>
 </html>
