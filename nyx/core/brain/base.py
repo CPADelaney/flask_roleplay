@@ -1724,7 +1724,7 @@ class NyxBrain(DistributedCheckpointMixin, EventLogMixin):
         
         # Register each action
         for action_name, handler in action_mappings.items():
-            self.agentic_action_generator.register_action(action_name, handler)
+            await self.agentic_action_generator.register_action(action_name, handler)
             
         logger.info(f"Registered {len(action_mappings)} creative actions with action generator")
 
