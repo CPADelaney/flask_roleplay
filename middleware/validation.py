@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Common validation patterns
 PATTERNS = {
-    'username': re.compile(r'^[a-zA-Z0-9_.-]{3,30}$'),
-    'email': re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'),
+    'username': re.compile(r'^[a-zA-Z0-9_.-]{3,30}$'),  # Allows '.', '_', '-'
+    'email': re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'), # A more standard email regex
     'no_html': re.compile(r'<[^>]*>'),
     'no_script': re.compile(r'<script[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL),
     'alphanumeric': re.compile(r'^[a-zA-Z0-9]+$'),
