@@ -715,77 +715,77 @@ def create_quart_app():
             logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during login"}), 500
 
-@app.route("/register", methods=["POST"]) # Needs `app` to be defined
-@rate_limit(limit=3, period=300)
-@validate_input(schema={
-    'username': {'type': 'string', 'pattern': 'username', 'required': True},
-    'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
-    'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False}
-})
-async def register():
-    data = getattr(request, 'sanitized_data', None)
-    if data is None:
-        logger.warning("/register: request.sanitized_data not found.")
-        return jsonify({"error": "Invalid or missing request data"}), 400
-
-    username = data.get("username")
-    password = data.get("password")
-    email = data.get("email")
-
-    if not username or not password:
-        return jsonify({"error": "Missing username or password"}), 400
-
-    loop = asyncio.get_running_loop()
-    try:
-        password_hash_bytes = await loop.run_in_executor(
-            None, bcrypt.hashpw, password.encode('utf-8'), bcrypt.gensalt()
-        )
-        password_hash = password_hash_bytes.decode('utf-8')
-    except Exception as hash_err:
-        logger.error(f"Password hashing error for user {username}: {hash_err}", exc_info=True)
-        return jsonify({"error": "Registration process failed (hashing error)"}), 500
-
-    try:
-        async with get_db_connection_context(app=current_app) as conn:
-            async with conn.transaction():
-                existing_user = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
-                if existing_user:
-                    return jsonify({"error": "Username already exists"}), 409
-                if email:
-                    existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
-                    if existing_email:
-                        return jsonify({"error": "Email already exists"}), 409
-                user_id = await conn.fetchval(
-                    "INSERT INTO users (username, password_hash, email, created_at) VALUES ($1, $2, $3, NOW()) RETURNING id",
-                    username, password_hash, email
-                )
-        if user_id:
-            session["user_id"] = user_id
-            session.permanent = True
-            logger.info(f"Registration successful: User {user_id} ({username}) created.")
-            return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
-        else:
-            logger.error(f"Registration failed for {username} - no user_id returned.")
-            return jsonify({"error": "Registration failed (DB error)"}), 500
-    except asyncpg.exceptions.UniqueViolationError as uve:
-        logger.warning(f"Registration conflict for {username}: {uve}")
-        if 'username' in str(uve).lower() or (uve.constraint_name and 'username' in uve.constraint_name.lower()):
-            return jsonify({"error": "Username already taken"}), 409
-        elif 'email' in str(uve).lower() or (uve.constraint_name and 'email' in uve.constraint_name.lower()):
-            return jsonify({"error": "Email already registered"}), 409
-        return jsonify({"error": "User credential already exists"}), 409
-    except asyncio.TimeoutError:
-        logger.error(f"DB timeout during registration for {username}.", exc_info=True)
-        return jsonify({"error": "Registration timed out"}), 503
-    except asyncpg.PostgresError as db_err:
-        logger.error(f"DB error during registration for {username}: {db_err}", exc_info=True)
-        return jsonify({"error": "Database issue during registration"}), 500
-    except ConnectionError as conn_err:
-        logger.error(f"DB pool error during registration for {username}: {conn_err}", exc_info=True)
-        return jsonify({"error": "Database connection problem"}), 503
-    except Exception as e:
-        logger.error(f"Unexpected error during registration for {username}: {e}", exc_info=True)
-        return jsonify({"error": "Server error during registration"}), 500
+    @app.route("/register", methods=["POST"]) # Needs `app` to be defined
+    @rate_limit(limit=3, period=300)
+    @validate_input(schema={
+        'username': {'type': 'string', 'pattern': 'username', 'required': True},
+        'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
+        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False}
+    })
+    async def register():
+        data = getattr(request, 'sanitized_data', None)
+        if data is None:
+            logger.warning("/register: request.sanitized_data not found.")
+            return jsonify({"error": "Invalid or missing request data"}), 400
+    
+        username = data.get("username")
+        password = data.get("password")
+        email = data.get("email")
+    
+        if not username or not password:
+            return jsonify({"error": "Missing username or password"}), 400
+    
+        loop = asyncio.get_running_loop()
+        try:
+            password_hash_bytes = await loop.run_in_executor(
+                None, bcrypt.hashpw, password.encode('utf-8'), bcrypt.gensalt()
+            )
+            password_hash = password_hash_bytes.decode('utf-8')
+        except Exception as hash_err:
+            logger.error(f"Password hashing error for user {username}: {hash_err}", exc_info=True)
+            return jsonify({"error": "Registration process failed (hashing error)"}), 500
+    
+        try:
+            async with get_db_connection_context(app=current_app) as conn:
+                async with conn.transaction():
+                    existing_user = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
+                    if existing_user:
+                        return jsonify({"error": "Username already exists"}), 409
+                    if email:
+                        existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
+                        if existing_email:
+                            return jsonify({"error": "Email already exists"}), 409
+                    user_id = await conn.fetchval(
+                        "INSERT INTO users (username, password_hash, email, created_at) VALUES ($1, $2, $3, NOW()) RETURNING id",
+                        username, password_hash, email
+                    )
+            if user_id:
+                session["user_id"] = user_id
+                session.permanent = True
+                logger.info(f"Registration successful: User {user_id} ({username}) created.")
+                return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
+            else:
+                logger.error(f"Registration failed for {username} - no user_id returned.")
+                return jsonify({"error": "Registration failed (DB error)"}), 500
+        except asyncpg.exceptions.UniqueViolationError as uve:
+            logger.warning(f"Registration conflict for {username}: {uve}")
+            if 'username' in str(uve).lower() or (uve.constraint_name and 'username' in uve.constraint_name.lower()):
+                return jsonify({"error": "Username already taken"}), 409
+            elif 'email' in str(uve).lower() or (uve.constraint_name and 'email' in uve.constraint_name.lower()):
+                return jsonify({"error": "Email already registered"}), 409
+            return jsonify({"error": "User credential already exists"}), 409
+        except asyncio.TimeoutError:
+            logger.error(f"DB timeout during registration for {username}.", exc_info=True)
+            return jsonify({"error": "Registration timed out"}), 503
+        except asyncpg.PostgresError as db_err:
+            logger.error(f"DB error during registration for {username}: {db_err}", exc_info=True)
+            return jsonify({"error": "Database issue during registration"}), 500
+        except ConnectionError as conn_err:
+            logger.error(f"DB pool error during registration for {username}: {conn_err}", exc_info=True)
+            return jsonify({"error": "Database connection problem"}), 503
+        except Exception as e:
+            logger.error(f"Unexpected error during registration for {username}: {e}", exc_info=True)
+            return jsonify({"error": "Server error during registration"}), 500
 
 
     @app.route("/logout", methods=["POST"])
