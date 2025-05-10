@@ -382,10 +382,10 @@ class ProgressiveNarrativeSummarizer:
                 # Assume the main app (e.g., via @app.before_serving) has done this.
                 # We just need to ensure tables exist.
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
+                
+                # --- CORRECTED BLOCK ---
+                # All DB operations for initialization go under this single 'async with' and 'try'
                 async with get_db_connection_context() as conn: # This will use the worker-local pool
-                    
-                # Create tables if they don't exist
-                async with get_db_connection_context() as conn:
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS narrative_events (
                         event_id TEXT PRIMARY KEY,
@@ -445,54 +445,43 @@ class ProgressiveNarrativeSummarizer:
                 logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
             logger.info("ProgressiveNarrativeSummarizer initialized.")
     
-    async def _load_data_from_db(self) -> None:
-        """Load data from database"""
-        async with get_db_connection_context() as conn:
+    async def _load_data_from_db(self, conn: asyncpg.Connection) -> None: # Accept connection as argument
+        """Load data from database using the provided connection."""
+        # No 'if not self.db_connection_string: return' needed here, as initialize() checks it.
+        # No 'async with get_db_connection_context()' needed here, as conn is passed.
+        logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
+        try:
             # Load events
             event_rows = await conn.fetch("SELECT * FROM narrative_events")
-            for row in event_rows:
-                event = EventInfo.from_dict({
-                    "event_id": row["event_id"],
-                    "event_type": row["event_type"],
-                    "content": row["content"],
-                    "timestamp": row["timestamp"],
-                    "importance": row["importance"],
-                    "tags": row["tags"], 
-                    "metadata": row["metadata"],
-                    "summaries": row["summaries"],
-                    "last_accessed": row["last_accessed"],
-                    "access_count": row["access_count"]
-                })
-                self.events[event.event_id] = event
-            
+            for row_dict in event_rows:
+                try:
+                    event = EventInfo.from_dict(dict(row_dict))
+                    self.events[event.event_id] = event
+                except Exception as e_event:
+                    logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
+
             # Load arcs
             arc_rows = await conn.fetch("SELECT * FROM story_arcs")
-            for row in arc_rows:
-                arc = StoryArc.from_dict({
-                    "arc_id": row["arc_id"],
-                    "title": row["title"],
-                    "description": row["description"],
-                    "start_date": row["start_date"],
-                    "end_date": row["end_date"],
-                    "status": row["status"],
-                    "importance": row["importance"],
-                    "tags": row["tags"], 
-                    "event_ids": row["event_ids"],
-                    "summaries": row["summaries"],
-                    "last_accessed": row["last_accessed"],
-                    "access_count": row["access_count"]
-                })
-                self.arcs[arc.arc_id] = arc
-            
+            for row_dict in arc_rows:
+                try:
+                    arc = StoryArc.from_dict(dict(row_dict))
+                    self.arcs[arc.arc_id] = arc
+                except Exception as e_arc:
+                    logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
+
             # Load relationships
             rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
-            for row in rel_rows:
-                event_id = row["event_id"]
-                arc_id = row["arc_id"]
-                
+            for row_dict in rel_rows:
+                event_id = row_dict["event_id"]
+                arc_id = row_dict["arc_id"]
                 if event_id not in self.event_arc_map:
                     self.event_arc_map[event_id] = set()
                 self.event_arc_map[event_id].add(arc_id)
+            logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
+        except Exception as e:
+            logger.error(f"Error loading narrative data from DB using provided connection: {e}", exc_info=True)
+            # Decide if this failure should propagate or be handled (e.g., by disabling DB for this instance)
+            raise # Re-raising might be appropriate if data load is critical for init
     
     async def close(self) -> None:
         """Clean up resources, like cancelling background tasks."""
