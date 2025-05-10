@@ -41,51 +41,34 @@ class OpenAISummarizer(NarrativeSummarizer):
     """
     Summarizer using OpenAI API
     """
-    def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview"):
+    def __init__(self, api_key: str, model: str = "gpt-4.1"):
         if not HAVE_OPENAI:
             raise ImportError("openai is required for OpenAISummarizer")
         self.client = openai.AsyncClient(api_key=api_key)
         self.model = model
     
     async def summarize(self, text: str, target_level: int, max_tokens: int = 0) -> str:
-        """
-        Summarize text using OpenAI API
-        
-        Args:
-            text: Text to summarize
-            target_level: Target summary level (0-3)
-            max_tokens: Maximum tokens for summary (0 for auto)
-            
-        Returns:
-            Summarized text
-        """
-        # Determine instructions based on level
-        if target_level == SummaryLevel.DETAILED:
-            instruction = "Create a slightly condensed version that preserves most details."
-        elif target_level == SummaryLevel.CONDENSED:
-            instruction = "Create a condensed version that preserves important details and context."
-        elif target_level == SummaryLevel.SUMMARY:
-            instruction = "Create a brief summary that captures the main points and key context."
-        elif target_level == SummaryLevel.HEADLINE:
-            instruction = "Create a headline or single sentence that captures the essence."
-        else:
-            instruction = "Summarize this text appropriately."
-        
-        # Add token constraint if specified
-        if max_tokens > 0:
-            instruction += f" Keep the summary under {max_tokens} tokens."
-        
-        # Call the API
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": f"You are a narrative summarizer that condenses text while preserving context and narrative flow. {instruction}"},
-                {"role": "user", "content": text}
-            ],
-            max_tokens=max_tokens if max_tokens > 0 else None
-        )
-        
-        return response.choices[0].message.content
+        instructions = {
+            SummaryLevel.DETAILED: "Create a slightly condensed version that preserves most details.",
+            SummaryLevel.CONDENSED: "Create a condensed version that preserves important details and context.",
+            SummaryLevel.SUMMARY: "Create a brief summary that captures the main points and key context.",
+            SummaryLevel.HEADLINE: "Create a headline or single sentence that captures the essence."
+        }
+        instruction = instructions.get(target_level, "Summarize this text appropriately.")
+        if max_tokens > 0: instruction += f" Keep the summary under {max_tokens} tokens."
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": f"You are a narrative summarizer. {instruction}"},
+                    {"role": "user", "content": text}
+                ],
+                max_tokens=max_tokens if max_tokens > 0 else None
+            )
+            return response.choices[0].message.content if response.choices else ""
+        except Exception as e:
+            logger.error(f"OpenAI summarization error: {e}", exc_info=True)
+            return f"[Error summarizing: {type(e).__name__}]" # Fallback
 
 
 class RuleSummarizer(NarrativeSummarizer):
@@ -363,45 +346,44 @@ class StoryArc:
 
 
 class ProgressiveNarrativeSummarizer:
-    """
-    System for progressive summarization of narrative content
-    """
-    
     def __init__(
         self,
         summarizer: Optional[NarrativeSummarizer] = None,
-        db_connection_string: Optional[str] = None
+        db_connection_string: Optional[str] = None # This might now be less relevant if DSN is global
+                                                   # or if the app passes a pool reference.
+                                                   # For now, keep it to indicate DB usage.
     ):
-        # Set up summarizer
         self.summarizer = summarizer or RuleSummarizer()
+        self.db_connection_string = db_connection_string # Indicates if DB operations should be attempted
         
-        # Storage
-        self.db_connection_string = db_connection_string
         self.events: Dict[str, EventInfo] = {}
         self.arcs: Dict[str, StoryArc] = {}
-        
-        # Event-arc relationships
-        self.event_arc_map: Dict[str, Set[str]] = {}  # event_id -> set of arc_ids
-        
-        # Aging configuration
+        self.event_arc_map: Dict[str, Set[str]] = {}
+
         self.age_thresholds = {
-            SummaryLevel.CONDENSED: timedelta(days=7),    # After 7 days, create condensed
-            SummaryLevel.SUMMARY: timedelta(days=30),     # After 30 days, create summary
-            SummaryLevel.HEADLINE: timedelta(days=90)     # After 90 days, create headline
+            SummaryLevel.CONDENSED: timedelta(days=7),
+            SummaryLevel.SUMMARY: timedelta(days=30),
+            SummaryLevel.HEADLINE: timedelta(days=90)
         }
-        
-        # Access thresholds for importance calculation
-        self.recency_weight = 0.6  # Weight for recency vs access count
-        
-        # Background task for summary generation
-        self.summary_task = None
+        self.recency_weight = 0.6
+        self.summary_task: Optional[asyncio.Task] = None
+        logger.info("ProgressiveNarrativeSummarizer instance created.")
     
     async def initialize(self) -> None:
-        """Initialize database connection if using PostgreSQL"""
-        if self.db_connection_string:
-            # Initialize the global connection pool rather than creating our own
-            await initialize_connection_pool()
-            
+        """
+        Initialize the summarizer.
+        Creates necessary DB tables if db_connection_string is set and loads data.
+        It RELIES on the global DB_POOL being initialized by the main application.
+        """
+        logger.info("Initializing ProgressiveNarrativeSummarizer...")
+        if self.db_connection_string: # Use this flag to decide if DB operations are active
+            try:
+                # DO NOT call initialize_connection_pool() here.
+                # Assume the main app (e.g., via @app.before_serving) has done this.
+                # We just need to ensure tables exist.
+                logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
+                async with get_db_connection_context() as conn: # This will use the worker-local pool
+                    
             # Create tables if they don't exist
             async with get_db_connection_context() as conn:
                 await conn.execute('''
@@ -447,7 +429,21 @@ class ProgressiveNarrativeSummarizer:
                 ''')
                 
                 # Load data
-                await self._load_data_from_db()
+                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
+                await self._load_data_from_db() # Load existing data
+            except ConnectionError as ce: # If get_db_connection_context fails because pool isn't ready
+                logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init - pool likely not ready: {ce}", exc_info=True)
+                # Decide how to handle: re-raise, or operate in memory-only mode?
+                # For now, let it proceed but DB features will fail.
+                self.db_connection_string = None # Disable DB features for this instance
+                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+            except Exception as e:
+                logger.error(f"ProgressiveNarrativeSummarizer: Error during DB table check/creation: {e}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+        else:
+            logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
+        logger.info("ProgressiveNarrativeSummarizer initialized.")
     
     async def _load_data_from_db(self) -> None:
         """Load data from database"""
@@ -461,9 +457,9 @@ class ProgressiveNarrativeSummarizer:
                     "content": row["content"],
                     "timestamp": row["timestamp"],
                     "importance": row["importance"],
-                    "tags": json.loads(row["tags"]),
-                    "metadata": json.loads(row["metadata"]),
-                    "summaries": json.loads(row["summaries"]),
+                    "tags": row["tags"], 
+                    "metadata": row["metadata"],
+                    "summaries": row["summaries"],
                     "last_accessed": row["last_accessed"],
                     "access_count": row["access_count"]
                 })
@@ -480,9 +476,9 @@ class ProgressiveNarrativeSummarizer:
                     "end_date": row["end_date"],
                     "status": row["status"],
                     "importance": row["importance"],
-                    "tags": json.loads(row["tags"]),
-                    "event_ids": json.loads(row["event_ids"]),
-                    "summaries": json.loads(row["summaries"]),
+                    "tags": row["tags"], 
+                    "event_ids": row["event_ids"],
+                    "summaries": row["summaries"],
                     "last_accessed": row["last_accessed"],
                     "access_count": row["access_count"]
                 })
@@ -499,18 +495,23 @@ class ProgressiveNarrativeSummarizer:
                 self.event_arc_map[event_id].add(arc_id)
     
     async def close(self) -> None:
-        """Close database connection and stop tasks"""
-        if self.summary_task:
+        """Clean up resources, like cancelling background tasks."""
+        logger.info("Closing ProgressiveNarrativeSummarizer...")
+        if self.summary_task and not self.summary_task.done():
             self.summary_task.cancel()
             try:
                 await self.summary_task
+                logger.info("Summary processor task cancelled.")
             except asyncio.CancelledError:
-                pass
-            self.summary_task = None
+                logger.info("Summary processor task was already cancelled or finished.")
+            except Exception as e: # Catch other potential errors during await
+                logger.error(f"Error awaiting summary task cancellation: {e}", exc_info=True)
+        self.summary_task = None
             
-        # Use the global connection pool closer instead of our own
-        if self.db_connection_string:
-            await close_connection_pool()
+        # DO NOT call close_connection_pool() here.
+        # The main application (main.py @app.after_serving) is responsible for closing the global pool.
+        # This class instance doesn't "own" the pool.
+        logger.info("ProgressiveNarrativeSummarizer closed.")
     
     async def start_summary_processor(self, interval: int = 3600) -> None:
         """
@@ -652,35 +653,28 @@ class ProgressiveNarrativeSummarizer:
         return event
     
     async def _save_event_to_db(self, event: EventInfo) -> None:
-        """Save event to database"""
-        async with get_db_connection_context() as conn:
-            await conn.execute('''
-            INSERT INTO narrative_events (
-                event_id, event_type, content, timestamp, importance,
-                tags, metadata, summaries, last_accessed, access_count
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (event_id) DO UPDATE SET
-                event_type = $2,
-                content = $3,
-                timestamp = $4,
-                importance = $5,
-                tags = $6,
-                metadata = $7,
-                summaries = $8,
-                last_accessed = $9,
-                access_count = $10
-            ''',
-            event.event_id,
-            event.event_type,
-            event.content,
-            event.timestamp,
-            event.importance,
-            json.dumps(event.tags),
-            json.dumps(event.metadata),
-            json.dumps({str(k): v for k, v in event.summaries.items()}),
-            event.last_accessed,
-            event.access_count
-            )
+        if not self.db_connection_string: return
+        try:
+            async with get_db_connection_context() as conn:
+                await conn.execute(
+                    '''
+                    INSERT INTO narrative_events (
+                        event_id, event_type, content, timestamp, importance,
+                        tags, metadata, summaries, last_accessed, access_count
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (event_id) DO UPDATE SET
+                        event_type = EXCLUDED.event_type, content = EXCLUDED.content,
+                        timestamp = EXCLUDED.timestamp, importance = EXCLUDED.importance,
+                        tags = EXCLUDED.tags, metadata = EXCLUDED.metadata, summaries = EXCLUDED.summaries,
+                        last_accessed = EXCLUDED.last_accessed, access_count = EXCLUDED.access_count
+                    ''',
+                    event.event_id, event.event_type, event.content, event.timestamp,
+                    event.importance, json.dumps(event.tags or []), json.dumps(event.metadata or {}),
+                    json.dumps({str(k): v for k, v in (event.summaries or {}).items()}), # Ensure summaries is a dict
+                    event.last_accessed, event.access_count
+                )
+        except Exception as e:
+            logger.error(f"Failed to save event {event.event_id} to DB: {e}", exc_info=True)
     
     async def add_story_arc(
         self,
@@ -1141,9 +1135,9 @@ class ProgressiveNarrativeSummarizer:
                         "content": row["content"],
                         "timestamp": row["timestamp"],
                         "importance": row["importance"],
-                        "tags": json.loads(row["tags"]),
-                        "metadata": json.loads(row["metadata"]),
-                        "summaries": json.loads(row["summaries"]),
+                        "tags": row["tags"],
+                        "metadata": row["metadata"],
+                        "summaries": row["summaries"],
                         "last_accessed": row["last_accessed"],
                         "access_count": row["access_count"]
                     })
@@ -1260,9 +1254,9 @@ class ProgressiveNarrativeSummarizer:
                         "end_date": row["end_date"],
                         "status": row["status"],
                         "importance": row["importance"],
-                        "tags": json.loads(row["tags"]),
-                        "event_ids": json.loads(row["event_ids"]),
-                        "summaries": json.loads(row["summaries"]),
+                        "tags": row["tags"], 
+                        "metadata": row["metadata"],
+                        "summaries": row["summaries"],
                         "last_accessed": row["last_accessed"],
                         "access_count": row["access_count"]
                     })
@@ -1604,38 +1598,50 @@ if __name__ == "__main__":
 # RPG-Specific Implementation
 
 class RPGNarrativeManager:
-    """
-    RPG-specific narrative manager that integrates with the game system
-    """
-    
     def __init__(
         self,
-        user_id: int,
-        conversation_id: int,
-        db_connection_string: Optional[str] = None,
+        user_id: int, # Should probably be str if your user IDs from DB are SERIAL (int) but used as str elsewhere
+        conversation_id: int, # Same as above
+        db_connection_string: Optional[str] = None, # Or pass DSN explicitly if preferred
         openai_api_key: Optional[str] = None
     ):
         self.user_id = user_id
         self.conversation_id = conversation_id
         
-        # Set up summarizer
-        if openai_api_key and HAVE_OPENAI:
-            summarizer = OpenAISummarizer(openai_api_key)
+        current_openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY") # Get from env if not passed
+
+        if current_openai_api_key and HAVE_OPENAI:
+            summarizer = OpenAISummarizer(current_openai_api_key)
         else:
+            if not HAVE_OPENAI: logger.warning("OpenAI library not found. Using rule-based summarizer.")
+            if not current_openai_api_key: logger.warning("OpenAI API key not provided. Using rule-based summarizer.")
             summarizer = RuleSummarizer()
         
-        # Set up narrative summarizer
+        # Use the DSN from db.connection if db_connection_string is not provided explicitly
+        # but we still want to use DB if the global one is configured.
+        # If db_connection_string is explicitly None, it means "don't use DB for this instance".
+        effective_db_string = db_connection_string
+        if db_connection_string is None: # If caller didn't specify, check if global DSN exists
+            try:
+                from db.connection import get_db_dsn # Assuming this function exists
+                if get_db_dsn(): # Check if a DSN is configured globally
+                     effective_db_string = "USE_GLOBAL_POOL" # Signal to use global pool setup
+            except ImportError:
+                logger.warning("db.connection.get_db_dsn not found, cannot infer global DSN for RPGNarrativeManager.")
+            except EnvironmentError: # If get_db_dsn raises error because no DSN is set
+                logger.info("No global DB DSN configured. RPGNarrativeManager will operate in memory-only unless db_connection_string is explicitly passed.")
+
+
         self.narrative = ProgressiveNarrativeSummarizer(
             summarizer=summarizer,
-            db_connection_string=db_connection_string
+            db_connection_string=effective_db_string # Pass the determined DSN or signal
         )
-        
-        # Keep track of active arcs
-        self.active_arcs = {}
+        self.active_arcs: Dict[str, Any] = {} # Store arc data, not just IDs
+        logger.info(f"RPGNarrativeManager for user {user_id}, conv {conversation_id} created.")
     
     async def initialize(self) -> None:
-        """Initialize the manager"""
-        await self.narrative.initialize()
+        logger.info(f"Initializing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
+        await self.narrative.initialize() # This will handle its DB setup
         await self.narrative.start_summary_processor()
         
         # Load active arcs
@@ -1643,8 +1649,9 @@ class RPGNarrativeManager:
         self.active_arcs = {arc["arc_id"]: arc for arc in active_arcs}
     
     async def close(self) -> None:
-        """Close the manager"""
-        await self.narrative.close()
+        logger.info(f"Closing RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id}...")
+        await self.narrative.close() # This will cancel its summary_task if started
+        logger.info(f"RPGNarrativeManager for user {self.user_id}, conv {self.conversation_id} closed.")
     
     async def add_interaction(
         self,
