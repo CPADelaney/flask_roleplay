@@ -338,11 +338,11 @@ async def initialize_systems(app: Quart): # Type hint for 'app'
     try:
         app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
     except ValueError:
-            logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1].")
-            app.config['ADMIN_USER_IDS'] = [1]
-        logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
+        logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1].")
+        app.config['ADMIN_USER_IDS'] = [1]
+    logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
-        logger.info("All asynchronous system initializations completed.")
+    logger.info("All asynchronous system initializations completed.")
 
     try:
         from logic.aggregator_sdk import init_singletons # Moved import closer
