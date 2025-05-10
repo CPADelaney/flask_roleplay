@@ -959,60 +959,42 @@ def create_quart_app():
         return jsonify({"status": "healthy", "timestamp": time.time()})
 
     @app.route("/readiness", methods=["GET"])
-    async def readiness_check():
+    async def readiness_check(): # All code below must be indented under this
         status = {"status": "ready", "timestamp": time.time(), "checks": {}}
         is_ready = True
+        
+        # DB Check
         try:
-            async with get_db_connection_context(timeout=5, app=current_app) as conn: # Pass app
+            async with get_db_connection_context(timeout=5, app=current_app) as conn:
                 result = await conn.fetchval("SELECT 1")
                 status["checks"]["database"] = "connected" if result == 1 else "error: bad query"
                 if result != 1: is_ready = False
-        except Exception as db_err: # Catch all for DB check
+        except Exception as db_err:
             status["checks"]["database"] = f"error: {type(db_err).__name__}"
-            is_ready = False; logger.warning(f"Readiness DB check failed: {db_err}")
-        if not is_ready:
-            status["status"] = "not ready"; return jsonify(status), 503
-        return jsonify(status), 200
-
-    return app
-
-
-    # --- Redis Check (Sync - consider async if heavily used) ---
-    redis_host = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    redis_port = int(os.getenv("REDIS_PORT", 6379))
-    try:
-        # Get the aioredis pool/client similar to how your middleware does.
-        # For simplicity, let's assume you have a way to get an aioredis client instance.
-        # If you stored the pool on 'current_app' during initialize_systems:
-        # redis_pool = getattr(current_app, 'aioredis_rate_limit_pool', None)
-        # Or create a temporary one for the check if not easily accessible:
+            is_ready = False
+            logger.warning(f"Readiness DB check failed: {db_err}")
+        
+        # aioredis Check (CORRECTLY INDENTED)
         redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
         if redis_url:
-            # Use a timeout for the connection attempt in readiness
             try:
-                aredis_client = await asyncio.wait_for(
+                aredis_client = await asyncio.wait_for( # This is now correctly inside async def
                     aioredis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2),
-                    timeout=3 # Overall timeout for from_url and ping
+                    timeout=3
                 )
                 await aredis_client.ping()
                 status["checks"]["aioredis"] = "connected"
-                await aredis_client.close() # Close the temporary client/pool
+                await aredis_client.close()
             except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as aredis_err:
                 status["checks"]["aioredis"] = f"error: {type(aredis_err).__name__}"
                 is_ready = False
                 logger.warning(f"Readiness aioredis check failed: {aredis_err}")
-            except Exception as e_aredis: # Catch any other exception during aioredis init/ping
+            except Exception as e_aredis:
                 status["checks"]["aioredis"] = f"unexpected error: {type(e_aredis).__name__}"
                 is_ready = False
                 logger.warning(f"Readiness aioredis check unexpected error: {e_aredis}", exc_info=True)
         else:
             status["checks"]["aioredis"] = "not configured (REDIS_URL missing)"
-            is_ready = False # Or handle as per your requirements
-
-    except Exception as e: # General catch for the try block
-        status["checks"]["aioredis"] = f"error: {type(e).__name__}"
-        is_ready = False
-        logger.warning(f"Readiness check aioredis setup error: {e}", exc_info=True)
 
         # --- Celery Check (using inspect) ---
         # This can be slow and unreliable; consider a dedicated health check task
