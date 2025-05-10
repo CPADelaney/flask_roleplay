@@ -384,66 +384,66 @@ class ProgressiveNarrativeSummarizer:
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
                 async with get_db_connection_context() as conn: # This will use the worker-local pool
                     
-            # Create tables if they don't exist
-            async with get_db_connection_context() as conn:
-                await conn.execute('''
-                CREATE TABLE IF NOT EXISTS narrative_events (
-                    event_id TEXT PRIMARY KEY,
-                    event_type TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TIMESTAMP NOT NULL,
-                    importance REAL NOT NULL,
-                    tags JSONB NOT NULL,
-                    metadata JSONB NOT NULL,
-                    summaries JSONB NOT NULL,
-                    last_accessed TIMESTAMP NOT NULL,
-                    access_count INTEGER NOT NULL
-                );
-                
-                CREATE TABLE IF NOT EXISTS story_arcs (
-                    arc_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    start_date TIMESTAMP NOT NULL,
-                    end_date TIMESTAMP,
-                    status TEXT NOT NULL,
-                    importance REAL NOT NULL,
-                    tags JSONB NOT NULL,
-                    event_ids JSONB NOT NULL,
-                    summaries JSONB NOT NULL,
-                    last_accessed TIMESTAMP NOT NULL,
-                    access_count INTEGER NOT NULL
-                );
-                
-                CREATE TABLE IF NOT EXISTS event_arc_relationships (
-                    event_id TEXT NOT NULL,
-                    arc_id TEXT NOT NULL,
-                    PRIMARY KEY (event_id, arc_id),
-                    FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
-                    FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);
-                CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);
-                CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);
-                ''')
-                
-                # Load data
-                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
-                await self._load_data_from_db() # Load existing data
-            except ConnectionError as ce: # If get_db_connection_context fails because pool isn't ready
-                logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init - pool likely not ready: {ce}", exc_info=True)
-                # Decide how to handle: re-raise, or operate in memory-only mode?
-                # For now, let it proceed but DB features will fail.
-                self.db_connection_string = None # Disable DB features for this instance
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
-            except Exception as e:
-                logger.error(f"ProgressiveNarrativeSummarizer: Error during DB table check/creation: {e}", exc_info=True)
-                self.db_connection_string = None
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
-        else:
-            logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
-        logger.info("ProgressiveNarrativeSummarizer initialized.")
+                # Create tables if they don't exist
+                async with get_db_connection_context() as conn:
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS narrative_events (
+                        event_id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        timestamp TIMESTAMP NOT NULL,
+                        importance REAL NOT NULL,
+                        tags JSONB NOT NULL,
+                        metadata JSONB NOT NULL,
+                        summaries JSONB NOT NULL,
+                        last_accessed TIMESTAMP NOT NULL,
+                        access_count INTEGER NOT NULL
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS story_arcs (
+                        arc_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        start_date TIMESTAMP NOT NULL,
+                        end_date TIMESTAMP,
+                        status TEXT NOT NULL,
+                        importance REAL NOT NULL,
+                        tags JSONB NOT NULL,
+                        event_ids JSONB NOT NULL,
+                        summaries JSONB NOT NULL,
+                        last_accessed TIMESTAMP NOT NULL,
+                        access_count INTEGER NOT NULL
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS event_arc_relationships (
+                        event_id TEXT NOT NULL,
+                        arc_id TEXT NOT NULL,
+                        PRIMARY KEY (event_id, arc_id),
+                        FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
+                        FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);
+                    CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);
+                    CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);
+                    ''')
+                    
+                    # Load data
+                    logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
+                    await self._load_data_from_db() # Load existing data
+                except ConnectionError as ce: # If get_db_connection_context fails because pool isn't ready
+                    logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init - pool likely not ready: {ce}", exc_info=True)
+                    # Decide how to handle: re-raise, or operate in memory-only mode?
+                    # For now, let it proceed but DB features will fail.
+                    self.db_connection_string = None # Disable DB features for this instance
+                    logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+                except Exception as e:
+                    logger.error(f"ProgressiveNarrativeSummarizer: Error during DB table check/creation: {e}", exc_info=True)
+                    self.db_connection_string = None
+                    logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+            else:
+                logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
+            logger.info("ProgressiveNarrativeSummarizer initialized.")
     
     async def _load_data_from_db(self) -> None:
         """Load data from database"""
