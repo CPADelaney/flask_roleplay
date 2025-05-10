@@ -37,6 +37,7 @@ mysqlclient==2.2.0
 # Caching
 redis==5.0.1
 aioredis==2.0.1
+bleach
 
 # Monitoring and logging
 structlog==23.2.0
