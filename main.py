@@ -60,6 +60,7 @@ from routes.ai_image_generator import init_app as init_image_routes, generate_ro
 from routes.chatgpt_routes import init_app as init_chat_routes
 from logic.gpt_image_decision import should_generate_image_for_response
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+from middleware.security import validate_input
 
 # Nyx integration
 from logic.nyx_enhancements_integration import initialize_nyx_memory_system # Keep this async
@@ -577,8 +578,8 @@ def create_quart_app():
 
     @app.route("/login", methods=["POST"])
     @rate_limit(limit=5, period=60)
-    @validate_request({ # This should populate request.sanitized_data
-        'username': {'type': 'string', 'pattern': r'^[a-zA-Z0-9_.-]{3,30}$', 'required': True},
+    @validate_input({ # Renamed to validate_input for clarity if it's from security.py
+        'username': {'type': 'string', 'pattern': 'username', 'required': True}, # Use 'username' NAME
         'password': {'type': 'string', 'max_length': 100, 'required': True}
     })
     async def login():
@@ -637,10 +638,11 @@ def create_quart_app():
 
     @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
-    @validate_request({ # Added patterns, made email optional
-        'username': {'type': 'string', 'pattern': r'^[a-zA-Z0-9_.-]{3,30}$', 'required': True},
+    @validate_input({ # Renamed to validate_input
+        'username': {'type': 'string', 'pattern': 'username', 'required': True},     # Use 'username' NAME
         'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
-        'email':    {'type': 'string', 'pattern': r'[^@]+@[^@]+\.[^@]+', 'max_length': 100, 'required': False}
+        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False} # Use 'email' NAME
+                                                                                              # (or 'simple_email' if you defined that)
     })
     async def register(): # Make async for asyncpg
         data = getattr(request, 'sanitized_data', request.get_json())
