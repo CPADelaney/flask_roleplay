@@ -12,6 +12,7 @@ from functools import wraps
 from quart import request, abort, current_app
 from marshmallow import ValidationError
 from typing import Dict, Any, Callable, Optional
+from middleware.validation import sanitize_json as custom_sanitize_json
 
 logger = logging.getLogger(__name__)
 
@@ -66,33 +67,40 @@ def validate_input(schema: Optional[Dict[str, Any]] = None, patterns: Optional[D
     def decorator(f: Callable):
         @wraps(f)
         async def decorated_function(*args, **kwargs):
-            security = SecurityMiddleware()
+            security = SecurityMiddleware() # Still useful for URL param validation or HTML sanitization
             
-            # Validate URL parameters
+            # Validate URL parameters (using SecurityMiddleware's patterns)
             for param_name, pattern_name in (patterns or {}).items():
                 if param_name in kwargs:
                     if not await security.validate_pattern(kwargs[param_name], pattern_name):
                         logger.warning(f"Invalid {param_name} format: {kwargs[param_name]}")
                         abort(400, f"Invalid {param_name} format")
             
-            # Validate JSON body
+            # Validate JSON body USING YOUR CUSTOM SANITIZER
             if schema and request.is_json:
+                data_to_validate = {}
                 try:
-                    data = await request.get_json() # ADD AWAIT
-                    if data is None: # Handle empty JSON body
-                        data = {}
+                    data_to_validate = await request.get_json()
+                    if data_to_validate is None: data_to_validate = {}
                 except Exception as json_err:
                     logger.warning(f"Invalid JSON body for validation in 'validate_input': {json_err}")
-                    # Consider using your create_error_response or handle_validation_errors here
-                    # instead of abort, for consistent error format.
-                    # For example:
-                    # err_resp, status = await create_error_response(json_err, "Invalid JSON request body", 400)
-                    # return err_resp, status
-                    abort(400, "Invalid JSON request body") # abort() is fine too
+                    abort(400, "Invalid JSON request body")
                 
-                if not await security.validate_json_structure(data, schema):
-                    # Same here, consider consistent error response
-                    abort(400, "Invalid request body structure")
+                # Use your custom sanitize_json from middleware.validation.py
+                # This function expects your custom schema format.
+                sanitized, errors = await custom_sanitize_json(data_to_validate, schema) 
+                
+                if errors:
+                    logger.warning(f"Custom JSON validation/sanitization error: {errors}")
+                    # You might want a more specific error response creator here
+                    return jsonify({
+                        "error": "Validation failed",
+                        "validation_errors": errors, # Errors from your custom_sanitize_json
+                        "status_code": 400
+                    }), 400
+                
+                # Add sanitized data to request object for the route to use
+                request.sanitized_data = sanitized # Store the result from custom_sanitize_json
             
             return await f(*args, **kwargs)
         return decorated_function
