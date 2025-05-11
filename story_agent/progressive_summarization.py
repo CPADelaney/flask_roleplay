@@ -378,9 +378,9 @@ class ProgressiveNarrativeSummarizer:
         """
         logger.info("Initializing ProgressiveNarrativeSummarizer...")
         if self.db_connection_string:  # Check if DB operations should be attempted
+            db_setup_successful = False
             try:
-                # All DB operations are now correctly indented under this try block
-                logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist and loading data...")
+                logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
                 # Use a single connection for all setup DB operations
             async with get_db_connection_context() as conn:
                 await conn.execute('''
@@ -424,62 +424,80 @@ class ProgressiveNarrativeSummarizer:
                 CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);
                 CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);
                 ''')
+                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
+                db_setup_successful = True # Mark table setup as successful
 
-                    # Load data using the same acquired connection
-                    await self._load_data_from_db(conn) # Pass the connection
-                
-                # Connection is automatically released when 'async with' block exits
+            except ConnectionError as ce:
+                logger.error(f"PNS: DB ConnectionError during table creation: {ce}", exc_info=True)
+                self.db_connection_string = None # Disable further DB ops
+                logger.warning("PNS: Disabling database features due to table creation error.")
+            except Exception as e:
+                logger.error(f"PNS: Error during DB table creation: {e}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("PNS: Disabling database features due to table creation error.")
 
-            except ConnectionError as ce: # This except now correctly corresponds to the try above
-                logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init - pool likely not ready: {ce}", exc_info=True)
-                self.db_connection_string = None
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
-            except Exception as e:  # This except also corresponds to the try above
-                logger.error(f"ProgressiveNarrativeSummarizer: Error during DB table check/creation or data load: {e}", exc_info=True)
-                self.db_connection_string = None
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+            # Only attempt to load data if table setup was (or seemed) successful AND db is still enabled
+            if db_setup_successful and self.db_connection_string:
+                try:
+                    await self._load_data_from_db()  # Load existing data
+                except ConnectionError as ce:
+                    logger.error(f"PNS: DB ConnectionError during data load: {ce}", exc_info=True)
+                    self.db_connection_string = None
+                    logger.warning("PNS: Disabling database features due to data load error.")
+                except Exception as e:
+                    logger.error(f"PNS: Error during data load: {e}", exc_info=True)
+                    self.db_connection_string = None
+                    logger.warning("PNS: Disabling database features due to data load error.")
+        
+        # This 'else' correctly corresponds to 'if self.db_connection_string:'
         else:
             logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
         
         logger.info("ProgressiveNarrativeSummarizer initialized.")
-    
-    async def _load_data_from_db(self, conn: asyncpg.Connection) -> None: # Modified to accept conn
-        """Load data from database using the provided connection."""
-        # No 'if not self.db_connection_string:' check needed here, as initialize() handles it.
-        # No 'async with get_db_connection_context()' needed here, as conn is passed.
-        logger.info("ProgressiveNarrativeSummarizer: Loading data using provided DB connection...")
-        try:
-            # Load events
-            event_rows = await conn.fetch("SELECT * FROM narrative_events")
-            for row_dict in event_rows:
-                try:
-                    # Convert asyncpg.Record to dict before passing to Pydantic model
-                    event = EventInfo.from_dict(dict(row_dict))
-                    self.events[event.event_id] = event
-                except Exception as e_event:
-                    logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
-            
-            # Load arcs
-            arc_rows = await conn.fetch("SELECT * FROM story_arcs")
-            for row_dict in arc_rows:
-                try:
-                    arc = StoryArc.from_dict(dict(row_dict))
-                    self.arcs[arc.arc_id] = arc
-                except Exception as e_arc:
-                    logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
 
-            # Load relationships
-            rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
-            for row_dict in rel_rows:
-                event_id = row_dict["event_id"]
-                arc_id = row_dict["arc_id"]
-                if event_id not in self.event_arc_map:
-                    self.event_arc_map[event_id] = set()
-                self.event_arc_map[event_id].add(arc_id)
+    
+    async def _load_data_from_db(self) -> None: # Does NOT take 'conn' as argument
+        """Load data from database. Acquires its own connection."""
+        if not self.db_connection_string: # Guard clause
+            logger.debug("Skipping _load_data_from_db as db_connection_string is not set.")
+            return
+
+        logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
+        # This 'try...except' is specific to this data loading operation
+        try:
+            async with get_db_connection_context() as conn: # Acquires its own connection
+                # Load events
+                event_rows = await conn.fetch("SELECT * FROM narrative_events")
+                for row_dict in event_rows:
+                    try:
+                        event = EventInfo.from_dict(dict(row_dict))
+                        self.events[event.event_id] = event
+                    except Exception as e_event:
+                        logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
+                
+                # Load arcs
+                arc_rows = await conn.fetch("SELECT * FROM story_arcs")
+                for row_dict in arc_rows:
+                    try:
+                        arc = StoryArc.from_dict(dict(row_dict))
+                        self.arcs[arc.arc_id] = arc
+                    except Exception as e_arc:
+                        logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
+
+                # Load relationships
+                rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
+                for row_dict in rel_rows:
+                    event_id = row_dict["event_id"]
+                    arc_id = row_dict["arc_id"]
+                    if event_id not in self.event_arc_map:
+                        self.event_arc_map[event_id] = set()
+                    self.event_arc_map[event_id].add(arc_id)
             logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
-        except Exception as e:
-            logger.error(f"Error loading narrative data from DB using provided connection: {e}", exc_info=True)
-            # Re-raise if data loading is critical and failure should stop initialization
+        except Exception as e: # Catch errors specific to data loading
+            logger.error(f"Error loading narrative data from DB: {e}", exc_info=True)
+            # This error will propagate up to the caller (initialize method) if not caught here,
+            # or you can handle it by setting db_connection_string to None.
+            # For now, let it propagate to be caught by initialize's except blocks.
             raise
     
     async def close(self) -> None:
