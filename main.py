@@ -242,16 +242,17 @@ async def startup_worker_resources(app=None):
     # Use the passed app if provided, otherwise use current_app
     actual_app = app if app is not None else current_app
     
-    # --- 1. Initialize DB Pool ---
-    if not getattr(actual_app, 'db_initialized', False):
-        logger.info(f"Worker {worker_pid}: Initializing DB pool...")
-        if not await initialize_connection_pool(app=actual_app):
-            logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
-            raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
-        actual_app.db_initialized = True
-        logger.info(f"Worker {worker_pid}: DB pool initialized.")
-    else:
-        logger.info(f"Worker {worker_pid}: DB pool already initialized.")
+    # --- 0. Initialize systems first ---
+    if not getattr(actual_app, 'systems_initialized', False):
+        try:
+            logger.info(f"Worker {worker_pid}: Initializing application systems...")
+            await initialize_systems(actual_app)
+            actual_app.systems_initialized = True
+            logger.info(f"Worker {worker_pid}: Application systems initialized.")
+        except Exception as e:
+            logger.error(f"Worker {worker_pid}: Error initializing application systems: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to initialize application systems in worker {worker_pid}.") from e
+    
 
     # --- 2. Initialize Nyx Memory System ---
     if not getattr(current_app, 'nyx_memory_initialized', False):
@@ -496,18 +497,10 @@ def create_quart_app():
     app.nyx_brain_initialized = False
     app.story_director_initialized = False
     
-    # Register startup and shutdown handlers ONLY ONCE - keep these lines
-    app.before_serving(startup_worker_resources)  # FIXED: removed (app)
-    app.after_serving(shutdown_worker_resources)  # FIXED: removed (app)
+    # Register startup and shutdown handlers CORRECTLY
+    app.before_serving(startup_worker_resources)
+    app.after_serving(shutdown_worker_resources)
     
-    # Initialize non-DB components synchronously if needed
-    try:
-        asyncio.run(initialize_systems(app))
-        logger.info("Non-DB application systems initialized. Worker-specific initialization will happen at startup.")
-    except Exception as init_err:
-        logger.critical(f"Non-DB application initialization failed: {init_err}", exc_info=True)
-        raise RuntimeError("Failed to initialize application systems.") from init_err
-
     # 3) Metrics (aioprometheus)
     registry = Registry()
     http_requests = Counter(
