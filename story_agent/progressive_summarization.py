@@ -371,19 +371,11 @@ class ProgressiveNarrativeSummarizer:
         logger.info("ProgressiveNarrativeSummarizer instance created.")
     
     async def initialize(self) -> None:
-        """
-        Initialize the summarizer.
-        Creates necessary DB tables if db_connection_string is set and loads data.
-        It RELIES on the global DB_POOL being initialized by the main application.
-        """
         logger.info("Initializing ProgressiveNarrativeSummarizer...")
-        if self.db_connection_string:  # Check if DB operations should be attempted
+        if self.db_connection_string:
             try:
-                # >>>>> ALL OPERATIONS WITHIN THIS 'try' MUST BE INDENTED <<<<<
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
-                
-                # Operation 1: Create tables
-                async with get_db_connection_context() as conn:
+                async with get_db_connection_context() as conn: # Using app=None by default
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS narrative_events (
                         event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, content TEXT NOT NULL,
@@ -391,6 +383,7 @@ class ProgressiveNarrativeSummarizer:
                         metadata JSONB NOT NULL, summaries JSONB NOT NULL,
                         last_accessed TIMESTAMP NOT NULL, access_count INTEGER NOT NULL
                     );''')
+                    
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS story_arcs (
                         arc_id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
@@ -398,35 +391,37 @@ class ProgressiveNarrativeSummarizer:
                         importance REAL NOT NULL, tags JSONB NOT NULL, event_ids JSONB NOT NULL,
                         summaries JSONB NOT NULL, last_accessed TIMESTAMP NOT NULL, access_count INTEGER NOT NULL
                     );''')
+                    
                     await conn.execute('''
                     CREATE TABLE IF NOT EXISTS event_arc_relationships (
                         event_id TEXT NOT NULL, arc_id TEXT NOT NULL, PRIMARY KEY (event_id, arc_id),
                         FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
                         FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
                     );''')
+                    
                     await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
-                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
                 
-                # Operation 2: Load data (still within the same try block)
-                await self._load_data_from_db()  # This will acquire its own connection internally
+                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
+                await self._load_data_from_db()
 
-            # These except blocks are now correctly associated with the try block above
             except ConnectionError as ce:
-                logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init: {ce}", exc_info=True)
-                self.db_connection_string = None # Degrade gracefully
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
-            except Exception as e: # Catch other errors like asyncpg.PostgresError
-                logger.error(f"ProgressiveNarrativeSummarizer: Error during DB setup or data load: {e}", exc_info=True)
+                logger.error(f"PNS: DB ConnectionError during init: {ce}", exc_info=True)
                 self.db_connection_string = None
-                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+                logger.warning("PNS: Disabling database features due to initialization error.")
+            except asyncpg.PostgresError as pg_err: # Catch asyncpg specific errors
+                logger.error(f"PNS: PostgresError during DB setup or data load: {pg_err}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("PNS: Disabling database features due to DB error.")
+            except Exception as e:
+                logger.error(f"PNS: Unexpected error during DB setup or data load: {e}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("PNS: Disabling database features due to unexpected error.")
         else:
-            logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
+            logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode.")
         
         logger.info("ProgressiveNarrativeSummarizer initialized.")
-
-
     
     async def _load_data_from_db(self) -> None: # Does NOT take 'conn' as argument
         """Load data from database. Acquires its own connection."""
