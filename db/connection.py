@@ -46,16 +46,24 @@ def get_db_dsn() -> str:
     # asyncpg generally works well with standard postgresql:// DSNs
     return dsn
 
-async def initialize_connection_pool(app: Optional[Quart] = None) -> bool: # <<< ADDED app: Optional[Quart] = None
+async def initialize_connection_pool(app: Optional[Quart] = None) -> bool:
     """
     Initializes the global DB_POOL for the current process/event loop.
     If 'app' is provided, the pool is also stored on app.db_pool.
     """
     global DB_POOL
+    
+    # Check if the pool is already initialized and valid
     if DB_POOL is not None and not DB_POOL._closed:
         logger.info(f"DB pool already initialized in process {os.getpid()}.")
         if app and not hasattr(app, 'db_pool'): # Ensure app.db_pool is also set if app is passed now
             app.db_pool = DB_POOL
+        return True
+
+    # Check if app already has a pool
+    if app and hasattr(app, 'db_pool') and app.db_pool is not None and not app.db_pool._closed:
+        logger.info(f"Using existing DB pool from app in process {os.getpid()}.")
+        DB_POOL = app.db_pool
         return True
 
     try:
