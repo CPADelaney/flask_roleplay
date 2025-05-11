@@ -316,6 +316,9 @@ async def shutdown_worker_resources(app=None):
     # Get reference to app
     from quart import current_app
     
+    # Use the passed app if provided, otherwise use current_app
+    actual_app = app if app is not None else current_app
+      
     # 1. Close NyxBrain connections if necessary
     if hasattr(current_app, 'nyx_brain') and current_app.nyx_brain:
         if hasattr(current_app.nyx_brain, 'close_worker_state'):
@@ -493,9 +496,9 @@ def create_quart_app():
     app.nyx_brain_initialized = False
     app.story_director_initialized = False
     
-    # Register startup and shutdown handlers ONCE
-    app.before_serving(startup_worker_resources(app))
-    app.after_serving(shutdown_worker_resources(app))
+    # Register startup and shutdown handlers ONLY ONCE - keep these lines
+    app.before_serving(startup_worker_resources)  # FIXED: removed (app)
+    app.after_serving(shutdown_worker_resources)  # FIXED: removed (app)
     
     # Initialize non-DB components synchronously if needed
     try:
@@ -694,8 +697,6 @@ def create_quart_app():
     # --- Run Async Initializations ---
     # Run the async setup tasks AFTER the main app config but before returning app
     # This uses asyncio.run, which is okay here as it's during initial setup phase.
-    app.before_serving(startup_worker_resources)
-    app.after_serving(shutdown_worker_resources)
     
     # Initialize non-DB components synchronously if needed
     try:
