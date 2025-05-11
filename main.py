@@ -230,154 +230,110 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
-async def initialize_systems(app: Quart): # Type hint for 'app'
+async def initialize_systems(app: Quart):
     """
-    Initialize non-DB-pool systems required for the application.
-    The DB_POOL is initialized separately by each worker via @app.before_serving.
+    Initialize non-DB-pool and non-Nyx-Memory systems.
+    These are application-level singletons or configurations.
+    DB_POOL and Nyx Memory System are initialized by each worker via @app.before_serving.
     """
-    logger.info("Starting application systems initialization (DB Pool handled by app lifecycle events)...")
+    logger.info("Main App: Starting application systems initialization (DB Pool & Nyx Memory handled by worker lifecycle)...")
     
-    # Make sure NyxBrain and set_app_initialized are correctly imported or defined
-    # This often requires careful management of import order or circular dependencies.
-    # For now, assuming they can be imported here:
+    # Try-except for critical module imports needed by this function
     try:
         from nyx.core.brain.base import NyxBrain
-    except ImportError:
-        logger.error("Failed to import NyxBrain in initialize_systems. Check circular dependencies or path.")
-        NyxBrain = None # Fallback
+        from mcp_orchestrator import MCPOrchestrator
+        # from logic.nyx_enhancements_integration import initialize_nyx_memory_system # MOVED TO before_serving
+        from logic.aggregator_sdk import init_singletons
+        from story_agent.story_director_agent import initialize_story_director, register_with_governance
+        from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+        from tasks import set_app_initialized # Ensure this exists
+        global background_chat_task # Make sure background_chat_task is accessible
+    except ImportError as e:
+        logger.critical(f"Main App: Import failed in initialize_systems: {e}", exc_info=True)
+        raise RuntimeError(f"Module import failed during system initialization: {e}") from e
 
-    try:
-        from tasks import set_app_initialized
-    except ImportError:
-        logger.error("Failed to import set_app_initialized from tasks. Check path.")
-        def set_app_initialized(): logger.warning("set_app_initialized (dummy): Real function not found.")
+    logger.warning("Main App: Skipping DB schema/seed/migration checks in app startup. Run these manually.")
 
-
-    # --- Database Schema/Seed Warning ---
-    # Your existing warning about manual schema/seed is good.
-    logger.warning("Skipping DB schema/seed/migration checks in app startup. Run these manually/via deployment script.")
-
-    # --- REMOVED: DB Pool Initialization ---
-    # The following block is removed because DB_POOL is now initialized
-    # by each worker process in the `@app.before_serving` handler.
-    # ---
-    # if not await initialize_connection_pool(): # NO LONGER CALLED HERE
-    #     raise RuntimeError("Database pool initialization failed")
-    # else:
-    #     logger.info("Database connection pool initialized successfully.")
-    #
-    # async def cleanup_pool_on_exit():
-    #     logger.info("Running async pool cleanup...")
-    #     await close_connection_pool()
-    # def run_async_cleanup():
-    #     try: asyncio.run(cleanup_pool_on_exit())
-    #     except RuntimeError as e: logger.warning(f"Could not run async cleanup in atexit: {e}")
-    # atexit.register(run_async_cleanup) # atexit for DB pool is also handled by @app.after_serving
-    # logger.info("Registered async pool cleanup with atexit (best effort).")
-    # --- END OF REMOVED DB POOL BLOCK ---
-
-
-    # --- Initialize Nyx Memory System ---
-    try:
-        # Ensure initialize_nyx_memory_system can function correctly without a pre-initialized global DB_POOL
-        # or if it uses get_db_connection_context, that will now work as the pool will be set up by the worker.
-        from logic.nyx_enhancements_integration import initialize_nyx_memory_system # Moved import closer to usage
-        await initialize_nyx_memory_system()
-        logger.info("Nyx memory system initialized successfully.")
-    except Exception as e:
-        logger.error(f"Error initializing Nyx Memory System: {e}", exc_info=True)
-        # Decide if this is a fatal error
-
-    # --- Initialize Global NyxBrain Instance ---
-    # Your existing NyxBrain initialization logic seems fine.
-    # It will be stored on `app.nyx_brain`.
-    # `NyxBrain.get_instance` might internally use `get_db_connection_context`
-    # which will now correctly get the worker-specific pool.
-    logger.info("Attempting to initialize NyxBrain...")
-    if NyxBrain and hasattr(NyxBrain, "get_instance"):
+    # --- NyxBrain Instance ---
+    if hasattr(NyxBrain, "get_instance"):
         try:
-            system_user_id = 0; system_conversation_id = 0 # Example IDs
+            system_user_id = 0; system_conversation_id = 0
             app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-            logger.info("Global NyxBrain instance obtained/initialized.")
+            logger.info("Main App: NyxBrain instance obtained/initialized.")
             if app.nyx_brain:
                 await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-                # Your print statements for debugging NyxBrain can be kept or removed
-                # print(">>> NyxBrain module:", NyxBrain.__module__) ...
-                
-                # Register processors if nyx_brain was successfully initialized
-                from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-                # Assuming background_chat_task is defined or imported
-                global background_chat_task # Make sure it's in scope or imported
                 app.nyx_brain.response_processors = {
                     "default": background_chat_task,
                     "openai": process_user_input_with_openai,
                     "base": process_user_input
                 }
-                logger.info("Response processors registered with NyxBrain.")
+                logger.info("Main App: Response processors registered.")
         except Exception as e:
-            logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
-            app.nyx_brain = None # Ensure it's None on failure
+            logger.error(f"Main App: Error initializing NyxBrain: {e}", exc_info=True)
+            app.nyx_brain = None
     else:
-        logger.warning("NyxBrain or NyxBrain.get_instance not available. Skipping NyxBrain initialization.")
+        logger.warning("Main App: NyxBrain.get_instance not available.")
         app.nyx_brain = None
 
-
-    # --- Initialize MCP orchestrator ---
+    # --- MCP orchestrator ---
     try:
-        # Assuming MCPOrchestrator is imported or defined
-        from mcp_orchestrator import MCPOrchestrator # Moved import closer
         app.mcp_orchestrator = MCPOrchestrator()
         await app.mcp_orchestrator.initialize()
-        logger.info("MCP orchestrator initialized.")
+        logger.info("Main App: MCP orchestrator initialized.")
     except Exception as e:
-        logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
-        app.mcp_orchestrator = None # Ensure it's None on failure
+        logger.error(f"Main App: Error initializing MCP Orchestrator: {e}", exc_info=True)
+        app.mcp_orchestrator = None
 
-
+    # --- Admin config ---
     admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
     try:
         app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
     except ValueError:
-        logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1].")
+        logger.error(f"Main App: Invalid ADMIN_USER_IDS: '{admin_ids_str}'. Defaulting to [1].")
         app.config['ADMIN_USER_IDS'] = [1]
-    logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
+    logger.info(f"Main App: Admin User IDs: {app.config['ADMIN_USER_IDS']}")
 
-    logger.info("All asynchronous system initializations completed.")
-
+    # --- Aggregator SDK ---
     try:
-        from logic.aggregator_sdk import init_singletons # Moved import closer
         await init_singletons()
-        logger.info("Aggregator SDK singletons initialized.")
+        logger.info("Main App: Aggregator SDK singletons initialized.")
     except Exception as e:
-        logger.error(f"Error initializing Aggregator SDK singletons: {e}", exc_info=True)
+        logger.error(f"Main App: Error initializing Aggregator SDK: {e}", exc_info=True)
 
+    # --- StoryDirector ---
     try:
-        from story_agent.story_director_agent import initialize_story_director, register_with_governance # Moved
-        story_user_id = 1; story_conversation_id = 1 # Example IDs
+        story_user_id = 1; story_conversation_id = 1
         await initialize_story_director(story_user_id, story_conversation_id)
         await register_with_governance(story_user_id, story_conversation_id)
-        logger.info("StoryDirector initialized and registered.")
+        logger.info("Main App: StoryDirector initialized and registered.")
     except Exception as e:
-        logger.error(f"Error initializing StoryDirector: {e}", exc_info=True)
+        logger.error(f"Main App: Error initializing StoryDirector: {e}", exc_info=True)
 
-    logger.info("Attempting to initialize aioredis pools...")
+    # --- aioredis Pools (initialized once for the app, shared by workers if designed so) ---
+    logger.info("Main App: Attempting to initialize aioredis pools...")
     try:
         redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
         if redis_url:
-            app.aioredis_rate_limit_pool = await aioredis.from_url(redis_url, decode_responses=True)
+            app.aioredis_rate_limit_pool = await asyncio.wait_for(
+                aioredis.from_url(redis_url, decode_responses=True, socket_connect_timeout=5, socket_timeout=5),
+                timeout=10
+            )
             await app.aioredis_rate_limit_pool.ping()
-            logger.info("aioredis pool for Rate Limiter initialized.")
-            app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Share pool
-            logger.info("aioredis pool for IP Block List configured.")
+            logger.info("Main App: aioredis pool for Rate Limiter initialized.")
+            app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool
+            logger.info("Main App: aioredis pool for IP Block List configured (shared).")
         else:
-            logger.warning("REDIS_URL not configured. Distributed rate limiting/IP blocking will use local fallback.")
+            logger.warning("Main App: REDIS_URL not configured. Distributed features fallback.")
             app.aioredis_rate_limit_pool = None; app.aioredis_ip_block_pool = None
-    except Exception as e: # Catch broad exception for Redis init
-        logger.error(f"Failed to initialize aioredis pools: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Main App: Failed to initialize aioredis pools: {e}", exc_info=True)
         app.aioredis_rate_limit_pool = None; app.aioredis_ip_block_pool = None
 
-    logger.info("All non-DB-pool asynchronous system initializations completed.")
-    set_app_initialized() # Signal that app setup (sans per-worker DB pool) is done
+    logger.info("Main App: All non-DB-pool, non-Nyx-Memory systems initializations completed.")
+    try:
+        set_app_initialized()
+    except NameError:
+         logger.warning("Main App: set_app_initialized not found/called.")
 
 ###############################################################################
 # quart APP CREATION
@@ -522,18 +478,30 @@ def create_quart_app():
         logger.info(f"Worker {os.getpid()}: Database pool closed.")
 
     @app.before_serving
-    async def startup_db_pool_for_worker():
-        logger.info(f"Worker {os.getpid()}: Initializing DB pool (before_serving).")
-        if not await initialize_connection_pool(app=app): # Pass app if it sets app.db_pool
-            logger.critical(f"Worker {os.getpid()}: DB pool FAILED to initialize.")
-            raise RuntimeError("DB Pool failed to initialize in worker.")
-        logger.info(f"Worker {os.getpid()}: DB pool initialized successfully.")
+    async def startup_worker_resources(): # SINGLE before_serving for worker resources
+        worker_pid = os.getpid()
+        logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
+        if not await initialize_connection_pool(app=app):
+            logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
+            raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
+        logger.info(f"Worker {worker_pid}: DB pool initialized.")
+        try:
+            from logic.nyx_enhancements_integration import initialize_nyx_memory_system
+            logger.info(f"Worker {worker_pid}: Initializing Nyx Memory System...")
+            await initialize_nyx_memory_system()
+            logger.info(f"Worker {worker_pid}: Nyx Memory System initialized.")
+        except Exception as e:
+            logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
+            # Optionally raise to stop worker if Nyx Memory is critical
 
     @app.after_serving
-    async def shutdown_db_pool_for_worker():
-        logger.info(f"Worker {os.getpid()}: Closing DB pool (after_serving).")
-        await close_connection_pool(app=app) # Pass app if it uses app.db_pool
-        logger.info(f"Worker {os.getpid()}: DB pool closed.")
+    async def shutdown_worker_resources(): # SINGLE after_serving for worker resources
+        worker_pid = os.getpid()
+        logger.info(f"Worker {worker_pid}: Closing resources (after_serving).")
+        # Add Nyx Memory System shutdown if it exists
+        await close_connection_pool(app=app)
+        logger.info(f"Worker {worker_pid}: DB pool closed.")
+
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # +++ FULL VERSION OF REDIS POOL SHUTDOWN LOGIC                      +++
