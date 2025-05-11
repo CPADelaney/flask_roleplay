@@ -378,78 +378,49 @@ class ProgressiveNarrativeSummarizer:
         """
         logger.info("Initializing ProgressiveNarrativeSummarizer...")
         if self.db_connection_string:  # Check if DB operations should be attempted
-            db_setup_successful = False
             try:
+                # >>>>> ALL OPERATIONS WITHIN THIS 'try' MUST BE INDENTED <<<<<
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables exist...")
-                # Use a single connection for all setup DB operations
-            async with get_db_connection_context() as conn:
-                await conn.execute('''
-                CREATE TABLE IF NOT EXISTS narrative_events (
-                    event_id TEXT PRIMARY KEY,
-                    event_type TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TIMESTAMP NOT NULL,
-                    importance REAL NOT NULL,
-                    tags JSONB NOT NULL,
-                    metadata JSONB NOT NULL,
-                    summaries JSONB NOT NULL,
-                    last_accessed TIMESTAMP NOT NULL,
-                    access_count INTEGER NOT NULL
-                );
                 
-                CREATE TABLE IF NOT EXISTS story_arcs (
-                    arc_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    start_date TIMESTAMP NOT NULL,
-                    end_date TIMESTAMP,
-                    status TEXT NOT NULL,
-                    importance REAL NOT NULL,
-                    tags JSONB NOT NULL,
-                    event_ids JSONB NOT NULL,
-                    summaries JSONB NOT NULL,
-                    last_accessed TIMESTAMP NOT NULL,
-                    access_count INTEGER NOT NULL
-                );
-                
-                CREATE TABLE IF NOT EXISTS event_arc_relationships (
-                    event_id TEXT NOT NULL,
-                    arc_id TEXT NOT NULL,
-                    PRIMARY KEY (event_id, arc_id),
-                    FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
-                    FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);
-                CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);
-                CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);
-                ''')
+                # Operation 1: Create tables
+                async with get_db_connection_context() as conn:
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS narrative_events (
+                        event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, content TEXT NOT NULL,
+                        timestamp TIMESTAMP NOT NULL, importance REAL NOT NULL, tags JSONB NOT NULL,
+                        metadata JSONB NOT NULL, summaries JSONB NOT NULL,
+                        last_accessed TIMESTAMP NOT NULL, access_count INTEGER NOT NULL
+                    );''')
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS story_arcs (
+                        arc_id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
+                        start_date TIMESTAMP NOT NULL, end_date TIMESTAMP, status TEXT NOT NULL,
+                        importance REAL NOT NULL, tags JSONB NOT NULL, event_ids JSONB NOT NULL,
+                        summaries JSONB NOT NULL, last_accessed TIMESTAMP NOT NULL, access_count INTEGER NOT NULL
+                    );''')
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS event_arc_relationships (
+                        event_id TEXT NOT NULL, arc_id TEXT NOT NULL, PRIMARY KEY (event_id, arc_id),
+                        FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
+                        FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
+                    );''')
+                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
                 logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
-                db_setup_successful = True # Mark table setup as successful
+                
+                # Operation 2: Load data (still within the same try block)
+                await self._load_data_from_db()  # This will acquire its own connection internally
 
+            # These except blocks are now correctly associated with the try block above
             except ConnectionError as ce:
-                logger.error(f"PNS: DB ConnectionError during table creation: {ce}", exc_info=True)
-                self.db_connection_string = None # Disable further DB ops
-                logger.warning("PNS: Disabling database features due to table creation error.")
-            except Exception as e:
-                logger.error(f"PNS: Error during DB table creation: {e}", exc_info=True)
+                logger.error(f"ProgressiveNarrativeSummarizer: DB ConnectionError during init: {ce}", exc_info=True)
+                self.db_connection_string = None # Degrade gracefully
+                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
+            except Exception as e: # Catch other errors like asyncpg.PostgresError
+                logger.error(f"ProgressiveNarrativeSummarizer: Error during DB setup or data load: {e}", exc_info=True)
                 self.db_connection_string = None
-                logger.warning("PNS: Disabling database features due to table creation error.")
-
-            # Only attempt to load data if table setup was (or seemed) successful AND db is still enabled
-            if db_setup_successful and self.db_connection_string:
-                try:
-                    await self._load_data_from_db()  # Load existing data
-                except ConnectionError as ce:
-                    logger.error(f"PNS: DB ConnectionError during data load: {ce}", exc_info=True)
-                    self.db_connection_string = None
-                    logger.warning("PNS: Disabling database features due to data load error.")
-                except Exception as e:
-                    logger.error(f"PNS: Error during data load: {e}", exc_info=True)
-                    self.db_connection_string = None
-                    logger.warning("PNS: Disabling database features due to data load error.")
-        
-        # This 'else' correctly corresponds to 'if self.db_connection_string:'
+                logger.warning("ProgressiveNarrativeSummarizer: Disabling database features due to initialization error.")
         else:
             logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode (no db_connection_string).")
         
