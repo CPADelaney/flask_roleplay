@@ -455,6 +455,7 @@ class ProgressiveNarrativeSummarizer:
         
         logger.info("ProgressiveNarrativeSummarizer initialized.")
 
+
     
     async def _load_data_from_db(self) -> None: # Does NOT take 'conn' as argument
         """Load data from database. Acquires its own connection."""
