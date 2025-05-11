@@ -258,9 +258,20 @@ async def initialize_systems(app: Quart):
     if hasattr(NyxBrain, "get_instance"):
         try:
             system_user_id = 0; system_conversation_id = 0
+            # NyxBrain.get_instance should NOT use the global DB_POOL from db.connection directly
+            # if it's meant to be used by workers later.
+            # It could take a DSN and create its own internal pool for setup if needed,
+            # or its DB-dependent parts should be initialized per-worker.
+            # For now, let's assume get_instance is mostly about object creation.
             app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-            logger.info("Main App: NyxBrain instance obtained/initialized.")
+            logger.info("Main App: NyxBrain instance object created.")
+
+            # Defer DB-dependent parts of NyxBrain init to workers if possible.
+            # If restore_entity_from_distributed_checkpoints needs DB, it should be in before_serving.
+            # For now, if it runs here, it uses the asyncio.run() temp pool.
             if app.nyx_brain:
+                logger.info("Main App: NyxBrain - running restore_entity_from_distributed_checkpoints...")
+                # This will use the temporary pool created by get_db_connection_context's lazy init
                 await app.nyx_brain.restore_entity_from_distributed_checkpoints()
                 app.nyx_brain.response_processors = {
                     "default": background_chat_task,
@@ -506,6 +517,12 @@ def create_quart_app():
         except Exception as e:
             logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
             # Optionally raise to stop worker
+
+        if hasattr(app, 'nyx_brain') and app.nyx_brain:
+            if hasattr(app.nyx_brain, 'initialize_worker_state'):
+                logger.info(f"Worker {os.getpid()}: Initializing NyxBrain worker state...")
+                # Pass the worker's pool or let it use get_db_connection_context(app=current_app)
+                await app.nyx_brain.initialize_worker_state(db_pool=current_app.db_pool) # Example
 
 
     @app.after_serving
