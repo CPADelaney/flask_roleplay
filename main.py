@@ -230,7 +230,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
-@app.before_serving
+
 async def startup_worker_resources():
     """Initialize resources for each worker, with duplicate initialization protection."""
     worker_pid = os.getpid()
@@ -304,7 +304,7 @@ async def startup_worker_resources():
         logger.error(f"Worker {worker_pid}: Error setting app initialized status: {e}", exc_info=True)
 
 
-@app.after_serving
+
 async def shutdown_worker_resources():
     """Clean up resources for each worker."""
     worker_pid = os.getpid()
@@ -491,8 +491,8 @@ def create_quart_app():
     app.story_director_initialized = False
     
     # Register startup and shutdown handlers ONCE
-    app.before_serving(startup_worker_resources)
-    app.after_serving(shutdown_worker_resources)
+    app.before_serving(lambda: startup_worker_resources(app))
+    app.after_serving(lambda: shutdown_worker_resources(app))
     
     # Initialize non-DB components synchronously if needed
     try:
