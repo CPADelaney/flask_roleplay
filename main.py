@@ -366,6 +366,24 @@ def create_quart_app():
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
 
+    # IMPORTANT: Create and set initialization tracking flags
+    app.db_initialized = False
+    app.nyx_memory_initialized = False
+    app.nyx_brain_initialized = False
+    app.story_director_initialized = False
+    
+    # Register startup and shutdown handlers ONCE
+    app.before_serving(startup_worker_resources)
+    app.after_serving(shutdown_worker_resources)
+    
+    # Initialize non-DB components synchronously if needed
+    try:
+        asyncio.run(initialize_systems(app))
+        logger.info("Non-DB application systems initialized. Worker-specific initialization will happen at startup.")
+    except Exception as init_err:
+        logger.critical(f"Non-DB application initialization failed: {init_err}", exc_info=True)
+        raise RuntimeError("Failed to initialize application systems.") from init_err
+
     # 3) Metrics (aioprometheus)
     registry = Registry()
     http_requests = Counter(
@@ -487,65 +505,73 @@ def create_quart_app():
             # raise RuntimeError("DB Pool failed to initialize in worker.")
         else:
             logger.info(f"Worker {os.getpid()}: Database pool initialized successfully.")
-
-    @app.after_serving
-    async def shutdown_db_pool():
-        """Close DB_POOL for this worker process."""
-        logger.info(f"Worker {os.getpid()}: Closing database connection pool (after_serving).")
-        await close_connection_pool(app=app) # Pass app if close_connection_pool uses it
-        logger.info(f"Worker {os.getpid()}: Database pool closed.")
-
+    
     @app.before_serving
     async def startup_worker_resources():
-        """Initialize resources for each worker, including DB pool and Nyx Memory."""
+        """Initialize resources for each worker, with duplicate initialization protection."""
         worker_pid = os.getpid()
         logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
     
-        # 1. Initialize DB Pool for this worker
-        if not await initialize_connection_pool(app=app):
-            logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
-            raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
-        logger.info(f"Worker {worker_pid}: DB pool initialized.")
+        # Get reference to app
+        from quart import current_app
+        
+        # --- 1. Initialize DB Pool ---
+        if not getattr(current_app, 'db_initialized', False):
+            logger.info(f"Worker {worker_pid}: Initializing DB pool...")
+            if not await initialize_connection_pool(app=current_app):
+                logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
+                raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
+            current_app.db_initialized = True
+            logger.info(f"Worker {worker_pid}: DB pool initialized.")
+        else:
+            logger.info(f"Worker {worker_pid}: DB pool already initialized.")
     
-        # 2. Initialize Nyx Memory System for this worker (now that DB_POOL is ready)
-        try:
-            from logic.nyx_enhancements_integration import initialize_nyx_memory_system
-            logger.info(f"Worker {worker_pid}: Initializing Nyx Memory System...")
-            await initialize_nyx_memory_system()
-            logger.info(f"Worker {worker_pid}: Nyx Memory System initialized.")
-        except Exception as e:
-            logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
-            # Optionally raise to stop worker
+        # --- 2. Initialize Nyx Memory System ---
+        if not getattr(current_app, 'nyx_memory_initialized', False):
+            try:
+                from logic.nyx_enhancements_integration import initialize_nyx_memory_system
+                logger.info(f"Worker {worker_pid}: Initializing Nyx Memory System...")
+                await initialize_nyx_memory_system()
+                current_app.nyx_memory_initialized = True
+                logger.info(f"Worker {worker_pid}: Nyx Memory System initialized.")
+            except Exception as e:
+                logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
+        else:
+            logger.info(f"Worker {worker_pid}: Nyx Memory System already initialized.")
     
-        # 3. Now initialize NyxBrain DB-dependent parts
-        if hasattr(app, 'nyx_brain') and app.nyx_brain:
-            # Perform DB-dependent initialization
+        # --- 3. Initialize NyxBrain DB-dependent parts ---
+        if hasattr(current_app, 'nyx_brain') and current_app.nyx_brain and not getattr(current_app, 'nyx_brain_initialized', False):
             logger.info(f"Worker {worker_pid}: Running NyxBrain DB-dependent initialization...")
             try:
                 # Run checkpoints restoration now that we have DB access
-                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-                logger.info(f"Worker {worker_pid}: NyxBrain checkpoints restored.")
+                await current_app.nyx_brain.restore_entity_from_distributed_checkpoints()
                 
                 # Initialize any worker-specific state
-                if hasattr(app.nyx_brain, 'initialize_worker_state'):
-                    logger.info(f"Worker {worker_pid}: Initializing NyxBrain worker state...")
-                    # Pass the worker's pool or let it use get_db_connection_context(app=current_app)
-                    await app.nyx_brain.initialize_worker_state(db_pool=current_app.db_pool)
+                if hasattr(current_app.nyx_brain, 'initialize_worker_state'):
+                    await current_app.nyx_brain.initialize_worker_state(db_pool=current_app.db_pool)
+                    
+                current_app.nyx_brain_initialized = True
+                logger.info(f"Worker {worker_pid}: NyxBrain checkpoints restored.")
             except Exception as nyx_e:
                 logger.error(f"Worker {worker_pid}: Error in NyxBrain DB initialization: {nyx_e}", exc_info=True)
-                # Consider whether to raise or continue with partial initialization
+        elif hasattr(current_app, 'nyx_brain') and current_app.nyx_brain:
+            logger.info(f"Worker {worker_pid}: NyxBrain already initialized.")
     
-        # 4. Register with governance systems (now that DB is available)
-        try:
-            from story_agent.story_director_agent import register_with_governance
-            story_user_id = 1; story_conversation_id = 1
-            logger.info(f"Worker {worker_pid}: Registering StoryDirector with governance...")
-            await register_with_governance(story_user_id, story_conversation_id)
-            logger.info(f"Worker {worker_pid}: StoryDirector registered with governance.")
-        except Exception as e:
-            logger.error(f"Worker {worker_pid}: Error registering StoryDirector: {e}", exc_info=True)
+        # --- 4. Register with governance systems ---
+        if not getattr(current_app, 'story_director_initialized', False):
+            try:
+                from story_agent.story_director_agent import register_with_governance
+                story_user_id = 1; story_conversation_id = 1
+                logger.info(f"Worker {worker_pid}: Registering StoryDirector with governance...")
+                await register_with_governance(story_user_id, story_conversation_id)
+                current_app.story_director_initialized = True
+                logger.info(f"Worker {worker_pid}: StoryDirector registered with governance.")
+            except Exception as e:
+                logger.error(f"Worker {worker_pid}: Error registering StoryDirector: {e}", exc_info=True)
+        else:
+            logger.info(f"Worker {worker_pid}: StoryDirector already initialized.")
     
-        # 5. Signal Celery tasks that the app is ready
+        # --- 5. Signal Celery tasks that the app is ready ---
         try:
             from tasks import set_app_initialized
             set_app_initialized()
@@ -555,12 +581,46 @@ def create_quart_app():
 
 
     @app.after_serving
-    async def shutdown_worker_resources(): # Consolidated handler
+    async def shutdown_worker_resources():
+        """Clean up resources for each worker."""
         worker_pid = os.getpid()
         logger.info(f"Worker {worker_pid}: Closing resources (after_serving).")
-        # Add Nyx Memory System shutdown if it has one (e.g., await app.nyx_memory.close())
-        await close_connection_pool(app=app) # Pass app
-        logger.info(f"Worker {worker_pid}: DB pool closed.")
+        
+        # Get reference to app
+        from quart import current_app
+        
+        # 1. Close NyxBrain connections if necessary
+        if hasattr(current_app, 'nyx_brain') and current_app.nyx_brain:
+            if hasattr(current_app.nyx_brain, 'close_worker_state'):
+                try:
+                    logger.info(f"Worker {worker_pid}: Closing NyxBrain worker state...")
+                    await current_app.nyx_brain.close_worker_state()
+                except Exception as e:
+                    logger.error(f"Worker {worker_pid}: Error closing NyxBrain worker state: {e}", exc_info=True)
+        
+        # 2. Close Nyx Memory System if it has a shutdown method
+        try:
+            from logic.nyx_enhancements_integration import shutdown_nyx_memory_system
+            if callable(shutdown_nyx_memory_system):
+                logger.info(f"Worker {worker_pid}: Shutting down Nyx Memory System...")
+                await shutdown_nyx_memory_system()
+        except (ImportError, AttributeError):
+            # Function may not exist, so this is not necessarily an error
+            pass
+        except Exception as e:
+            logger.error(f"Worker {worker_pid}: Error shutting down Nyx Memory System: {e}", exc_info=True)
+        
+        # 3. Close the DB pool and reset initialization flags
+        logger.info(f"Worker {worker_pid}: Closing database connection pool...")
+        await close_connection_pool(app=current_app)
+        
+        # Reset initialization flags for potentially reused workers
+        current_app.db_initialized = False
+        current_app.nyx_memory_initialized = False
+        current_app.nyx_brain_initialized = False
+        current_app.story_director_initialized = False
+        
+        logger.info(f"Worker {worker_pid}: DB pool closed and initialization flags reset.")
 
 
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
