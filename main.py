@@ -266,13 +266,9 @@ async def initialize_systems(app: Quart):
             app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
             logger.info("Main App: NyxBrain instance object created.")
 
-            # Defer DB-dependent parts of NyxBrain init to workers if possible.
-            # If restore_entity_from_distributed_checkpoints needs DB, it should be in before_serving.
-            # For now, if it runs here, it uses the asyncio.run() temp pool.
+            # IMPORTANT: DEFER DB-dependent parts of NyxBrain to worker initialization
+            # Don't call restore_entity_from_distributed_checkpoints here!
             if app.nyx_brain:
-                logger.info("Main App: NyxBrain - running restore_entity_from_distributed_checkpoints...")
-                # This will use the temporary pool created by get_db_connection_context's lazy init
-                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
                 app.nyx_brain.response_processors = {
                     "default": background_chat_task,
                     "openai": process_user_input_with_openai,
@@ -313,10 +309,12 @@ async def initialize_systems(app: Quart):
 
     # --- StoryDirector ---
     try:
+        # IMPORTANT: Don't initialize with DB access here - just set up the basic objects
+        # The actual DB operations will happen during worker startup
         story_user_id = 1; story_conversation_id = 1
         await initialize_story_director(story_user_id, story_conversation_id)
-        await register_with_governance(story_user_id, story_conversation_id)
-        logger.info("Main App: StoryDirector initialized and registered.")
+        # DEFER this to worker startup: await register_with_governance(story_user_id, story_conversation_id)
+        logger.info("Main App: StoryDirector objects initialized. Registration deferred to workers.")
     except Exception as e:
         logger.error(f"Main App: Error initializing StoryDirector: {e}", exc_info=True)
 
@@ -498,16 +496,17 @@ def create_quart_app():
         logger.info(f"Worker {os.getpid()}: Database pool closed.")
 
     @app.before_serving
-    async def startup_worker_resources(): # Consolidated handler
+    async def startup_worker_resources():
+        """Initialize resources for each worker, including DB pool and Nyx Memory."""
         worker_pid = os.getpid()
         logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
-
+    
         # 1. Initialize DB Pool for this worker
-        if not await initialize_connection_pool(app=app): # Pass app
+        if not await initialize_connection_pool(app=app):
             logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
             raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
         logger.info(f"Worker {worker_pid}: DB pool initialized.")
-
+    
         # 2. Initialize Nyx Memory System for this worker (now that DB_POOL is ready)
         try:
             from logic.nyx_enhancements_integration import initialize_nyx_memory_system
@@ -517,12 +516,42 @@ def create_quart_app():
         except Exception as e:
             logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
             # Optionally raise to stop worker
-
+    
+        # 3. Now initialize NyxBrain DB-dependent parts
         if hasattr(app, 'nyx_brain') and app.nyx_brain:
-            if hasattr(app.nyx_brain, 'initialize_worker_state'):
-                logger.info(f"Worker {os.getpid()}: Initializing NyxBrain worker state...")
-                # Pass the worker's pool or let it use get_db_connection_context(app=current_app)
-                await app.nyx_brain.initialize_worker_state(db_pool=current_app.db_pool) # Example
+            # Perform DB-dependent initialization
+            logger.info(f"Worker {worker_pid}: Running NyxBrain DB-dependent initialization...")
+            try:
+                # Run checkpoints restoration now that we have DB access
+                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+                logger.info(f"Worker {worker_pid}: NyxBrain checkpoints restored.")
+                
+                # Initialize any worker-specific state
+                if hasattr(app.nyx_brain, 'initialize_worker_state'):
+                    logger.info(f"Worker {worker_pid}: Initializing NyxBrain worker state...")
+                    # Pass the worker's pool or let it use get_db_connection_context(app=current_app)
+                    await app.nyx_brain.initialize_worker_state(db_pool=current_app.db_pool)
+            except Exception as nyx_e:
+                logger.error(f"Worker {worker_pid}: Error in NyxBrain DB initialization: {nyx_e}", exc_info=True)
+                # Consider whether to raise or continue with partial initialization
+    
+        # 4. Register with governance systems (now that DB is available)
+        try:
+            from story_agent.story_director_agent import register_with_governance
+            story_user_id = 1; story_conversation_id = 1
+            logger.info(f"Worker {worker_pid}: Registering StoryDirector with governance...")
+            await register_with_governance(story_user_id, story_conversation_id)
+            logger.info(f"Worker {worker_pid}: StoryDirector registered with governance.")
+        except Exception as e:
+            logger.error(f"Worker {worker_pid}: Error registering StoryDirector: {e}", exc_info=True)
+    
+        # 5. Signal Celery tasks that the app is ready
+        try:
+            from tasks import set_app_initialized
+            set_app_initialized()
+            logger.info(f"Worker {worker_pid}: Set app initialized status for Celery tasks.")
+        except Exception as e:
+            logger.error(f"Worker {worker_pid}: Error setting app initialized status: {e}", exc_info=True)
 
 
     @app.after_serving
@@ -598,13 +627,15 @@ def create_quart_app():
     # --- Run Async Initializations ---
     # Run the async setup tasks AFTER the main app config but before returning app
     # This uses asyncio.run, which is okay here as it's during initial setup phase.
+    app.before_serving(startup_worker_resources)
+    app.after_serving(shutdown_worker_resources)
+    
+    # Initialize non-DB components synchronously if needed
     try:
-        # Use asyncio.run() to execute the async initializer function
-        # This is acceptable here during the synchronous app creation phase.
         asyncio.run(initialize_systems(app))
+        logger.info("Non-DB application systems initialized. Worker-specific initialization will happen at startup.")
     except Exception as init_err:
-        logger.critical(f"Application initialization failed: {init_err}", exc_info=True)
-        # Exit or raise prevents the app from being returned in a broken state
+        logger.critical(f"Non-DB application initialization failed: {init_err}", exc_info=True)
         raise RuntimeError("Failed to initialize application systems.") from init_err
     logger.info("Async initializations complete. quart app creation finished.")
 
