@@ -5,6 +5,7 @@ import logging
 import asyncio
 import asyncpg # Use asyncpg
 from contextlib import asynccontextmanager
+from quart import Quart 
 from typing import Optional
 
 # Configure logging
@@ -45,52 +46,41 @@ def get_db_dsn() -> str:
     # asyncpg generally works well with standard postgresql:// DSNs
     return dsn
 
-async def initialize_connection_pool():
+async def initialize_connection_pool(app: Optional[Quart] = None) -> bool: # <<< ADDED app: Optional[Quart] = None
     """
-    Asynchronously initialize the asyncpg database connection pool.
-    Should be awaited during application startup (e.g., in initialize_systems).
-
-    Returns:
-        bool: True if successful or already initialized, False otherwise.
+    Initializes the global DB_POOL for the current process/event loop.
+    If 'app' is provided, the pool is also stored on app.db_pool.
     """
     global DB_POOL
-
-    # Skip if already initialized
     if DB_POOL is not None and not DB_POOL._closed:
-        logger.info("Database connection pool already initialized.")
+        logger.info(f"DB pool already initialized in process {os.getpid()}.")
+        if app and not hasattr(app, 'db_pool'): # Ensure app.db_pool is also set if app is passed now
+            app.db_pool = DB_POOL
         return True
 
     try:
-        dsn = get_db_dsn() # Get DSN, raises error if not set
-        min_connections = int(os.getenv("DB_POOL_MIN_SIZE", DEFAULT_MIN_CONNECTIONS))
-        max_connections = int(os.getenv("DB_POOL_MAX_SIZE", DEFAULT_MAX_CONNECTIONS))
+        dsn = get_db_dsn()
+        min_s = int(os.getenv("DB_POOL_MIN_SIZE", DEFAULT_MIN_CONNECTIONS))
+        max_s = int(os.getenv("DB_POOL_MAX_SIZE", DEFAULT_MAX_CONNECTIONS))
 
-        logger.info(f"Initializing asyncpg connection pool (min={min_connections}, max={max_connections})...")
-        # Create the connection pool using asyncpg
-        DB_POOL = await asyncpg.create_pool(
-            dsn=dsn,
-            min_size=min_connections,
-            max_size=max_connections,
-            statement_cache_size=0,
-            # command_timeout=60, # Optional: Set a default command timeout
-            # Add setup/init functions if needed:
-            # init=async def init(conn): logger.info(f"Pool init connection {id(conn)}")
+        logger.info(f"Process {os.getpid()}: Initializing asyncpg pool (min={min_s}, max={max_s})...")
+        local_pool = await asyncpg.create_pool(
+            dsn=dsn, min_size=min_s, max_size=max_s, statement_cache_size=0
         )
-
-        # Test connection (optional but recommended)
-        async with DB_POOL.acquire() as conn:
+        async with local_pool.acquire() as conn:
             await conn.execute("SELECT 1")
 
-        logger.info(f"Asyncpg connection pool initialized successfully.")
-        return True
+        DB_POOL = local_pool
+        if app: # If app instance is provided, store the pool on it
+            app.db_pool = DB_POOL
+            logger.info(f"Process {os.getpid()}: DB_POOL stored on app.db_pool.")
 
-    except (asyncpg.PostgresError, OSError, EnvironmentError) as e:
-        logger.critical(f"Failed to initialize asyncpg connection pool: {str(e)}", exc_info=True)
-        DB_POOL = None # Ensure pool is None on failure
-        return False
-    except Exception as e: # Catch any other unexpected errors
-        logger.critical(f"Unexpected error initializing asyncpg pool: {str(e)}", exc_info=True)
+        logger.info(f"Process {os.getpid()}: Asyncpg pool initialized successfully.")
+        return True
+    except Exception as e:
+        logger.critical(f"Process {os.getpid()}: Failed to initialize asyncpg pool: {e}", exc_info=True)
         DB_POOL = None
+        if app: app.db_pool = None # Clear on app too if set attempt failed
         return False
 
 async def get_db_connection_pool():
@@ -103,84 +93,73 @@ async def get_db_connection_pool():
 
 
 @asynccontextmanager
-async def get_db_connection_context(timeout: Optional[float] = 30.0):
-    """
-    Provides an asyncpg connection from the pool using an async context manager.
-    Handles acquiring and releasing the connection. Does NOT handle transactions.
+async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Optional[Quart] = None): # <<< ADDED app: Optional[Quart] = None
+    global DB_POOL
+    current_pool_to_use: Optional[asyncpg.Pool] = None
 
-    Args:
-        timeout (Optional[float]): Timeout in seconds to acquire a connection. Defaults to 30.0.
-
-    Yields:
-        asyncpg.Connection: An active database connection.
-
-    Raises:
-        ConnectionError: If the pool is not initialized or fails to acquire connection.
-        asyncio.TimeoutError: If acquiring a connection times out.
-
-    Example:
-        try:
-            async with get_db_connection_context() as conn:
-                # Single statement (implicitly transactional)
-                await conn.execute("UPDATE users SET active = TRUE WHERE id = $1", user_id)
-
-                # Multiple statements requiring atomicity
-                async with conn.transaction():
-                    await conn.execute("INSERT INTO logs (msg) VALUES ($1)", "Log entry 1")
-                    await conn.execute("INSERT INTO data (val) VALUES ($1)", 100)
-
-                result = await conn.fetchval("SELECT name FROM products WHERE id = $1", product_id)
-        except asyncio.TimeoutError:
-            logger.error("Could not get DB connection in time.")
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"Database operation failed: {db_err}")
-        except ConnectionError as pool_err:
-            logger.error(f"Pool issue: {pool_err}")
-
-    """
-    if DB_POOL is None or DB_POOL._closed:
-        # Optionally attempt lazy initialization (can be risky under high concurrency)
-        logger.warning("Connection pool not initialized or closed. Attempting lazy init.")
-        if not await initialize_connection_pool() or DB_POOL is None:
-             raise ConnectionError("Database connection pool is not available.")
-        # If lazy init succeeds, fall through to acquire
+    if app and hasattr(app, 'db_pool') and isinstance(app.db_pool, asyncpg.Pool) and not app.db_pool._closed:
+        current_pool_to_use = app.db_pool
+    elif DB_POOL and not DB_POOL._closed:
+        current_pool_to_use = DB_POOL
+    
+    if current_pool_to_use is None:
+        logger.warning(f"Process {os.getpid()}: DB pool not initialized. Attempting lazy init for get_db_connection_context.")
+        if not await initialize_connection_pool(app=app): # Pass app to lazy init too
+            raise ConnectionError("DB pool unavailable and lazy init failed.")
+        # Re-fetch pool after lazy init
+        current_pool_to_use = app.db_pool if app and hasattr(app, 'db_pool') else DB_POOL
+        if current_pool_to_use is None: # Still none
+            raise ConnectionError("DB pool is None even after lazy init attempt.")
 
     conn: Optional[asyncpg.Connection] = None
+    # ... (rest of get_db_connection_context as in previous good examples, using current_pool_to_use)
     try:
-        # Acquire connection with timeout
-        logger.debug(f"Acquiring connection from pool (timeout={timeout}s)...")
-        conn = await asyncio.wait_for(DB_POOL.acquire(), timeout=timeout)
-        logger.debug(f"Acquired connection {id(conn)}.")
+        conn = await asyncio.wait_for(current_pool_to_use.acquire(), timeout=timeout)
         yield conn
     except asyncio.TimeoutError:
-        logger.error(f"Timeout ({timeout}s) acquiring database connection from pool.")
-        raise # Re-raise TimeoutError
+        logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool.")
+        raise
     finally:
         if conn:
             try:
-                await DB_POOL.release(conn)
-                logger.debug(f"Released connection {id(conn)} back to pool.")
+                await current_pool_to_use.release(conn)
+            except asyncpg.exceptions.InterfaceError as ie:
+                logger.error(f"InterfaceError releasing conn {id(conn)}: {ie}. Forcing close.", exc_info=False)
+                try:
+                    if not conn.is_closed(): await conn.close(timeout=5)
+                except Exception as close_err: logger.error(f"Error forcing close on {id(conn)}: {close_err}")
             except Exception as release_err:
-                # Log error, but don't prevent code flow if release fails (pool might handle)
-                logger.error(f"Error releasing connection {id(conn)}: {release_err}", exc_info=True)
+                logger.error(f"Error releasing conn {id(conn)}: {release_err}", exc_info=True)
 
-async def close_connection_pool():
-    """
-    Asynchronously close the database connection pool.
-    Should be awaited during application shutdown (e.g., via atexit asyncio wrapper).
-    """
+async def close_connection_pool(app: Optional[Quart] = None): # <<< ADDED app: Optional[Quart] = None
+    """Closes the DB_POOL, preferentially using app.db_pool if app is provided."""
     global DB_POOL
-    pool_to_close = DB_POOL
-    if pool_to_close and not pool_to_close._closed:
-        DB_POOL = None # Prevent new acquisitions immediately
+    pool_to_close: Optional[asyncpg.Pool] = None
+
+    # Prefer pool from app context if available and valid
+    if app and hasattr(app, 'db_pool') and isinstance(app.db_pool, asyncpg.Pool) and not app.db_pool._closed:
+        pool_to_close = app.db_pool
+        logger.info(f"Process {os.getpid()}: Will close DB pool from app.db_pool.")
+    elif DB_POOL and not DB_POOL._closed: # Fallback to global
+        pool_to_close = DB_POOL
+        logger.info(f"Process {os.getpid()}: Will close global DB_POOL.")
+    
+    if pool_to_close:
+        # Prevent new acquisitions by clearing references first (if they point to the same object)
+        if DB_POOL is pool_to_close:
+            DB_POOL = None
+        if app and hasattr(app, 'db_pool') and app.db_pool is pool_to_close:
+            app.db_pool = None
+        
+        logger.info(f"Process {os.getpid()}: Closing asyncpg pool ({id(pool_to_close)})...")
         try:
-            logger.info("Closing asyncpg connection pool...")
-            # close() waits for connections to be released
             await pool_to_close.close()
-            logger.info("Asyncpg connection pool closed.")
+            logger.info(f"Process {os.getpid()}: Asyncpg pool ({id(pool_to_close)}) closed.")
         except Exception as e:
-            logger.error(f"Error closing asyncpg connection pool: {str(e)}", exc_info=True)
-            # Pool might be partially closed or in error state
+            logger.error(f"Process {os.getpid()}: Error closing asyncpg pool ({id(pool_to_close)}): {e}", exc_info=True)
+    else:
+        logger.info(f"Process {os.getpid()}: No active asyncpg pool found to close.")
+
 
 # --- Remove Synchronous/psycopg2 specific functions ---
 # get_db_connection (Legacy sync) - REMOVED
