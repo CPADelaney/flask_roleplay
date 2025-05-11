@@ -5,6 +5,7 @@ import logging
 import asyncio
 import json
 import time
+import asyncpg
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union, Tuple, Set
 
