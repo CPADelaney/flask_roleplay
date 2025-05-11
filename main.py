@@ -309,31 +309,40 @@ async def initialize_systems(app: Quart):
     except Exception as e:
         logger.error(f"Main App: Error initializing StoryDirector: {e}", exc_info=True)
 
-    # --- aioredis Pools (initialized once for the app, shared by workers if designed so) ---
     logger.info("Main App: Attempting to initialize aioredis pools...")
     try:
         redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
         if redis_url:
-            app.aioredis_rate_limit_pool = await asyncio.wait_for(
-                aioredis.from_url(redis_url, decode_responses=True, socket_connect_timeout=5, socket_timeout=5),
-                timeout=10
-            )
-            await app.aioredis_rate_limit_pool.ping()
-            logger.info("Main App: aioredis pool for Rate Limiter initialized.")
-            app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool
-            logger.info("Main App: aioredis pool for IP Block List configured (shared).")
+            # Create the pool object. The actual connections are typically made lazily.
+            # The ping here is to test connectivity during startup.
+            temp_pool_for_ping_test = None
+            try:
+                temp_pool_for_ping_test = await asyncio.wait_for(
+                    aioredis.from_url(redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2),
+                    timeout=5 # Timeout for creating the pool object itself
+                )
+                await asyncio.wait_for(temp_pool_for_ping_test.ping(), timeout=3) # Timeout for the ping
+                logger.info("Main App: aioredis ping successful during initial setup.")
+                # Now assign the successfully created and pinged pool to the app
+                app.aioredis_rate_limit_pool = temp_pool_for_ping_test
+                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Share pool
+                logger.info("Main App: aioredis pools configured.")
+                temp_pool_for_ping_test = None # Avoid closing the one stored on app
+            except Exception as e_ping:
+                logger.error(f"Main App: aioredis initial ping/setup failed: {e_ping}", exc_info=True)
+                app.aioredis_rate_limit_pool = None
+                app.aioredis_ip_block_pool = None
+            finally:
+                if temp_pool_for_ping_test: # If ping failed after pool creation, close the temp one
+                    await temp_pool_for_ping_test.close()
         else:
-            logger.warning("Main App: REDIS_URL not configured. Distributed features fallback.")
-            app.aioredis_rate_limit_pool = None; app.aioredis_ip_block_pool = None
+            logger.warning("Main App: REDIS_URL not configured. aioredis pools not created.")
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
     except Exception as e:
-        logger.error(f"Main App: Failed to initialize aioredis pools: {e}", exc_info=True)
-        app.aioredis_rate_limit_pool = None; app.aioredis_ip_block_pool = None
-
-    logger.info("Main App: All non-DB-pool, non-Nyx-Memory systems initializations completed.")
-    try:
-        set_app_initialized()
-    except NameError:
-         logger.warning("Main App: set_app_initialized not found/called.")
+        logger.error(f"Main App: General error initializing aioredis pools: {e}", exc_info=True)
+        app.aioredis_rate_limit_pool = None
+        app.aioredis_ip_block_pool = None
 
 ###############################################################################
 # quart APP CREATION
@@ -478,13 +487,17 @@ def create_quart_app():
         logger.info(f"Worker {os.getpid()}: Database pool closed.")
 
     @app.before_serving
-    async def startup_worker_resources(): # SINGLE before_serving for worker resources
+    async def startup_worker_resources(): # Consolidated handler
         worker_pid = os.getpid()
         logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
-        if not await initialize_connection_pool(app=app):
+
+        # 1. Initialize DB Pool for this worker
+        if not await initialize_connection_pool(app=app): # Pass app
             logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
             raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
         logger.info(f"Worker {worker_pid}: DB pool initialized.")
+
+        # 2. Initialize Nyx Memory System for this worker (now that DB_POOL is ready)
         try:
             from logic.nyx_enhancements_integration import initialize_nyx_memory_system
             logger.info(f"Worker {worker_pid}: Initializing Nyx Memory System...")
@@ -492,14 +505,15 @@ def create_quart_app():
             logger.info(f"Worker {worker_pid}: Nyx Memory System initialized.")
         except Exception as e:
             logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
-            # Optionally raise to stop worker if Nyx Memory is critical
+            # Optionally raise to stop worker
+
 
     @app.after_serving
-    async def shutdown_worker_resources(): # SINGLE after_serving for worker resources
+    async def shutdown_worker_resources(): # Consolidated handler
         worker_pid = os.getpid()
         logger.info(f"Worker {worker_pid}: Closing resources (after_serving).")
-        # Add Nyx Memory System shutdown if it exists
-        await close_connection_pool(app=app)
+        # Add Nyx Memory System shutdown if it has one (e.g., await app.nyx_memory.close())
+        await close_connection_pool(app=app) # Pass app
         logger.info(f"Worker {worker_pid}: DB pool closed.")
 
 
