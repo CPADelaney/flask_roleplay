@@ -617,7 +617,7 @@ async def perform_sweep_and_merge_for_id(nyx_id: str):
 
 # --- Modified Sweep Task ---
 @celery_app.task
-@async_task # Use decorator for the async logic
+@async_task
 async def sweep_and_merge_nyx_split_brains():
     """
     Celery task for periodically merging split-brain Nyx instances.
