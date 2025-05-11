@@ -231,7 +231,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
 
-async def startup_worker_resources():
+async def startup_worker_resources(app=None):
     """Initialize resources for each worker, with duplicate initialization protection."""
     worker_pid = os.getpid()
     logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
@@ -239,13 +239,16 @@ async def startup_worker_resources():
     # Get reference to app
     from quart import current_app
     
+    # Use the passed app if provided, otherwise use current_app
+    actual_app = app if app is not None else current_app
+    
     # --- 1. Initialize DB Pool ---
-    if not getattr(current_app, 'db_initialized', False):
+    if not getattr(actual_app, 'db_initialized', False):
         logger.info(f"Worker {worker_pid}: Initializing DB pool...")
-        if not await initialize_connection_pool(app=current_app):
+        if not await initialize_connection_pool(app=actual_app):
             logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
             raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
-        current_app.db_initialized = True
+        actual_app.db_initialized = True
         logger.info(f"Worker {worker_pid}: DB pool initialized.")
     else:
         logger.info(f"Worker {worker_pid}: DB pool already initialized.")
@@ -305,7 +308,7 @@ async def startup_worker_resources():
 
 
 
-async def shutdown_worker_resources():
+async def shutdown_worker_resources(app=None):
     """Clean up resources for each worker."""
     worker_pid = os.getpid()
     logger.info(f"Worker {worker_pid}: Closing resources (after_serving).")
@@ -491,8 +494,8 @@ def create_quart_app():
     app.story_director_initialized = False
     
     # Register startup and shutdown handlers ONCE
-    app.before_serving(lambda: startup_worker_resources(app))
-    app.after_serving(lambda: shutdown_worker_resources(app))
+    app.before_serving(startup_worker_resources(app))
+    app.after_serving(shutdown_worker_resources(app))
     
     # Initialize non-DB components synchronously if needed
     try:
