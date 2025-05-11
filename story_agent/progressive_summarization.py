@@ -381,18 +381,48 @@ class ProgressiveNarrativeSummarizer:
             try:
                 logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
                 # Use a single connection for all setup DB operations
-                async with get_db_connection_context() as conn: # This connection is 'conn_setup'
-                    # --- Create tables ---
-                    await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS narrative_events (...);''') # Truncated for brevity
-                    await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS story_arcs (...);''') # Truncated
-                    await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS event_arc_relationships (...);''') # Truncated
-                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
-                    logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
+            async with get_db_connection_context() as conn:
+                await conn.execute('''
+                CREATE TABLE IF NOT EXISTS narrative_events (
+                    event_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    importance REAL NOT NULL,
+                    tags JSONB NOT NULL,
+                    metadata JSONB NOT NULL,
+                    summaries JSONB NOT NULL,
+                    last_accessed TIMESTAMP NOT NULL,
+                    access_count INTEGER NOT NULL
+                );
+                
+                CREATE TABLE IF NOT EXISTS story_arcs (
+                    arc_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    start_date TIMESTAMP NOT NULL,
+                    end_date TIMESTAMP,
+                    status TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    tags JSONB NOT NULL,
+                    event_ids JSONB NOT NULL,
+                    summaries JSONB NOT NULL,
+                    last_accessed TIMESTAMP NOT NULL,
+                    access_count INTEGER NOT NULL
+                );
+                
+                CREATE TABLE IF NOT EXISTS event_arc_relationships (
+                    event_id TEXT NOT NULL,
+                    arc_id TEXT NOT NULL,
+                    PRIMARY KEY (event_id, arc_id),
+                    FOREIGN KEY (event_id) REFERENCES narrative_events (event_id) ON DELETE CASCADE,
+                    FOREIGN KEY (arc_id) REFERENCES story_arcs (arc_id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);
+                CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);
+                CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);
+                ''')
 
                     # --- Load data using the SAME connection ---
                     logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
