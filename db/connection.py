@@ -109,39 +109,65 @@ async def get_db_connection_pool():
 
 @asynccontextmanager
 async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Optional[Quart] = None):
-    # If 'app' is not passed, try to use 'current_app' if in a Quart request context
-    effective_app = app or (current_app if current_app else None)
+    global DB_POOL
     pid = os.getpid()
     pool_to_use: Optional[asyncpg.Pool] = None
-
-    if effective_app and hasattr(effective_app, 'db_pool') and effective_app.db_pool:
-        pool_to_use = effective_app.db_pool
-        logger.debug(f"Process {pid}: Using DB pool from app.db_pool for get_db_connection_context.")
-    elif DB_POOL: # Fallback to current process's global DB_POOL
-        pool_to_use = DB_POOL
-        logger.debug(f"Process {pid}: Using global DB_POOL for get_db_connection_context (app context not available/pool not set on app).")
     
+    # Determine the effective app instance to check for app.db_pool
+    effective_app_instance = app # Use passed 'app' if provided
+    if not effective_app_instance and quart_current_app: # Check if quart_current_app was imported and is not None
+        try:
+            # current_app proxy will raise RuntimeError if no app context is active
+            effective_app_instance = quart_current_app._get_current_object()
+        except RuntimeError:
+            # No active Quart app context, current_app cannot be resolved
+            logger.debug(f"Process {pid}: No active Quart app context for current_app in get_db_connection_context.")
+            effective_app_instance = None # Ensure it's None
+
+    # 1. Try to get pool from the effective app instance
+    if effective_app_instance and hasattr(effective_app_instance, 'db_pool') and effective_app_instance.db_pool:
+        pool_to_use = effective_app_instance.db_pool
+        logger.debug(f"Process {pid}: Using DB pool from provided/current app context (app.db_pool).")
+    # 2. Fallback to process-global DB_POOL
+    elif DB_POOL and not DB_POOL._closed:
+        pool_to_use = DB_POOL
+        logger.debug(f"Process {pid}: Using global DB_POOL for this process (app context/pool not found or fallback).")
+
+    # 3. If still no pool, attempt lazy initialization
     if pool_to_use is None or pool_to_use._closed:
         logger.warning(f"Process {pid}: DB pool is None or closed. Attempting lazy init in get_db_connection_context.")
-        # Pass effective_app to ensure if a pool is created, it's set on the app context if possible
-        if not await initialize_connection_pool(app=effective_app):
-            raise ConnectionError("DB pool unavailable and lazy init failed.")
+        # Pass effective_app_instance (which might be None) to initialize_connection_pool.
+        # If it's None, initialize_connection_pool will set the global DB_POOL.
+        # If it's an app, initialize_connection_pool will set app.db_pool and global DB_POOL.
+        if not await initialize_connection_pool(app=effective_app_instance):
+            raise ConnectionError("DB pool unavailable and lazy init failed decisively.")
         
-        # Re-fetch after lazy init
-        pool_to_use = getattr(effective_app, 'db_pool', None) if effective_app else DB_POOL
+        # Re-check after lazy init attempt
+        if effective_app_instance and hasattr(effective_app_instance, 'db_pool') and effective_app_instance.db_pool:
+            pool_to_use = effective_app_instance.db_pool
+        elif DB_POOL:
+            pool_to_use = DB_POOL
+        
         if pool_to_use is None:
-            raise ConnectionError("DB pool is still None after lazy init attempt.")
+            raise ConnectionError("DB pool is still None even after successful-looking lazy init attempt.")
         logger.info(f"Process {pid}: DB pool successfully lazy-initialized/retrieved: {id(pool_to_use)}.")
 
     conn: Optional[asyncpg.Connection] = None
     try:
         conn = await asyncio.wait_for(pool_to_use.acquire(), timeout=timeout)
         yield conn
-    # ... (rest of your finally block for release) ...
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout ({timeout}s) acquiring DB connection from pool {id(pool_to_use)}.")
+        raise
+    # Let other exceptions (like RuntimeError for different loop, if pool_to_use was somehow stale) propagate
     finally:
         if conn:
             try:
-                await pool_to_use.release(conn)
+                if not pool_to_use._closed: # Check if pool is still open before releasing
+                    await pool_to_use.release(conn)
+                else:
+                    logger.warning(f"Process {pid}: Pool {id(pool_to_use)} was closed before connection {id(conn)} could be released. Forcibly closing connection.")
+                    if not conn.is_closed(): await conn.close(timeout=2)
             except asyncpg.exceptions.InterfaceError as ie:
                 logger.error(f"InterfaceError releasing conn {id(conn)} from pool {id(pool_to_use)}: {ie}. Forcing close.", exc_info=False)
                 try:
@@ -149,6 +175,7 @@ async def get_db_connection_context(timeout: Optional[float] = 30.0, app: Option
                 except Exception as close_err: logger.error(f"Error forcing close on conn {id(conn)}: {close_err}")
             except Exception as release_err:
                 logger.error(f"Error releasing conn {id(conn)} from pool {id(pool_to_use)}: {release_err}", exc_info=True)
+
 
 async def close_connection_pool(app: Optional[Quart] = None): # <<< ADDED app: Optional[Quart] = None
     """Closes the DB_POOL, preferentially using app.db_pool if app is provided."""
