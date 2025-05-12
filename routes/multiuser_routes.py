@@ -2,7 +2,7 @@
 
 from quart import Blueprint, request, jsonify, session
 from db.connection import get_db_connection_context  # Updated import
-import logger
+import logging
 
 multiuser_bp = Blueprint("multiuser_bp", __name__)
 
