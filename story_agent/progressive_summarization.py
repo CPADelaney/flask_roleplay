@@ -371,103 +371,103 @@ class ProgressiveNarrativeSummarizer:
         self.summary_task: Optional[asyncio.Task] = None
         logger.info("ProgressiveNarrativeSummarizer instance created.")
     
-async def initialize(self) -> None:
-    """
-    Initialize the summarizer.
-    Creates necessary DB tables if db_connection_string is set and loads data.
-    It RELIES on the global DB_POOL being initialized by the main application.
-    """
-    logger.info("Initializing ProgressiveNarrativeSummarizer...")
-    if self.db_connection_string:
-        try:
-            logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
-            # Use a single connection for all setup DB operations
-            async with get_db_connection_context() as conn: # This connection is 'conn_setup'
-                # --- Create tables ---
-                await conn.execute('''
-                CREATE TABLE IF NOT EXISTS narrative_events (
-                    event_id TEXT PRIMARY KEY,
-                    event_type TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TIMESTAMPTZ NOT NULL,
-                    importance FLOAT NOT NULL DEFAULT 0.5,
-                    tags JSONB DEFAULT '[]',
-                    metadata JSONB DEFAULT '{}',
-                    summaries JSONB DEFAULT '{}',
-                    last_accessed TIMESTAMPTZ NOT NULL,
-                    access_count INTEGER NOT NULL DEFAULT 0
-                );''')
-                
-                await conn.execute('''
-                CREATE TABLE IF NOT EXISTS story_arcs (
-                    arc_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    start_date TIMESTAMPTZ NOT NULL,
-                    end_date TIMESTAMPTZ,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    importance FLOAT NOT NULL DEFAULT 0.5,
-                    tags JSONB DEFAULT '[]',
-                    event_ids JSONB DEFAULT '[]',
-                    summaries JSONB DEFAULT '{}',
-                    last_accessed TIMESTAMPTZ NOT NULL,
-                    access_count INTEGER NOT NULL DEFAULT 0
-                );''')
-                
-                await conn.execute('''
-                CREATE TABLE IF NOT EXISTS event_arc_relationships (
-                    event_id TEXT NOT NULL,
-                    arc_id TEXT NOT NULL,
-                    PRIMARY KEY (event_id, arc_id),
-                    FOREIGN KEY (event_id) REFERENCES narrative_events(event_id) ON DELETE CASCADE,
-                    FOREIGN KEY (arc_id) REFERENCES story_arcs(arc_id) ON DELETE CASCADE
-                );''')
-                
-                await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
-                await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
-                await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
-                logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
-
-                # --- Load data using the SAME connection ---
-                logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
-                event_rows = await conn.fetch("SELECT * FROM narrative_events")
-                for row_dict in event_rows:
-                    try:
-                        event = EventInfo.from_dict(dict(row_dict))
-                        self.events[event.event_id] = event
-                    except Exception as e_event:
-                        logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
-                
-                arc_rows = await conn.fetch("SELECT * FROM story_arcs") # LINE 447 (approx) - uses conn_setup
-                for row_dict in arc_rows:
-                    try:
-                        arc = StoryArc.from_dict(dict(row_dict))
-                        self.arcs[arc.arc_id] = arc
-                    except Exception as e_arc:
-                        logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
-
-                rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
-                for row_dict in rel_rows:
-                    event_id = row_dict["event_id"]
-                    arc_id = row_dict["arc_id"]
-                    if event_id not in self.event_arc_map:
-                        self.event_arc_map[event_id] = set()
-                    self.event_arc_map[event_id].add(arc_id)
-                logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
-            # Connection conn_setup is released here
-        
-        except ConnectionError as ce:
-            logger.error(f"PNS: DB ConnectionError during init: {ce}", exc_info=True)
-            self.db_connection_string = None
-            logger.warning("PNS: Disabling DB features due to initialization error.")
-        except Exception as e:
-            logger.error(f"PNS: Error during DB setup or data load: {e}", exc_info=True)
-            self.db_connection_string = None
-            logger.warning("PNS: Disabling DB features due to initialization error.")
-    else:
-        logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode.")
+    async def initialize(self) -> None:
+        """
+        Initialize the summarizer.
+        Creates necessary DB tables if db_connection_string is set and loads data.
+        It RELIES on the global DB_POOL being initialized by the main application.
+        """
+        logger.info("Initializing ProgressiveNarrativeSummarizer...")
+        if self.db_connection_string:
+            try:
+                logger.info("ProgressiveNarrativeSummarizer: Ensuring database tables and loading data...")
+                # Use a single connection for all setup DB operations
+                async with get_db_connection_context() as conn: # This connection is 'conn_setup'
+                    # --- Create tables ---
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS narrative_events (
+                        event_id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        importance FLOAT NOT NULL DEFAULT 0.5,
+                        tags JSONB DEFAULT '[]',
+                        metadata JSONB DEFAULT '{}',
+                        summaries JSONB DEFAULT '{}',
+                        last_accessed TIMESTAMPTZ NOT NULL,
+                        access_count INTEGER NOT NULL DEFAULT 0
+                    );''')
+                    
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS story_arcs (
+                        arc_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        start_date TIMESTAMPTZ NOT NULL,
+                        end_date TIMESTAMPTZ,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        importance FLOAT NOT NULL DEFAULT 0.5,
+                        tags JSONB DEFAULT '[]',
+                        event_ids JSONB DEFAULT '[]',
+                        summaries JSONB DEFAULT '{}',
+                        last_accessed TIMESTAMPTZ NOT NULL,
+                        access_count INTEGER NOT NULL DEFAULT 0
+                    );''')
+                    
+                    await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS event_arc_relationships (
+                        event_id TEXT NOT NULL,
+                        arc_id TEXT NOT NULL,
+                        PRIMARY KEY (event_id, arc_id),
+                        FOREIGN KEY (event_id) REFERENCES narrative_events(event_id) ON DELETE CASCADE,
+                        FOREIGN KEY (arc_id) REFERENCES story_arcs(arc_id) ON DELETE CASCADE
+                    );''')
+                    
+                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_timestamp_idx ON narrative_events (timestamp);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS narrative_events_type_idx ON narrative_events (event_type);")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS story_arcs_status_idx ON story_arcs (status);")
+                    logger.info("ProgressiveNarrativeSummarizer: Database tables checked/created.")
     
-    logger.info("ProgressiveNarrativeSummarizer initialized.")
+                    # --- Load data using the SAME connection ---
+                    logger.info("ProgressiveNarrativeSummarizer: Loading data from database...")
+                    event_rows = await conn.fetch("SELECT * FROM narrative_events")
+                    for row_dict in event_rows:
+                        try:
+                            event = EventInfo.from_dict(dict(row_dict))
+                            self.events[event.event_id] = event
+                        except Exception as e_event:
+                            logger.error(f"Error processing event row: {row_dict}, error: {e_event}", exc_info=True)
+                    
+                    arc_rows = await conn.fetch("SELECT * FROM story_arcs") # LINE 447 (approx) - uses conn_setup
+                    for row_dict in arc_rows:
+                        try:
+                            arc = StoryArc.from_dict(dict(row_dict))
+                            self.arcs[arc.arc_id] = arc
+                        except Exception as e_arc:
+                            logger.error(f"Error processing arc row: {row_dict}, error: {e_arc}", exc_info=True)
+    
+                    rel_rows = await conn.fetch("SELECT event_id, arc_id FROM event_arc_relationships")
+                    for row_dict in rel_rows:
+                        event_id = row_dict["event_id"]
+                        arc_id = row_dict["arc_id"]
+                        if event_id not in self.event_arc_map:
+                            self.event_arc_map[event_id] = set()
+                        self.event_arc_map[event_id].add(arc_id)
+                    logger.info(f"ProgressiveNarrativeSummarizer: Loaded {len(self.events)} events, {len(self.arcs)} arcs from DB.")
+                # Connection conn_setup is released here
+            
+            except ConnectionError as ce:
+                logger.error(f"PNS: DB ConnectionError during init: {ce}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("PNS: Disabling DB features due to initialization error.")
+            except Exception as e:
+                logger.error(f"PNS: Error during DB setup or data load: {e}", exc_info=True)
+                self.db_connection_string = None
+                logger.warning("PNS: Disabling DB features due to initialization error.")
+        else:
+            logger.info("ProgressiveNarrativeSummarizer: Initializing in memory-only mode.")
+        
+        logger.info("ProgressiveNarrativeSummarizer initialized.")
     
     async def _load_data_from_db(self) -> None: # Does NOT take 'conn' as argument
         """Load data from database. Acquires its own connection."""
