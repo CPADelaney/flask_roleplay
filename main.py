@@ -486,18 +486,19 @@ def create_quart_app():
     app = Quart(__name__, static_folder="static", template_folder="templates")
     QuartSchema(app)
     
-    # 2) Create & attach Socket.IO _before_ any @sio.event handlers
+    # Create & attach Socket.IO
     sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
 
-    # IMPORTANT: Create and set initialization tracking flags
+    # IMPORTANT: Create initialization tracking flags
     app.db_initialized = False
     app.nyx_memory_initialized = False
     app.nyx_brain_initialized = False
     app.story_director_initialized = False
+    app.systems_initialized = False  # Add this flag
     
-    # Register startup and shutdown handlers CORRECTLY
+    # CORRECTLY register startup/shutdown handlers ONLY ONCE
     app.before_serving(startup_worker_resources)
     app.after_serving(shutdown_worker_resources)
     
