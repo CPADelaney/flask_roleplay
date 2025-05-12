@@ -756,14 +756,13 @@ def create_quart_app():
 
     # --- Core Game Routes (Example - move complex logic to blueprints) ---
 
-    @app.route("/chat") # Serves the chat page UI
-    def chat_page():
+    @app.route("/chat")
+    async def chat_page():  # Make the function async
         if "user_id" not in session:
             return redirect("/login_page")
-        # Pass necessary data to template (e.g., user_id, active conversation_id)
         user_id = session.get("user_id")
-        # Fetch active conversation or list of conversations here if needed (using asyncpg if route becomes async)
-        return render_template("chat.html", user_id=user_id) # Ensure chat.html exists
+        # Await the render_template call
+        return await render_template("chat.html", user_id=user_id)
 
     # Note: /start_chat and /openai_chat POST routes were removed as the primary interaction
     # now seems to happen via SocketIO ('message' event). If you need these HTTP endpoints,
