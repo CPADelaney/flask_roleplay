@@ -1564,11 +1564,6 @@ async def example_usage():
     print(f"Events: {len(context['relevant_events'])}")
     print(f"Token usage: {context['token_usage']}")
 
-# Run the example
-if __name__ == "__main__":
-    asyncio.run(example_usage())
-
-
 # RPG-Specific Implementation
 
 class RPGNarrativeManager:
