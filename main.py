@@ -578,63 +578,59 @@ def create_quart_app():
 
     @app.route("/login", methods=["POST"])
     @rate_limit(limit=5, period=60)
-    @validate_input({ # Renamed to validate_input for clarity if it's from security.py
-        'username': {'type': 'string', 'pattern': 'username', 'required': True}, # Use 'username' NAME
+    @validate_input({
+        'username': {'type': 'string', 'pattern': 'username', 'required': True},
         'password': {'type': 'string', 'max_length': 100, 'required': True}
     })
     async def login():
-        # Prefer request.sanitized_data
         data = getattr(request, 'sanitized_data', None)
-        
-        if data is None: # Fallback if sanitized_data is not set by middleware
-            logger.warning("/login route: request.sanitized_data not found, attempting direct JSON parse.")
+        if data is None:
             try:
                 data = await request.get_json()
-                if data is None: # Check if JSON body itself was empty e.g. {} or null
-                    return jsonify({"error": "Request body is empty or null JSON"}), 400
-            except Exception as json_err: # Catch errors parsing JSON
-                logger.error(f"Error parsing JSON directly in /login route: {json_err}")
+            except Exception:
                 return jsonify({"error": "Invalid JSON request body"}), 400
-    
-        # Now that 'data' is guaranteed to be a dict (or an error was returned)
+        
         username = data.get("username")
         password = data.get("password")
-    
+        
         if not username or not password:
-             return jsonify({"error": "Missing username or password"}), 400
-
-        # Use asyncpg for database access
+            return jsonify({"error": "Missing username or password"}), 400
+    
         try:
-            async with get_db_connection_context() as conn:
+            # Create a FRESH connection specifically for this request
+            # This avoids event loop conflicts entirely
+            dsn = get_db_dsn()  # Your existing function to get the connection string
+            conn = await asyncpg.connect(dsn)
+            try:
                 row = await conn.fetchrow(
                     "SELECT id, password_hash FROM users WHERE username=$1",
                     username
                 )
-
-            if not row: # User not found
-                 # Mitigate timing attacks
-                 fake_hash = bcrypt.hashpw(b"dummy", bcrypt.gensalt())
-                 bcrypt.checkpw(password.encode('utf-8'), fake_hash)
-                 logger.warning(f"Login failed (no such user): {username}")
-                 return jsonify({"error": "Invalid username or password"}), 401
-
-            user_id, hashed_password_bytes = row['id'], row['password_hash'].encode('utf-8')
-
-            if bcrypt.checkpw(password.encode('utf-8'), hashed_password_bytes):
-                 session["user_id"] = user_id
-                 session.permanent = True
-                 logger.info(f"Login successful: User {user_id}")
-                 return jsonify({"message": "Logged in", "user_id": user_id})
-            else:
-                 logger.warning(f"Login failed (bad password): User {user_id}")
-                 return jsonify({"error": "Invalid username or password"}), 401
-
-        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-            logger.error(f"Login DB error for {username}: {db_err}", exc_info=True)
-            return jsonify({"error": "Database error during login"}), 500
+                
+                if not row:
+                    # Timing attack mitigation
+                    fake_hash = bcrypt.hashpw(b"dummy", bcrypt.gensalt())
+                    bcrypt.checkpw(password.encode('utf-8'), fake_hash)
+                    logger.warning(f"Login failed (no such user): {username}")
+                    return jsonify({"error": "Invalid username or password"}), 401
+                    
+                user_id, hashed_password_bytes = row['id'], row['password_hash'].encode('utf-8')
+                
+                if bcrypt.checkpw(password.encode('utf-8'), hashed_password_bytes):
+                    session["user_id"] = user_id
+                    session.permanent = True
+                    logger.info(f"Login successful: User {user_id}")
+                    return jsonify({"message": "Logged in", "user_id": user_id})
+                else:
+                    logger.warning(f"Login failed (bad password): User {user_id}")
+                    return jsonify({"error": "Invalid username or password"}), 401
+            finally:
+                # Always close the connection
+                await conn.close()
+                    
         except Exception as e:
-            logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
-            return jsonify({"error": "Server error during login"}), 500
+            logger.error(f"Login error for {username}: {e}", exc_info=True)
+            return jsonify({"error": "Database error during login"}), 500
 
     @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
