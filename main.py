@@ -567,6 +567,13 @@ def create_quart_app():
     # ROUTES (Defined in main app - keep minimal, prefer blueprints)
     ###########################################################################
 
+    @app.route("/login_page", methods=["GET"])
+    async def login_page():
+        return await render_template("login.html") # Ensure login.html exists
+
+    @app.route("/register_page", methods=["GET"])
+    async def register_page():
+        return await render_template("register.html") # Ensure register.html exists    
     # --- Authentication Routes ---
     # At the top of main.py, add this import:
     from db.connection import get_db_dsn
