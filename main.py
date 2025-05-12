@@ -678,18 +678,41 @@ def create_quart_app():
                     if existing_user:
                         return jsonify({"error": "Username already exists"}), 409
     
-                    # Check existing email if provided
-                    if email:
-                        existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
-                        if existing_email:
-                            return jsonify({"error": "Email already exists"}), 409
+                    # Check if the 'email' column exists in the users table
+                    has_email_column = False
+                    try:
+                        # Query information_schema to check if email column exists
+                        email_check = await conn.fetchval("""
+                            SELECT COUNT(*) FROM information_schema.columns 
+                            WHERE table_name = 'users' AND column_name = 'email'
+                        """)
+                        has_email_column = email_check > 0
+                    except Exception as schema_err:
+                        logger.warning(f"Error checking for email column: {schema_err}")
+                        has_email_column = False
     
-                    # Insert new user
-                    user_id = await conn.fetchval(
-                        """INSERT INTO users (username, password_hash, email, created_at)
-                           VALUES ($1, $2, $3, NOW()) RETURNING id""",
-                        username, password_hash, email
-                    )
+                    # Insert new user based on table structure
+                    user_id = None
+                    if has_email_column:
+                        # If email column exists, include it in the query
+                        if email:
+                            # Check if email already exists
+                            existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
+                            if existing_email:
+                                return jsonify({"error": "Email already exists"}), 409
+                                
+                        user_id = await conn.fetchval(
+                            """INSERT INTO users (username, password_hash, email, created_at)
+                               VALUES ($1, $2, $3, NOW()) RETURNING id""",
+                            username, password_hash, email
+                        )
+                    else:
+                        # If email column doesn't exist, skip it
+                        user_id = await conn.fetchval(
+                            """INSERT INTO users (username, password_hash, created_at)
+                               VALUES ($1, $2, NOW()) RETURNING id""",
+                            username, password_hash
+                        )
     
                 if user_id:
                     session["user_id"] = user_id
@@ -700,27 +723,7 @@ def create_quart_app():
                     logger.error(f"Registration failed: No user ID returned for {username}")
                     return jsonify({"error": "Registration failed"}), 500
             finally:
-                # Always close the connection
                 await conn.close()
-    
-        except asyncpg.exceptions.UniqueViolationError as uve:
-            logger.warning(f"Registration conflict for {username}: {uve}")
-            if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
-            if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
-            return jsonify({"error": "Username or email already exists"}), 409
-        except asyncpg.exceptions.DuplicatePreparedStatementError as dpse:
-            # This shouldn't happen with statement_cache_size=0, but just in case
-            logger.error(f"PgBouncer compatibility issue for {username}: {dpse}")
-            return jsonify({"error": "Database connection error during registration"}), 500
-        except Exception as e:
-            logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
-            return jsonify({"error": "Server error during registration"}), 500
-    
-        except asyncpg.exceptions.UniqueViolationError as uve:
-            logger.warning(f"Registration conflict for {username}: {uve}")
-            if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
-            if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
-            return jsonify({"error": "Username or email already exists"}), 409
         except Exception as e:
             logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during registration"}), 500
