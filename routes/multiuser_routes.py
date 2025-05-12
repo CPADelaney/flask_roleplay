@@ -163,20 +163,35 @@ async def delete_folder(folder_id):
 async def list_conversations():
     user_id = session.get("user_id")
     if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
-
-    async with get_db_connection_context() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                SELECT id, conversation_name
-                FROM conversations
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-            """, (user_id,))
-            rows = await cur.fetchall()
-
-    conversations = [{"id": r[0], "name": r[1]} for r in rows]
-    return jsonify(conversations)
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    try:
+        # Use a fresh connection with statement_cache_size=0 for pgbouncer compatibility
+        dsn = get_db_dsn()
+        conn = await asyncpg.connect(dsn, statement_cache_size=0)
+        try:
+            # Correct way to fetch conversations with asyncpg
+            rows = await conn.fetch("""
+                SELECT c.id, c.conversation_name as name, c.created_at,
+                       f.folder_name
+                FROM conversations c
+                LEFT JOIN folders f ON c.folder_id = f.id
+                WHERE c.user_id = $1
+                ORDER BY c.created_at DESC
+            """, user_id)
+            
+            conversations = [dict(id=row['id'], 
+                                 name=row['name'], 
+                                 created_at=row['created_at'].isoformat() if row['created_at'] else None,
+                                 folder=row['folder_name'])
+                            for row in rows]
+            
+            return jsonify(conversations)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error(f"Error listing conversations for user {user_id}: {e}", exc_info=True)
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
 @multiuser_bp.route("/conversations", methods=["POST"])
 async def create_conversation():
