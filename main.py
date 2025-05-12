@@ -411,6 +411,11 @@ async def initialize_systems(app):
 def create_quart_app():
     app = Quart(__name__, static_folder="static", template_folder="templates")
     QuartSchema(app)
+
+    app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+    app.config['SESSION_TYPE'] = 'filesystem'
+    # Optionally set session lifetime - 7 days here
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
     sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
