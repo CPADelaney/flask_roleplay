@@ -568,14 +568,9 @@ def create_quart_app():
     ###########################################################################
 
     # --- Authentication Routes ---
-    @app.route("/login_page", methods=["GET"])
-    async def login_page():
-        return await render_template("login.html") # Ensure login.html exists
-
-    @app.route("/register_page", methods=["GET"])
-    async def register_page():
-        return await render_template("register.html") # Ensure register.html exists
-
+    # At the top of main.py, add this import:
+    from db.connection import get_db_dsn
+    
     @app.route("/login", methods=["POST"])
     @rate_limit(limit=5, period=60)
     @validate_input({
@@ -586,6 +581,7 @@ def create_quart_app():
         data = getattr(request, 'sanitized_data', None)
         if data is None:
             try:
+                # Fix the awaiting issue with get_json()
                 data = await request.get_json()
             except Exception:
                 return jsonify({"error": "Invalid JSON request body"}), 400
@@ -598,8 +594,7 @@ def create_quart_app():
     
         try:
             # Create a FRESH connection specifically for this request
-            # This avoids event loop conflicts entirely
-            dsn = get_db_dsn()  # Your existing function to get the connection string
+            dsn = get_db_dsn()  # Now properly imported
             conn = await asyncpg.connect(dsn)
             try:
                 row = await conn.fetchrow(
@@ -634,71 +629,76 @@ def create_quart_app():
 
     @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
-    @validate_input({ # Renamed to validate_input
-        'username': {'type': 'string', 'pattern': 'username', 'required': True},     # Use 'username' NAME
+    @validate_input({
+        'username': {'type': 'string', 'pattern': 'username', 'required': True},
         'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
-        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False} # Use 'email' NAME
-                                                                                              # (or 'simple_email' if you defined that)
+        'email': {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False}
     })
-    async def register(): # Make async for asyncpg
-        data = getattr(request, 'sanitized_data', request.get_json())
-        if not data:
-            return jsonify({"error": "Invalid request data"}), 400
+    async def register():
+        data = getattr(request, 'sanitized_data', None)
+        if data is None:
+            try:
+                # Make sure to await the get_json() call
+                data = await request.get_json()
+            except Exception:
+                return jsonify({"error": "Invalid request data"}), 400
+                
         username = data.get("username")
         password = data.get("password")
-        email = data.get("email") # Optional based on validation schema
-
-        if not username or not password: # Add email check if required
-             return jsonify({"error": "Missing required fields"}), 400
-
+        email = data.get("email")
+    
+        if not username or not password:
+            return jsonify({"error": "Missing required fields"}), 400
+    
         # Hash password
         try:
             password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as hash_err:
             logger.error(f"Password hashing error: {hash_err}", exc_info=True)
             return jsonify({"error": "Registration error"}), 500
-
+    
         try:
-            async with get_db_connection_context() as conn: # Use async context
+            # Create a fresh connection for this request
+            dsn = get_db_dsn()
+            conn = await asyncpg.connect(dsn)
+            try:
                 # Use transaction for atomic check-and-insert
                 async with conn.transaction():
                     # Check existing username
                     existing_user = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
                     if existing_user:
                         return jsonify({"error": "Username already exists"}), 409
-
-                    # Check existing email if provided and email column exists and is unique
+    
+                    # Check existing email if provided
                     if email:
                         existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
                         if existing_email:
                             return jsonify({"error": "Email already exists"}), 409
-
+    
                     # Insert new user
-                    user_id = await conn.fetchval( # Use await and $n params
+                    user_id = await conn.fetchval(
                         """INSERT INTO users (username, password_hash, email, created_at)
                            VALUES ($1, $2, $3, NOW()) RETURNING id""",
                         username, password_hash, email
                     )
-
-            if user_id:
-                session["user_id"] = user_id
-                session.permanent = True
-                logger.info(f"Registration successful: User {user_id} ({username})")
-                return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
-            else:
-                logger.error(f"Registration failed: No user ID returned for {username}")
-                return jsonify({"error": "Registration failed"}), 500
-
+    
+                if user_id:
+                    session["user_id"] = user_id
+                    session.permanent = True
+                    logger.info(f"Registration successful: User {user_id} ({username})")
+                    return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
+                else:
+                    logger.error(f"Registration failed: No user ID returned for {username}")
+                    return jsonify({"error": "Registration failed"}), 500
+            finally:
+                # Always close the connection
+                await conn.close()
+    
         except asyncpg.exceptions.UniqueViolationError as uve:
-             # Catch specific unique constraint error
-             logger.warning(f"Registration conflict for {username}: {uve}")
-             # Determine if username or email caused it based on constraint name if possible
-             if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
-             if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
-             return jsonify({"error": "Username or email already exists"}), 409
-        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
-            logger.error(f"Registration DB error for {username}: {db_err}", exc_info=True)
-            return jsonify({"error": "Database error during registration"}), 500
+            logger.warning(f"Registration conflict for {username}: {uve}")
+            if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
+            if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
+            return jsonify({"error": "Username or email already exists"}), 409
         except Exception as e:
             logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during registration"}), 500
