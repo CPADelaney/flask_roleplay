@@ -599,9 +599,9 @@ def create_quart_app():
             return jsonify({"error": "Missing username or password"}), 400
     
         try:
-            # Create a FRESH connection specifically for this request
+            # Create connection with statement_cache_size=0 to fix pgbouncer issue
             dsn = get_db_dsn()
-            conn = await asyncpg.connect(dsn)
+            conn = await asyncpg.connect(dsn, statement_cache_size=0)
             try:
                 row = await conn.fetchrow(
                     "SELECT id, password_hash FROM users WHERE username=$1",
@@ -617,7 +617,6 @@ def create_quart_app():
                     
                 user_id, hashed_password = row['id'], row['password_hash']
                 
-                # Handle potential encoding issues and invalid hash formats
                 try:
                     hashed_password_bytes = hashed_password.encode('utf-8') if isinstance(hashed_password, str) else hashed_password
                     
@@ -630,11 +629,9 @@ def create_quart_app():
                         logger.warning(f"Login failed (bad password): User {user_id}")
                         return jsonify({"error": "Invalid username or password"}), 401
                 except ValueError as salt_err:
-                    # Handle invalid salt error
                     logger.error(f"Password hash format error for {username}: {salt_err}")
                     return jsonify({"error": "System error during authentication"}), 500
             finally:
-                # Always close the connection
                 await conn.close()
         except Exception as e:
             logger.error(f"Login error for {username}: {e}", exc_info=True)
@@ -651,7 +648,6 @@ def create_quart_app():
         data = getattr(request, 'sanitized_data', None)
         if data is None:
             try:
-                # Make sure to await the get_json() call
                 data = await request.get_json()
             except Exception:
                 return jsonify({"error": "Invalid request data"}), 400
@@ -671,9 +667,9 @@ def create_quart_app():
             return jsonify({"error": "Registration error"}), 500
     
         try:
-            # Create a fresh connection for this request
+            # Create a fresh connection with statement_cache_size=0 to fix pgbouncer issue
             dsn = get_db_dsn()
-            conn = await asyncpg.connect(dsn)
+            conn = await asyncpg.connect(dsn, statement_cache_size=0)
             try:
                 # Use transaction for atomic check-and-insert
                 async with conn.transaction():
@@ -706,6 +702,19 @@ def create_quart_app():
             finally:
                 # Always close the connection
                 await conn.close()
+    
+        except asyncpg.exceptions.UniqueViolationError as uve:
+            logger.warning(f"Registration conflict for {username}: {uve}")
+            if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
+            if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
+            return jsonify({"error": "Username or email already exists"}), 409
+        except asyncpg.exceptions.DuplicatePreparedStatementError as dpse:
+            # This shouldn't happen with statement_cache_size=0, but just in case
+            logger.error(f"PgBouncer compatibility issue for {username}: {dpse}")
+            return jsonify({"error": "Database connection error during registration"}), 500
+        except Exception as e:
+            logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
+            return jsonify({"error": "Server error during registration"}), 500
     
         except asyncpg.exceptions.UniqueViolationError as uve:
             logger.warning(f"Registration conflict for {username}: {uve}")
