@@ -9,7 +9,7 @@ import asyncio
 from typing import Dict, Any, Optional
 
 # quart and related imports
-from quart import Quart, render_template, session, request, jsonify, redirect, Response, current_app
+from quart import Quart, render_template, session, request, jsonify, redirect, Response
 import socketio
 
 from aioprometheus import Registry, Counter, render
@@ -230,119 +230,179 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
-async def initialize_systems(app: Quart):
-    """
-    Initialize non-DB-pool and non-Nyx-Memory systems.
-    These are application-level singletons or configurations.
-    DB_POOL and Nyx Memory System are initialized by each worker via @app.before_serving.
-    """
-    logger.info("Main App: Starting application systems initialization (DB Pool & Nyx Memory handled by worker lifecycle)...")
-    
-    # Try-except for critical module imports needed by this function
+async def initialize_systems(app):
+    """Initialize systems required for the application AFTER app creation."""
+    logger.info("Starting asynchronous system initializations...")
+    from nyx.core.brain.base import NyxBrain
+    from tasks import set_app_initialized
+
     try:
-        from nyx.core.brain.base import NyxBrain
-        from mcp_orchestrator import MCPOrchestrator
-        # from logic.nyx_enhancements_integration import initialize_nyx_memory_system # MOVED TO before_serving
-        from logic.aggregator_sdk import init_singletons
-        from story_agent.story_director_agent import initialize_story_director, register_with_governance
-        from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-        from tasks import set_app_initialized # Ensure this exists
-        global background_chat_task # Make sure background_chat_task is accessible
-    except ImportError as e:
-        logger.critical(f"Main App: Import failed in initialize_systems: {e}", exc_info=True)
-        raise RuntimeError(f"Module import failed during system initialization: {e}") from e
+        # --- Database Schema/Seed ---
+        # !! IMPORTANT !!: Schema creation/migration and seeding should ideally
+        # be done via separate CLI commands (e.g., using quart-Migrate, Alembic, or your init_db_script.py)
+        # BEFORE starting the application server, not during runtime initialization.
+        # Doing it here is risky and slows down startup.
+        # Commenting out the direct calls:
+        # from db.schema_and_seed import create_all_tables, seed_initial_data
+        # from db.schema_migrations import ensure_schema_version
+        # ensure_schema_version() # Run migrations separately!
+        # logger.info("Database migrations check completed (ensure this was run beforehand!).")
+        # create_all_tables() # Create tables separately!
+        # seed_initial_data() # Seed data separately!
+        # logger.info("Database tables initialization check completed (ensure this was done beforehand!).")
+        logger.warning("Skipping DB schema/seed/migration checks in app startup. Run these manually/via deployment script.")
 
-    logger.warning("Main App: Skipping DB schema/seed/migration checks in app startup. Run these manually.")
+        # --- Initialize DB Pool ---
+        # This *should* be done here or early in create_quart_app
+        if not await initialize_connection_pool():
+            raise RuntimeError("Database pool initialization failed")
+        else:
+            logger.info("Database connection pool initialized successfully.")
 
-    # --- NyxBrain Instance ---
-    if hasattr(NyxBrain, "get_instance"):
+        # Register pool cleanup (atexit might be unreliable for async)
+        # Consider a more robust shutdown handler in production
+        async def cleanup_pool_on_exit():
+            logger.info("Running async pool cleanup...")
+            await close_connection_pool()
+
+        def start_background_services():
+            loop = asyncio.get_event_loop()
+            daemon = NyxSyncDaemon()
+            loop.create_task(daemon.start())
+
+        # Wrap the async cleanup for atexit (use with caution)
+        def run_async_cleanup():
+            try:
+                asyncio.run(cleanup_pool_on_exit())
+            except RuntimeError as e:
+                # Handle cases where event loop might already be closed
+                logger.warning(f"Could not run async cleanup in atexit: {e}")
+
+        atexit.register(run_async_cleanup)
+        logger.info("Registered async pool cleanup with atexit (best effort).")
+
+        # --- Initialize Nyx Memory System ---
+        # Pass DSN or ensure it's configured globally for initialize_nyx_memory_system
+        await initialize_nyx_memory_system() # Ensure this uses asyncpg/DB_DSN if needed
+        logger.info("Nyx memory system initialized successfully.")
+
+        # --- Initialize Global NyxBrain Instance ---
+        # Ensure NyxBrain.get_instance is async and uses asyncpg if needed
+        print(">>> NyxBrain module:", NyxBrain.__module__)
+        print(">>> NyxBrain class file:", NyxBrain.__dict__.get('__module__', None))
+        print(">>> NyxBrain has get_instance?", hasattr(NyxBrain, "get_instance"))
+        print(">>> NyxBrain dir:", dir(NyxBrain))
+        print(">>> NyxBrain MRO:", NyxBrain.__mro__)
+
         try:
-            system_user_id = 0; system_conversation_id = 0
-            app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-            logger.info("Main App: NyxBrain instance obtained/initialized.")
-            if app.nyx_brain:
-                await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+            system_user_id = 0 # Or appropriate system-level IDs
+            system_conversation_id = 0
+        
+            if hasattr(NyxBrain, "get_instance"):
+                # get_instance now handles initialization if a new instance is created
+                app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
+                # REMOVE the explicit call to app.nyx_brain.initialize() here, as get_instance handles it.
+                # await app.nyx_brain.initialize() # <--- REMOVE THIS LINE
+        
+                logger.info("Global NyxBrain instance obtained/initialized.")
+        
+                if app.nyx_brain: # Ensure instance was successfully obtained
+                    await app.nyx_brain.restore_entity_from_distributed_checkpoints()
+    
+                
+                # Register processors (ensure handlers are async)
+                from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+                
                 app.nyx_brain.response_processors = {
                     "default": background_chat_task,
                     "openai": process_user_input_with_openai,
                     "base": process_user_input
                 }
-                logger.info("Main App: Response processors registered.")
+                logger.info("Response processors registered with NyxBrain.")
+            else:
+                logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
+                app.nyx_brain = None
+        except ImportError as e:
+             logger.error(f"Could not import NyxBrain: {e}. Skipping init.")
+             app.nyx_brain = None
         except Exception as e:
-            logger.error(f"Main App: Error initializing NyxBrain: {e}", exc_info=True)
-            app.nyx_brain = None
-    else:
-        logger.warning("Main App: NyxBrain.get_instance not available.")
-        app.nyx_brain = None
+             logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
+             app.nyx_brain = None
 
-    # --- MCP orchestrator ---
-    try:
-        app.mcp_orchestrator = MCPOrchestrator()
-        await app.mcp_orchestrator.initialize()
-        logger.info("Main App: MCP orchestrator initialized.")
-    except Exception as e:
-        logger.error(f"Main App: Error initializing MCP Orchestrator: {e}", exc_info=True)
-        app.mcp_orchestrator = None
+        # MCP orchestrator (assuming async)
+        try:
+            app.mcp_orchestrator = MCPOrchestrator()
+            await app.mcp_orchestrator.initialize() # Assuming async
+            logger.info("MCP orchestrator initialized.")
+        except Exception as e:
+             logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
-    # --- Admin config ---
-    admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
-    try:
-        app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
-    except ValueError:
-        logger.error(f"Main App: Invalid ADMIN_USER_IDS: '{admin_ids_str}'. Defaulting to [1].")
-        app.config['ADMIN_USER_IDS'] = [1]
-    logger.info(f"Main App: Admin User IDs: {app.config['ADMIN_USER_IDS']}")
+        # Admin config
+        admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
+        try:
+            app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
+        except ValueError:
+            logger.error(f"Invalid ADMIN_USER_IDS format: '{admin_ids_str}'. Defaulting to [1].")
+            app.config['ADMIN_USER_IDS'] = [1]
+        logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
-    # --- Aggregator SDK ---
-    try:
-        await init_singletons()
-        logger.info("Main App: Aggregator SDK singletons initialized.")
-    except Exception as e:
-        logger.error(f"Main App: Error initializing Aggregator SDK: {e}", exc_info=True)
+        logger.info("All asynchronous system initializations completed.")
 
-    # --- StoryDirector ---
-    try:
-        story_user_id = 1; story_conversation_id = 1
+        await init_singletons()  # Initialize aggregator_sdk singletons here
+        logger.info("Aggregator SDK singletons are ready.")
+
+        from story_agent.story_director_agent import initialize_story_director, register_with_governance
+    
+        story_user_id = 1
+        story_conversation_id = 1
+    
+        # 1) Build & start your director (agent + context + directive loop)
         await initialize_story_director(story_user_id, story_conversation_id)
+    
+        # 2) THEN register it once with Nyx governance
         await register_with_governance(story_user_id, story_conversation_id)
-        logger.info("Main App: StoryDirector initialized and registered.")
-    except Exception as e:
-        logger.error(f"Main App: Error initializing StoryDirector: {e}", exc_info=True)
+        logger.info("StoryDirector initialized and registered with governance.")
 
-    logger.info("Main App: Attempting to initialize aioredis pools...")
-    try:
-        redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-        if redis_url:
-            # Create the pool object. The actual connections are typically made lazily.
-            # The ping here is to test connectivity during startup.
-            temp_pool_for_ping_test = None
-            try:
-                temp_pool_for_ping_test = await asyncio.wait_for(
-                    aioredis.from_url(redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2),
-                    timeout=5 # Timeout for creating the pool object itself
-                )
-                await asyncio.wait_for(temp_pool_for_ping_test.ping(), timeout=3) # Timeout for the ping
-                logger.info("Main App: aioredis ping successful during initial setup.")
-                # Now assign the successfully created and pinged pool to the app
-                app.aioredis_rate_limit_pool = temp_pool_for_ping_test
-                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Share pool
-                logger.info("Main App: aioredis pools configured.")
-                temp_pool_for_ping_test = None # Avoid closing the one stored on app
-            except Exception as e_ping:
-                logger.error(f"Main App: aioredis initial ping/setup failed: {e_ping}", exc_info=True)
+        try:
+            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            if redis_url:
+                # For Rate Limiter
+                app.aioredis_rate_limit_pool = aioredis.from_url(redis_url, decode_responses=True)
+                await app.aioredis_rate_limit_pool.ping() # Test connection
+                logger.info("aioredis pool for Rate Limiter initialized.")
+    
+                # For IP Block List (can use the same pool or a different one if needed)
+                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Or create new if different DB/config
+                logger.info("aioredis pool for IP Block List configured.")
+            else:
+                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will fall back to local.")
                 app.aioredis_rate_limit_pool = None
                 app.aioredis_ip_block_pool = None
-            finally:
-                if temp_pool_for_ping_test: # If ping failed after pool creation, close the temp one
-                    await temp_pool_for_ping_test.close()
-        else:
-            logger.warning("Main App: REDIS_URL not configured. aioredis pools not created.")
+    
+        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+            logger.error(f"Failed to initialize aioredis pools: {e}")
+            app.aioredis_rate_limit_pool = None # Ensure it's None on failure
+            app.aioredis_ip_block_pool = None
+        except Exception as e:
+            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
             app.aioredis_rate_limit_pool = None
             app.aioredis_ip_block_pool = None
+
+        from nyx.core.brain import base as nyx_base
+        print('Dir on NyxBrain:', dir(nyx_base.NyxBrain))
+        print('NyxBrain.__dict__:', nyx_base.NyxBrain.__dict__.keys())
+        print('Any get_instance global?', hasattr(nyx_base, "get_instance"))
+        print('get_instance:', getattr(nyx_base, "get_instance", None))
+    
+
+        logger.info("All asynchronous system initializations completed.")
+        set_app_initialized() # <<< --- CALL THIS HERE ---
+
     except Exception as e:
-        logger.error(f"Main App: General error initializing aioredis pools: {e}", exc_info=True)
-        app.aioredis_rate_limit_pool = None
-        app.aioredis_ip_block_pool = None
+        logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
+        # Optionally reset the flag if initialization fails critically
+        global _APP_INITIALIZED; _APP_INITIALIZED = False
+        raise
 
 ###############################################################################
 # quart APP CREATION
@@ -464,96 +524,7 @@ def create_quart_app():
 
         return response
 
-    @app.before_serving
-    async def startup_db_pool():
-        """Initialize DB_POOL for this worker process."""
-        logger.info(f"Worker {os.getpid()}: Initializing database connection pool (before_serving).")
-        # Pass 'app' if you want db.connection to store the pool on app.db_pool
-        # This allows routes to access it via current_app.db_pool if needed,
-        # though get_db_connection_context can also use the global DB_POOL.
-        if not await initialize_connection_pool(app=app):
-            logger.critical(f"Worker {os.getpid()}: Database pool initialization FAILED. This worker might not function.")
-            # Consider raising an error to stop the worker if DB is absolutely essential from the start
-            # For now, it logs and continues, problems will arise when DB is accessed.
-            # raise RuntimeError("DB Pool failed to initialize in worker.")
-        else:
-            logger.info(f"Worker {os.getpid()}: Database pool initialized successfully.")
-
-    @app.after_serving
-    async def shutdown_db_pool():
-        """Close DB_POOL for this worker process."""
-        logger.info(f"Worker {os.getpid()}: Closing database connection pool (after_serving).")
-        await close_connection_pool(app=app) # Pass app if close_connection_pool uses it
-        logger.info(f"Worker {os.getpid()}: Database pool closed.")
-
-    @app.before_serving
-    async def startup_worker_resources(): # Consolidated handler
-        worker_pid = os.getpid()
-        logger.info(f"Worker {worker_pid}: Initializing resources (before_serving).")
-
-        # 1. Initialize DB Pool for this worker
-        if not await initialize_connection_pool(app=app): # Pass app
-            logger.critical(f"Worker {worker_pid}: DB pool FAILED to initialize.")
-            raise RuntimeError(f"DB Pool failed to initialize in worker {worker_pid}.")
-        logger.info(f"Worker {worker_pid}: DB pool initialized.")
-
-        # 2. Initialize Nyx Memory System for this worker (now that DB_POOL is ready)
-        try:
-            from logic.nyx_enhancements_integration import initialize_nyx_memory_system
-            logger.info(f"Worker {worker_pid}: Initializing Nyx Memory System...")
-            await initialize_nyx_memory_system()
-            logger.info(f"Worker {worker_pid}: Nyx Memory System initialized.")
-        except Exception as e:
-            logger.error(f"Worker {worker_pid}: Error initializing Nyx Memory System: {e}", exc_info=True)
-            # Optionally raise to stop worker
-
-
-    @app.after_serving
-    async def shutdown_worker_resources(): # Consolidated handler
-        worker_pid = os.getpid()
-        logger.info(f"Worker {worker_pid}: Closing resources (after_serving).")
-        # Add Nyx Memory System shutdown if it has one (e.g., await app.nyx_memory.close())
-        await close_connection_pool(app=app) # Pass app
-        logger.info(f"Worker {worker_pid}: DB pool closed.")
-
-
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    # +++ FULL VERSION OF REDIS POOL SHUTDOWN LOGIC                      +++
-    # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    async def shutdown_redis_pools_app_event():
-        """Gracefully closes aioredis connection pools stored on the app context."""
-        logger.info("Attempting to shut down aioredis pools (app after_serving event)...")
-        rate_limit_pool = getattr(app, 'aioredis_rate_limit_pool', None)
-        if rate_limit_pool and hasattr(rate_limit_pool, 'close') and callable(rate_limit_pool.close):
-            try:
-                logger.info("Closing aioredis_rate_limit_pool...")
-                await rate_limit_pool.close()
-                logger.info("Rate limiter aioredis pool closed successfully.")
-            except Exception as e: logger.error(f"Error closing rate_limit_pool: {e}", exc_info=True)
-            app.aioredis_rate_limit_pool = None
-
-        ip_block_pool = getattr(app, 'aioredis_ip_block_pool', None)
-        if ip_block_pool and ip_block_pool is not rate_limit_pool: # Only close if different instance
-            if hasattr(ip_block_pool, 'close') and callable(ip_block_pool.close):
-                try:
-                    logger.info("Closing aioredis_ip_block_pool...")
-                    await ip_block_pool.close()
-                    logger.info("IP block list aioredis pool closed successfully.")
-                except Exception as e: logger.error(f"Error closing ip_block_pool: {e}", exc_info=True)
-            app.aioredis_ip_block_pool = None
-        elif ip_block_pool and ip_block_pool is rate_limit_pool: # Was shared
-            app.aioredis_ip_block_pool = None # Just clear the reference
-            logger.info("IP block list aioredis pool (shared) reference cleared.")
-
-    app.after_serving(shutdown_redis_pools_app_event)
-
-    logger.info("Running initial application setup (asyncio.run(initialize_systems))...")
-    try:
-        asyncio.run(initialize_systems(app)) # Pass the app instance
-    except Exception as init_err:
-        logger.critical(f"Core application system initialization failed: {init_err}", exc_info=True)
-        raise RuntimeError("Failed to initialize core application systems.") from init_err
-    logger.info("Core application systems initialization complete.")
+    # (Removed stray PrometheusMetrics import & metrics.info — we’re using aioprometheus now)
 
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
@@ -606,56 +577,24 @@ def create_quart_app():
         return await render_template("register.html") # Ensure register.html exists
 
     @app.route("/login", methods=["POST"])
-    @rate_limit(limit=5, period=60) # Ensure rate_limit uses current_app for its Redis pool
-    @validate_input(schema={ # Ensure validate_input uses current_app for its needs if any
-        'username': {'type': 'string', 'pattern': 'username', 'required': True},
+    @rate_limit(limit=5, period=60)
+    @validate_input({ # Renamed to validate_input for clarity if it's from security.py
+        'username': {'type': 'string', 'pattern': 'username', 'required': True}, # Use 'username' NAME
         'password': {'type': 'string', 'max_length': 100, 'required': True}
     })
     async def login():
+        # Prefer request.sanitized_data
         data = getattr(request, 'sanitized_data', None)
-        if data is None: return jsonify({"error": "Invalid request data or not JSON"}), 400
-        username = data.get("username"); password = data.get("password")
-        if not username or not password: return jsonify({"error": "Missing username or password"}), 400
-
-        try:
-            # Use current_app if get_db_connection_context was modified to accept it
-            # and if you stored the pool on app.db_pool
-            async with get_db_connection_context(app=current_app) as conn:
-                row = await conn.fetchrow("SELECT id, password_hash FROM users WHERE username=$1", username)
-
-            if not row:
-                # Timing attack mitigation: hash a dummy password
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, bcrypt.hashpw, b"dummy", bcrypt.gensalt())
-                logger.warning(f"Login attempt for non-existent user: {username}")
-                return jsonify({"error": "Invalid username or password"}), 401
-
-            user_id, hashed_password_from_db = row['id'], row['password_hash'].encode('utf-8')
-
-            loop = asyncio.get_running_loop()
-            password_matches = await loop.run_in_executor(
-                None, bcrypt.checkpw, password.encode('utf-8'), hashed_password_from_db
-            )
-
-            if password_matches:
-                session["user_id"] = user_id; session.permanent = True
-                logger.info(f"Login successful: User {user_id}")
-                return jsonify({"message": "Logged in", "user_id": user_id})
-            else:
-                logger.warning(f"Login failed (bad password): User {user_id} ({username})")
-                return jsonify({"error": "Invalid username or password"}), 401
-        except asyncio.TimeoutError:
-            logger.error(f"Login DB timeout for {username}", exc_info=True)
-            return jsonify({"error": "Database operation timed out"}), 503
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"Login DB error for {username}: {db_err}", exc_info=True)
-            return jsonify({"error": "Database error during login"}), 500
-        except ConnectionError as conn_err: # From get_db_connection_context
-            logger.error(f"Login DB pool error for {username}: {conn_err}", exc_info=True)
-            return jsonify({"error": "Database connection issue"}), 503
-        except Exception as e:
-            logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
-            return jsonify({"error": "Server error during login"}), 500
+        
+        if data is None: # Fallback if sanitized_data is not set by middleware
+            logger.warning("/login route: request.sanitized_data not found, attempting direct JSON parse.")
+            try:
+                data = await request.get_json()
+                if data is None: # Check if JSON body itself was empty e.g. {} or null
+                    return jsonify({"error": "Request body is empty or null JSON"}), 400
+            except Exception as json_err: # Catch errors parsing JSON
+                logger.error(f"Error parsing JSON directly in /login route: {json_err}")
+                return jsonify({"error": "Invalid JSON request body"}), 400
     
         # Now that 'data' is guaranteed to be a dict (or an error was returned)
         username = data.get("username")
@@ -697,76 +636,75 @@ def create_quart_app():
             logger.error(f"Login unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during login"}), 500
 
-    @app.route("/register", methods=["POST"]) # Needs `app` to be defined
+    @app.route("/register", methods=["POST"])
     @rate_limit(limit=3, period=300)
-    @validate_input(schema={
-        'username': {'type': 'string', 'pattern': 'username', 'required': True},
+    @validate_input({ # Renamed to validate_input
+        'username': {'type': 'string', 'pattern': 'username', 'required': True},     # Use 'username' NAME
         'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
-        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False}
+        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': False} # Use 'email' NAME
+                                                                                              # (or 'simple_email' if you defined that)
     })
-    async def register():
-        data = getattr(request, 'sanitized_data', None)
-        if data is None:
-            logger.warning("/register: request.sanitized_data not found.")
-            return jsonify({"error": "Invalid or missing request data"}), 400
-    
+    async def register(): # Make async for asyncpg
+        data = getattr(request, 'sanitized_data', request.get_json())
+        if not data:
+            return jsonify({"error": "Invalid request data"}), 400
         username = data.get("username")
         password = data.get("password")
-        email = data.get("email")
-    
-        if not username or not password:
-            return jsonify({"error": "Missing username or password"}), 400
-    
-        loop = asyncio.get_running_loop()
+        email = data.get("email") # Optional based on validation schema
+
+        if not username or not password: # Add email check if required
+             return jsonify({"error": "Missing required fields"}), 400
+
+        # Hash password
         try:
-            password_hash_bytes = await loop.run_in_executor(
-                None, bcrypt.hashpw, password.encode('utf-8'), bcrypt.gensalt()
-            )
-            password_hash = password_hash_bytes.decode('utf-8')
+            password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         except Exception as hash_err:
-            logger.error(f"Password hashing error for user {username}: {hash_err}", exc_info=True)
-            return jsonify({"error": "Registration process failed (hashing error)"}), 500
-    
+            logger.error(f"Password hashing error: {hash_err}", exc_info=True)
+            return jsonify({"error": "Registration error"}), 500
+
         try:
-            async with get_db_connection_context(app=current_app) as conn:
+            async with get_db_connection_context() as conn: # Use async context
+                # Use transaction for atomic check-and-insert
                 async with conn.transaction():
+                    # Check existing username
                     existing_user = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
                     if existing_user:
                         return jsonify({"error": "Username already exists"}), 409
+
+                    # Check existing email if provided and email column exists and is unique
                     if email:
                         existing_email = await conn.fetchval("SELECT id FROM users WHERE email=$1", email)
                         if existing_email:
                             return jsonify({"error": "Email already exists"}), 409
-                    user_id = await conn.fetchval(
-                        "INSERT INTO users (username, password_hash, email, created_at) VALUES ($1, $2, $3, NOW()) RETURNING id",
+
+                    # Insert new user
+                    user_id = await conn.fetchval( # Use await and $n params
+                        """INSERT INTO users (username, password_hash, email, created_at)
+                           VALUES ($1, $2, $3, NOW()) RETURNING id""",
                         username, password_hash, email
                     )
+
             if user_id:
                 session["user_id"] = user_id
                 session.permanent = True
-                logger.info(f"Registration successful: User {user_id} ({username}) created.")
+                logger.info(f"Registration successful: User {user_id} ({username})")
                 return jsonify({"message": "User registered successfully", "user_id": user_id}), 201
             else:
-                logger.error(f"Registration failed for {username} - no user_id returned.")
-                return jsonify({"error": "Registration failed (DB error)"}), 500
+                logger.error(f"Registration failed: No user ID returned for {username}")
+                return jsonify({"error": "Registration failed"}), 500
+
         except asyncpg.exceptions.UniqueViolationError as uve:
-            logger.warning(f"Registration conflict for {username}: {uve}")
-            if 'username' in str(uve).lower() or (uve.constraint_name and 'username' in uve.constraint_name.lower()):
-                return jsonify({"error": "Username already taken"}), 409
-            elif 'email' in str(uve).lower() or (uve.constraint_name and 'email' in uve.constraint_name.lower()):
-                return jsonify({"error": "Email already registered"}), 409
-            return jsonify({"error": "User credential already exists"}), 409
-        except asyncio.TimeoutError:
-            logger.error(f"DB timeout during registration for {username}.", exc_info=True)
-            return jsonify({"error": "Registration timed out"}), 503
-        except asyncpg.PostgresError as db_err:
-            logger.error(f"DB error during registration for {username}: {db_err}", exc_info=True)
-            return jsonify({"error": "Database issue during registration"}), 500
-        except ConnectionError as conn_err:
-            logger.error(f"DB pool error during registration for {username}: {conn_err}", exc_info=True)
-            return jsonify({"error": "Database connection problem"}), 503
+             # Catch specific unique constraint error
+             logger.warning(f"Registration conflict for {username}: {uve}")
+             # Determine if username or email caused it based on constraint name if possible
+             if 'username' in str(uve): return jsonify({"error": "Username already exists"}), 409
+             if 'email' in str(uve): return jsonify({"error": "Email already exists"}), 409
+             return jsonify({"error": "Username or email already exists"}), 409
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            logger.error(f"Registration DB error for {username}: {db_err}", exc_info=True)
+            return jsonify({"error": "Database error during registration"}), 500
         except Exception as e:
-            logger.error(f"Unexpected error during registration for {username}: {e}", exc_info=True)
+            logger.error(f"Registration unexpected error for {username}: {e}", exc_info=True)
             return jsonify({"error": "Server error during registration"}), 500
 
 
@@ -941,42 +879,60 @@ def create_quart_app():
         return jsonify({"status": "healthy", "timestamp": time.time()})
 
     @app.route("/readiness", methods=["GET"])
-    async def readiness_check(): # All code below must be indented under this
+    async def readiness_check(): # Keep async
         status = {"status": "ready", "timestamp": time.time(), "checks": {}}
         is_ready = True
-        
-        # DB Check
+        # DB Check (Async)
         try:
-            async with get_db_connection_context(timeout=5, app=current_app) as conn:
+            # Use short timeout
+            async with get_db_connection_context(timeout=5) as conn:
                 result = await conn.fetchval("SELECT 1")
-                status["checks"]["database"] = "connected" if result == 1 else "error: bad query"
-                if result != 1: is_ready = False
-        except Exception as db_err:
-            status["checks"]["database"] = f"error: {type(db_err).__name__}"
-            is_ready = False
+                if result == 1: status["checks"]["database"] = "connected"
+                else: status["checks"]["database"] = "error: bad query result"; is_ready = False
+        except (asyncpg.PostgresError, ConnectionError, asyncio.TimeoutError) as db_err:
+            status["checks"]["database"] = f"error: {type(db_err).__name__}"; is_ready = False
             logger.warning(f"Readiness DB check failed: {db_err}")
-        
-        # aioredis Check (CORRECTLY INDENTED)
-        redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-        if redis_url:
-            try:
-                aredis_client = await asyncio.wait_for( # This is now correctly inside async def
-                    aioredis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2),
-                    timeout=3
-                )
-                await aredis_client.ping()
-                status["checks"]["aioredis"] = "connected"
-                await aredis_client.close()
-            except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as aredis_err:
-                status["checks"]["aioredis"] = f"error: {type(aredis_err).__name__}"
-                is_ready = False
-                logger.warning(f"Readiness aioredis check failed: {aredis_err}")
-            except Exception as e_aredis:
-                status["checks"]["aioredis"] = f"unexpected error: {type(e_aredis).__name__}"
-                is_ready = False
-                logger.warning(f"Readiness aioredis check unexpected error: {e_aredis}", exc_info=True)
-        else:
-            status["checks"]["aioredis"] = "not configured (REDIS_URL missing)"
+        except Exception as e:
+            status["checks"]["database"] = f"error: {type(e).__name__}"; is_ready = False
+            logger.warning(f"Readiness DB check unexpected error: {e}", exc_info=True)
+
+
+        # --- Redis Check (Sync - consider async if heavily used) ---
+        redis_host = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        redis_port = int(os.getenv("REDIS_PORT", 6379))
+        try:
+            # Get the aioredis pool/client similar to how your middleware does.
+            # For simplicity, let's assume you have a way to get an aioredis client instance.
+            # If you stored the pool on 'current_app' during initialize_systems:
+            # redis_pool = getattr(current_app, 'aioredis_rate_limit_pool', None)
+            # Or create a temporary one for the check if not easily accessible:
+            redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            if redis_url:
+                # Use a timeout for the connection attempt in readiness
+                try:
+                    aredis_client = await asyncio.wait_for(
+                        aioredis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2),
+                        timeout=3 # Overall timeout for from_url and ping
+                    )
+                    await aredis_client.ping()
+                    status["checks"]["aioredis"] = "connected"
+                    await aredis_client.close() # Close the temporary client/pool
+                except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as aredis_err:
+                    status["checks"]["aioredis"] = f"error: {type(aredis_err).__name__}"
+                    is_ready = False
+                    logger.warning(f"Readiness aioredis check failed: {aredis_err}")
+                except Exception as e_aredis: # Catch any other exception during aioredis init/ping
+                    status["checks"]["aioredis"] = f"unexpected error: {type(e_aredis).__name__}"
+                    is_ready = False
+                    logger.warning(f"Readiness aioredis check unexpected error: {e_aredis}", exc_info=True)
+            else:
+                status["checks"]["aioredis"] = "not configured (REDIS_URL missing)"
+                is_ready = False # Or handle as per your requirements
+
+        except Exception as e: # General catch for the try block
+            status["checks"]["aioredis"] = f"error: {type(e).__name__}"
+            is_ready = False
+            logger.warning(f"Readiness check aioredis setup error: {e}", exc_info=True)
 
         # --- Celery Check (using inspect) ---
         # This can be slow and unreliable; consider a dedicated health check task
