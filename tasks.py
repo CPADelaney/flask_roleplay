@@ -64,14 +64,20 @@ async def is_app_initialized():
 def async_task(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        # Ensure an event loop exists or create one
         try:
             loop = asyncio.get_running_loop()
+            # If we can get a running loop, we're already in an async context
+            # This would be an error condition - can't create another loop
+            raise RuntimeError("Cannot run async_task from an async context")
         except RuntimeError:
+            # No running loop, safe to create a new one
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        return loop.run_until_complete(func(*args, **kwargs))
-        # Note: Consider loop cleanup policies if creating many loops.
+            try:
+                return loop.run_until_complete(func(*args, **kwargs))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)  # Cleanup to avoid potential memory leaks
     return wrapper
 
 @celery_app.task
