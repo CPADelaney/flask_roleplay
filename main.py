@@ -471,13 +471,13 @@ def create_quart_app():
         logger.warning(f"No valid CORS origins found in environment. Using defaults: {origins}")
     
     # Configure CORS - if using specific origins, don't use wildcard
-    if origins == "*":
+    if origins == "*" or not origins:
         # When using wildcard, cannot use credentials
         cors(app,
-             allow_origin=origins,
-             allow_credentials=True,
-             allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
-             allow_headers=["Content-Type", "Authorization", "X-Requested-With"])
+             allow_origin="*",
+             allow_credentials=False,  # MUST be False with wildcard
+             allow_methods="*",
+             allow_headers="*")
         logger.info("CORS configured with wildcard origin (credentials disabled)")
     else:
         # When using specific origins, can use credentials
