@@ -279,7 +279,6 @@ async def initialize_systems(app):
                 # Handle cases where event loop might already be closed
                 logger.warning(f"Could not run async cleanup in atexit: {e}")
 
-        atexit.register(run_async_cleanup)
         logger.info("Registered async pool cleanup with atexit (best effort).")
 
         # --- Initialize Nyx Memory System ---
@@ -564,10 +563,9 @@ def create_quart_app():
 
     @app.before_serving
     async def on_startup():
-        # now that Hypercorn is already listening,
-        # do your heavy lifting in the background
-        from main import initialize_systems
-        await initialize_systems(app)
+        # schedules your init to run *after* the server has bound –
+        # but doesn’t block Hypercorn itself
+        asyncio.create_task(initialize_systems(app))
 
     
     register_auth_routes(app)
