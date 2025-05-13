@@ -518,28 +518,29 @@ def create_quart_app():
     async def set_security_headers(response):
         # Define allowed CDN sources
         cdn_scripts = "https://cdn.jsdelivr.net https://cdn.socket.io https://code.jquery.com"
-        cdn_styles = "https://cdn.jsdelivr.net" # For Bootstrap CSS
+        cdn_styles = "https://cdn.jsdelivr.net"  # e.g. Bootstrap CSS
 
-        response.headers["Content-Security-Policy"] = (
+        # Build a CSP that allows exactly one inline <script> block:
+        csp = (
             "default-src 'self'; "
-            f"script-src 'self' {cdn_scripts}; "
-            # Add 'unsafe-inline' here to allow inline styles
-            f"style-src 'self' {cdn_styles} 'unsafe-inline'; "  # Modified line
+            # Allow our one inline <script> (for window.CURRENT_USER_ID) plus the CDNs:
+            f"script-src 'self' 'unsafe-inline' {cdn_scripts}; "
+            # Allow inline styles for your CSS plus the CDN:
+            f"style-src 'self' {cdn_styles} 'unsafe-inline'; "
             "img-src 'self' data: https://*; "
             "font-src 'self' https://cdn.jsdelivr.net; "
             "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com; "
             "frame-ancestors 'none'; "
             "object-src 'none'; "
-            "base-uri 'self';"
+            "base-uri 'self'; "
             "form-action 'self';"
         )
-        # Other security headers (optional but recommended)
+
+        response.headers["Content-Security-Policy"] = csp
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY" # Or SAMEORIGIN
+        response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # Only if site is HTTPS only
-
         return response
 
     # --- Register Blueprints ---
