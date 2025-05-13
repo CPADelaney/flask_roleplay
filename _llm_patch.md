@@ -1,0 +1,1 @@
+Could you please share the specific lint errors and the relevant code snippets (file paths and surrounding context)? With those details I can draft the exact unified-diff patches to address them.
