@@ -1,0 +1,1 @@
+I’ll need the specific lint errors and the relevant code snippets to propose precise fixes. Could you please share the lint messages and the surrounding context (or file paths and line numbers) so I can generate the appropriate unified diffs?
