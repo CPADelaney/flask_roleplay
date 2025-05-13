@@ -1,0 +1,1 @@
+Could you please provide the list of lint errors (and any relevant code snippets) you’d like addressed? Once I have the details, I can propose minimal unified-diff patches to fix them.
