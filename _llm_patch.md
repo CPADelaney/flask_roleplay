@@ -1,0 +1,1 @@
+I’m ready to help clean up the repo—please paste the lint warnings/errors and any relevant code snippets so I can propose minimal unified-diff patches.
