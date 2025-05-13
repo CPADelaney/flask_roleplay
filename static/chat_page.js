@@ -631,14 +631,37 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Socket.IO connection
   socket = io.connect(location.origin, {
     path: '/socket.io',
-    transports: ['websocket', 'polling'],
+    transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
     reconnection: true,
-    reconnectionAttempts: Infinity, // Keep trying
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    timeout: 20000
+    timeout: 20000,
+    autoConnect: true,
+    forceNew: true // Force a new connection
   });
   setupSocketListeners();
+
+  // Add more debug logging
+  socket.on('connect', () => {
+    console.log("Socket.IO connected!", socket.id);
+    if (currentConvId) {
+      socket.emit('join', { conversation_id: currentConvId });
+      console.log(`Joined room: ${currentConvId}`);
+    }
+  });
+  
+  socket.on('connect_error', (error) => {
+    console.error("Socket.IO connection error:", error);
+  });
+  
+  socket.on('reconnect_attempt', (attemptNumber) => {
+    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
+  });
+  
+  socket.on('reconnect_failed', () => {
+    console.error("Socket.IO reconnection failed");
+  });
 
   // Attach global event listeners
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
