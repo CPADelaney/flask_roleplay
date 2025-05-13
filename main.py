@@ -418,7 +418,13 @@ def create_quart_app():
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
-    sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
+    sio = socketio.AsyncServer(
+        async_mode="asgi",
+        cors_allowed_origins="*",
+        ping_timeout=20, # Increase timeout values
+        ping_interval=25,
+        max_http_buffer_size=5 * 1024 * 1024  # 5MB
+    )
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
 
