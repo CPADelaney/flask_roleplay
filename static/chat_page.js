@@ -204,24 +204,18 @@ function finalizeAssistantMessage(finalText) {
   chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
 }
 
+let myUserId = null;
+
 async function checkLoggedIn() {
-  try {
-    const res = await fetch("/whoami", { method: "GET", credentials: "include" });
-    if (res.ok) {
-      const data = await res.json();
-      if (!data.logged_in) {
-        window.location.href = "/login_page";
-      } else {
-        (logoutBtn || document.getElementById("logoutBtn")).style.display = "inline-block";
-      }
-    } else {
-      window.location.href = "/login_page";
-    }
-  } catch (err) {
-    console.error("Check login error:", err);
-    window.location.href = "/login_page";
+  const res = await fetch("/whoami", { credentials: "include" });
+  const data = await res.json();
+  if (!data.logged_in) {
+    return window.location.href = "/login_page";
   }
+  myUserId = data.user_id;
+  document.getElementById("logoutBtn").style.display = "inline-block";
 }
+
 
 function attachEnterKey() {
   (userMsgInput || document.getElementById("userMsg")).addEventListener("keydown", function(e) {
@@ -631,14 +625,13 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Socket.IO connection
   socket = io.connect(location.origin, {
     path: '/socket.io',
-    transports: ['websocket', 'polling'], // Try websocket first, fallback to polling
+    transports: ['websocket','polling'],
+    auth: { user_id: myUserId },    // ← ← ← inject it here
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
     timeout: 20000,
     autoConnect: true,
-    forceNew: true // Force a new connection
+    forceNew: true
   });
   setupSocketListeners();
 
