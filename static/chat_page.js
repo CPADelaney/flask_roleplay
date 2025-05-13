@@ -624,9 +624,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // Socket.IO connection
   socket = io.connect(location.origin, {
-    auth: { user_id: window.CURRENT_USER_ID },
     path: '/socket.io',
     transports: ['websocket','polling'],
+    auth: { user_id: window.CURRENT_USER_ID },
     reconnection: true,
     reconnectionAttempts: Infinity,
     timeout: 20000,
