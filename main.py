@@ -420,7 +420,7 @@ def create_quart_app():
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
     sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*", 
-                               ping_timeout=20, ping_interval=25,
+                               ping_timeout=60, ping_interval=25,
                                max_http_buffer_size=5*1024*1024)
 
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
