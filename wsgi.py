@@ -16,7 +16,7 @@ import time
 # Global flag and server object
 dummy_server_instance = None # Renamed for clarity
 server_should_exit = False
-DUMMY_SERVER_PORT = 8080 # Define as a constant for clarity
+DUMMY_SERVER_PORT = int(os.environ.get("PORT", "8080"))
 
 def run_simple_server():
     global dummy_server_instance, server_should_exit # Use the global instance variable
