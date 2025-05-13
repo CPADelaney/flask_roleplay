@@ -609,6 +609,11 @@ def create_quart_app():
     # --- Authentication Routes ---
     # At the top of main.py, add this import:
     from db.connection import get_db_dsn
+
+    @app.route("/socket-health")
+    async def socket_health():
+        active_count = len(app.socketio.manager.get_participants())
+        return {"status": "healthy", "active_connections": active_count}
     
     @app.route("/login", methods=["POST"])
     @rate_limit(limit=5, period=60)
