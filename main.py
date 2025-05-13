@@ -85,6 +85,12 @@ from logic.aggregator_sdk import init_singletons
 
 logger = logging.getLogger(__name__)
 
+logging.basicConfig(level=logging.INFO)
+
+# 2) Silence noisy libraries
+for lib in ("asyncio", "hypercorn", "socketio", "engineio", "openai"):
+    logging.getLogger(lib).setLevel(logging.WARNING)
+
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
 if not DB_DSN:
