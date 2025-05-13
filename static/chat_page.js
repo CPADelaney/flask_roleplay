@@ -66,10 +66,31 @@ function setupSocketListeners() {
     }
   });
 
-  socket.on("disconnect", (reason) => {
+  socket.on('disconnect', (reason) => {
     console.log("Socket.IO disconnected:", reason);
     const disconnectMsg = { sender: "system", content: "Connection lost. Attempting to reconnect..." };
     appendMessage(disconnectMsg, true);
+    
+    // If the server disconnected us, try to reconnect
+    if (reason === 'io server disconnect') {
+      // The disconnection was initiated by the server, reconnect manually
+      setTimeout(() => {
+        console.log("Manually reconnecting...");
+        socket.connect();
+      }, 1000);
+    }
+    // else the socket will automatically try to reconnect
+  });
+
+  socket.on('reconnect', (attemptNumber) => {
+    console.log(`Socket.IO reconnected after ${attemptNumber} attempts`);
+    const reconnectMsg = { sender: "system", content: "Reconnected to server!" };
+    appendMessage(reconnectMsg, true);
+    
+    // Rejoin the room if we have a conversation selected
+    if (currentConvId) {
+      socket.emit('join', { conversation_id: currentConvId });
+    }
   });
 
   socket.on("connect_error", (error) => {
