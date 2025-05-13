@@ -88,7 +88,17 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # 2) Silence noisy libraries
-for lib in ("asyncio", "hypercorn", "socketio", "engineio", "openai"):
+NOISY = (
+    "asyncio",
+    "hypercorn",
+    "socketio",
+    "engineio",
+    "httpx",
+    "openai",
+    "mcp_orchestrator",
+    "celery.utils.functional",
+)
+for lib in NOISY:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
 # Database DSN
