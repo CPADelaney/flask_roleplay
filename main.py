@@ -419,13 +419,10 @@ def create_quart_app():
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
     
     # 2) Create & attach Socket.IO _before_ any @sio.event handlers
-    sio = socketio.AsyncServer(
-        async_mode="asgi",
-        cors_allowed_origins="*",
-        ping_timeout=20, # Increase timeout values
-        ping_interval=25,
-        max_http_buffer_size=5 * 1024 * 1024  # 5MB
-    )
+    sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*", 
+                               ping_timeout=20, ping_interval=25,
+                               max_http_buffer_size=5*1024*1024)
+
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
 
@@ -492,19 +489,26 @@ def create_quart_app():
 
     # 5) Socket.IO event handlers
     @sio.event
-    async def connect(sid, environ):
-        user = session.get("user_id", "anonymous")
-        app.logger.info(f"connect: {sid}/{user}")
+    async def connect(sid, environ, auth):
+        # auth comes from client: io({ auth: { user_id: … } })
+        user_id = auth.get("user_id") if auth else "anonymous"
+        # save it into the socketio session
+        await sio.save_session(sid, {"user_id": user_id})
+        app.logger.info(f"connect: {sid} / user={user_id}")
         await sio.emit("response", {"data": "Connected!"}, to=sid)
 
     @sio.on("join")
     async def on_join(sid, data):
+        sock_sess = await sio.get_session(sid)
+        user_id  = sock_sess.get("user_id", "anonymous")
         room = str(data.get("conversation_id"))
         sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room}, to=sid)
 
     @sio.on("message")
     async def on_message(sid, data):
+        sock_sess = await sio.get_session(sid)
+        user_id  = sock_sess.get("user_id", "anonymous")        
         await sio.emit("message_received", {"status": "processing"}, to=sid)
         # … your background task kick‑off here …
 
