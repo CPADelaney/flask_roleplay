@@ -510,15 +510,16 @@ def create_quart_app():
 
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            f"script-src 'self' {cdn_scripts}; " # Allow 'self' and specific CDNs for scripts
-            f"style-src 'self' {cdn_styles}; "   # Allow 'self' and specific CDNs for styles
-            "img-src 'self' data: https://*; " # Allow images from self, data URIs, and any HTTPS source (be more specific if possible)
-            "font-src 'self' https://cdn.jsdelivr.net; " # If Bootstrap uses webfonts from its CDN
-            "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com; " # Allows connections to self, all WebSocket URLs, and your Render domain explicitly.
-            "frame-ancestors 'none'; " # Good practice to prevent clickjacking
-            "object-src 'none'; " # Good practice, disallow <object>, <embed>, <applet>
-            "base-uri 'self';" # Restricts <base> tag
-            "form-action 'self';" # Restricts where forms can submit to
+            f"script-src 'self' {cdn_scripts}; "
+            # Add 'unsafe-inline' here to allow inline styles
+            f"style-src 'self' {cdn_styles} 'unsafe-inline'; "  # Modified line
+            "img-src 'self' data: https://*; "
+            "font-src 'self' https://cdn.jsdelivr.net; "
+            "connect-src 'self' ws://* wss://* https://nyx-m85p.onrender.com; "
+            "frame-ancestors 'none'; "
+            "object-src 'none'; "
+            "base-uri 'self';"
+            "form-action 'self';"
         )
         # Other security headers (optional but recommended)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -528,8 +529,6 @@ def create_quart_app():
         # response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains" # Only if site is HTTPS only
 
         return response
-
-    # (Removed stray PrometheusMetrics import & metrics.info — we’re using aioprometheus now)
 
     # --- Register Blueprints ---
     # (Ensure blueprints using async routes correctly use asyncpg)
