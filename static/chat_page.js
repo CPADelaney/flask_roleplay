@@ -624,14 +624,15 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // Socket.IO connection
   socket = io({
-    path: '/socket.io',
-    transports: ['websocket','polling'],
-    auth: { user_id: window.CURRENT_USER_ID },
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    timeout: 20000,
-    autoConnect: true,
-    forceNew: true
+      path: '/socket.io',
+      transports: ['websocket', 'polling'], // Keep both, but websocket first
+      auth: { user_id: window.CURRENT_USER_ID },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000, // Start with 1s delay
+      reconnectionDelayMax: 5000, // Max 5s between attempts
+      timeout: 30000, // Increase timeout
+      autoConnect: true
   });
   setupSocketListeners();
 
