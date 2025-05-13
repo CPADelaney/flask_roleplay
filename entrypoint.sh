@@ -7,5 +7,5 @@ else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
     # Add the --workers=1 flag to ensure a single worker process
-    exec hypercorn --workers 1 --bind 0.0.0.0:${PORT} --lifespan off wsgi:app
+    exec hypercorn --workers 1 --bind 0.0.0.0:${PORT} wsgi:app
 fi
