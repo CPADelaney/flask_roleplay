@@ -623,7 +623,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   await loadConversations();
 
   // Socket.IO connection
-  socket = io.connect(location.origin, {
+  socket = io({
     path: '/socket.io',
     transports: ['websocket','polling'],
     auth: { user_id: window.CURRENT_USER_ID },
