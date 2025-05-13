@@ -627,7 +627,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     auth: { user_id: window.CURRENT_USER_ID },
     path: '/socket.io',
     transports: ['websocket','polling'],
-    auth: { user_id: myUserId },    // ← ← ← inject it here
     reconnection: true,
     reconnectionAttempts: Infinity,
     timeout: 20000,
