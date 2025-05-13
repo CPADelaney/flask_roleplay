@@ -1,0 +1,1 @@
+It looks like the lint errors and code snippets didn’t come through—could you repost the specific warnings/errors along with the surrounding code? Once I have those, I can craft minimal unified‑diff patches to address each issue.
