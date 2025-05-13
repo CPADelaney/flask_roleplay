@@ -490,18 +490,19 @@ def create_quart_app():
     # 5) Socket.IO event handlers
     @sio.event
     async def connect(sid, environ, auth):
-        # auth comes from client: io({ auth: { user_id: … } })
+        # auth comes from the client: io({ auth: { user_id: … } })
         user_id = auth.get("user_id") if auth else "anonymous"
-        # save it into the socketio session
+        # save into the socketio session
         await sio.save_session(sid, {"user_id": user_id})
-        app.logger.info(f"connect: {sid} / user={user_id}")
+        app.logger.info(f"Socket connected: sid={sid}, user_id={user_id}")
+        # optional welcome ack
         await sio.emit("response", {"data": "Connected!"}, to=sid)
 
     @sio.on("join")
     async def on_join(sid, data):
         sock_sess = await sio.get_session(sid)
         user_id  = sock_sess.get("user_id", "anonymous")
-        room = str(data.get("conversation_id"))
+        room = str(data["conversation_id"])
         sio.enter_room(sid, room)
         await sio.emit("joined", {"room": room}, to=sid)
 
