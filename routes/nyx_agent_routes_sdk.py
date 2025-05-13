@@ -19,11 +19,18 @@ from db.connection import get_db_connection_context
 nyx_agent_bp = Blueprint("nyx_agent_bp", __name__)
 
 # Initialize the agent system when the Flask app starts
+_nyx_initialized = False
+
 @nyx_agent_bp.before_app_request
-async def initialize():
-    """Initialize the agent system before the first request"""
-    await initialize_agents()
-    logging.info("Nyx agent system initialized")
+async def initialize_once():
+    """
+    Initialize the Nyx agent system exactly once.
+    """
+    global _nyx_initialized
+    if not _nyx_initialized:
+        await initialize_agents()
+        logging.info("Nyx agent system initialized")
+        _nyx_initialized = True
 
 @nyx_agent_bp.route("/nyx_response", methods=["POST"])
 @timed_function(name="nyx_response")
