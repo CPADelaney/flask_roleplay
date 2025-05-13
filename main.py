@@ -561,24 +561,19 @@ def create_quart_app():
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
     app.before_request(async_ip_block_middleware)
+
+    @app.before_serving
+    async def on_startup():
+        # now that Hypercorn is already listening,
+        # do your heavy lifting in the background
+        from main import initialize_systems
+        await initialize_systems(app)
+
+    
     register_auth_routes(app)
 
     init_image_routes(app) # Ensure this uses asyncpg if needed
     init_chat_routes(app) # Ensure this uses asyncpg if needed
-
-    # --- Run Async Initializations ---
-    # Run the async setup tasks AFTER the main app config but before returning app
-    # This uses asyncio.run, which is okay here as it's during initial setup phase.
-    try:
-        # Use asyncio.run() to execute the async initializer function
-        # This is acceptable here during the synchronous app creation phase.
-        asyncio.run(initialize_systems(app))
-    except Exception as init_err:
-        logger.critical(f"Application initialization failed: {init_err}", exc_info=True)
-        # Exit or raise prevents the app from being returned in a broken state
-        raise RuntimeError("Failed to initialize application systems.") from init_err
-    logger.info("Async initializations complete. quart app creation finished.")
-
 
     ###########################################################################
     # ROUTES (Defined in main app - keep minimal, prefer blueprints)
@@ -1005,18 +1000,6 @@ def create_quart_app():
 
         return jsonify(status), 200
 
-
-    try:
-        import wsgi
-        wsgi.server_should_exit = True
-        # Make a request to the server to trigger handle_request() one more time
-        try:
-            import urllib.request
-            urllib.request.urlopen('http://localhost:8080/shutdown').close()
-        except:
-            pass  # Ignore errors here
-    except:
-        pass  # In case wsgi is not available
 
     async def shutdown_redis_pools():
         logger.info("Attempting to shut down aioredis pools...")
