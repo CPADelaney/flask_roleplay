@@ -1,3 +1,4 @@
+
 # main.py
 
 import os
@@ -421,9 +422,9 @@ def create_quart_app():
     sio = socketio.AsyncServer(
         async_mode="asgi",
         cors_allowed_origins="*",
-        ping_timeout=60,  # Increased from 20
-        ping_interval=45,  # Increased from 25
-        max_http_buffer_size=5 * 1024 * 1024
+        ping_timeout=20, # Increase timeout values
+        ping_interval=25,
+        max_http_buffer_size=5 * 1024 * 1024  # 5MB
     )
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
@@ -471,11 +472,11 @@ def create_quart_app():
         logger.warning(f"No valid CORS origins found in environment. Using defaults: {origins}")
     
     # Configure CORS - if using specific origins, don't use wildcard
-    if origins == "*" or not origins:
+    if origins == "*":
         # When using wildcard, cannot use credentials
         cors(app,
              allow_origin="*",
-             allow_credentials=False,  # MUST be False with wildcard
+             allow_credentials=False,  # Must be False with wildcard
              allow_methods="*",
              allow_headers="*")
         logger.info("CORS configured with wildcard origin (credentials disabled)")
@@ -498,36 +499,14 @@ def create_quart_app():
 
     @sio.on("join")
     async def on_join(sid, data):
-        try:
-            room = str(data.get("conversation_id"))
-            sio.enter_room(sid, room)
-            await sio.emit("joined", {"room": room}, to=sid)
-            logger.info(f"Client {sid} joined room {room}")
-        except Exception as e:
-            logger.error(f"Error in join handler: {e}", exc_info=True)
-            # Try to notify the client
-            await sio.emit("error", {"error": "Server error joining room"}, to=sid)
+        room = str(data.get("conversation_id"))
+        sio.enter_room(sid, room)
+        await sio.emit("joined", {"room": room}, to=sid)
 
     @sio.on("message")
     async def on_message(sid, data):
         await sio.emit("message_received", {"status": "processing"}, to=sid)
         # … your background task kick‑off here …
-
-    @sio.on("storybeat")
-    async def on_storybeat(sid, data):
-        user_input = data.get("user_input")
-        conversation_id = data.get("conversation_id")
-        player_name = data.get("player_name", "Chase")
-        advance_time = data.get("advance_time", False)
-        universal_update = data.get("universal_update", None)
-        
-        # Start background task to process the message
-        await background_chat_task(conversation_id, user_input, session.get("user_id"), universal_update)
-
-    @app.before_serving
-    async def before_serving():
-        # Complete all initialization before accepting connections
-        await initialize_systems(app)
 
     # 6) Security headers
     @app.after_request
