@@ -83,18 +83,18 @@ logging.info(f"Logging level set to: {log_level_name}")
 
 
 # Start the dummy server in a separate thread
-#logging.info("Starting dummy placeholder server thread...")
-#server_thread = threading.Thread(target=run_simple_server, name="DummyServerThread")
+logging.info("Starting dummy placeholder server thread...")
+server_thread = threading.Thread(target=run_simple_server, name="DummyServerThread")
 # daemon=True means this thread won't prevent the main program from exiting.
 # This is safer if the join() times out or has an issue.
-#server_thread.daemon = True
-#server_thread.start()
+server_thread.daemon = True
+server_thread.start()
 
 # Optional: Give the dummy server a very brief moment to actually start and bind.
 # This can help avoid a race condition where the main thread signals shutdown
 # before the dummy server's HTTPServer has even fully initialized.
 # However, the join() later is the more critical synchronization point.
-# time.sleep(0.1) # Usually not strictly necessary but can be a pragmatic addition
+time.sleep(0.1) # Usually not strictly necessary but can be a pragmatic addition
 
 # Import the app creation functions AFTER logging setup
 from main import create_quart_app
@@ -105,18 +105,18 @@ app = create_quart_app()
 logging.info("Quart app instance created.")
 
 # Now, signal the dummy server to stop
-#logging.info("Signaling dummy placeholder server to stop...")
-#server_should_exit = True
+logging.info("Signaling dummy placeholder server to stop...")
+server_should_exit = True
 
 # Wait for the dummy server thread to finish.
 # This is CRUCIAL to ensure the port is freed before Hypercorn (launched externally)
 # tries to use it.
-#logging.info("Waiting for dummy placeholder server thread to join...")
-#server_thread.join(timeout=5) # Wait up to 5 seconds for the thread to terminate
+logging.info("Waiting for dummy placeholder server thread to join...")
+server_thread.join(timeout=5) # Wait up to 5 seconds for the thread to terminate
 
-#if server_thread.is_alive():
-#    logging.warning("Dummy placeholder server thread did not exit in time. Hypercorn might still face port issues if using the same port.")
-#else:
-#    logging.info("Dummy placeholder server thread joined successfully. Port should be free.")
+if server_thread.is_alive():
+    logging.warning("Dummy placeholder server thread did not exit in time. Hypercorn might still face port issues if using the same port.")
+else:
+    logging.info("Dummy placeholder server thread joined successfully. Port should be free.")
 
-#logging.info("wsgi.py loaded successfully. Hypercorn should now be able to bind.")
+logging.info("wsgi.py loaded successfully. Hypercorn should now be able to bind.")
