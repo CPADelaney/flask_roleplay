@@ -1034,7 +1034,7 @@ def create_quart_app():
 
         return jsonify(status), 200
 
-
+    @app.before_serving
     async def init_redis_pools(app):
         """Initialize Redis connection pools properly."""
         try:
