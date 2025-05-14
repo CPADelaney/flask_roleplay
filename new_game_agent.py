@@ -176,6 +176,19 @@ class NewGameAgent:
         
         # Start background processing of directives
         await self.directive_handler.start_background_processing()
+
+    logger.info("Scheduling StoryDirector initialization after startup")
+    
+    async def _init_story_director():
+        try:
+            logger.info("Deferred StoryDirector async init starts")
+            await initialize_story_director(story_user_id, story_conversation_id)
+            await register_with_governance(story_user_id, story_conversation_id)
+            logger.info("StoryDirector initialized+registered (deferred)")
+        except Exception as e:
+            logger.error(f"Deferred StoryDirector init failed: {e}", exc_info=True)
+    
+    asyncio.create_task(_init_story_director())
     
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
