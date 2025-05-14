@@ -29,6 +29,7 @@ smolagents>=1.0.0
 werkzeug
 starlette
 aioprometheus
+hf_xet
 
 # Database
 SQLAlchemy==2.0.23
