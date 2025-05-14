@@ -510,6 +510,15 @@ def create_quart_app():
 
     # 5) Socket.IO event handlers
     @sio.event
+    async def client_heartbeat(sid, data):
+        """Handle client heartbeat to keep connections alive."""
+        try:
+            # Respond with server heartbeat
+            await sio.emit('server_heartbeat', {'timestamp': time.time()}, room=sid)
+        except Exception as e:
+            logger.error(f"Error handling heartbeat from {sid}: {e}")
+    
+    @sio.event
     async def connect(sid, environ, auth):
         # auth comes from the client: io({ auth: { user_id: … } })
         user_id = auth.get("user_id") if auth else "anonymous"
