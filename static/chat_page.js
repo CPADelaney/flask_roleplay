@@ -68,29 +68,49 @@ function setupSocketListeners() {
 
   socket.on('disconnect', (reason) => {
     console.log("Socket.IO disconnected:", reason);
+    
     const disconnectMsg = { sender: "system", content: "Connection lost. Attempting to reconnect..." };
     appendMessage(disconnectMsg, true);
     
-    // If the server disconnected us, try to reconnect
+    // Server initiated disconnect needs manual reconnection
     if (reason === 'io server disconnect') {
-      // The disconnection was initiated by the server, reconnect manually
+      socket.connect();
+    }
+    // For ping timeout, try clearing any zombie connections
+    if (reason === 'ping timeout') {
       setTimeout(() => {
-        console.log("Manually reconnecting...");
-        socket.connect();
+        if (!socket.connected) {
+          console.log("Attempting recovery from ping timeout...");
+          socket.connect();
+        }
       }, 1000);
     }
-    // else the socket will automatically try to reconnect
   });
 
+  socket.on('reconnect_attempt', (attemptNumber) => {
+    console.log(`Socket.IO reconnection attempt #${attemptNumber}`);
+  });
+  
   socket.on('reconnect', (attemptNumber) => {
     console.log(`Socket.IO reconnected after ${attemptNumber} attempts`);
-    const reconnectMsg = { sender: "system", content: "Reconnected to server!" };
+    const reconnectMsg = { sender: "system", content: "Connection restored!" };
     appendMessage(reconnectMsg, true);
     
-    // Rejoin the room if we have a conversation selected
+    // Rejoin any active conversation
     if (currentConvId) {
       socket.emit('join', { conversation_id: currentConvId });
+      console.log(`Rejoined room: ${currentConvId} after reconnection`);
     }
+  });
+  
+  socket.on('reconnect_error', (error) => {
+    console.error("Socket.IO reconnection error:", error);
+  });
+  
+  socket.on('reconnect_failed', () => {
+    console.error("Socket.IO reconnection failed after all attempts");
+    const failMsg = { sender: "system", content: "Unable to reconnect to server. Please refresh the page." };
+    appendMessage(failMsg, true);
   });
 
   socket.on("connect_error", (error) => {
@@ -646,13 +666,16 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Socket.IO connection
   socket = io({
       path: '/socket.io',
-      transports: ['websocket', 'polling'], // Keep both, but websocket first
+      transports: ['websocket', 'polling'],
       auth: { user_id: window.CURRENT_USER_ID },
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000, // Start with 1s delay
-      reconnectionDelayMax: 5000, // Max 5s between attempts
-      timeout: 30000, // Increase timeout
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 120000, // Match server's pingTimeout (120 seconds)
+      pingTimeout: 120000,
+      pingInterval: 25000, // Match server's pingInterval
+      forceNew: false, // Don't force a new connection each time
       autoConnect: true
   });
   setupSocketListeners();
