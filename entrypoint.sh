@@ -9,5 +9,5 @@ else
     echo "Starting Web Server with SocketIO using Hypercorn config file..."
     # The PORT environment variable will be read by hypercorn_config.py
     # Make sure hypercorn_config.py is in /app in the container (if WORKDIR /app)
-    exec hypercorn -c /app/hypercorn_config.py wsgi:app
+    exec hypercorn -c /app/hypercorn_config.toml wsgi:app
 fi
