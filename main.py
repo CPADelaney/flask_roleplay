@@ -1,4 +1,3 @@
-
 # main.py
 
 import os
@@ -359,13 +358,6 @@ async def initialize_systems(app: Quart):
         logger.info("Initializing Aggregator SDK singletons...")
         await init_singletons()
         logger.info("Aggregator SDK singletons are ready.")
-
-        logger.info("Initializing StoryDirector...")
-        story_user_id = 1
-        story_conversation_id = 1
-        await initialize_story_director(story_user_id, story_conversation_id)
-        await register_with_governance(story_user_id, story_conversation_id)
-        logger.info("StoryDirector initialized and registered with governance.")
 
         # --- 5. Configuration Settings ---
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
