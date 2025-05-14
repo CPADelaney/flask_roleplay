@@ -1035,18 +1035,40 @@ def create_quart_app():
         return jsonify(status), 200
 
 
+    async def init_redis_pools(app):
+        """Initialize Redis connection pools properly."""
+        try:
+            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+            if redis_url:
+                # For Rate Limiter - with reasonable pool limits
+                app.aioredis_rate_limit_pool = aioredis.from_url(
+                    redis_url, 
+                    decode_responses=True,
+                    max_connections=10  # Limit concurrent connections
+                )
+                await app.aioredis_rate_limit_pool.ping()  # Test connection
+                logger.info("aioredis pool for Rate Limiter initialized.")
+                
+                # Use the same pool for IP blocking
+                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool
+                logger.info("aioredis pool for IP Block List configured.")
+            else:
+                logger.warning("REDIS_URL not configured. Using in-memory rate limiting.")
+                app.aioredis_rate_limit_pool = None
+                app.aioredis_ip_block_pool = None
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize aioredis pools: {e}", exc_info=True)
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
+    
+    @app.after_serving
     async def shutdown_redis_pools():
-        logger.info("Attempting to shut down aioredis pools...")
+        """Properly close Redis connections on shutdown."""
+        logger.info("Closing Redis connection pools...")
         if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
             await app.aioredis_rate_limit_pool.close()
-            # await app.aioredis_rate_limit_pool.wait_closed() # For older aioredis
-            logger.info("Rate limiter aioredis pool closed.")
-        # No need to close ip_block_pool if it's the same object as rate_limit_pool
-        # If they were different:
-        # if hasattr(app, 'aioredis_ip_block_pool') and app.aioredis_ip_block_pool and \
-        #    app.aioredis_ip_block_pool is not app.aioredis_rate_limit_pool:
-        #     await app.aioredis_ip_block_pool.close()
-        #     logger.info("IP blocklist aioredis pool closed.")
+            logger.info("Redis rate limiter pool closed.")
     
     app.after_serving(shutdown_redis_pools)
     
