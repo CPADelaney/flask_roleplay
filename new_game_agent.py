@@ -23,6 +23,7 @@ from db.connection import get_db_connection_context
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from story_agent.story_director_agent import initialize_story_director, register_with_governance as register_sd_with_gov
 from nyx.directive_handler import DirectiveHandler
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 
@@ -30,8 +31,6 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 DB_DSN = os.getenv("DB_DSN")
 
 logger = logging.getLogger(__name__)
-
-from nyx.nyx_governance import AgentType # Make sure this is imported
 
 NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER # Or AgentType.UNIVERSAL_UPDATER.value if methods expect string
 NEW_GAME_AGENT_NYX_ID = "new_game_director_agent" 
@@ -179,19 +178,6 @@ class NewGameAgent:
         # Start background processing of directives
         await self.directive_handler.start_background_processing()
 
-    logger.info("Scheduling StoryDirector initialization after startup")
-    
-    async def _init_story_director():
-        try:
-            logger.info("Deferred StoryDirector async init starts")
-            await initialize_story_director(story_user_id, story_conversation_id)
-            await register_with_governance(story_user_id, story_conversation_id)
-            logger.info("StoryDirector initialized+registered (deferred)")
-        except Exception as e:
-            logger.error(f"Deferred StoryDirector init failed: {e}", exc_info=True)
-    
-    asyncio.create_task(_init_story_director())
-    
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
         instruction = directive.get("instruction", "")
@@ -843,27 +829,32 @@ class NewGameAgent:
             tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests",
                       "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"]
             for t in tables:
-                # Use f-string carefully, ensure t is from a controlled list (which it is here)
                 await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
                                    user_id, conversation_id)
-        
-        # NOW we have conversation_id, so let's insert default "Chase" stats
-        # Since insert_default_player_stats_chase is async, await it directly:
-        await insert_default_player_stats_chase(user_id, conversation_id) # <<< CORRECTED CALL
+        logger.info("Scheduling StoryDirector initialization after startup")
+        # --- Async background initialization of StoryDirector, non-blocking ---
+        async def _init_story_director():
+            try:
+                logger.info(f"Deferred StoryDirector async init starts for user={user_id} conv={conversation_id}")
+                await initialize_story_director(user_id, conversation_id)
+                await register_sd_with_gov(user_id, conversation_id)
+                logger.info(f"StoryDirector initialized+registered (deferred) for user={user_id} conv={conversation_id}")
+            except Exception as e:
+                logger.error(f"Deferred StoryDirector init failed for user={user_id} conv={conversation_id}: {e}", exc_info=True)
+                
+        asyncio.create_task(_init_story_director())
+    
+        # --- The rest of your process_new_game logic follows; Chase setup, registration, etc ---
+        await insert_default_player_stats_chase(user_id, conversation_id)
         logging.info(f"Default player stats for Chase inserted for user_id={user_id}, conv_id={conversation_id}")
-        
-        # Initialize directive handler for this session
+    
         await self.initialize_directive_handler(user_id, conversation_id)
-        
-        # Register with the governance system
         governance = await get_central_governance(user_id, conversation_id)
         await governance.register_agent(
             agent_type=NEW_GAME_AGENT_NYX_TYPE,
             agent_instance=self,
             agent_id=NEW_GAME_AGENT_NYX_ID
         )
-        
-        # Process directives (to pick up any pending directives for this game)
         await self.directive_handler.process_directives(force_check=True)
         
         # Gather environment components
