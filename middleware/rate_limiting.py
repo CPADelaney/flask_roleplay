@@ -277,39 +277,41 @@ class AsyncIPBlockList:
         self.redis_key_prefix = "ip_blocklist:"
         self.local_lock = asyncio.Lock()
 
-    async def _get_redis(self) -> Optional[aioredis.Redis]: # Same as RateLimiter's
+    async def _get_redis(self) -> Optional[aioredis.Redis]:
+        """Get Redis connection from app pool instead of creating a new one."""
         try:
-            if not hasattr(g, 'ip_block_aioredis_pool'): # Use a different pool attribute on g
-                redis_url = current_app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-                g.ip_block_aioredis_pool = aioredis.from_url(redis_url, decode_responses=True)
-            if not hasattr(g, 'ip_block_aioredis_conn') or g.ip_block_aioredis_conn.closed:
-                 g.ip_block_aioredis_conn = await g.ip_block_aioredis_pool.client()
-                 await g.ip_block_aioredis_conn.ping()
-            return g.ip_block_aioredis_conn
-        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to connect to aioredis for AsyncIPBlockList: {e}")
-            return None
+            # Use the shared connection pool from current_app
+            if hasattr(current_app, 'aioredis_ip_block_pool') and current_app.aioredis_ip_block_pool:
+                return current_app.aioredis_ip_block_pool
+            else:
+                logger.warning("aioredis_ip_block_pool not available on app context")
+                return None
         except Exception as e:
-            logger.error(f"Unexpected error getting aioredis for AsyncIPBlockList: {e}")
+            logger.error(f"Error getting Redis connection from pool: {e}")
             return None
 
     async def is_blocked(self, ip_address: str, distributed: bool = True) -> bool:
+        # Check local blocklist first
         async with self.local_lock:
             if ip_address in self.local_blocked_ips:
-                logger.debug(f"IP {ip_address} found in local blocklist (async)")
+                logger.debug(f"IP {ip_address} found in local blocklist")
                 return True
-
+                
+        # Then check Redis
         if distributed:
-            redis_client = await self._get_redis()
-            if redis_client:
+            redis = await self._get_redis()
+            if redis:
                 try:
                     key = f"{self.redis_key_prefix}{ip_address}"
-                    if await redis_client.exists(key):
-                        logger.debug(f"IP {ip_address} found in aioredis blocklist")
+                    exists = await redis.exists(key)
+                    if exists:
+                        logger.debug(f"IP {ip_address} found in Redis blocklist")
                         return True
-                except aioredis.RedisError as e:
-                    logger.error(f"aioredis error checking blocked IP {ip_address}: {e}")
+                except Exception as e:
+                    logger.error(f"Redis error checking IP {ip_address}: {e}")
+        
         return False
+
 
     async def block_ip(self, ip_address: str, reason: str = "Manual block",
                       duration: int = 86400, distributed: bool = True) -> bool:
@@ -391,28 +393,17 @@ global_async_ip_block_list = AsyncIPBlockList()
 
 # Async Middleware for IP Blocking
 async def async_ip_block_middleware():
-    """Async middleware function for IP blocking."""
-    # Try to get client IP from common headers first, then remote_addr
-    # This handles proxies better. Ensure your proxy (e.g., Nginx, Render's LB) sets X-Forwarded-For.
-    # You might need to configure Quart's PROXY_FIX settings if behind multiple proxies.
-    x_forwarded_for = request.headers.get('X-Forwarded-For')
-    if x_forwarded_for:
-        client_ip = x_forwarded_for.split(',')[0].strip()
-    else:
-        client_ip = request.remote_addr # remote_addr might be proxy IP if not configured
-
-    if client_ip:
-        if await global_async_ip_block_list.is_blocked(client_ip):
-            logger.warning(f"Blocked request from IP: {client_ip} (async)")
-            # abort() is synchronous. For async, we return a response.
-            # Or raise a specific HTTPException that Quart can handle.
-            # For simplicity, let's construct the response directly.
-            return jsonify({"error": "Forbidden", "message": "Your IP address has been blocked."}), 403
-    else:
-        logger.warning("Could not determine client IP address for blocking check (async).")
-    # If not blocked, allow request to proceed (by returning None from before_request)
-    return None
-
+    """Async middleware function for IP blocking using shared Redis pool."""
+    try:
+        # Get client IP address
+        ip = request.remote_addr
+        
+        # Check if IP is blocked
+        if ip and await global_async_ip_block_list.is_blocked(ip):
+            logger.warning(f"Blocked request from IP: {ip}")
+            return Response("Your IP has been blocked due to suspicious activity", status=403)
+    except Exception as e:
+        logger.error(f"Error in IP block middleware: {e}")
 
 # In your main.py or app factory:
 # from middleware.rate_limiting import rate_limit, async_ip_block_middleware
