@@ -1035,16 +1035,16 @@ def create_quart_app():
         return jsonify(status), 200
 
     @app.before_serving
-    async def init_redis_pools(app):
+    async def init_redis_pools():  # Remove the 'app' parameter
         """Initialize Redis connection pools properly."""
         try:
             redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
             if redis_url:
-                # For Rate Limiter - with reasonable pool limits
-                app.aioredis_rate_limit_pool = aioredis.from_url(
+                # For Rate Limiter
+                app.aioredis_rate_limit_pool = await aioredis.from_url(
                     redis_url, 
                     decode_responses=True,
-                    max_connections=10  # Limit concurrent connections
+                    max_connections=10
                 )
                 await app.aioredis_rate_limit_pool.ping()  # Test connection
                 logger.info("aioredis pool for Rate Limiter initialized.")
