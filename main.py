@@ -126,7 +126,7 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         # Get aggregator context (ensure this function is async or thread-safe if it hits DB)
         # If sync and hits DB, consider running in an executor or making it async
         from logic.aggregator import get_aggregated_roleplay_context
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase") # Adjust player name if needed
+        aggregator_data = await get_aggregated_roleplay_context(user_id, conversation_id, "Chase") # Adjust player name if needed
 
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
