@@ -407,12 +407,17 @@ def create_quart_app():
     sio = socketio.AsyncServer(
         async_mode="asgi", 
         cors_allowed_origins="*",
-        ping_timeout=120, # Increase from 60
+        ping_timeout=60, # Reduce to more standard value
         ping_interval=25,
+        max_http_buffer_size=1024*1024, # Reduce slightly to 1MB
+        logger=True,
+        engineio_logger=True,
+        async_handlers=True, # Enable async event handlers
         max_http_buffer_size=5*1024*1024,
-        logger=True, # Enable logger for debugging
-        engineio_logger=True # Enable engineio logger
+        always_connect=True, # Be more permissive in connections
+        http_compression=True # Enable HTTP compression
     )
+
 
     app.asgi_app = socketio.ASGIApp(sio, app.asgi_app)
     app.socketio = sio
