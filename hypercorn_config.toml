@@ -1,5 +1,0 @@
-# hypercorn_config.py
-
-worker_class = "asyncio"
-workers = 1
-startup_timeout = 60
