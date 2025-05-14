@@ -29,6 +29,11 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
 
+from nyx.nyx_governance import AgentType # Make sure this is imported
+
+NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER # Or AgentType.UNIVERSAL_UPDATER.value if methods expect string
+NEW_GAME_AGENT_NYX_ID = "new_game_director_agent" 
+
 # Output models for structured data
 class EnvironmentData(BaseModel):
     setting_name: str
@@ -154,8 +159,8 @@ class NewGameAgent:
         handler = DirectiveHandler(
             user_id=user_id,
             conversation_id=conversation_id,
-            agent_type=agent_type,
-            agent_id=agent_id,
+            agent_type=NEW_GAME_AGENT_NYX_TYPE, 
+            agent_id=NEW_GAME_AGENT_NYX_ID, 
             governance=governance  # pass the object here
         )
         
@@ -415,16 +420,13 @@ class NewGameAgent:
             }
         
         # Store in database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES (%s, %s, 'ChaseSchedule', %s)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, (user_id, conversation_id, json.dumps(default_schedule)))
-        conn.commit()
-        conn.close()
+        async with get_db_connection_context() as conn:
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES($1, $2, 'ChaseSchedule', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value=EXCLUDED.value
+            """, user_id, conversation_id, json.dumps(default_schedule))
         
         # Store as player memory using the new memory system
         try:
@@ -823,18 +825,17 @@ class NewGameAgent:
                     raise Exception(f"Conversation {conversation_id} not found or unauthorized")
     
             # Clear old data, etc...
-            tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests", 
+            tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests",
                       "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"]
             for t in tables:
+                # Use f-string carefully, ensure t is from a controlled list (which it is here)
                 await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
                                    user_id, conversation_id)
         
         # NOW we have conversation_id, so let's insert default "Chase" stats
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            functools.partial(insert_default_player_stats_chase, user_id, conversation_id)
-        )
+        # Since insert_default_player_stats_chase is async, await it directly:
+        await insert_default_player_stats_chase(user_id, conversation_id) # <<< CORRECTED CALL
+        logging.info(f"Default player stats for Chase inserted for user_id={user_id}, conv_id={conversation_id}")
         
         # Initialize directive handler for this session
         await self.initialize_directive_handler(user_id, conversation_id)
@@ -842,9 +843,9 @@ class NewGameAgent:
         # Register with the governance system
         governance = await get_central_governance(user_id, conversation_id)
         await governance.register_agent(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_type=NEW_GAME_AGENT_NYX_TYPE,
             agent_instance=self,
-            agent_id="new_game"
+            agent_id=NEW_GAME_AGENT_NYX_ID
         )
         
         # Process directives (to pick up any pending directives for this game)
@@ -852,7 +853,7 @@ class NewGameAgent:
         
         # Gather environment components
         from routes.settings_routes import generate_mega_setting_logic
-        mega_data = generate_mega_setting_logic()
+        mega_data = await generate_mega_setting_logic()
         env_comps = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
         if not env_comps:
             env_comps = [
