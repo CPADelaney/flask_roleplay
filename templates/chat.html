@@ -94,11 +94,13 @@
 </div>
 
 <div id="contextMenu"></div>
+  
   <script>
     // Quart’s session.user_id to JSON    
     window.CURRENT_USER_ID = {{ session.user_id|tojson }};
   </script>
 <!-- Link to our refactored script, DEFER is important -->
+<script src="/static/socket-fix.js"></script>
 <script src="/static/chat_page.js" defer></script>
 </body>
 </html>
