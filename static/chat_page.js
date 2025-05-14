@@ -717,22 +717,196 @@ async function deleteConversation(convId) {
 
 // Improved Socket.IO initialization with robust configuration
 function initializeSocket() {
-  socket = io({
-    path: '/socket.io',
-    transports: ['websocket', 'polling'],
-    auth: { user_id: window.CURRENT_USER_ID },
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    timeout: 120000, // Match server's pingTimeout (120 seconds)
-    pingTimeout: 120000,
-    pingInterval: 25000, // Match server's pingInterval
-    forceNew: false, // Don't force a new connection each time
-    autoConnect: true
+  // Use the enhanced connection manager
+  socket = createRobustSocketConnection({
+    // Event handlers that integrate with the UI
+    onConnect: (socket, wasReconnect) => {
+      console.log("Socket connected with ID:", socket.id);
+      
+      // If reconnection was in progress, add a system message
+      if (wasReconnect) {
+        const reconnectMsg = { sender: "system", content: "Connection restored!" };
+        appendMessage(reconnectMsg, true);
+        reconnectionInProgress = false;
+      }
+      
+      // Join conversation room if one is active
+      if (currentConvId) {
+        socket.emit('join', { conversation_id: currentConvId });
+        console.log(`Joined room: ${currentConvId}`);
+      }
+    },
+    
+    onDisconnect: (socket, reason) => {
+      console.error("Socket disconnected:", reason);
+      reconnectionInProgress = true;
+      const disconnectMsg = { sender: "system", content: `Connection lost (${reason}). Attempting to reconnect...` };
+      appendMessage(disconnectMsg, true);
+    },
+    
+    onReconnect: (socket, attemptNumber) => {
+      console.log(`Socket reconnected after ${attemptNumber} attempts`);
+      reconnectionInProgress = false;
+      
+      // Rejoin the conversation room if active
+      if (currentConvId) {
+        socket.emit('join', { conversation_id: currentConvId });
+      }
+      
+      const reconnectMsg = { sender: "system", content: "Connection restored!" };
+      appendMessage(reconnectMsg, true);
+    },
+    
+    onReconnectFailed: () => {
+      console.error("Socket reconnection failed");
+      const failMsg = { sender: "system", content: "Unable to reconnect. Please refresh the page." };
+      appendMessage(failMsg, true);
+    }
   });
   
-  setupSocketListeners();
+  // Set up event listeners for message handling
+  setupSocketMessageListeners();
+}
+
+// Separate function for message-specific listeners
+function setupSocketMessageListeners() {
+  // Room events
+  socket.on("joined", (data) => {
+    console.log("Joined room:", data.room);
+    const joinMsg = { sender: "system", content: "Connected to game session" };
+    appendMessage(joinMsg, true);
+  });
+
+  // Message streaming events
+  socket.on("new_token", function(payload) {
+    handleNewToken(payload.token);
+  });
+
+  socket.on("done", function(payload) {
+    console.log("Done streaming. Full text received.");
+    finalizeAssistantMessage(payload.full_text);
+  });
+
+  socket.on("error", (payload) => {
+    console.error("Server error:", payload.error);
+    handleNewToken("[Error: " + payload.error + "]");
+    finalizeAssistantMessage(""); // Finalize with empty if error occurred during stream
+  });
+
+  socket.on("message", function(data) {
+    console.log("Received non-streaming message event:", data);
+    const messageObj = {
+      sender: data.sender || "Nyx",
+      content: data.content || data.message || "No content"
+    };
+    appendMessage(messageObj, true);
+  });
+
+  socket.on("image", function(payload) {
+    console.log("Received image:", payload);
+    appendImageToChat(payload.image_url, payload.reason);
+  });
+
+  socket.on("processing", function(data) {
+    console.log("Server is processing:", data.message);
+    const chatWindowEl = document.getElementById("chatWindow");
+    let processingDiv = document.getElementById("processingIndicator");
+    if (!processingDiv) {
+        processingDiv = document.createElement("div");
+        processingDiv.id = "processingIndicator";
+        processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
+        chatWindowEl.appendChild(processingDiv);
+    }
+    chatWindowEl.scrollTop = chatWindowEl.scrollHeight;
+  });
+
+  socket.on("game_state_update", function(data) {
+    console.log("Game state updated:", data);
+    // Example: if (data.type === "npc_update") updateNPCInfo(data.npc_data);
+  });
+}
+
+// Improved send message function with better error handling
+async function sendMessage() {
+  const userMsgInputEl = userMsgInput || document.getElementById("userMsg");
+  const userText = userMsgInputEl.value.trim();
+  if (!userText || !currentConvId) return;
+
+  userMsgInputEl.value = "";
+  const userMsgObj = { sender: "user", content: userText };
+  appendMessage(userMsgObj, true);
+
+  currentAssistantBubble = null; // Reset for new assistant message
+  partialAssistantText = "";
+
+  console.log(`Sending storybeat to server for conversation ${currentConvId}`);
+  
+  // Check if socket is connected before sending
+  if (!socket || !socket.connected) {
+    console.warn("Socket disconnected, attempting to reconnect before sending...");
+    
+    // Add reconnection message
+    const reconnectingMsg = { sender: "system", content: "Connection lost. Reconnecting before sending your message..." };
+    appendMessage(reconnectingMsg, true);
+    
+    // Try to reconnect
+    if (socket) {
+      socket.connect();
+      
+      // Wait for connection to establish before proceeding
+      let attempts = 0;
+      const maxAttempts = 5;
+      const waitForConnection = setInterval(() => {
+        attempts++;
+        if (socket.connected) {
+          clearInterval(waitForConnection);
+          console.log("Socket reconnected. Proceeding with message send.");
+          proceedWithSend();
+        } else if (attempts >= maxAttempts) {
+          clearInterval(waitForConnection);
+          console.error("Failed to reconnect after multiple attempts.");
+          const errorMsg = { sender: "system", content: "Could not connect to server. Please refresh the page and try again." };
+          appendMessage(errorMsg, true);
+        }
+      }, 1000);
+      
+      return; // Exit here and let the interval handler call proceedWithSend
+    } else {
+      const errorMsg = { sender: "system", content: "Connection error. Please refresh the page." };
+      appendMessage(errorMsg, true);
+      return;
+    }
+  }
+  
+  // If socket is connected, proceed with sending
+  proceedWithSend();
+  
+  function proceedWithSend() {
+    // Double check joined to the correct room
+    socket.emit('join', { conversation_id: currentConvId });
+
+    // Set a timeout to detect if server doesn't respond
+    const messageTimeout = setTimeout(() => {
+      const timeoutMsg = { sender: "system", content: "Server taking longer than expected to respond. Please wait..." };
+      appendMessage(timeoutMsg, true);
+    }, 15000); // 15 seconds timeout
+    
+    // Listen for any response to clear the timeout
+    const clearTimeoutHandler = () => clearTimeout(messageTimeout);
+    socket.once('new_token', clearTimeoutHandler);
+    socket.once('error', clearTimeoutHandler);
+    socket.once('processing', clearTimeoutHandler);
+    
+    // Send the message
+    socket.emit("storybeat", {
+      user_input: userText,
+      conversation_id: currentConvId,
+      player_name: "Chase", // This should ideally come from logged-in user data
+      advance_time: false,
+      universal_update: pendingUniversalUpdates
+    });
+    resetPendingUniversalUpdates();
+  }
 }
 
 // DOMContentLoaded to initialize everything
