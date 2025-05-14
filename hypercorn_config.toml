@@ -1,12 +1,5 @@
 # hypercorn_config.py
-import os
 
-#bind = f"0.0.0.0:{os.getenv('PORT', '8080')}"
 worker_class = "asyncio"
 workers = 1
-startup_timeout = 60  # Or even 120 for initial debugging
-# graceful_timeout = 10 # Optional: increase graceful shutdown time
-
-# OMIT the 'bind' line for now. Let Render's PORT environment variable dictate the port.
-# Hypercorn should pick this up. If it doesn't, we'll add:
-# bind = "0.0.0.0:10000" (or whatever your Render service PORT is)
+startup_timeout = 60
