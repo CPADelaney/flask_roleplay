@@ -558,8 +558,6 @@ def create_quart_app():
         
         logger.info("Resource shutdown complete.")
 
-    return app    
-
     @sio.event
     async def disconnect(sid):
         # sock_sess = await sio.get_session(sid) # This might fail if session is already gone
