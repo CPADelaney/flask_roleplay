@@ -45,6 +45,7 @@ from routes.nyx_agent_routes_sdk import nyx_agent_bp
 from routes.conflict_routes import conflict_bp
 from routes.npc_learning_routes import npc_learning_bp
 from routes.auth import register_auth_routes, auth_bp
+from logic.stats_logic import insert_default_player_stats_chase
 
 from nyx.core.brain.base import NyxBrain
 
@@ -91,8 +92,8 @@ logging.basicConfig(level=logging.INFO)
 NOISY = (
     "asyncio",
     "hypercorn",
-    "socketio",
-    "engineio",
+#    "socketio",
+#    "engineio",
     "httpx",
     "openai",
     "mcp_orchestrator",
@@ -100,6 +101,8 @@ NOISY = (
 )
 for lib in NOISY:
     logging.getLogger(lib).setLevel(logging.WARNING)
+    logging.getLogger("socketio").setLevel(logging.INFO)
+    logging.getLogger("engineio").setLevel(logging.INFO)
 
 # Database DSN
 DB_DSN = os.getenv("DB_DSN", "postgresql://user:password@host:port/database")
@@ -247,113 +250,124 @@ async def background_chat_task(conversation_id, user_input, user_id, universal_u
         logger.error(f"[BG Task {conversation_id}] Critical Error: {str(e)}", exc_info=True)
         await current_app.socketio.emit('error', {'error': f"Server error processing message: {str(e)}"}, room=str(conversation_id))
 
-async def initialize_systems(app):
-    """Initialize systems required for the application AFTER app creation."""
+app_is_ready = asyncio.Event()
+
+async def initialize_systems(app: Quart):
     logger.info("Starting asynchronous system initializations...")
+    # Imports for initialize_systems
     from nyx.core.brain.base import NyxBrain
     from tasks import set_app_initialized
+    from logic.aggregator_sdk import init_singletons
+    from story_agent.story_director_agent import initialize_story_director, register_with_governance
+    from db.connection import initialize_connection_pool, close_connection_pool
+    from logic.nyx_enhancements_integration import initialize_nyx_memory_system
+    from mcp_orchestrator import MCPOrchestrator
 
     try:
-        # --- Database Schema/Seed ---
-        # !! IMPORTANT !!: Schema creation/migration and seeding should ideally
-        # be done via separate CLI commands (e.g., using quart-Migrate, Alembic, or your init_db_script.py)
-        # BEFORE starting the application server, not during runtime initialization.
-        # Doing it here is risky and slows down startup.
-        # Commenting out the direct calls:
-        # from db.schema_and_seed import create_all_tables, seed_initial_data
-        # from db.schema_migrations import ensure_schema_version
-        # ensure_schema_version() # Run migrations separately!
-        # logger.info("Database migrations check completed (ensure this was run beforehand!).")
-        # create_all_tables() # Create tables separately!
-        # seed_initial_data() # Seed data separately!
-        # logger.info("Database tables initialization check completed (ensure this was done beforehand!).")
-        logger.warning("Skipping DB schema/seed/migration checks in app startup. Run these manually/via deployment script.")
+        # --- 1. Database Connection Pool ---
+        logger.info("Initializing database connection pool...")
+        if not await initialize_connection_pool(app=app):
+            raise RuntimeError("Database pool initialization failed critically.")
+        logger.info("Database connection pool initialized successfully.")
 
-        # --- Initialize DB Pool ---
-        # This *should* be done here or early in create_quart_app
-        if not await initialize_connection_pool():
-            raise RuntimeError("Database pool initialization failed")
-        else:
-            logger.info("Database connection pool initialized successfully.")
+        # --- 2. Redis Connection Pools (Centralized Here) ---
+        logger.info("Initializing aioredis pools...")
+        try:
+            # Ensure REDIS_URL is available on app.config or os.environ
+            # It's good practice for create_quart_app to load .env or set app.config['REDIS_URL']
+            # Defaulting here if not on app.config for robustness
+            redis_url_from_env = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+            redis_url = app.config.get('REDIS_URL', redis_url_from_env)
 
-        # Register pool cleanup (atexit might be unreliable for async)
-        # Consider a more robust shutdown handler in production
-        async def cleanup_pool_on_exit():
-            logger.info("Running async pool cleanup...")
-            await close_connection_pool()
+            if redis_url:
+                # For Rate Limiter & IP Blocking (shared pool)
+                # aioredis.from_url creates a connection pool internally
+                shared_redis_pool = await aioredis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", 10)), # Make configurable
+                    socket_timeout=int(os.getenv("REDIS_SOCKET_TIMEOUT", 5)),
+                    socket_connect_timeout=int(os.getenv("REDIS_CONNECT_TIMEOUT", 5))
+                )
+                await shared_redis_pool.ping() # Test connection
+                
+                app.aioredis_rate_limit_pool = shared_redis_pool
+                app.aioredis_ip_block_pool = shared_redis_pool # Use the same pool
 
-        def start_background_services():
-            loop = asyncio.get_event_loop()
-            daemon = NyxSyncDaemon()
-            loop.create_task(daemon.start())
+                logger.info("Shared aioredis pool for Rate Limiter and IP Blocking initialized.")
+            else:
+                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will be unavailable or fall back to local.")
+                app.aioredis_rate_limit_pool = None
+                app.aioredis_ip_block_pool = None
+        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+            logger.error(f"Failed to initialize aioredis pools: {e}. This might affect rate limiting and IP blocking.")
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
+            # Consider if this is a critical failure. If so, raise an error.
+            # raise RuntimeError(f"Critical Redis initialization failure: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
+            app.aioredis_rate_limit_pool = None
+            app.aioredis_ip_block_pool = None
+            # raise RuntimeError(f"Unexpected critical Redis initialization failure: {e}")
 
-        # Wrap the async cleanup for atexit (use with caution)
-        def run_async_cleanup():
-            try:
-                asyncio.run(cleanup_pool_on_exit())
-            except RuntimeError as e:
-                # Handle cases where event loop might already be closed
-                logger.warning(f"Could not run async cleanup in atexit: {e}")
-
-        logger.info("Registered async pool cleanup with atexit (best effort).")
-
-        # --- Initialize Nyx Memory System ---
-        # Pass DSN or ensure it's configured globally for initialize_nyx_memory_system
-        await initialize_nyx_memory_system() # Ensure this uses asyncpg/DB_DSN if needed
+        # --- 3. Core Application Logic (Nyx, MCP, etc.) ---
+        logger.info("Initializing Nyx memory system...")
+        await initialize_nyx_memory_system()
         logger.info("Nyx memory system initialized successfully.")
 
-        # --- Initialize Global NyxBrain Instance ---
-        # Ensure NyxBrain.get_instance is async and uses asyncpg if needed
-        print(">>> NyxBrain module:", NyxBrain.__module__)
-        print(">>> NyxBrain class file:", NyxBrain.__dict__.get('__module__', None))
-        print(">>> NyxBrain has get_instance?", hasattr(NyxBrain, "get_instance"))
-        print(">>> NyxBrain dir:", dir(NyxBrain))
-        print(">>> NyxBrain MRO:", NyxBrain.__mro__)
-
+        logger.info("Initializing global NyxBrain instance...")
         try:
-            system_user_id = 0 # Or appropriate system-level IDs
+            system_user_id = 0
             system_conversation_id = 0
-        
             if hasattr(NyxBrain, "get_instance"):
-                # get_instance now handles initialization if a new instance is created
                 app.nyx_brain = await NyxBrain.get_instance(system_user_id, system_conversation_id)
-                # REMOVE the explicit call to app.nyx_brain.initialize() here, as get_instance handles it.
-                # await app.nyx_brain.initialize() # <--- REMOVE THIS LINE
-        
                 logger.info("Global NyxBrain instance obtained/initialized.")
-        
-                if app.nyx_brain: # Ensure instance was successfully obtained
+                if app.nyx_brain:
                     await app.nyx_brain.restore_entity_from_distributed_checkpoints()
-    
-                
-                # Register processors (ensure handlers are async)
-                from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
-                
-                app.nyx_brain.response_processors = {
-                    "default": background_chat_task,
-                    "openai": process_user_input_with_openai,
-                    "base": process_user_input
-                }
-                logger.info("Response processors registered with NyxBrain.")
+                    from nyx.nyx_agent_sdk import process_user_input, process_user_input_with_openai
+                    app.nyx_brain.response_processors = {
+                        "default": background_chat_task,
+                        "openai": process_user_input_with_openai,
+                        "base": process_user_input
+                    }
+                    logger.info("Response processors registered with NyxBrain.")
             else:
                 logger.warning("NyxBrain.get_instance method not available. Skipping NyxBrain initialization.")
                 app.nyx_brain = None
         except ImportError as e:
-             logger.error(f"Could not import NyxBrain: {e}. Skipping init.")
+             logger.error(f"Could not import or use NyxBrain components: {e}. NyxBrain might be unavailable.", exc_info=True)
              app.nyx_brain = None
         except Exception as e:
              logger.error(f"Error initializing NyxBrain: {e}", exc_info=True)
              app.nyx_brain = None
+        
+        if not app.nyx_brain: # Example of a critical check
+            # raise RuntimeError("NyxBrain initialization failed, which is critical.")
+            logger.warning("NyxBrain initialization failed. Some features might be unavailable.")
 
-        # MCP orchestrator (assuming async)
+
+        logger.info("Initializing MCP orchestrator...")
         try:
             app.mcp_orchestrator = MCPOrchestrator()
-            await app.mcp_orchestrator.initialize() # Assuming async
+            await app.mcp_orchestrator.initialize()
             logger.info("MCP orchestrator initialized.")
         except Exception as e:
              logger.error(f"Error initializing MCP Orchestrator: {e}", exc_info=True)
 
-        # Admin config
+        # --- 4. Other System Initializations ---
+        logger.info("Initializing Aggregator SDK singletons...")
+        await init_singletons()
+        logger.info("Aggregator SDK singletons are ready.")
+
+        logger.info("Initializing StoryDirector...")
+        story_user_id = 1
+        story_conversation_id = 1
+        await initialize_story_director(story_user_id, story_conversation_id)
+        await register_with_governance(story_user_id, story_conversation_id)
+        logger.info("StoryDirector initialized and registered with governance.")
+
+        # --- 5. Configuration Settings ---
         admin_ids_str = os.getenv("ADMIN_USER_IDS", "1")
         try:
             app.config['ADMIN_USER_IDS'] = [int(uid.strip()) for uid in admin_ids_str.split(',')]
@@ -362,64 +376,20 @@ async def initialize_systems(app):
             app.config['ADMIN_USER_IDS'] = [1]
         logger.info(f"Admin User IDs configured: {app.config['ADMIN_USER_IDS']}")
 
-        logger.info("All asynchronous system initializations completed.")
+        # --- 6. Final Readiness Signals ---
+        set_app_initialized() # For Celery
+        logger.info("Celery tasks application initialization status set to True.")
 
-        await init_singletons()  # Initialize aggregator_sdk singletons here
-        logger.info("Aggregator SDK singletons are ready.")
-
-        from story_agent.story_director_agent import initialize_story_director, register_with_governance
-    
-        story_user_id = 1
-        story_conversation_id = 1
-    
-        # 1) Build & start your director (agent + context + directive loop)
-        await initialize_story_director(story_user_id, story_conversation_id)
-    
-        # 2) THEN register it once with Nyx governance
-        await register_with_governance(story_user_id, story_conversation_id)
-        logger.info("StoryDirector initialized and registered with governance.")
-
-        try:
-            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-            if redis_url:
-                # For Rate Limiter
-                app.aioredis_rate_limit_pool = aioredis.from_url(redis_url, decode_responses=True)
-                await app.aioredis_rate_limit_pool.ping() # Test connection
-                logger.info("aioredis pool for Rate Limiter initialized.")
-    
-                # For IP Block List (can use the same pool or a different one if needed)
-                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool # Or create new if different DB/config
-                logger.info("aioredis pool for IP Block List configured.")
-            else:
-                logger.warning("REDIS_URL not configured. Distributed rate limiting and IP blocking will fall back to local.")
-                app.aioredis_rate_limit_pool = None
-                app.aioredis_ip_block_pool = None
-    
-        except (aioredis.RedisError, ConnectionRefusedError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to initialize aioredis pools: {e}")
-            app.aioredis_rate_limit_pool = None # Ensure it's None on failure
-            app.aioredis_ip_block_pool = None
-        except Exception as e:
-            logger.error(f"Unexpected error initializing aioredis pools: {e}", exc_info=True)
-            app.aioredis_rate_limit_pool = None
-            app.aioredis_ip_block_pool = None
-
-        from nyx.core.brain import base as nyx_base
-        print('Dir on NyxBrain:', dir(nyx_base.NyxBrain))
-        print('NyxBrain.__dict__:', nyx_base.NyxBrain.__dict__.keys())
-        print('Any get_instance global?', hasattr(nyx_base, "get_instance"))
-        print('get_instance:', getattr(nyx_base, "get_instance", None))
-    
-
-        logger.info("All asynchronous system initializations completed.")
-        set_app_initialized() # <<< --- CALL THIS HERE ---
+        app_is_ready.set() # For Quart app
+        logger.info("Quart application is_ready event set. Application fully initialized and ready to serve.")
 
     except Exception as e:
         logger.critical(f"Fatal error during system initialization: {str(e)}", exc_info=True)
-        # Optionally reset the flag if initialization fails critically
-        global _APP_INITIALIZED; _APP_INITIALIZED = False
-        raise
-
+        # app_is_ready will NOT be set.
+        # Ensure Celery's _APP_INITIALIZED reflects this failure if tasks.py uses it.
+        # (set_app_initialized() should not have been called if we errored before it)
+        raise # Re-raise to halt app startup if this function is awaited.
+        
 ###############################################################################
 # quart APP CREATION
 ###############################################################################
@@ -511,6 +481,10 @@ def create_quart_app():
     # 5) Socket.IO event handlers
     @sio.on("storybeat")
     async def on_storybeat(sid, data):
+        if not app_is_ready.is_set():
+            logger.warning(f"Received 'storybeat' from sid={sid} before app is fully ready. Rejecting.")
+            await sio.emit('error', {'error': 'Server is initializing, please try again in a moment.'}, to=sid)
+            return
         sock_sess = await sio.get_session(sid)
         user_id = sock_sess.get("user_id", "anonymous")
         conversation_id = data.get("conversation_id")
@@ -548,11 +522,45 @@ def create_quart_app():
             target_room = str(conversation_id) if conversation_id else sid
             await sio.emit('error', {'error': 'Server failed to initiate message processing.'}, room=target_room)
 
+    @app.before_serving
+    async def on_startup():
+        try:
+            # IMPORTANT: initialize_systems should now handle all critical async setups
+            await initialize_systems(app) 
+        except Exception as e:
+            logger.critical(f"Application startup failed during initialize_systems: {e}", exc_info=True)
+            # This will prevent Hypercorn from fully starting if init fails
+            raise 
+
+    @app.after_serving
+    async def shutdown_resources():
+        logger.info("Starting graceful shutdown of resources...")
+
+        # Close aioredis pools
+        if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
+            try:
+                await app.aioredis_rate_limit_pool.close()
+                # await app.aioredis_rate_limit_pool.wait_closed() # For older redis-py versions or if needed
+                logger.info("aioredis pool for Rate Limiter (and IP Block) closed.")
+            except Exception as e:
+                logger.error(f"Error closing aioredis_rate_limit_pool: {e}", exc_info=True)
+        
+        # Close database pool (your existing db.connection.close_connection_pool should handle app.db_pool)
+        try:
+            await close_connection_pool(app=app) # Pass app if your function expects it
+            logger.info("Database connection pool closed via db.connection.close_connection_pool.")
+        except Exception as e:
+            logger.error(f"Error closing database connection pool: {e}", exc_info=True)
+        
+        logger.info("Resource shutdown complete.")
+
+    return app    
+
     @sio.event
     async def disconnect(sid):
-        sock_sess = await sio.get_session(sid) # Use await
-        user_id = sock_sess.get("user_id", "anonymous") if sock_sess else "unknown (session not found)"
-        app.logger.warning(f"Socket DISCONNECTED: sid={sid}, user_id={user_id}. Current active SIDs: {list(sio.manager.sockets.keys())}")
+        # sock_sess = await sio.get_session(sid) # This might fail if session is already gone
+        # user_id = sock_sess.get("user_id", "unknown") if sock_sess else "unknown"
+        app.logger.warning(f"SERVER-SIDE: Socket disconnected: sid={sid}.")
         
     @sio.event
     async def client_heartbeat(sid, data):
@@ -636,13 +644,6 @@ def create_quart_app():
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
     app.before_request(async_ip_block_middleware)
-
-    @app.before_serving
-    async def on_startup():
-        # schedules your init to run *after* the server has bound –
-        # but doesn’t block Hypercorn itself
-        asyncio.create_task(initialize_systems(app))
-
     
     register_auth_routes(app)
 
@@ -1079,42 +1080,42 @@ def create_quart_app():
 
         return jsonify(status), 200
 
-    @app.before_serving
-    async def init_redis_pools():  # Remove the 'app' parameter
-        """Initialize Redis connection pools properly."""
-        try:
-            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
-            if redis_url:
-                # For Rate Limiter
-                app.aioredis_rate_limit_pool = await aioredis.from_url(
-                    redis_url, 
-                    decode_responses=True,
-                    max_connections=10
-                )
-                await app.aioredis_rate_limit_pool.ping()  # Test connection
-                logger.info("aioredis pool for Rate Limiter initialized.")
-                
-                # Use the same pool for IP blocking
-                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool
-                logger.info("aioredis pool for IP Block List configured.")
-            else:
-                logger.warning("REDIS_URL not configured. Using in-memory rate limiting.")
-                app.aioredis_rate_limit_pool = None
-                app.aioredis_ip_block_pool = None
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize aioredis pools: {e}", exc_info=True)
-            app.aioredis_rate_limit_pool = None
-            app.aioredis_ip_block_pool = None
-    
-    @app.after_serving
-    async def shutdown_redis_pools():
-        """Properly close Redis connections on shutdown."""
-        logger.info("Closing Redis connection pools...")
-        if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
-            await app.aioredis_rate_limit_pool.close()
-            logger.info("Redis rate limiter pool closed.")
-    
-    app.after_serving(shutdown_redis_pools)
+#    @app.before_serving
+#    async def init_redis_pools():  # Remove the 'app' parameter
+#        """Initialize Redis connection pools properly."""
+#        try:
+#            redis_url = app.config.get('REDIS_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+#            if redis_url:
+#                # For Rate Limiter
+#                app.aioredis_rate_limit_pool = await aioredis.from_url(
+#                    redis_url, 
+#                    decode_responses=True,
+#                    max_connections=10
+#                )
+#                await app.aioredis_rate_limit_pool.ping()  # Test connection
+#                logger.info("aioredis pool for Rate Limiter initialized.")
+#                
+#                # Use the same pool for IP blocking
+#                app.aioredis_ip_block_pool = app.aioredis_rate_limit_pool
+#               logger.info("aioredis pool for IP Block List configured.")
+#           else:
+#               logger.warning("REDIS_URL not configured. Using in-memory rate limiting.")
+#                app.aioredis_rate_limit_pool = None
+#                app.aioredis_ip_block_pool = None
+#            
+#        except Exception as e:
+#            logger.error(f"Failed to initialize aioredis pools: {e}", exc_info=True)
+#            app.aioredis_rate_limit_pool = None
+#            app.aioredis_ip_block_pool = None
+#    
+#    @app.after_serving
+#    async def shutdown_redis_pools():
+#        """Properly close Redis connections on shutdown."""
+#        logger.info("Closing Redis connection pools...")
+#        if hasattr(app, 'aioredis_rate_limit_pool') and app.aioredis_rate_limit_pool:
+#            await app.aioredis_rate_limit_pool.close()
+#            logger.info("Redis rate limiter pool closed.")
+#    
+#    app.after_serving(shutdown_redis_pools)
     
     return app
