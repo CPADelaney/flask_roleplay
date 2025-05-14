@@ -29,6 +29,8 @@ from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
 
+logger = logging.getLogger(__name__)
+
 from nyx.nyx_governance import AgentType # Make sure this is imported
 
 NEW_GAME_AGENT_NYX_TYPE = AgentType.UNIVERSAL_UPDATER # Or AgentType.UNIVERSAL_UPDATER.value if methods expect string
